@@ -6195,6 +6195,7 @@ impl Server {
         let mut nil_hermes_tool_completed_intent_id_audit_refs = 0_u64;
         let mut nil_hermes_approval_requested_intent_id_audit_refs = 0_u64;
         let mut nil_hermes_approval_resolved_intent_id_audit_refs = 0_u64;
+        let mut nil_hermes_file_written_intent_id_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6364,6 +6365,20 @@ impl Server {
                     });
                 }
             }
+            if let AuditKind::HermesFileWritten { intent_id, .. } = &event.kind {
+                if intent_id.is_nil() {
+                    nil_hermes_file_written_intent_id_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_hermes_file_written_intent_id_nil".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::HermesFileWritten with intent_id = {}; production HermesFileWritten audit writes always source intent_id from the Uuid::new_v4()-allocated identifier passed through runtime_trace_to_audit_kind, which does not produce the nil UUID",
+                            event.id, intent_id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; production HermesFileWritten audit writes always source intent_id from the Uuid::new_v4()-allocated identifier passed in by the outer intent dispatch path through runtime_trace_to_audit_kind, so a nil intent_id detaches the workspace-write row from the matching AuditKind::IntentDispatched row and from the rest of the Hermes step trail (HermesToolInvoked, HermesToolCompleted, HermesApprovalRequested, HermesApprovalResolved) that joins on the same intent_id, breaking every HermesFileWritten ↔ IntentDispatched and HermesFileWritten ↔ Hermes-step correlation that uses intent_id as the lookup".into(),
+                    });
+                }
+            }
         }
         orphans_total += zero_timestamp_audit_refs
             + nil_id_audit_refs
@@ -6376,7 +6391,8 @@ impl Server {
             + nil_hermes_tool_invoked_intent_id_audit_refs
             + nil_hermes_tool_completed_intent_id_audit_refs
             + nil_hermes_approval_requested_intent_id_audit_refs
-            + nil_hermes_approval_resolved_intent_id_audit_refs;
+            + nil_hermes_approval_resolved_intent_id_audit_refs
+            + nil_hermes_file_written_intent_id_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
             passed: zero_timestamp_audit_refs == 0
@@ -6390,9 +6406,10 @@ impl Server {
                 && nil_hermes_tool_invoked_intent_id_audit_refs == 0
                 && nil_hermes_tool_completed_intent_id_audit_refs == 0
                 && nil_hermes_approval_requested_intent_id_audit_refs == 0
-                && nil_hermes_approval_resolved_intent_id_audit_refs == 0,
+                && nil_hermes_approval_resolved_intent_id_audit_refs == 0
+                && nil_hermes_file_written_intent_id_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s)"
             ),
         });
 
@@ -11429,6 +11446,77 @@ required = {caps:?}
                         .message
                         .contains("1 nil-intent-id HermesApprovalResolved audit event"),
                     "check message should count nil-intent-id HermesApprovalResolved events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_hermes_file_written_intent_id_nil_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::HermesFileWritten {
+                    intent_id: Uuid::nil(),
+                    run_id: "drift-run".into(),
+                    path: "src/lib.rs".into(),
+                    bytes: 42,
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_hermes_file_written_intent_id_nil"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_hermes_file_written_intent_id_nil: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::HermesFileWritten"),
+                    "drift message should name the HermesFileWritten variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("intent_id ="),
+                    "drift message should name the nil-intent-id invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("Uuid::new_v4") && row.repair.contains("intent_id"),
+                    "repair hint should name Uuid::new_v4 and intent_id: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 nil-intent-id HermesFileWritten audit event"),
+                    "check message should count nil-intent-id HermesFileWritten events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

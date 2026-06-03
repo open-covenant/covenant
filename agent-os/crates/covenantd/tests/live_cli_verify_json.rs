@@ -1954,3 +1954,91 @@ async fn live_cli_verify_json_reports_memory_record_id_nil_drift() {
 
     let _ = restarted.kill().await;
 }
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, inserts a created_at=0 memory record via SqliteStore, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_memory_record_created_at_zero_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let store = SqliteStore::open(&home.path().join("memory.db")).expect("open memory db");
+    let memory_id = Uuid::new_v4();
+    let zero_record = MemoryRecord {
+        id: memory_id,
+        tier: MemoryTier::Working,
+        owner: AgentId::new("user@local", [0u8; 32]),
+        text: "zero-created-at fixture".into(),
+        embedding: vec![0.5; 8],
+        metadata: serde_json::json!({}),
+        created_at: 0,
+        parent: None,
+    };
+    store
+        .put(zero_record.clone())
+        .await
+        .expect("inject zero-created-at record");
+    let reread = store
+        .get(memory_id)
+        .await
+        .expect("reload record")
+        .expect("record persists");
+    assert_eq!(
+        reread.created_at, 0,
+        "SqliteStore must persist created_at == 0 through put/get; otherwise the live coverage is meaningless"
+    );
+    drop(store);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when memory record created_at is zero: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("memory_record_created_at_zero")
+                && item["id"].as_str() == Some(&memory_id.to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("expected memory_record_created_at_zero drift for {memory_id}: {drift:?}")
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("created_at = 0"),
+        "drift message should name the zero invariant: {message:?}"
+    );
+    assert!(
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("epoch_ms")),
+        "zero-created-at drift repair string should name epoch_ms: {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}

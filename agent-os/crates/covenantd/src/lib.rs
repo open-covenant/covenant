@@ -5837,9 +5837,21 @@ impl Server {
         // Uuid::new_v4(), or a direct SQLite edit zeroing the id to
         // break the memory_record_id back-reference that settlement
         // receipts and audit IntentDispatched rows correlate on.
+        //
+        // record.created_at is stamped from epoch_ms() at every
+        // production memory write site (either Intent.issued_at —
+        // itself computed via epoch_ms() at lib.rs:3619 — or a fresh
+        // epoch_ms() at write time). epoch_ms() returns 0 only when
+        // the system clock predates UNIX_EPOCH, which no real clock
+        // does. A persisted record with created_at == 0 is out-of-band
+        // evidence on the same shape as audit_event_timestamp_zero and
+        // receipt_settled_at_zero: a serde regression defaulting the
+        // u64 field, an import tool that bypassed epoch_ms(), or a
+        // SQLite edit zeroing the timestamp.
         let mut empty_text_refs = 0_u64;
         let mut nan_embedding_refs = 0_u64;
         let mut nil_id_memory_refs = 0_u64;
+        let mut zero_created_at_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -5874,13 +5886,29 @@ impl Server {
                     repair: "review the memory store row and the writer that produced it; production memory writes always allocate id via Uuid::new_v4() so the row can be referenced by id from settlement receipt memory_record_id back-references and audit IntentDispatched correlation".into(),
                 });
             }
+            if record.created_at == 0 {
+                zero_created_at_memory_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_record_created_at_zero".into(),
+                    id: Some(record.id.to_string()),
+                    message: format!(
+                        "memory record {} has created_at = 0; epoch_ms() does not produce 0 on any sane system clock",
+                        record.id
+                    ),
+                    repair: "review the memory store row and the writer that produced it; production memory writes always stamp created_at via epoch_ms() (or via Intent.issued_at which is itself epoch_ms()) at the time of record".into(),
+                });
+            }
         }
-        orphans_total += empty_text_refs + nan_embedding_refs + nil_id_memory_refs;
+        orphans_total +=
+            empty_text_refs + nan_embedding_refs + nil_id_memory_refs + zero_created_at_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
-            passed: empty_text_refs == 0 && nan_embedding_refs == 0 && nil_id_memory_refs == 0,
+            passed: empty_text_refs == 0
+                && nan_embedding_refs == 0
+                && nil_id_memory_refs == 0
+                && zero_created_at_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {nil_id_memory_refs} nil-id record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s)"
             ),
         });
 
@@ -9586,6 +9614,66 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 nil-id record"),
                     "check message should count nil-id records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_created_at_zero_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "zero-created-at fixture".into(),
+                embedding: vec![0.5; 8],
+                metadata: serde_json::json!({}),
+                created_at: 0,
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_created_at_zero"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected memory_record_created_at_zero: {drift:?}"));
+                assert!(
+                    row.message.contains("created_at = 0"),
+                    "drift message should name the zero invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("epoch_ms"),
+                    "repair hint should name epoch_ms: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 zero-created-at record"),
+                    "check message should count zero-created-at records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

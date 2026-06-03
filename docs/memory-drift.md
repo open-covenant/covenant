@@ -25,6 +25,7 @@ The verifier returns two layers:
 | `memory_receipt_owner_mismatch` | A receipt references a memory record owned by a different payer. |
 | `memory_receipt_resource_mismatch` | A settlement receipt carries `memory_record_id` but reports a non-Memory `resource`. |
 | `memory_receipt_settled_before_created` | A settlement receipt's `settled_at` precedes the correlated memory record's `created_at`. |
+| `memory_empty_text` | A memory record's `text` is empty; the record cannot anchor retrieval and usually indicates a tool emitter that dropped its result body. |
 
 ## Operator Posture
 

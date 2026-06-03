@@ -5816,6 +5816,32 @@ impl Server {
             ),
         });
 
+        // Check 5: every memory record must carry non-empty text. The SQLite
+        // schema only enforces TEXT NOT NULL, so empty strings round-trip
+        // through put() today. An empty body produces a noise embedding,
+        // cannot anchor retrieval, and is the visible footprint of a tool
+        // emitter that dropped its result or an out-of-band write that
+        // bypassed dispatch. The verifier surfaces them; the existing
+        // delete_record repair is the safe handler.
+        let mut empty_text_refs = 0_u64;
+        for record in &memories {
+            if record.text.is_empty() {
+                empty_text_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_empty_text".into(),
+                    id: Some(record.id.to_string()),
+                    message: format!("memory record {} has empty text", record.id),
+                    repair: "review the record source; safe removals go through an explicit delete_record repair command".into(),
+                });
+            }
+        }
+        orphans_total += empty_text_refs;
+        checks.push(VerifyCheck {
+            name: "memory record integrity".into(),
+            passed: empty_text_refs == 0,
+            message: format!("{empty_text_refs} empty-text record(s)"),
+        });
+
         Response::VerifyReport {
             window,
             checks,
@@ -9149,6 +9175,61 @@ required = {caps:?}
                     parent_check.message.contains("1 self-parent reference"),
                     "check message should count self-parent refs: {}",
                     parent_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_empty_text_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: String::new(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let empty = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_empty_text"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected memory_empty_text: {drift:?}"));
+                assert!(
+                    empty.repair.contains("delete_record"),
+                    "repair hint should name delete_record: {}",
+                    empty.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 empty-text record"),
+                    "check message should count empty-text records: {}",
+                    integrity.message
                 );
                 assert!(orphans_total >= 1);
             }

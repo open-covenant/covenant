@@ -1779,3 +1779,91 @@ async fn live_cli_verify_json_reports_receipt_settled_at_zero_drift() {
 
     let _ = restarted.kill().await;
 }
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, appends a nil-id settlement receipt, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_receipt_id_nil_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let receipts_dir = home.path().join("receipts");
+    std::fs::create_dir_all(&receipts_dir).expect("create receipts dir");
+    let nil = SettlementReceipt {
+        id: Uuid::nil(),
+        payer: AgentId::new("user@local", [0u8; 32]),
+        resource: ResourceKind::Compute,
+        memory_record_id: None,
+        credits_consumed: 1,
+        settled_at: 1_700_000_000_000,
+        chain: None,
+        cluster: None,
+        batch_id: None,
+        merkle_root: None,
+        tx_sig: None,
+        slot: None,
+        confirmed_at: None,
+        onchain_sig: None,
+    };
+    let receipts_path = receipts_dir.join("working.jsonl");
+    use std::io::Write as _;
+    let mut receipts = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&receipts_path)
+        .expect("open receipts/working.jsonl for append");
+    writeln!(receipts, "{}", serde_json::to_string(&nil).unwrap()).expect("append nil-id receipt");
+    drop(receipts);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when receipt id is nil: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let nil_id_str = Uuid::nil().to_string();
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("receipt_id_nil")
+                && item["id"].as_str() == Some(nil_id_str.as_str())
+        })
+        .unwrap_or_else(|| panic!("expected receipt_id_nil drift for nil UUID: {drift:?}"));
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("Uuid::new_v4()"),
+        "drift message should name the new_v4 invariant: {message:?}"
+    );
+    assert!(
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("Uuid::new_v4()")),
+        "nil-id drift repair string should name Uuid::new_v4(): {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}

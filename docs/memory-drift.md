@@ -15,6 +15,7 @@ The verifier returns two layers:
 | `audit_without_memory` | An `IntentDispatched` audit row has no matching memory record in the sampled window. |
 | `memory_stale_parent` | A memory record points at a parent memory id that no longer exists. |
 | `memory_self_parent` | A memory record's parent reference points at the record's own id. |
+| `memory_parent_cycle` | A memory record's parent chain loops back on itself two or more hops up (e.g. A → B → A). |
 | `capability_without_audit` | A capability grant exists without a matching `CapabilityGranted` audit row. |
 | `memory_receipt_mismatch` | Memory records and memory settlement receipts differ for an owner in the sampled window. |
 | `memory_without_receipt` | A memory record has no exact or legacy-compatible settlement receipt. |

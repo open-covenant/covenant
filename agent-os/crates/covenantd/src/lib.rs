@@ -5501,9 +5501,13 @@ impl Server {
         // even when the parent sits outside the sampled recent window. A
         // self-parent (parent == id) resolves via get() and would otherwise
         // hide the cycle behind memory_stale_parent's None branch, so guard
-        // it explicitly before the lookup.
+        // it explicitly before the lookup. When the direct parent resolves,
+        // keep walking the chain so multi-hop cycles (A->B->A or longer)
+        // surface as memory_parent_cycle instead of silently passing.
+        const MAX_PARENT_HOPS: usize = 32;
         let mut stale_parent_refs = 0_u64;
         let mut self_parent_refs = 0_u64;
+        let mut cycle_parent_refs = 0_u64;
         for record in &memories {
             let Some(parent) = record.parent else {
                 continue;
@@ -5519,7 +5523,40 @@ impl Server {
                 continue;
             }
             match self.memory.get(parent).await {
-                Ok(Some(_)) => {}
+                Ok(Some(direct)) => {
+                    let mut visited: HashSet<Uuid> = HashSet::new();
+                    visited.insert(record.id);
+                    visited.insert(parent);
+                    let mut cursor = direct.parent;
+                    let mut hops = 1_usize;
+                    while let Some(next) = cursor {
+                        if !visited.insert(next) {
+                            cycle_parent_refs += 1;
+                            drift.push(VerifyDrift {
+                                kind: "memory_parent_cycle".into(),
+                                id: Some(record.id.to_string()),
+                                message: format!(
+                                    "memory record's parent chain forms a cycle through {next}"
+                                ),
+                                repair: "detach a node in the cycle through an explicit detach_parent repair command".into(),
+                            });
+                            break;
+                        }
+                        hops += 1;
+                        if hops > MAX_PARENT_HOPS {
+                            break;
+                        }
+                        match self.memory.get(next).await {
+                            Ok(Some(rec)) => cursor = rec.parent,
+                            Ok(None) => break,
+                            Err(e) => {
+                                return Response::Error {
+                                    message: format!("memory: {e}"),
+                                };
+                            }
+                        }
+                    }
+                }
                 Ok(None) => {
                     stale_parent_refs += 1;
                     drift.push(VerifyDrift {
@@ -5536,12 +5573,14 @@ impl Server {
                 }
             }
         }
-        orphans_total += stale_parent_refs + self_parent_refs;
+        orphans_total += stale_parent_refs + self_parent_refs + cycle_parent_refs;
         checks.push(VerifyCheck {
             name: "memory parent references".into(),
-            passed: stale_parent_refs == 0 && self_parent_refs == 0,
+            passed: stale_parent_refs == 0
+                && self_parent_refs == 0
+                && cycle_parent_refs == 0,
             message: format!(
-                "{stale_parent_refs} stale parent reference(s), {self_parent_refs} self-parent reference(s)"
+                "{stale_parent_refs} stale parent reference(s), {self_parent_refs} self-parent reference(s), {cycle_parent_refs} parent cycle(s)"
             ),
         });
 
@@ -9066,6 +9105,84 @@ required = {caps:?}
                     parent_check.message
                 );
                 assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_parent_cycle_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let a_id = Uuid::new_v4();
+        let b_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: a_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "node a".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(b_id),
+            })
+            .await
+            .unwrap();
+        s.memory
+            .put(MemoryRecord {
+                id: b_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "node b".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(a_id),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                for id in [a_id, b_id] {
+                    let cycle = drift
+                        .iter()
+                        .find(|item| {
+                            item.kind == "memory_parent_cycle"
+                                && item.id.as_deref() == Some(&id.to_string())
+                        })
+                        .unwrap_or_else(|| {
+                            panic!("expected memory_parent_cycle for {id}: {drift:?}")
+                        });
+                    assert!(
+                        cycle.repair.contains("detach_parent"),
+                        "repair hint should name detach_parent: {}",
+                        cycle.repair
+                    );
+                }
+                assert!(
+                    !drift.iter().any(|item| item.kind == "memory_stale_parent"
+                        || item.kind == "memory_self_parent"),
+                    "two-hop cycle must not double-report as stale or self parent: {drift:?}"
+                );
+                let parent_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory parent references")
+                    .unwrap_or_else(|| panic!("expected parent references check: {checks:?}"));
+                assert!(!parent_check.passed);
+                assert!(
+                    parent_check.message.contains("2 parent cycle"),
+                    "check message should count cycles: {}",
+                    parent_check.message
+                );
+                assert!(orphans_total >= 2);
             }
             other => panic!("unexpected: {other:?}"),
         }

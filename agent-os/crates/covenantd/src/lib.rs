@@ -5861,14 +5861,19 @@ impl Server {
         });
 
         // Check 6: settlement receipt integrity. annotate_receipt is the
-        // sole production path that fills confirmed_at, and it always sets
-        // chain/cluster/batch_id/merkle_root from the same ChainConfirmation.
-        // A receipt with confirmed_at = Some(_) but chain = None is therefore
-        // out-of-band evidence: a manual JSONL edit, a partial migration, or
-        // a future on-chain confirmation path that bypassed annotate_receipt.
-        // The verifier surfaces them; remediation is a settlement-team
-        // decision and is intentionally outside the memory-side repair set.
+        // sole production path that fills chain provenance, and it sets the
+        // bundle (chain, cluster, batch_id, merkle_root) together from the
+        // same ChainConfirmation. Two signals fold into this row:
+        //   - confirmed_at = Some(_) with chain = None. annotate_receipt
+        //     would have set chain too, so this is out-of-band evidence.
+        //   - chain-bundle partial state: a strict subset (1-3 of the four
+        //     fields) is Some. A bundle that is fully unset (0) or fully
+        //     set (4) is fine; anything in between is a half-torn provenance
+        //     anchor.
+        // Remediation is a settlement-team decision and intentionally
+        // outside the memory-side repair set.
         let mut confirmed_without_chain_refs = 0_u64;
+        let mut chain_partial_refs = 0_u64;
         for receipt in &receipts {
             if receipt.confirmed_at.is_some() && receipt.chain.is_none() {
                 confirmed_without_chain_refs += 1;
@@ -5882,12 +5887,37 @@ impl Server {
                     repair: "review settlement provenance before retaining; confirmed_at is only set by annotate_receipt alongside chain/cluster/batch_id/merkle_root".into(),
                 });
             }
+            let bundle_set = [
+                receipt.chain.is_some(),
+                receipt.cluster.is_some(),
+                receipt.batch_id.is_some(),
+                receipt.merkle_root.is_some(),
+            ];
+            let set_count = bundle_set.iter().filter(|present| **present).count();
+            if set_count != 0 && set_count != 4 {
+                chain_partial_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_chain_partial".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt {} chain provenance is partial: chain={} cluster={} batch_id={} merkle_root={}",
+                        receipt.id,
+                        bundle_set[0],
+                        bundle_set[1],
+                        bundle_set[2],
+                        bundle_set[3]
+                    ),
+                    repair: "review settlement provenance before retaining; annotate_receipt fills chain/cluster/batch_id/merkle_root as a single bundle".into(),
+                });
+            }
         }
-        orphans_total += confirmed_without_chain_refs;
+        orphans_total += confirmed_without_chain_refs + chain_partial_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
-            passed: confirmed_without_chain_refs == 0,
-            message: format!("{confirmed_without_chain_refs} confirmed-without-chain receipt(s)"),
+            passed: confirmed_without_chain_refs == 0 && chain_partial_refs == 0,
+            message: format!(
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s)"
+            ),
         });
 
         Response::VerifyReport {
@@ -9402,6 +9432,82 @@ required = {caps:?}
                         .message
                         .contains("1 confirmed-without-chain receipt"),
                     "check message should count confirmed-without-chain receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_chain_partial_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_chain_partial"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_chain_partial: {drift:?}"));
+                assert!(
+                    row.message.contains("chain=true")
+                        && row.message.contains("cluster=true")
+                        && row.message.contains("batch_id=false")
+                        && row.message.contains("merkle_root=false"),
+                    "drift message should record every bundle field's set state: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("single bundle"),
+                    "repair hint should name the single-bundle invariant: {}",
+                    row.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_confirmed_without_chain"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "chain=Some must not double-report under confirmed_without_chain: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 partial-chain-bundle receipt"),
+                    "check message should count partial-bundle receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

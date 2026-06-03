@@ -28,6 +28,7 @@ The verifier returns two layers:
 | `memory_empty_text` | A memory record's `text` is empty; the record cannot anchor retrieval and usually indicates a tool emitter that dropped its result body. |
 | `memory_nan_embedding` | A memory record's `embedding` contains NaN values; cosine similarity poisons every ranking the record competes in. |
 | `receipt_confirmed_without_chain` | A settlement receipt carries `confirmed_at` but `chain` is unset; only `annotate_receipt` writes `confirmed_at`, and it always sets `chain` from the same confirmation. |
+| `receipt_chain_partial` | A settlement receipt has a strict subset (1-3 of 4) of the `chain`/`cluster`/`batch_id`/`merkle_root` bundle set; `annotate_receipt` writes the bundle as a unit. |
 
 ## Operator Posture
 

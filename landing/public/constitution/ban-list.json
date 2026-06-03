@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "generated_at": "2026-06-03T00:00:00Z",
+  "anchor_protocol": "solana-memo-program",
+  "anchor_program": "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+  "anchor_authority_default": "id.json (operator hardware wallet) — rotates to 2-of-3 multisig at v0.3.0 week 10",
+  "rules": [
+    {
+      "id": "identity-token-substring",
+      "kind": "runtime-derived-substring-ban",
+      "what": "Operator-identifying tokens that must never appear in any committed file or generated content. Tokens are derived at runtime by the verifier from environment (USER, HOME, host name) and global git identity (user.name, user.email), with tokens shorter than 4 chars and common words (root, node, user, home, admin, guest, local) dropped to avoid false positives. Mirrors hooks/pre-commit exactly so a commit that passes the hook also passes ConstitutionVerifier without reciting the literal tokens in this file. This file therefore leaks no operator-identifying string when read.",
+      "applies_to": "any staged file path or staged added line; commit metadata is best-effort (legacy history pre-cutover is rewritten at render time by landing/app/verify/[sha]/page.tsx redactAuthor)",
+      "severity": "reject-commit"
+    },
+    {
+      "id": "autonomous-author-pin",
+      "kind": "git-author-pin",
+      "what": "Autonomous-mode commits must carry the Covenant author identity verbatim.",
+      "required_author_name": "Covenant",
+      "required_author_email": "covenant@users.noreply.github.com",
+      "manual_rotation_allowed": ["aw@opencovenant.org", "ir@opencovenant.org", "nr@opencovenant.org", "197570892+mizuki0x@users.noreply.github.com"],
+      "applies_to": "every commit produced by org.opencovenant.loop pipeline",
+      "severity": "reject-commit"
+    },
+    {
+      "id": "scaffold-mutation-scope",
+      "kind": "path-allowlist",
+      "what": "The Modifier persona may write only to the scaffold-mutation surface.",
+      "allowed_globs": ["agent-os/agents/tools/**", "agent-os/autonomy/tasks/**"],
+      "applies_to": "any Modifier commit (autonomous loop normal sprint)",
+      "manual_rotation_exempt": true,
+      "severity": "reject-commit"
+    },
+    {
+      "id": "no-supervisor-modification",
+      "kind": "path-denylist",
+      "what": "Modifier may not edit supervisor scripts, launchd plists, the verifier, or the constitution itself.",
+      "denied_globs": [
+        "agent-os/scripts/handover.sh",
+        "agent-os/scripts/run-loop.sh",
+        "Library/LaunchAgents/org.opencovenant.*.plist",
+        "agent-os/crates/covenant-verifier/**",
+        "agent-os/crates/covenant-permissions/src/scaffold_mutation_scope.rs",
+        "landing/app/verify/**",
+        "landing/app/api/verify/**",
+        "landing/public/constitution/**",
+        "docs/provenance/constitution-anchoring.md",
+        "docs/provenance/witness-loop-overview.md"
+      ],
+      "applies_to": "any Modifier commit",
+      "severity": "reject-commit"
+    },
+    {
+      "id": "no-centralized-api-additions",
+      "kind": "code-pattern-deny",
+      "what": "Modifier may not introduce network calls routing through a centralized Covenant API surface.",
+      "patterns": [
+        "covenant.opencovenant.org",
+        "api.opencovenant.org"
+      ],
+      "applies_to": "Modifier writes to any *.rs, *.ts, *.tsx, *.mjs, *.js",
+      "rationale": "v0.2 architecture is local-first + decentralized; centralized hops in the trust path are out of scope and require explicit operator approval.",
+      "severity": "reject-commit"
+    },
+    {
+      "id": "no-test-deletion",
+      "kind": "diff-shape",
+      "what": "Modifier may extend tests but never remove or weaken assertions.",
+      "applies_to": "any diff to *.rs, *.ts, *.tsx, *.mjs, *.js under tests/ or *_test.{rs,ts}",
+      "rules": [
+        "test function count after diff >= test function count before diff",
+        "per-test assertion-hash compares — assertion lines may be added, never removed (whitespace-only changes ok)"
+      ],
+      "severity": "reject-commit"
+    }
+  ],
+  "note": "sha256 of this file (after sorting keys to canonical form) is posted via Solana Memo program by the operator authority. ConstitutionVerifier reads the highest-block-height memo signed by the authority pubkey matching `^covenant-banlist-v(\\d+):([0-9a-f]{64}):(\\d+)$` and asserts the file hash equals the recorded hash. See docs/provenance/constitution-anchoring.md for the full protocol."
+}

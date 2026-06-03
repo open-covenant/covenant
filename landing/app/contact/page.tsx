@@ -36,7 +36,7 @@ export default function ContactPage() {
       <div className="page-container">
         <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant</div>
+            <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-400">Covenant</div>
             <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
               Contact
             </h1>
@@ -105,7 +105,7 @@ export default function ContactPage() {
 
             <Panel>
               <PanelEyebrow>About inquiries</PanelEyebrow>
-              <ul className="mt-6 space-y-3 text-[12px] leading-relaxed text-neutral-500">
+              <ul className="mt-6 space-y-3 text-[12px] leading-relaxed text-neutral-400">
                 <li>Press, integration, and ecosystem inquiries are read and triaged daily.</li>
                 <li>Security issues take priority. Please mark the message subject accordingly.</li>
                 <li>We do not provide individual investment, legal, or tax advice.</li>
@@ -130,7 +130,7 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 function PanelEyebrow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-500">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-400">{children}</div>
   );
 }
 
@@ -147,7 +147,7 @@ function ChannelRow({
 }) {
   return (
     <div className="border-b border-neutral-900 pb-5 last:border-0 last:pb-0">
-      <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">{label}</div>
       <a
         href={href}
         target={href.startsWith("http") ? "_blank" : undefined}
@@ -156,7 +156,7 @@ function ChannelRow({
       >
         {value}
       </a>
-      <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">{detail}</p>
+      <p className="mt-2 text-[11px] leading-relaxed text-neutral-400">{detail}</p>
     </div>
   );
 }

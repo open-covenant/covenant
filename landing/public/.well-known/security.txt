@@ -1,4 +1,4 @@
-# Covenant security policy — https://github.com/open-covenant/covenant/blob/main/SECURITY.md
+# Covenant security policy. https://github.com/open-covenant/covenant/blob/main/SECURITY.md
 Contact: mailto:security@opencovenant.org
 Contact: https://github.com/open-covenant/covenant/security/advisories/new
 Expires: 2027-05-31T00:00:00.000Z

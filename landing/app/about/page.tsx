@@ -27,7 +27,7 @@ export const metadata: Metadata = {
   },
 };
 
-const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-500";
+const eyebrow = "font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400";
 const headingTitle = "text-[13px] uppercase tracking-[0.25em] text-neutral-100 sm:text-[14px]";
 const paragraph = "text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]";
 const linkClass =

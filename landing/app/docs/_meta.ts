@@ -19,7 +19,7 @@ export function buildDocsMetadata(
   description: string,
 ): Metadata {
   const url = slug ? `${DOCS_HOST}/${slug}` : DOCS_HOST;
-  const fullTitle = slug ? `${title} — Covenant docs` : "Documentation — Covenant";
+  const fullTitle = slug ? `${title}: Covenant docs` : "Documentation: Covenant";
   return {
     title,
     description,
@@ -35,7 +35,7 @@ export function buildDocsMetadata(
           url: OG_IMAGE,
           width: 1200,
           height: 630,
-          alt: "Covenant — open agent-native operating layer",
+          alt: "Covenant: open agent-native operating layer",
         },
       ],
     },
@@ -46,7 +46,7 @@ export function buildDocsMetadata(
       title: fullTitle,
       description,
       images: [
-        { url: OG_IMAGE, alt: "Covenant — open agent-native operating layer" },
+        { url: OG_IMAGE, alt: "Covenant: open agent-native operating layer" },
       ],
     },
   };
@@ -81,7 +81,7 @@ export function buildDocsJsonLd(
       {
         "@type": "TechArticle",
         "@id": `${url}#article`,
-        headline: slug ? `${title} — Covenant docs` : "Documentation — Covenant",
+        headline: slug ? `${title}: Covenant docs` : "Documentation: Covenant",
         description,
         url,
         inLanguage: "en",

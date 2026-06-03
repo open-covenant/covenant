@@ -6,7 +6,7 @@ export type Primitive = {
   docHref: string; // canonical docs URL
 };
 
-// Condensed strictly from app/docs/primitives/page.tsx — no invented facts,
+// Condensed strictly from app/docs/primitives/page.tsx, no invented facts,
 // strict "X is a Y that Z" lead form for clean AI extraction. Shared by the
 // glossary page and any future home/FAQ content so definitions never drift.
 export const PRIMITIVES: Primitive[] = [
@@ -33,7 +33,7 @@ export const PRIMITIVES: Primitive[] = [
     gloss:
       "A three-tier semantic store with cosine-similarity search over embedded vectors.",
     definition:
-      "Memory is a three-tier semantic store — working, episodic, and long-term — with cosine-similarity search over embedded vectors. Records are SQLite-backed in production and carry a UUID, tier, owner, result text, embedding, metadata, and timestamp.",
+      "Memory is a three-tier semantic store (working, episodic, and long-term) with cosine-similarity search over embedded vectors. Records are SQLite-backed in production and carry a UUID, tier, owner, result text, embedding, metadata, and timestamp.",
     docHref: "https://docs.opencovenant.org/memory",
   },
   {
@@ -69,7 +69,7 @@ export const PRIMITIVES: Primitive[] = [
     gloss:
       "How agent state, decisions, and results are surfaced back to a human operator.",
     definition:
-      "The compositor is how agent state, decisions, and results are surfaced to a human operator. It covers the operator console, this public landing and documentation surface, and the covenant-tui terminal binary — all reading the same daemon with no privileged shortcut around the IPC and HTTP surfaces.",
+      "The compositor is how agent state, decisions, and results are surfaced to a human operator. It covers the operator console, this public landing and documentation surface, and the covenant-tui terminal binary, all reading the same daemon with no privileged shortcut around the IPC and HTTP surfaces.",
     docHref: "https://docs.opencovenant.org/architecture",
   },
   {

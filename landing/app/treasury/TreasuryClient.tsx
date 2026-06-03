@@ -181,12 +181,12 @@ function Dashboard({ state }: { state: TreasuryState }) {
           <Panel>
             <PanelEyebrow>Status</PanelEyebrow>
             <div className="mt-6 flex items-center justify-between">
-              <span className="text-[12px] uppercase tracking-[0.22em] text-neutral-500">
+              <span className="text-[12px] uppercase tracking-[0.22em] text-neutral-400">
                 Protocol state
               </span>
               <StatusPill ok={!config.paused} label={config.paused ? "Paused" : "Active"} />
             </div>
-            <p className="mt-4 text-[12px] leading-relaxed text-neutral-500">
+            <p className="mt-4 text-[12px] leading-relaxed text-neutral-400">
               If the protocol is paused, you cannot open new positions or claim
               rewards. You can still withdraw your principal once your lock
               period ends.
@@ -201,7 +201,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
               <TierLine days={90} multiplier="1.5×" />
               <TierLine days={180} multiplier="2.0×" />
             </div>
-            <p className="mt-6 text-[11px] leading-relaxed text-neutral-500">
+            <p className="mt-6 text-[11px] leading-relaxed text-neutral-400">
               A position&apos;s weight equals its principal multiplied by the
               tier coefficient. Distribution shares are computed from weight,
               not principal.
@@ -221,7 +221,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
       <div className="mt-6">
         <Panel>
           <PanelEyebrow>Disclosures</PanelEyebrow>
-          <ul className="mt-6 grid grid-cols-1 gap-4 text-[12px] leading-relaxed text-neutral-500 sm:grid-cols-2">
+          <ul className="mt-6 grid grid-cols-1 gap-4 text-[12px] leading-relaxed text-neutral-400 sm:grid-cols-2">
             <li>All values on this page are read directly from the program&apos;s on-chain state at the most recent confirmed slot.</li>
             <li>Distribution amounts reflect actual protocol revenue and are not guaranteed. Past distributions do not predict future amounts.</li>
             <li>Locked principal is non-transferable. Positions cannot be withdrawn before their lock period elapses.</li>
@@ -237,7 +237,7 @@ function PageHeader() {
   return (
     <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
-        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant Stake</div>
+        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-400">Covenant Stake</div>
         <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
           Treasury
         </h1>
@@ -263,17 +263,17 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 function PanelEyebrow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-500">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-400">{children}</div>
   );
 }
 
 function KpiCard({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
     <div className="rounded-md border border-neutral-900 bg-neutral-950/50 p-6">
-      <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">{label}</div>
       <div className="mt-4 flex items-baseline gap-2">
         <span className="font-mono text-2xl font-light tracking-tight text-neutral-50 sm:text-3xl">{value}</span>
-        <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">{unit}</span>
+        <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">{unit}</span>
       </div>
     </div>
   );
@@ -286,7 +286,7 @@ function SplitCard({ label, value, detail }: { label: string; value: string; det
         <span className="text-[11px] uppercase tracking-[0.22em] text-neutral-400">{label}</span>
         <span className="font-mono text-lg text-neutral-50">{value}</span>
       </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">{detail}</p>
+      <p className="mt-2 text-[11px] leading-relaxed text-neutral-400">{detail}</p>
     </div>
   );
 }
@@ -294,7 +294,7 @@ function SplitCard({ label, value, detail }: { label: string; value: string; det
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-600">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
       <div className="mt-1 font-mono text-sm text-neutral-100">{value}</div>
     </div>
   );

@@ -1,14 +1,15 @@
 # Covenant
 
-> Covenant is an open, local-first, agent-native operating layer. It runs as a local daemon on the host and exposes eight operating-layer primitives — intent, runtime, memory, identity, permissions, comms, compositor, and settlement — through which human users, software agents, and tools coordinate work, share state, and account for resource usage. License Apache-2.0. Version 0.1.0-alpha.1.
+> Covenant is an open, local-first, agent-native operating layer. It runs as a local daemon on the host and exposes eight operating-layer primitives (intent, runtime, memory, identity, permissions, comms, compositor, and settlement) through which human users, software agents, and tools coordinate work, share state, and account for resource usage. License Apache-2.0. Version 0.1.0-alpha.1.
 
 Covenant sits between the host OS and agentic applications. Agents are package directories with an agent.toml manifest; permissions are ed25519-signed capability tokens; every state change is appended to a hash-linked audit log; resource usage produces local settlement receipts. The canonical vocabulary is: intent, agent, capability, memory record, audit event, settlement receipt.
 
 ## Docs
 
+- [FAQ](https://opencovenant.org/faq): Short answers to common questions (what Covenant is, how it differs from MCP, whether it needs a blockchain, the eight primitives, and its pre-1.0 status).
 - [Overview](https://docs.opencovenant.org/): What Covenant is and where it sits in the stack.
 - [Getting started](https://docs.opencovenant.org/getting-started): Build from source, run the daemon, dispatch a first intent.
-- [Concepts](https://docs.opencovenant.org/concepts): The data model — intents, agents, capabilities, memory, audit, settlement.
+- [Concepts](https://docs.opencovenant.org/concepts): The data model: intents, agents, capabilities, memory, audit, settlement.
 - [The eight primitives](https://docs.opencovenant.org/primitives): Definitions of all eight host-level primitives.
 - [Glossary](https://docs.opencovenant.org/glossary): Canonical one-line definitions of the eight primitives and core artifacts.
 - [System architecture](https://docs.opencovenant.org/architecture): Daemon, runtime, local control plane, settlement scaffold.
@@ -26,7 +27,7 @@ Covenant sits between the host OS and agentic applications. Agents are package d
 
 ## Research
 
-- [Technical whitepaper](https://doi.org/10.5281/zenodo.20134416): Covenant — a capability-based operating layer for autonomous software-engineering agents.
+- [Technical whitepaper](https://doi.org/10.5281/zenodo.20134416): Covenant, a capability-based operating layer for autonomous software-engineering agents.
 - [Source repository](https://github.com/open-covenant/covenant)
 
 ## Optional

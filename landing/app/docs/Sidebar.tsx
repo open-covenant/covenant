@@ -31,7 +31,7 @@ export function Sidebar() {
       >
         <a
           href="https://opencovenant.org"
-          className="mb-10 block text-xs uppercase tracking-[0.4em] text-neutral-500 hover:text-neutral-300"
+          className="mb-10 block text-xs uppercase tracking-[0.4em] text-neutral-400 hover:text-neutral-300"
         >
           ← covenant
         </a>
@@ -39,7 +39,7 @@ export function Sidebar() {
         <nav aria-label="Documentation" className="space-y-8 pb-20">
           {DOCS_NAV.map((section) => (
             <div key={section.title}>
-              <h3 className="mb-3 text-[11px] font-medium uppercase tracking-[0.2em] text-neutral-500">
+              <h3 className="mb-3 text-[11px] font-medium uppercase tracking-[0.2em] text-neutral-400">
                 {section.title}
               </h3>
               <ul className="space-y-1.5">

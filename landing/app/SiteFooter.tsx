@@ -20,7 +20,7 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
   return (
     <footer
       className={[
-        "flex flex-wrap items-center justify-center gap-x-6 gap-y-2 px-4 text-center text-[12px] text-neutral-500 sm:text-[13px]",
+        "flex flex-wrap items-center justify-center gap-x-6 gap-y-2 px-4 text-center text-[12px] text-neutral-400 sm:text-[13px]",
         className ?? "",
       ]
         .filter(Boolean)

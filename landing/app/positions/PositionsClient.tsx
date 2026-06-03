@@ -151,7 +151,7 @@ export function PositionsClient() {
             {!publicKey ? (
               <div className="mt-8 text-center">
                 <ConnectButton />
-                <p className="mt-4 text-[11px] text-neutral-500">Connect to view your positions.</p>
+                <p className="mt-4 text-[11px] text-neutral-400">Connect to view your positions.</p>
               </div>
             ) : (
               <div className="mt-6 grid grid-cols-1 gap-4">
@@ -175,7 +175,7 @@ export function PositionsClient() {
             )}
 
             {publicKey && (
-              <div className="mt-6 border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-600">
+              <div className="mt-6 border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-400">
                 <Link href="/stake" className="transition-colors hover:text-neutral-300">
                   Open another position →
                 </Link>
@@ -209,7 +209,7 @@ export function PositionsClient() {
           <PanelEyebrow>Open positions</PanelEyebrow>
 
           {!publicKey && (
-            <p className="mt-10 text-center text-[12px] text-neutral-500">
+            <p className="mt-10 text-center text-[12px] text-neutral-400">
               Connect a wallet to view your positions.
             </p>
           )}
@@ -220,7 +220,7 @@ export function PositionsClient() {
 
           {publicKey && positions !== null && positions.length === 0 && !loading && (
             <div className="mt-12 text-center">
-              <p className="text-[12px] text-neutral-500">No open positions in this wallet.</p>
+              <p className="text-[12px] text-neutral-400">No open positions in this wallet.</p>
               <Link
                 href="/stake"
                 className="mt-6 inline-block rounded-sm bg-neutral-50 px-6 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-950 transition-colors hover:bg-white"
@@ -279,7 +279,7 @@ function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
-        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant Stake</div>
+        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-400">Covenant Stake</div>
         <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
           {title}
         </h1>
@@ -302,14 +302,14 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 function PanelEyebrow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-500">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-400">{children}</div>
   );
 }
 
 function StatRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between border-b border-neutral-900 pb-3 last:border-0 last:pb-0">
-      <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">{label}</div>
+      <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
       <div className="font-mono text-base text-neutral-100">{value}</div>
     </div>
   );
@@ -318,10 +318,10 @@ function StatRow({ label, value }: { label: string; value: string }) {
 function Step({ index, title, body }: { index: string; title: string; body: string }) {
   return (
     <li className="grid grid-cols-[2rem_1fr] gap-4">
-      <span className="pt-1 font-mono text-[11px] text-neutral-600">{index}</span>
+      <span className="pt-1 font-mono text-[11px] text-neutral-400">{index}</span>
       <div>
         <div className="text-[13px] font-medium text-neutral-100">{title}</div>
-        <div className="mt-1 text-[12px] leading-relaxed text-neutral-500">{body}</div>
+        <div className="mt-1 text-[12px] leading-relaxed text-neutral-400">{body}</div>
       </div>
     </li>
   );
@@ -350,16 +350,16 @@ function PositionCard({
         <div>
           <div className="font-mono text-2xl font-light tracking-tight text-neutral-50 sm:text-3xl">
             {formatCvnt(position.amount, { maxFrac: 2 })}
-            <span className="ml-2 text-[10px] uppercase tracking-[0.22em] text-neutral-600">CVNT</span>
+            <span className="ml-2 text-[10px] uppercase tracking-[0.22em] text-neutral-400">CVNT</span>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] uppercase tracking-[0.2em] text-neutral-400">
             <span>{tierLabel(position.multiplierBps)}</span>
             <span className="text-neutral-700">·</span>
             <span>Weight {formatCvnt(position.weight, { maxFrac: 0 })} CVNT-weighted</span>
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">Claimable</div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">Claimable</div>
           <div className="mt-1 font-mono text-base text-emerald-300">
             {formatSol(pending, { maxFrac: 6 })} SOL
           </div>
@@ -415,7 +415,7 @@ function Metric({
     highlight === "ok" ? "text-emerald-300" : highlight === "warn" ? "text-amber-300" : "text-neutral-100";
   const inner = (
     <>
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-600">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
       <div className={`mt-1 font-mono text-[12px] ${tone}`}>{value}</div>
     </>
   );

@@ -24,10 +24,12 @@ export const NAV_LINKS = [
 ];
 
 export const FOOTER_LINKS = [
+  { label: "FAQ", href: "/faq", external: false as const },
+  { label: "Changelog", href: "/changelog", external: false as const },
+  { label: "Treasury", href: "/treasury", external: false as const },
+  { label: "Paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },
   { label: "Terms of Service", href: "/terms", external: false as const },
   { label: "Privacy Policy", href: "/privacy", external: false as const },
-  { label: "Paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },
-  { label: "Treasury", href: "/treasury", external: false as const },
   { label: "Contact", href: "/contact", external: false as const },
 ];
 

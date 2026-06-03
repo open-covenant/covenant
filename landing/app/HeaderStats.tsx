@@ -23,7 +23,7 @@ function uptime(sinceISO: string): string {
 function Cell({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div className="flex flex-col items-end leading-none">
-      <span className="text-[9px] uppercase tracking-[0.18em] text-neutral-600">{label}</span>
+      <span className="text-[9px] uppercase tracking-[0.18em] text-neutral-400">{label}</span>
       <span
         className="mt-1 text-[12px] tabular-nums"
         style={{ color: accent ? "#7f9f78" : "#e0e0e0" }}

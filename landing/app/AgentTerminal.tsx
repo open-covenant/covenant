@@ -11,12 +11,12 @@ type AgentEvent =
 const COLOR: Record<string, string> = {
   cmd: "#cacaca",
   write: "#9a9a9a",
-  diff: "#6b6b6b",
-  meta: "#585858",
+  diff: "#868686",
+  meta: "#808080",
   hunk: "#7c8a99",
   add: "#7f9f78",
   del: "#a8807f",
-  ctx: "#707070",
+  ctx: "#8c8c8c",
   commit: "#b6b6b6",
   blank: "transparent",
 };
@@ -215,14 +215,14 @@ export function AgentTerminal({
         .join(" ")}
     >
       <div className="flex items-center gap-2 border-b border-neutral-800/70 px-3 py-2">
-        <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">
+        <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">
           Covenant build
         </span>
         <span className="ml-auto flex items-center gap-1.5">
           <span
             className={`h-1 w-1 rounded-full ${connected ? "animate-pulse bg-[#7f9f78]" : "bg-neutral-600"}`}
           />
-          <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-600">
+          <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">
             {connected ? "live" : "replay"}
           </span>
         </span>
@@ -231,7 +231,7 @@ export function AgentTerminal({
             type="button"
             onClick={onClose}
             aria-label="Hide agent log"
-            className="-mr-1 ml-1 rounded p-1 text-neutral-500 transition-colors hover:text-neutral-200 xl:hidden"
+            className="-mr-1 ml-1 rounded p-1 text-neutral-400 transition-colors hover:text-neutral-200 xl:hidden"
           >
             <X className="h-3.5 w-3.5" />
           </button>

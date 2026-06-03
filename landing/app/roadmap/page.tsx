@@ -146,7 +146,7 @@ export default function RoadmapPage() {
                   }
                 />
                 <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                  <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-500">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-neutral-400">
                     {m.code}
                   </span>
                   <h2 className="text-[13px] uppercase tracking-[0.25em] text-neutral-100 sm:text-[14px]">
@@ -156,7 +156,7 @@ export default function RoadmapPage() {
                     className={
                       m.live
                         ? "ml-auto text-[10px] uppercase tracking-[0.25em] text-neutral-200"
-                        : "ml-auto text-[10px] uppercase tracking-[0.25em] text-neutral-600"
+                        : "ml-auto text-[10px] uppercase tracking-[0.25em] text-neutral-400"
                     }
                   >
                     {m.status}

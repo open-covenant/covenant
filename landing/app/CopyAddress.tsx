@@ -27,7 +27,7 @@ export function CopyAddress({ address, label }: { address: string; label?: strin
       {copied ? (
         <Check className="h-3.5 w-3.5 shrink-0 text-[#7f9f78]" />
       ) : (
-        <Copy className="h-3.5 w-3.5 shrink-0 text-neutral-500 transition-colors group-hover:text-neutral-300" />
+        <Copy className="h-3.5 w-3.5 shrink-0 text-neutral-400 transition-colors group-hover:text-neutral-300" />
       )}
     </button>
   );

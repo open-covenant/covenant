@@ -2,10 +2,10 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Covenant — open agent-native operating layer",
+    name: "Covenant: open agent-native operating layer",
     short_name: "Covenant",
     description:
-      "Covenant is the coordination layer for agentic software — host-level primitives for humans and agents.",
+      "Covenant is the coordination layer for agentic software. Host-level primitives for humans and agents.",
     start_url: "/",
     scope: "/",
     display: "standalone",

@@ -190,9 +190,9 @@ export function StakeClient() {
                 onChange={(e) => setAmount(e.target.value)}
                 className="min-w-0 flex-1 bg-transparent text-3xl font-light tracking-tight text-neutral-50 outline-none placeholder:text-neutral-700 sm:text-4xl"
               />
-              <span className="text-[11px] uppercase tracking-[0.22em] text-neutral-500">CVNT</span>
+              <span className="text-[11px] uppercase tracking-[0.22em] text-neutral-400">CVNT</span>
             </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-[11px] text-neutral-500">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-[11px] text-neutral-400">
               <div className="flex items-center gap-4">
                 <span>
                   Available <span className="font-mono text-neutral-300">{balanceDisplay}</span>
@@ -252,7 +252,7 @@ export function StakeClient() {
             </button>
 
             <div className="mt-3 min-h-[1.25rem] text-center text-[11px]">
-              {!publicKey && <span className="text-neutral-500">Connect a wallet to open a position.</span>}
+              {!publicKey && <span className="text-neutral-400">Connect a wallet to open a position.</span>}
               {publicKey && capReached && (
                 <span className="text-amber-300">
                   The protocol position cap has been reached. New positions can be opened after an existing position closes.
@@ -290,8 +290,8 @@ export function StakeClient() {
           </div>
 
           {publicKey && stakeSource && accounts && accounts.length > 0 && (
-            <div className="mt-8 border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-600">
-              Source · <span className="font-mono normal-case tracking-normal text-neutral-500">{shortAddr(stakeSource.pubkey.toBase58(), 6, 6)}</span>
+            <div className="mt-8 border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-400">
+              Source · <span className="font-mono normal-case tracking-normal text-neutral-400">{shortAddr(stakeSource.pubkey.toBase58(), 6, 6)}</span>
               {accounts.length > 1 && <span className="ml-2">({accounts.length} CVNT accounts found, largest selected)</span>}
             </div>
           )}
@@ -341,7 +341,7 @@ export function StakeClient() {
                 }
               />
             </div>
-            <div className="mt-6 flex items-center justify-between border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-600">
+            <div className="mt-6 flex items-center justify-between border-t border-neutral-900 pt-4 text-[10px] uppercase tracking-[0.22em] text-neutral-400">
               <Link href="/treasury" className="transition-colors hover:text-neutral-300">
                 Protocol treasury →
               </Link>
@@ -374,7 +374,7 @@ export function StakeClient() {
 
           <Panel>
             <PanelEyebrow>Considerations</PanelEyebrow>
-            <ul className="mt-6 space-y-3 text-[12px] leading-relaxed text-neutral-500">
+            <ul className="mt-6 space-y-3 text-[12px] leading-relaxed text-neutral-400">
               <li>Locked principal is non-transferable and cannot be withdrawn before the lock period ends.</li>
               <li>Distribution amounts depend on protocol revenue. Past distributions do not predict future amounts.</li>
               <li>The protocol may be paused by the operator in response to incidents. New positions and reward claims are paused with it; principal withdrawal after lock expiry is not.</li>
@@ -390,7 +390,7 @@ function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div className="mb-10 flex flex-col items-start gap-4 border-b border-neutral-900 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div>
-        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Covenant Stake</div>
+        <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-400">Covenant Stake</div>
         <h1 className="mt-3 text-3xl font-extralight tracking-tight text-neutral-50 sm:text-4xl">
           {title}
         </h1>
@@ -413,13 +413,13 @@ function Panel({ children }: { children: React.ReactNode }) {
 
 function PanelEyebrow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-500">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.28em] text-neutral-400">{children}</div>
   );
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">{children}</div>
+    <div className="text-[10px] uppercase tracking-[0.22em] text-neutral-400">{children}</div>
   );
 }
 
@@ -474,7 +474,7 @@ function TierButton({
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-600">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
       <div className="mt-1 font-mono text-sm text-neutral-200">{value}</div>
     </div>
   );
@@ -484,10 +484,10 @@ function StatRow({ label, value, hint }: { label: string; value: string; hint?: 
   return (
     <div className="border-b border-neutral-900 pb-3 last:border-0 last:pb-0">
       <div className="flex items-baseline justify-between">
-        <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">{label}</div>
+        <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-400">{label}</div>
         <div className="font-mono text-base text-neutral-100">{value}</div>
       </div>
-      {hint && <div className="mt-1 text-[10px] leading-relaxed text-neutral-600">{hint}</div>}
+      {hint && <div className="mt-1 text-[10px] leading-relaxed text-neutral-400">{hint}</div>}
     </div>
   );
 }
@@ -495,10 +495,10 @@ function StatRow({ label, value, hint }: { label: string; value: string; hint?: 
 function Step({ index, title, body }: { index: string; title: string; body: string }) {
   return (
     <li className="grid grid-cols-[2rem_1fr] gap-4">
-      <span className="pt-1 font-mono text-[11px] text-neutral-600">{index}</span>
+      <span className="pt-1 font-mono text-[11px] text-neutral-400">{index}</span>
       <div>
         <div className="text-[13px] font-medium text-neutral-100">{title}</div>
-        <div className="mt-1 text-[12px] leading-relaxed text-neutral-500">{body}</div>
+        <div className="mt-1 text-[12px] leading-relaxed text-neutral-400">{body}</div>
       </div>
     </li>
   );

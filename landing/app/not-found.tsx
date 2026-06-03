@@ -17,7 +17,7 @@ export default function NotFound() {
       <SiteHeader />
 
       <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-        <p className="font-mono text-[11px] uppercase tracking-[0.4em] text-neutral-500">
+        <p className="font-mono text-[11px] uppercase tracking-[0.4em] text-neutral-400">
           404
         </p>
         <h1 className="mt-4 text-2xl font-extralight tracking-tight text-neutral-100 sm:text-3xl">

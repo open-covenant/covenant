@@ -7,7 +7,7 @@ type Status = "idle" | "sending" | "sent" | "error";
 const field =
   "w-full border border-neutral-800 bg-neutral-950/50 px-3 py-3 text-[13px] text-neutral-100 placeholder:text-neutral-600 outline-none backdrop-blur-sm transition-colors focus:border-neutral-500 focus:bg-neutral-950/70 sm:text-[14px]";
 const label =
-  "mb-2 block text-[10px] uppercase tracking-[0.3em] text-neutral-500";
+  "mb-2 block text-[10px] uppercase tracking-[0.3em] text-neutral-400";
 
 export function ContactForm() {
   const [status, setStatus] = useState<Status>("idle");
@@ -99,7 +99,7 @@ export function ContactForm() {
           {status === "sending" ? "Sending" : "Send"}
         </button>
         {status === "error" && (
-          <span className="text-[12px] text-neutral-500">{error}</span>
+          <span className="text-[12px] text-neutral-400">{error}</span>
         )}
       </div>
     </form>

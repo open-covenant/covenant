@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { FOOTER_LINKS, RELEASE_STATUS, TAGLINE } from "./_brand";
+import { FOOTER_LINKS } from "./_brand";
 
 type SiteFooterProps = {
   /** Extra classes for the outer <footer>. Pages own positioning. */
@@ -20,25 +20,20 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
   return (
     <footer
       className={[
-        "flex flex-col items-center gap-3 px-4 text-center",
+        "flex flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 text-center",
         className ?? "",
       ]
         .filter(Boolean)
         .join(" ")}
       style={style}
     >
-      <span className="inline-flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-widest text-neutral-500 sm:text-[11px]">
-        <Image
-          src="/logomark.svg"
-          alt=""
-          width={30}
-          height={15}
-          className="h-auto w-[30px] opacity-70"
-        />
-        <span>
-          Covenant · {TAGLINE} · {RELEASE_STATUS.toLowerCase()}
-        </span>
-      </span>
+      <Image
+        src="/logomark.svg"
+        alt="Covenant"
+        width={30}
+        height={15}
+        className="h-auto w-[30px] opacity-70"
+      />
       <nav
         aria-label="Footer"
         className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[12px] text-neutral-500 sm:text-[13px]"

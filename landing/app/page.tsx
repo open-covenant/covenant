@@ -40,21 +40,40 @@ export default function Page() {
         </p>
       </div>
 
-      <HeroMesh src="/hero-bg.jpg" />
-
       <SiteHeader />
 
       <AgentTerminalDock />
 
-      <a
-        href="https://sandbox.opencovenant.org"
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Try the interactive Covenant sandbox"
-        className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 translate-y-[calc(-50%+50px)] whitespace-nowrap rounded-full border border-neutral-500/40 bg-black/30 px-4 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-200 backdrop-blur-sm transition-colors hover:border-neutral-50/70 hover:text-neutral-50 sm:px-6 sm:text-[12px]"
-      >
-        Try the sandbox →
-      </a>
+      <div className="absolute inset-0 z-10 flex -translate-y-[100px] flex-col items-center justify-center gap-6 px-6 pb-6 pt-[calc(88px_+_env(safe-area-inset-top))] text-center">
+        <div className="relative w-full max-h-[53vh] flex-1 overflow-hidden">
+          <HeroMesh src="/hero-bg.jpg" />
+        </div>
+        <p className="max-w-2xl text-balance text-[15px] font-light leading-relaxed text-neutral-200 sm:text-lg">
+          Not a chatbot. Not an agent framework. An open operating layer where
+          every agent runs under a <span className="text-white">signed grant</span>,
+          every action leaves a <span className="text-white">receipt</span>, and the
+          system itself is built in the open by an{" "}
+          <span className="text-white">autonomous loop that never stops</span> —
+          live, in public, onchain.
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <a
+            href="https://sandbox.opencovenant.org"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Try the interactive Covenant sandbox"
+            className="rounded-full bg-white px-5 py-2.5 text-[11px] uppercase tracking-[0.28em] text-black transition-colors hover:bg-neutral-200 sm:px-6 sm:text-[12px]"
+          >
+            Try the sandbox →
+          </a>
+          <Link
+            href="/about"
+            className="rounded-full border border-neutral-700/50 px-5 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-400 transition-colors hover:border-neutral-500 hover:text-neutral-100 sm:px-6 sm:text-[12px]"
+          >
+            Learn about Covenant
+          </Link>
+        </div>
+      </div>
 
       <SiteFooter
         className="absolute inset-x-0 z-20"

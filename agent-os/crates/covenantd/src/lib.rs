@@ -5498,12 +5498,26 @@ impl Server {
         });
 
         // Check 2: parent references should resolve against the memory store,
-        // even when the parent sits outside the sampled recent window.
+        // even when the parent sits outside the sampled recent window. A
+        // self-parent (parent == id) resolves via get() and would otherwise
+        // hide the cycle behind memory_stale_parent's None branch, so guard
+        // it explicitly before the lookup.
         let mut stale_parent_refs = 0_u64;
+        let mut self_parent_refs = 0_u64;
         for record in &memories {
             let Some(parent) = record.parent else {
                 continue;
             };
+            if parent == record.id {
+                self_parent_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_self_parent".into(),
+                    id: Some(record.id.to_string()),
+                    message: "memory record's parent references itself".into(),
+                    repair: "detach the self-referential parent through an explicit detach_parent repair command".into(),
+                });
+                continue;
+            }
             match self.memory.get(parent).await {
                 Ok(Some(_)) => {}
                 Ok(None) => {
@@ -5522,11 +5536,13 @@ impl Server {
                 }
             }
         }
-        orphans_total += stale_parent_refs;
+        orphans_total += stale_parent_refs + self_parent_refs;
         checks.push(VerifyCheck {
             name: "memory parent references".into(),
-            passed: stale_parent_refs == 0,
-            message: format!("{stale_parent_refs} stale parent reference(s)"),
+            passed: stale_parent_refs == 0 && self_parent_refs == 0,
+            message: format!(
+                "{stale_parent_refs} stale parent reference(s), {self_parent_refs} self-parent reference(s)"
+            ),
         });
 
         // Check 3: every capability in the granted set has a matching
@@ -8988,6 +9004,68 @@ required = {caps:?}
                 assert!(drift
                     .iter()
                     .any(|item| item.kind == "memory_without_receipt"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_self_parent_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "self-referencing memory".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(memory_id),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let self_parent = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_self_parent"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected memory_self_parent: {drift:?}"));
+                assert!(
+                    self_parent.repair.contains("detach_parent"),
+                    "repair hint should name detach_parent: {}",
+                    self_parent.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "memory_stale_parent"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    }),
+                    "self-parent must not double-report as memory_stale_parent: {drift:?}"
+                );
+                let parent_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory parent references")
+                    .unwrap_or_else(|| panic!("expected parent references check: {checks:?}"));
+                assert!(!parent_check.passed);
+                assert!(
+                    parent_check.message.contains("1 self-parent reference"),
+                    "check message should count self-parent refs: {}",
+                    parent_check.message
+                );
+                assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),
         }

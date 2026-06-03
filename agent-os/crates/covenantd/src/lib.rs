@@ -5960,7 +5960,17 @@ impl Server {
         // AuditIntegrityReport chain hash covers byte-for-byte tampering
         // of the persisted file, not the semantic invariant that
         // timestamps reflect real wall time at write.
+        //
+        // The same reasoning covers AuditEvent.id: every production audit
+        // event allocates its id via Uuid::new_v4(), which never produces
+        // the nil UUID (00000000-0000-0000-0000-000000000000). A persisted
+        // event with id == Uuid::nil() is out-of-band evidence: a serde
+        // regression that dropped the Uuid field at deserialization
+        // (Uuid::default() is nil), an import/replay tool that constructed
+        // events without Uuid::new_v4(), or a direct JSONL edit zeroing
+        // the id to break cross-event correlation by event id.
         let mut zero_timestamp_audit_refs = 0_u64;
+        let mut nil_id_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -5974,12 +5984,26 @@ impl Server {
                     repair: "review the audit JSONL row and the writer that produced it; production audit writes always stamp epoch_ms() at the time of record".into(),
                 });
             }
+            if event.id.is_nil() {
+                nil_id_audit_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "audit_event_id_nil".into(),
+                    id: Some(event.id.to_string()),
+                    message: format!(
+                        "audit event at timestamp_ms = {} has id = {}; Uuid::new_v4() does not produce the nil UUID",
+                        event.timestamp_ms, event.id
+                    ),
+                    repair: "review the audit JSONL row and the writer that produced it; production audit writes always allocate event id via Uuid::new_v4() so the row can be referenced by id from drift, capability, and memory correlation tables".into(),
+                });
+            }
         }
-        orphans_total += zero_timestamp_audit_refs;
+        orphans_total += zero_timestamp_audit_refs + nil_id_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
-            passed: zero_timestamp_audit_refs == 0,
-            message: format!("{zero_timestamp_audit_refs} zero-timestamp audit event(s)"),
+            passed: zero_timestamp_audit_refs == 0 && nil_id_audit_refs == 0,
+            message: format!(
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s)"
+            ),
         });
 
         Response::VerifyReport {
@@ -9793,6 +9817,65 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zero-timestamp audit event"),
                     "check message should count zero-timestamp events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_event_id_nil_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::nil(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::AuthenticationFailed {
+                    transport: "ipc".into(),
+                    reason: "fixture".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_event_id_nil"
+                            && item.id.as_deref() == Some(&Uuid::nil().to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected audit_event_id_nil: {drift:?}"));
+                assert!(
+                    row.message.contains("Uuid::new_v4()"),
+                    "drift message should name the new_v4 invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("Uuid::new_v4()"),
+                    "repair hint should name Uuid::new_v4: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 nil-id audit event"),
+                    "check message should count nil-id events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

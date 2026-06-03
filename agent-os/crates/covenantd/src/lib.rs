@@ -5816,14 +5816,18 @@ impl Server {
             ),
         });
 
-        // Check 5: every memory record must carry non-empty text. The SQLite
-        // schema only enforces TEXT NOT NULL, so empty strings round-trip
-        // through put() today. An empty body produces a noise embedding,
-        // cannot anchor retrieval, and is the visible footprint of a tool
-        // emitter that dropped its result or an out-of-band write that
-        // bypassed dispatch. The verifier surfaces them; the existing
-        // delete_record repair is the safe handler.
+        // Check 5: memory record integrity. Two signals fold into this row:
+        //   - empty text. The SQLite schema only enforces TEXT NOT NULL, so
+        //     empty strings round-trip through put() today. An empty body
+        //     produces a noise embedding and cannot anchor retrieval.
+        //   - NaN inside the embedding vector. cosine() short-circuits on
+        //     na/nb == 0.0 but NaN never satisfies that comparison, so a
+        //     single NaN poisons every similarity that record competes in.
+        //     SQLite stores the embedding as a raw f32 BLOB and
+        //     embedding_to_bytes/from_bytes preserve NaN bit patterns intact.
+        // The existing delete_record repair handles both cases.
         let mut empty_text_refs = 0_u64;
+        let mut nan_embedding_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -5834,12 +5838,26 @@ impl Server {
                     repair: "review the record source; safe removals go through an explicit delete_record repair command".into(),
                 });
             }
+            if record.embedding.iter().any(|v| v.is_nan()) {
+                nan_embedding_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_nan_embedding".into(),
+                    id: Some(record.id.to_string()),
+                    message: format!(
+                        "memory record {} embedding contains NaN values",
+                        record.id
+                    ),
+                    repair: "the embedding is unusable for cosine ranking; safe removals go through an explicit delete_record repair command".into(),
+                });
+            }
         }
-        orphans_total += empty_text_refs;
+        orphans_total += empty_text_refs + nan_embedding_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
-            passed: empty_text_refs == 0,
-            message: format!("{empty_text_refs} empty-text record(s)"),
+            passed: empty_text_refs == 0 && nan_embedding_refs == 0,
+            message: format!(
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s)"
+            ),
         });
 
         Response::VerifyReport {
@@ -9229,6 +9247,66 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 empty-text record"),
                     "check message should count empty-text records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_nan_embedding_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "nan-embedding fixture".into(),
+                embedding: vec![1.0, f32::NAN, 0.5],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let nan = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_nan_embedding"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected memory_nan_embedding: {drift:?}"));
+                assert!(
+                    nan.repair.contains("delete_record"),
+                    "repair hint should name delete_record: {}",
+                    nan.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| item.kind == "memory_empty_text"
+                        && item.id.as_deref() == Some(&memory_id.to_string())),
+                    "non-empty text must not double-report as memory_empty_text: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 NaN-embedding record"),
+                    "check message should count NaN-embedding records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

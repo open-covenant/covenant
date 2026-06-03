@@ -26,6 +26,7 @@ The verifier returns two layers:
 | `memory_receipt_resource_mismatch` | A settlement receipt carries `memory_record_id` but reports a non-Memory `resource`. |
 | `memory_receipt_settled_before_created` | A settlement receipt's `settled_at` precedes the correlated memory record's `created_at`. |
 | `memory_empty_text` | A memory record's `text` is empty; the record cannot anchor retrieval and usually indicates a tool emitter that dropped its result body. |
+| `memory_nan_embedding` | A memory record's `embedding` contains NaN values; cosine similarity poisons every ranking the record competes in. |
 
 ## Operator Posture
 

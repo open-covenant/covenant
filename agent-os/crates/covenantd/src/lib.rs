@@ -5632,6 +5632,25 @@ impl Server {
         // passing when their aggregate accounting is still balanced.
         let memory_by_id: HashMap<Uuid, &MemoryRecord> =
             memories.iter().map(|memory| (memory.id, memory)).collect();
+        // memory_record_id is only set by memory writes, so a receipt that
+        // carries one while reporting a non-Memory resource is out-of-band
+        // mutation evidence. Pre-scan before the memory-resource filter so
+        // these surface as drift instead of being silently dropped.
+        let mut resource_mismatch_refs = 0_u64;
+        for receipt in &receipts {
+            if receipt.memory_record_id.is_some() && receipt.resource != ResourceKind::Memory {
+                resource_mismatch_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_receipt_resource_mismatch".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt {} carries memory_record_id but resource is {:?}",
+                        receipt.id, receipt.resource
+                    ),
+                    repair: "review settlement provenance before retaining; memory_record_id is only set by memory writes".into(),
+                });
+            }
+        }
         let memory_receipts: Vec<&SettlementReceipt> = receipts
             .iter()
             .filter(|receipt| receipt.resource == ResourceKind::Memory)
@@ -5756,17 +5775,18 @@ impl Server {
             });
         }
         let receipt_drift = exact_diff.max(pair_diff);
-        orphans_total += receipt_drift;
+        orphans_total += receipt_drift + resource_mismatch_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ receipts".into(),
-            passed: exact_diff == 0 && pair_diff == 0,
+            passed: exact_diff == 0 && pair_diff == 0 && resource_mismatch_refs == 0,
             message: format!(
-                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}",
+                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}",
                 memories.len(),
                 memory_receipts.len(),
                 pair_diff,
                 exact_diff,
-                legacy_fallback_used
+                legacy_fallback_used,
+                resource_mismatch_refs
             ),
         });
 
@@ -9103,6 +9123,77 @@ required = {caps:?}
                     parent_check.message.contains("1 self-parent reference"),
                     "check message should count self-parent refs: {}",
                     parent_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_receipt_resource_mismatch_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let compute_receipt_id = Uuid::new_v4();
+        let bogus_memory_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: compute_receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: Some(bogus_memory_id),
+                credits_consumed: 1,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let mismatch = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_receipt_resource_mismatch"
+                            && item.id.as_deref() == Some(&compute_receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_receipt_resource_mismatch: {drift:?}")
+                    });
+                assert!(
+                    mismatch.message.contains("Compute"),
+                    "message should record observed resource: {}",
+                    mismatch.message
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_without_memory_record"
+                            && item.id.as_deref() == Some(&compute_receipt_id.to_string())
+                    }),
+                    "cross-resource receipt must not double-report under receipt_without_memory_record: {drift:?}"
+                );
+                let receipt_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
+                assert!(!receipt_check.passed);
+                assert!(
+                    receipt_check.message.contains("resource mismatch = 1"),
+                    "check message should count resource mismatches: {}",
+                    receipt_check.message
                 );
                 assert!(orphans_total >= 1);
             }

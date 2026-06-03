@@ -22,6 +22,7 @@ The verifier returns two layers:
 | `receipt_without_memory_record` | A settlement receipt references a missing memory record. |
 | `memory_receipt_duplicate` | More than one settlement receipt references the same memory record. |
 | `memory_receipt_owner_mismatch` | A receipt references a memory record owned by a different payer. |
+| `memory_receipt_resource_mismatch` | A settlement receipt carries `memory_record_id` but reports a non-Memory `resource`. |
 
 ## Operator Posture
 

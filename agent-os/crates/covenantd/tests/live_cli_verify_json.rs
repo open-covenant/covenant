@@ -1867,3 +1867,90 @@ async fn live_cli_verify_json_reports_receipt_id_nil_drift() {
 
     let _ = restarted.kill().await;
 }
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, inserts a nil-id memory record via SqliteStore, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_memory_record_id_nil_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let store = SqliteStore::open(&home.path().join("memory.db")).expect("open memory db");
+    let nil_record = MemoryRecord {
+        id: Uuid::nil(),
+        tier: MemoryTier::Working,
+        owner: AgentId::new("user@local", [0u8; 32]),
+        text: "nil-id fixture".into(),
+        embedding: vec![0.5; 8],
+        metadata: serde_json::json!({}),
+        created_at: 1_700_000_000_000,
+        parent: None,
+    };
+    store
+        .put(nil_record.clone())
+        .await
+        .expect("inject nil-id record");
+    let reread = store
+        .get(Uuid::nil())
+        .await
+        .expect("reload nil-id record")
+        .expect("nil-id record persists");
+    assert_eq!(
+        reread.id,
+        Uuid::nil(),
+        "SqliteStore must persist the nil id through put/get; otherwise the live coverage is meaningless"
+    );
+    drop(store);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when memory record id is nil: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let nil_id_str = Uuid::nil().to_string();
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("memory_record_id_nil")
+                && item["id"].as_str() == Some(nil_id_str.as_str())
+        })
+        .unwrap_or_else(|| panic!("expected memory_record_id_nil drift for nil UUID: {drift:?}"));
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("Uuid::new_v4()"),
+        "drift message should name the new_v4 invariant: {message:?}"
+    );
+    assert!(
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("Uuid::new_v4()")),
+        "memory nil-id drift repair string should name Uuid::new_v4(): {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}

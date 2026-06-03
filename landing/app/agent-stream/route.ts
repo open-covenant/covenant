@@ -22,8 +22,11 @@ export function GET() {
   let body: string;
   try {
     const root = findRepoRoot(process.cwd());
-    const data = root ? generateStream({ repoRoot: root }) : { lines: [] };
-    if (!data.lines.length) throw new Error("no git history");
+    const data = root ? generateStream({ repoRoot: root }) : { lines: [], commits: 0 };
+    // A shallow runtime checkout (e.g. Render clones depth=1) yields only a
+    // commit or two — far thinner than the committed snapshot. Prefer the
+    // snapshot unless the live history is genuinely rich.
+    if (!data.lines.length || (data.commits ?? 0) < 12) throw new Error("thin git history");
     body = JSON.stringify(data);
   } catch {
     body = readFileSync(join(process.cwd(), "public", "agent-stream.json"), "utf8");

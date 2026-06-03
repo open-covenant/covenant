@@ -4,7 +4,7 @@
 //
 // Re-run after notable commits:  node scripts/gen-agent-stream.mjs
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findRepoRoot, generateStream } from "../lib/agentStream.mjs";
@@ -15,11 +15,18 @@ const outFile = resolve(here, "..", "public", "agent-stream.json");
 
 const payload = generateStream({ repoRoot });
 
-// If git isn't available at build time (no .git / no git binary), generateStream
-// yields nothing. Keep the existing committed snapshot rather than clobbering it
-// with an empty one — the replay fallback must never go blank. Don't fail the build.
-if (!payload.lines.length) {
-  console.warn("gen-agent-stream: no git history available — keeping existing snapshot");
+// Never clobber the committed snapshot with a thinner one. A shallow build
+// checkout (e.g. Render clones depth=1, or no git at all) yields little or no
+// history; keep the existing richer snapshot so the replay fallback stays full.
+// Don't fail the build either way.
+let existingCommits = 0;
+try {
+  existingCommits = JSON.parse(readFileSync(outFile, "utf8")).commits || 0;
+} catch {}
+if (!payload.lines.length || payload.commits < existingCommits) {
+  console.warn(
+    `gen-agent-stream: generated ${payload.commits} commits (< existing ${existingCommits}) — keeping existing snapshot`,
+  );
   process.exit(0);
 }
 

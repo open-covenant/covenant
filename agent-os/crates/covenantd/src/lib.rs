@@ -5826,8 +5826,20 @@ impl Server {
         //     SQLite stores the embedding as a raw f32 BLOB and
         //     embedding_to_bytes/from_bytes preserve NaN bit patterns intact.
         // The existing delete_record repair handles both cases.
+        //
+        // record.id is allocated via Uuid::new_v4() at every production
+        // memory write site (either the Intent.id flow-through at IPC
+        // ingest or a fresh new_v4 at write time), and Uuid::new_v4()
+        // never produces the nil UUID. A persisted MemoryRecord with
+        // id == Uuid::nil() is out-of-band evidence: a serde regression
+        // that defaulted Uuid::default() at row hydration (default is
+        // nil), a future writer that constructed a record without
+        // Uuid::new_v4(), or a direct SQLite edit zeroing the id to
+        // break the memory_record_id back-reference that settlement
+        // receipts and audit IntentDispatched rows correlate on.
         let mut empty_text_refs = 0_u64;
         let mut nan_embedding_refs = 0_u64;
+        let mut nil_id_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -5850,13 +5862,25 @@ impl Server {
                     repair: "the embedding is unusable for cosine ranking; safe removals go through an explicit delete_record repair command".into(),
                 });
             }
+            if record.id.is_nil() {
+                nil_id_memory_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_record_id_nil".into(),
+                    id: Some(record.id.to_string()),
+                    message: format!(
+                        "memory record at created_at = {} has id = {}; Uuid::new_v4() does not produce the nil UUID",
+                        record.created_at, record.id
+                    ),
+                    repair: "review the memory store row and the writer that produced it; production memory writes always allocate id via Uuid::new_v4() so the row can be referenced by id from settlement receipt memory_record_id back-references and audit IntentDispatched correlation".into(),
+                });
+            }
         }
-        orphans_total += empty_text_refs + nan_embedding_refs;
+        orphans_total += empty_text_refs + nan_embedding_refs + nil_id_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
-            passed: empty_text_refs == 0 && nan_embedding_refs == 0,
+            passed: empty_text_refs == 0 && nan_embedding_refs == 0 && nil_id_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {nil_id_memory_refs} nil-id record(s)"
             ),
         });
 
@@ -9503,6 +9527,65 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 NaN-embedding record"),
                     "check message should count NaN-embedding records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_id_nil_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        s.memory
+            .put(MemoryRecord {
+                id: Uuid::nil(),
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "nil-id fixture".into(),
+                embedding: vec![0.5; 8],
+                metadata: serde_json::json!({}),
+                created_at: 1_700_000_000_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_id_nil"
+                            && item.id.as_deref() == Some(&Uuid::nil().to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected memory_record_id_nil: {drift:?}"));
+                assert!(
+                    row.message.contains("Uuid::new_v4()"),
+                    "drift message should name the new_v4 invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("Uuid::new_v4()"),
+                    "repair hint should name Uuid::new_v4: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 nil-id record"),
+                    "check message should count nil-id records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

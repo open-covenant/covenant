@@ -5860,6 +5860,36 @@ impl Server {
             ),
         });
 
+        // Check 6: settlement receipt integrity. annotate_receipt is the
+        // sole production path that fills confirmed_at, and it always sets
+        // chain/cluster/batch_id/merkle_root from the same ChainConfirmation.
+        // A receipt with confirmed_at = Some(_) but chain = None is therefore
+        // out-of-band evidence: a manual JSONL edit, a partial migration, or
+        // a future on-chain confirmation path that bypassed annotate_receipt.
+        // The verifier surfaces them; remediation is a settlement-team
+        // decision and is intentionally outside the memory-side repair set.
+        let mut confirmed_without_chain_refs = 0_u64;
+        for receipt in &receipts {
+            if receipt.confirmed_at.is_some() && receipt.chain.is_none() {
+                confirmed_without_chain_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_confirmed_without_chain".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt {} carries confirmed_at but chain is unset",
+                        receipt.id
+                    ),
+                    repair: "review settlement provenance before retaining; confirmed_at is only set by annotate_receipt alongside chain/cluster/batch_id/merkle_root".into(),
+                });
+            }
+        }
+        orphans_total += confirmed_without_chain_refs;
+        checks.push(VerifyCheck {
+            name: "settlement receipt integrity".into(),
+            passed: confirmed_without_chain_refs == 0,
+            message: format!("{confirmed_without_chain_refs} confirmed-without-chain receipt(s)"),
+        });
+
         Response::VerifyReport {
             window,
             checks,
@@ -9307,6 +9337,71 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 NaN-embedding record"),
                     "check message should count NaN-embedding records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_confirmed_without_chain_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_confirmed_without_chain"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected receipt_confirmed_without_chain: {drift:?}")
+                    });
+                assert!(
+                    row.repair.contains("annotate_receipt"),
+                    "repair hint should name annotate_receipt: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 confirmed-without-chain receipt"),
+                    "check message should count confirmed-without-chain receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

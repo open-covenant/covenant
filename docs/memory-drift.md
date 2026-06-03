@@ -27,6 +27,7 @@ The verifier returns two layers:
 | `memory_receipt_settled_before_created` | A settlement receipt's `settled_at` precedes the correlated memory record's `created_at`. |
 | `memory_empty_text` | A memory record's `text` is empty; the record cannot anchor retrieval and usually indicates a tool emitter that dropped its result body. |
 | `memory_nan_embedding` | A memory record's `embedding` contains NaN values; cosine similarity poisons every ranking the record competes in. |
+| `receipt_confirmed_without_chain` | A settlement receipt carries `confirmed_at` but `chain` is unset; only `annotate_receipt` writes `confirmed_at`, and it always sets `chain` from the same confirmation. |
 
 ## Operator Posture
 

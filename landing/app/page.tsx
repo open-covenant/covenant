@@ -19,12 +19,12 @@ export default function Page() {
       />
 
       <div className="sr-only">
-        <h1>Covenant — open agent-native operating layer</h1>
+        <h1>Covenant: open agent-native operating layer</h1>
         <p>
           Covenant is the open, local-first coordination layer for agentic
-          software. It gives humans and agents eight host-level primitives —
-          intent, runtime, memory, identity, permissions, communication, a
-          compositor, and on-chain settlement — so they can safely share one
+          software. It gives humans and agents eight host-level primitives
+          (intent, runtime, memory, identity, permissions, communication, a
+          compositor, and on-chain settlement) so they can safely share one
           computer. Try the{" "}
           <a href="https://sandbox.opencovenant.org">interactive sandbox</a>,
           read the{" "}

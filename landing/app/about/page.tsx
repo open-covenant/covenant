@@ -3,14 +3,14 @@ import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
 export const metadata: Metadata = {
-  title: "About — Covenant",
+  title: "About Covenant",
   description:
     "Covenant is an open, host-level operating layer for agentic software: every agent runs under a signed grant, every action leaves a receipt, and the system is built in the open by an autonomous loop.",
   alternates: { canonical: "/about" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/about",
-    title: "About Covenant — the operating layer for agentic software",
+    title: "About Covenant: the operating layer for agentic software",
     description:
       "Permission, not trust. A receipt for every decision. Built in the open by an autonomous loop that never stops.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    title: "About Covenant — the operating layer for agentic software",
+    title: "About Covenant: the operating layer for agentic software",
     description:
       "Permission, not trust. A receipt for every decision. Built in the open by an autonomous loop that never stops.",
     images: "/twitter-image.jpg",
@@ -42,11 +42,11 @@ const SECTIONS: Section[] = [
     body: (
       <p className={paragraph}>
         Think of an operating system: it sits between your apps and the hardware and decides what
-        each one is allowed to do. Covenant is that layer for AI agents. Its eight capabilities —
-        intent, runtime, memory, identity, permissions, comms, compositor, and settlement — are all
-        reached through one local service (a daemon) over your machine&apos;s own internal channels.
-        It doesn&apos;t replace your operating system, and it isn&apos;t a website you call out to:
-        it&apos;s infrastructure that runs on the machine where the work happens, under your control.
+        each one is allowed to do. Covenant is that layer for AI agents. It exposes eight
+        capabilities through one local service (a daemon) over your machine&apos;s own internal
+        channels: intent, runtime, memory, identity, permissions, comms, compositor, and settlement.
+        It doesn&apos;t replace your operating system, and it isn&apos;t a website you call out to.
+        It&apos;s infrastructure that runs on the machine where the work happens, under your control.
       </p>
     ),
   },
@@ -56,12 +56,12 @@ const SECTIONS: Section[] = [
     title: "Permission, not trust",
     body: (
       <p className={paragraph}>
-        Most software trusts an agent the moment it starts running — it can quietly reach anything
-        the program itself can. Covenant flips that. An agent gets no standing access. Every
-        privileged action needs a capability: a cryptographically signed permission slip (ed25519)
-        that names one specific action, can be narrowed to a scope, expires, and can be revoked. It
-        is checked the instant the action is attempted — so an agent can do exactly what you signed
-        for and nothing else, and the check runs the same way whether the action succeeds or fails.
+        Most software trusts an agent the moment it starts running. It can quietly reach anything the
+        program itself can. Covenant flips that. An agent gets no standing access. Every privileged
+        action needs a capability: a cryptographically signed permission slip (ed25519) that names
+        one specific action, can be narrowed to a scope, expires, and can be revoked. It is checked
+        the instant the action is attempted, so an agent can do exactly what you signed for and
+        nothing else, and the check runs the same way whether the action succeeds or fails.
       </p>
     ),
   },
@@ -71,10 +71,10 @@ const SECTIONS: Section[] = [
     title: "A receipt for every decision",
     body: (
       <p className={paragraph}>
-        Every consequential thing the system does is written down as it happens — who was issued an
+        Every consequential thing the system does is written down as it happens: who was issued an
         identity, which permissions were checked, what was settled. It all goes into a tamper-evident
         log: append-only and hash-chained, so any later edit breaks the chain and shows. Each entry
-        records what kind of event it was, who issued it, and when — and you can verify the whole
+        records what kind of event it was, who issued it, and when, and you can verify the whole
         chain yourself, on your own machine. The result is a receipt for every decision the system
         makes, kept no matter the outcome.
       </p>
@@ -88,7 +88,7 @@ const SECTIONS: Section[] = [
       <p className={paragraph}>
         Covenant is built the same way it asks you to run agents. An autonomous engineering loop
         picks a scoped task, writes the code, reviews its own changes, runs the tests, and commits to
-        a public repository — around the clock, under a neutral automation identity, with provenance
+        a public repository, around the clock, under a neutral automation identity, with provenance
         on every privileged change. The terminal on the{" "}
         <a href="https://opencovenant.org" className={linkClass}>
           home page
@@ -104,8 +104,8 @@ const SECTIONS: Section[] = [
     body: (
       <p className={paragraph}>
         One key, on your hardware, is the root of everything. A single ed25519 keypair per install
-        signs your permission grants, signs on-chain settlement, and stamps the audit log — one
-        identity tying it all together. Your agents, your memory, and your keys stay on your machine
+        signs your permission grants, signs on-chain settlement, and stamps the audit log. One
+        identity ties it all together. Your agents, your memory, and your keys stay on your machine
         by default. The core is open source under the{" "}
         <a
           href="https://www.apache.org/licenses/LICENSE-2.0"
@@ -115,7 +115,7 @@ const SECTIONS: Section[] = [
         >
           Apache License 2.0
         </a>
-        , and the protocol is public — so how Covenant works is never hidden behind a service you
+        , and the protocol is public, so how Covenant works is never hidden behind a service you
         can&apos;t inspect.
       </p>
     ),
@@ -127,7 +127,7 @@ const SECTIONS: Section[] = [
     body: (
       <p className={paragraph}>
         We are careful to separate what ships from what is planned. Today the local control plane is
-        real and live-tested — across two dozen Rust crates and roughly two thousand tests, including
+        real and live-tested across two dozen Rust crates and roughly two thousand tests, including
         more than two hundred that exercise real process, model, and network boundaries.
         Production-grade isolation for untrusted code, networked multi-peer operation, and on-chain
         settlement are on the roadmap, not the changelog. The line between done, experimental, and
@@ -160,11 +160,11 @@ export default function AboutPage() {
         </h2>
 
         <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
-          AI agents are starting to act on your computer — running code, moving money, touching your
-          files. Covenant is the layer that lets them do that safely: a small set of host-level
-          controls — intent, runtime, memory, identity, permissions, comms, a compositor, and
-          settlement — so people and agents can share one machine without having to trust each other.
-          It runs where your work runs, not behind someone else&apos;s API.
+          AI agents are starting to act on your computer: running code, moving money, touching your
+          files. Covenant is the layer that lets them do that safely. It gives people and agents a
+          small set of host-level controls (intent, runtime, memory, identity, permissions, comms, a
+          compositor, and settlement) so they can share one machine without having to trust each
+          other. It runs where your work runs, not behind someone else&apos;s API.
         </p>
 
         <ol className="relative mt-16 sm:mt-24">

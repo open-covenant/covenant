@@ -5713,6 +5713,18 @@ impl Server {
                                 repair: "treat as out-of-band settlement mutation; backfill only after confirming the intended payer".into(),
                             });
                         }
+                        if receipt.settled_at < memory.created_at {
+                            exact_diff += 1;
+                            drift.push(VerifyDrift {
+                                kind: "memory_receipt_settled_before_created".into(),
+                                id: Some(receipt.id.to_string()),
+                                message: format!(
+                                    "receipt {} settled_at={} precedes memory record {memory_id}.created_at={}",
+                                    receipt.id, receipt.settled_at, memory.created_at
+                                ),
+                                repair: "review receipt correlation: settled_at < memory.created_at indicates a backfill correlation mistake or a clock-tamper restore".into(),
+                            });
+                        }
                     }
                 }
                 None => {
@@ -9138,6 +9150,101 @@ required = {caps:?}
                     "check message should count self-parent refs: {}",
                     parent_check.message
                 );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_receipt_settled_before_created_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        let receipt_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "settled-before-created fixture".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 2_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: memory_id,
+                    intent_text: "settled-before-created fixture".into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(b"settled-before-created fixture"),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(memory_id),
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_receipt_settled_before_created"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_receipt_settled_before_created: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("settled_at=1000")
+                        && row.message.contains("created_at=2000"),
+                    "message should record both timestamps: {}",
+                    row.message
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "memory_receipt_owner_mismatch"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "matching payer must not double-report as owner mismatch: {drift:?}"
+                );
+                let receipt_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
+                assert!(!receipt_check.passed);
                 assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),

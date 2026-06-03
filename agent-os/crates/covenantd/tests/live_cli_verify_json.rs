@@ -1411,3 +1411,109 @@ async fn live_cli_verify_json_reports_chain_partial_drift() {
 
     let _ = restarted.kill().await;
 }
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, appends a tx_sig/onchain_sig-diverged receipt, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_tx_sig_onchain_sig_diverged_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let receipts_dir = home.path().join("receipts");
+    std::fs::create_dir_all(&receipts_dir).expect("create receipts dir");
+    let receipt_id = Uuid::new_v4();
+    let diverged = SettlementReceipt {
+        id: receipt_id,
+        payer: AgentId::new("user@local", [0u8; 32]),
+        resource: ResourceKind::Compute,
+        memory_record_id: None,
+        credits_consumed: 1,
+        settled_at: 1_000,
+        chain: None,
+        cluster: None,
+        batch_id: None,
+        merkle_root: None,
+        tx_sig: Some("sig-from-annotate".to_string()),
+        slot: None,
+        confirmed_at: None,
+        onchain_sig: Some("sig-rewritten-out-of-band".to_string()),
+    };
+    let receipts_path = receipts_dir.join("working.jsonl");
+    use std::io::Write as _;
+    let mut receipts = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&receipts_path)
+        .expect("open receipts/working.jsonl for append");
+    writeln!(receipts, "{}", serde_json::to_string(&diverged).unwrap())
+        .expect("append diverged receipt");
+    drop(receipts);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when tx_sig/onchain_sig divergence exists: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("receipt_tx_sig_onchain_sig_diverged")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("expected receipt_tx_sig_onchain_sig_diverged drift for {receipt_id}: {drift:?}")
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("tx_sig=sig-from-annotate")
+            && message.contains("onchain_sig=sig-rewritten-out-of-band"),
+        "drift message should record both signature values: {message:?}"
+    );
+    assert!(
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("annotate_receipt")),
+        "diverged drift repair string should name annotate_receipt: {row:?}"
+    );
+    assert!(
+        !drift["drift"].as_array().unwrap().iter().any(|item| {
+            item["kind"].as_str() == Some("receipt_confirmed_without_chain")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        }),
+        "confirmed_at=None must not co-fire receipt_confirmed_without_chain: {drift:?}"
+    );
+    assert!(
+        !drift["drift"].as_array().unwrap().iter().any(|item| {
+            item["kind"].as_str() == Some("receipt_chain_partial")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        }),
+        "chain bundle fully unset must not co-fire receipt_chain_partial: {drift:?}"
+    );
+
+    let _ = restarted.kill().await;
+}

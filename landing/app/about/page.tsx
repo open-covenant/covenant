@@ -197,8 +197,19 @@ export default function AboutPage() {
             <h2 className={headingTitle}>The token</h2>
           </div>
           <p className={`max-w-2xl ${paragraph}`}>
-            Covenant&apos;s token, $CVNT, lives on Solana. It launched on pump.fun, and you can lock
-            it on the{" "}
+            Covenant&apos;s token, $CVNT, lives on Solana. It launched on pump.fun with a fixed
+            supply and a renounced mint authority.
+          </p>
+          <p className={`mt-4 max-w-2xl ${paragraph}`}>
+            The token is wired to real usage, not emissions. Protocol revenue (pump.fun creator
+            fees, metered sandbox use, the Hyre coding markup, and capability payments) is swept
+            on-chain and split four ways: a share pays stakers in SOL, a share buys $CVNT on the
+            open market and locks it, and the rest funds the treasury and an operator subsidy.
+            Staking locks your $CVNT for a fixed term, from 7 to 180 days, with longer locks
+            weighted higher, and pays a pro-rata share of that SOL. So the more Covenant is used,
+            the more revenue flows to stakers and the more $CVNT is bought and taken out of
+            circulation. Rewards are paid in SOL and track actual revenue, nothing is promised. You
+            can lock $CVNT on the{" "}
             <a href="/stake" className={linkClass}>
               stake page
             </a>

@@ -5848,10 +5848,31 @@ impl Server {
         // receipt_settled_at_zero: a serde regression defaulting the
         // u64 field, an import tool that bypassed epoch_ms(), or a
         // SQLite edit zeroing the timestamp.
+        // record.owner.pubkey is the 32-byte ed25519 public key of the
+        // memory record's owning identity. Every production memory write
+        // sources owner from either an authenticated peer's AgentId
+        // (issuer.clone() on the intent path at lib.rs:3880) or from
+        // self.identity.agent_id() (operator-initiated writes). Both
+        // paths route through LocalIdentity::pubkey_bytes
+        // (covenant-identity/src/lib.rs) which returns the ed25519
+        // verifying-key bytes derived from a freshly-generated or
+        // persisted signing key. ed25519 verifying keys are never the
+        // all-zero 32-byte sequence in practice, and a peer whose
+        // token resolved to [0u8; 32] would fail signature
+        // verification on every subsequent capability check. A
+        // persisted MemoryRecord with owner.pubkey == [0u8; 32] is
+        // therefore out-of-band evidence on the same shape as
+        // memory_record_id_nil: a serde regression that dropped the
+        // pubkey field at row hydration (Default for [u8; 32] is
+        // all-zero), an import/replay tool that constructed records
+        // with a placeholder AgentId, or a SQLite edit zeroing the
+        // pubkey to break the owner-based scope, capability, and
+        // retrieval routing the daemon relies on.
         let mut empty_text_refs = 0_u64;
         let mut nan_embedding_refs = 0_u64;
         let mut nil_id_memory_refs = 0_u64;
         let mut zero_created_at_memory_refs = 0_u64;
+        let mut zeroed_owner_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -5898,17 +5919,33 @@ impl Server {
                     repair: "review the memory store row and the writer that produced it; production memory writes always stamp created_at via epoch_ms() (or via Intent.issued_at which is itself epoch_ms()) at the time of record".into(),
                 });
             }
+            if record.owner.pubkey == [0u8; 32] {
+                zeroed_owner_memory_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_record_owner_pubkey_zeroed".into(),
+                    id: Some(record.id.to_string()),
+                    message: format!(
+                        "memory record {} has owner.pubkey = [0u8; 32]; ed25519 verifying keys are never the all-zero sequence",
+                        record.id
+                    ),
+                    repair: "review the memory store row and the writer that produced it; production memory writes always source owner.pubkey from LocalIdentity::pubkey_bytes (operator-initiated writes) or from an authenticated peer's AgentId (issuer.clone() on the intent path), so a zeroed pubkey collapses every memory record to one anonymous owner and breaks the owner-based scope, capability, and retrieval routing the daemon relies on".into(),
+                });
+            }
         }
-        orphans_total +=
-            empty_text_refs + nan_embedding_refs + nil_id_memory_refs + zero_created_at_memory_refs;
+        orphans_total += empty_text_refs
+            + nan_embedding_refs
+            + nil_id_memory_refs
+            + zero_created_at_memory_refs
+            + zeroed_owner_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
                 && nan_embedding_refs == 0
                 && nil_id_memory_refs == 0
-                && zero_created_at_memory_refs == 0,
+                && zero_created_at_memory_refs == 0
+                && zeroed_owner_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s)"
             ),
         });
 
@@ -9712,6 +9749,67 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zero-created-at record"),
                     "check message should count zero-created-at records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_owner_pubkey_zeroed_drift() {
+        let s = server_with(vec![], "");
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: AgentId::new("user@local", [0u8; 32]),
+                text: "zeroed-owner fixture".into(),
+                embedding: vec![0.5; 8],
+                created_at: epoch_ms(),
+                metadata: serde_json::json!({}),
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_owner_pubkey_zeroed"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_owner_pubkey_zeroed: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("[0u8; 32]"),
+                    "drift message should name the zeroed-pubkey invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("LocalIdentity::pubkey_bytes"),
+                    "repair hint should name the identity source: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 zeroed-owner-pubkey record"),
+                    "check message should count zeroed-owner records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

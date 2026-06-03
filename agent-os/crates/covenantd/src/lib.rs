@@ -5890,10 +5890,20 @@ impl Server {
         // settled_at to anonymize when the receipt was issued. The
         // settlement-receipt JSONL has no chain-hash anchor of its own
         // covering this invariant.
+        //
+        // The same reasoning covers SettlementReceipt.id: every production
+        // receipt allocates its id via Uuid::new_v4(), which never produces
+        // the nil UUID. A persisted receipt with id == Uuid::nil() is
+        // out-of-band evidence: a serde regression (Uuid::default() is
+        // nil), an import/replay tool that constructed receipts without
+        // Uuid::new_v4(), or a JSONL edit zeroing the id to break the
+        // memory-record metadata.receipt_id back-reference and chain-batch
+        // correlation, both of which key on the receipt id.
         let mut confirmed_without_chain_refs = 0_u64;
         let mut chain_partial_refs = 0_u64;
         let mut tx_sig_onchain_sig_diverged_refs = 0_u64;
         let mut zero_settled_at_refs = 0_u64;
+        let mut nil_id_receipt_refs = 0_u64;
         for receipt in &receipts {
             if receipt.settled_at == 0 {
                 zero_settled_at_refs += 1;
@@ -5905,6 +5915,18 @@ impl Server {
                         receipt.id
                     ),
                     repair: "review the receipt JSONL row and the writer that produced it; production receipt writes always stamp epoch_ms() at the time of record".into(),
+                });
+            }
+            if receipt.id.is_nil() {
+                nil_id_receipt_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_id_nil".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt at settled_at = {} has id = {}; Uuid::new_v4() does not produce the nil UUID",
+                        receipt.settled_at, receipt.id
+                    ),
+                    repair: "review the receipt JSONL row and the writer that produced it; production receipt writes always allocate id via Uuid::new_v4() so the row can be referenced by id from memory record metadata.receipt_id back-references and chain batch correlation tables".into(),
                 });
             }
             if receipt.confirmed_at.is_some() && receipt.chain.is_none() {
@@ -5962,15 +5984,17 @@ impl Server {
         orphans_total += confirmed_without_chain_refs
             + chain_partial_refs
             + tx_sig_onchain_sig_diverged_refs
-            + zero_settled_at_refs;
+            + zero_settled_at_refs
+            + nil_id_receipt_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
                 && chain_partial_refs == 0
                 && tx_sig_onchain_sig_diverged_refs == 0
-                && zero_settled_at_refs == 0,
+                && zero_settled_at_refs == 0
+                && nil_id_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s)"
             ),
         });
 
@@ -9773,6 +9797,71 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zero-settled-at receipt"),
                     "check message should count zero-settled-at receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_id_nil_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        s.settlement
+            .record(SettlementReceipt {
+                id: Uuid::nil(),
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_id_nil"
+                            && item.id.as_deref() == Some(&Uuid::nil().to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_id_nil: {drift:?}"));
+                assert!(
+                    row.message.contains("Uuid::new_v4()"),
+                    "drift message should name the new_v4 invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("Uuid::new_v4()"),
+                    "repair hint should name Uuid::new_v4: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 nil-id receipt"),
+                    "check message should count nil-id receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

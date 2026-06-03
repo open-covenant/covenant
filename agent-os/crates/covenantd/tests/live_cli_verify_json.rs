@@ -493,6 +493,135 @@ async fn live_cli_verify_json_repair_clears_stale_parent_drift() {
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, rewrites memory.created_at + injects a back-dated receipt, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_settled_before_created_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+
+    run_cli(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "memory.write"],
+    )
+    .await;
+    let intent_stdout = run_cli(
+        &cli_exe,
+        home.path(),
+        &["intent", "--json", "verify temporal fixture"],
+    )
+    .await;
+    let intent: Value =
+        serde_json::from_str(intent_stdout.trim()).expect("intent --json must be JSON");
+    let memory_id: Uuid = intent["intent_id"]
+        .as_str()
+        .expect("intent_id")
+        .parse()
+        .expect("intent_id must be uuid");
+
+    let _ = child.kill().await;
+
+    let store = SqliteStore::open(&home.path().join("memory.db")).expect("open memory db");
+    let mut record = store
+        .get(memory_id)
+        .await
+        .expect("load memory")
+        .expect("memory record exists");
+    let owner = record.owner.clone();
+    record.created_at = 9_000_000;
+    store.put(record).await.expect("rewrite memory created_at");
+    let reread = store
+        .get(memory_id)
+        .await
+        .expect("reload memory")
+        .expect("memory persists");
+    assert_eq!(
+        reread.created_at, 9_000_000,
+        "SqliteStore must persist the rewritten created_at",
+    );
+    drop(store);
+
+    let receipt_id = Uuid::new_v4();
+    let backdated = SettlementReceipt {
+        id: receipt_id,
+        payer: owner,
+        resource: ResourceKind::Memory,
+        memory_record_id: Some(memory_id),
+        credits_consumed: 1,
+        settled_at: 1_000,
+        chain: None,
+        cluster: None,
+        batch_id: None,
+        merkle_root: None,
+        tx_sig: None,
+        slot: None,
+        confirmed_at: None,
+        onchain_sig: None,
+    };
+    let receipts_path = home.path().join("receipts").join("working.jsonl");
+    use std::io::Write as _;
+    let mut receipts = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&receipts_path)
+        .expect("open receipts/working.jsonl for append");
+    writeln!(receipts, "{}", serde_json::to_string(&backdated).unwrap())
+        .expect("append back-dated receipt");
+    drop(receipts);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when temporal drift exists: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let temporal = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("memory_receipt_settled_before_created")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        })
+        .unwrap_or_else(|| panic!("expected temporal drift for {receipt_id}: {drift:?}"));
+    let message = temporal["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("settled_at=1000") && message.contains("created_at=9000000"),
+        "drift message should record both timestamps: {message:?}"
+    );
+    assert!(
+        !drift["drift"].as_array().unwrap().iter().any(|item| {
+            item["kind"].as_str() == Some("memory_receipt_owner_mismatch")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        }),
+        "matched payer must not double-report under owner mismatch: {drift:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, injects a Compute receipt carrying memory_record_id, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_resource_mismatch_drift() {
     let home = tempfile::tempdir().expect("tempdir");

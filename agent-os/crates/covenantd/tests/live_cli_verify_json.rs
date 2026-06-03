@@ -1690,6 +1690,90 @@ async fn live_cli_verify_json_reports_audit_event_id_nil_drift() {
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, appends a zeroed-issuer-pubkey audit event, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_audit_event_issuer_pubkey_zeroed_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let audit_dir = home.path().join("audit");
+    std::fs::create_dir_all(&audit_dir).expect("create audit dir");
+    let event_id = Uuid::new_v4();
+    let zeroed = AuditEvent {
+        id: event_id,
+        timestamp_ms: 1_700_000_000_000,
+        issuer: AgentId::new("user@local", [0u8; 32]),
+        kind: AuditKind::AuthenticationFailed {
+            transport: "ipc".into(),
+            reason: "fixture".into(),
+        },
+    };
+    let audit_path = audit_dir.join("events.jsonl");
+    use std::io::Write as _;
+    let mut audit_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .expect("open audit/events.jsonl for append");
+    writeln!(audit_file, "{}", serde_json::to_string(&zeroed).unwrap())
+        .expect("append zeroed-issuer-pubkey event");
+    drop(audit_file);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when audit event issuer pubkey is zeroed: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("audit_event_issuer_pubkey_zeroed")
+                && item["id"].as_str() == Some(&event_id.to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("expected audit_event_issuer_pubkey_zeroed drift for {event_id}: {drift:?}")
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("[0u8; 32]"),
+        "drift message should name the zeroed-pubkey invariant: {message:?}"
+    );
+    assert!(
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("LocalIdentity::pubkey_bytes")),
+        "zeroed-issuer drift repair string should name the identity source: {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, appends a settled_at=0 settlement receipt, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_receipt_settled_at_zero_drift() {
     let home = tempfile::tempdir().expect("tempdir");

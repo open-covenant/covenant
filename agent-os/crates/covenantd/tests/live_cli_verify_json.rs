@@ -2902,3 +2902,97 @@ async fn live_cli_verify_json_reports_audit_capability_revoke_rejected_signature
 
     let _ = restarted.kill().await;
 }
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, appends a settlement receipt with memory_record_id=Some(Uuid::nil()), and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_receipt_memory_record_id_nil_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let receipts_dir = home.path().join("receipts");
+    std::fs::create_dir_all(&receipts_dir).expect("create receipts dir");
+    let receipt_id = Uuid::new_v4();
+    let receipt = SettlementReceipt {
+        id: receipt_id,
+        payer: AgentId::new("user@local", [1u8; 32]),
+        resource: ResourceKind::Memory,
+        memory_record_id: Some(Uuid::nil()),
+        credits_consumed: 1,
+        settled_at: 1_700_000_000_000,
+        chain: None,
+        cluster: None,
+        batch_id: None,
+        merkle_root: None,
+        tx_sig: None,
+        slot: None,
+        confirmed_at: None,
+        onchain_sig: None,
+    };
+    let receipts_path = receipts_dir.join("working.jsonl");
+    use std::io::Write as _;
+    let mut receipts = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&receipts_path)
+        .expect("open receipts/working.jsonl for append");
+    writeln!(receipts, "{}", serde_json::to_string(&receipt).unwrap())
+        .expect("append nil-memory-record-id receipt");
+    drop(receipts);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when receipt memory_record_id is Some(Uuid::nil()): status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let receipt_id_str = receipt_id.to_string();
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("receipt_memory_record_id_nil")
+                && item["id"].as_str() == Some(receipt_id_str.as_str())
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected receipt_memory_record_id_nil drift for receipt {receipt_id_str}: {drift:?}"
+            )
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("Some(Uuid::nil())"),
+        "drift message should name the Some(Uuid::nil()) invariant: {message:?}"
+    );
+    assert!(
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("Uuid::new_v4()")),
+        "nil-memory-record-id drift repair string should name Uuid::new_v4(): {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}

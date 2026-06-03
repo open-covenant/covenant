@@ -13,6 +13,7 @@ The verifier returns two layers:
 | --- | --- |
 | `memory_without_audit` | A memory record has no matching `IntentDispatched` audit row. |
 | `audit_without_memory` | An `IntentDispatched` audit row has no matching memory record in the sampled window. |
+| `intent_dispatched_duplicate` | Two or more `IntentDispatched` audit rows share the same `intent_id`. |
 | `memory_stale_parent` | A memory record points at a parent memory id that no longer exists. |
 | `memory_self_parent` | A memory record's parent reference points at the record's own id. |
 | `memory_parent_cycle` | A memory record's parent chain loops back on itself two or more hops up (e.g. A → B → A). |

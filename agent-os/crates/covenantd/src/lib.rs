@@ -5447,23 +5447,24 @@ impl Server {
         };
 
         // Check 1: every memory record's id appears as an IntentDispatched
-        // audit event's intent_id. The other direction (audit without memory)
-        // is also drift but rarer in practice; report both.
+        // audit event's intent_id. Track per-intent_id counts so a replay or
+        // out-of-band append that records the same intent_id twice surfaces
+        // as intent_dispatched_duplicate; collapsing it into a HashSet would
+        // hide the second row entirely.
         let memory_ids: HashSet<Uuid> = memories.iter().map(|m| m.id).collect();
-        let dispatched_intent_ids: HashSet<Uuid> = audits
-            .iter()
-            .filter_map(|e| match &e.kind {
-                AuditKind::IntentDispatched { intent_id, .. } => Some(*intent_id),
-                _ => None,
-            })
-            .collect();
+        let mut dispatched_intent_counts: HashMap<Uuid, usize> = HashMap::new();
+        for event in &audits {
+            if let AuditKind::IntentDispatched { intent_id, .. } = &event.kind {
+                *dispatched_intent_counts.entry(*intent_id).or_insert(0) += 1;
+            }
+        }
         let memory_orphans: u64 = memory_ids
             .iter()
-            .filter(|id| !dispatched_intent_ids.contains(id))
+            .filter(|id| !dispatched_intent_counts.contains_key(id))
             .count() as u64;
         for id in memory_ids
             .iter()
-            .filter(|id| !dispatched_intent_ids.contains(id))
+            .filter(|id| !dispatched_intent_counts.contains_key(id))
         {
             drift.push(VerifyDrift {
                 kind: "memory_without_audit".into(),
@@ -5472,12 +5473,12 @@ impl Server {
                 repair: "inspect the record; preserve it if still useful, otherwise delete only through an explicit repair command".into(),
             });
         }
-        let audit_orphans: u64 = dispatched_intent_ids
-            .iter()
+        let audit_orphans: u64 = dispatched_intent_counts
+            .keys()
             .filter(|id| !memory_ids.contains(id))
             .count() as u64;
-        for id in dispatched_intent_ids
-            .iter()
+        for id in dispatched_intent_counts
+            .keys()
             .filter(|id| !memory_ids.contains(id))
         {
             drift.push(VerifyDrift {
@@ -5487,13 +5488,26 @@ impl Server {
                 repair: "inspect audit and receipt rows before deciding whether to backfill memory or mark the dispatch intentionally memoryless".into(),
             });
         }
-        orphans_total += memory_orphans + audit_orphans;
+        let mut duplicate_intent_refs = 0_u64;
+        for (intent_id, count) in &dispatched_intent_counts {
+            if *count > 1 {
+                duplicate_intent_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "intent_dispatched_duplicate".into(),
+                    id: Some(intent_id.to_string()),
+                    message: format!(
+                        "{count} IntentDispatched audit rows share intent_id {intent_id}"
+                    ),
+                    repair: "review the audit log for replay or duplicate dispatch; identify the canonical row before truncating".into(),
+                });
+            }
+        }
+        orphans_total += memory_orphans + audit_orphans + duplicate_intent_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ audit".into(),
-            passed: memory_orphans == 0 && audit_orphans == 0,
+            passed: memory_orphans == 0 && audit_orphans == 0 && duplicate_intent_refs == 0,
             message: format!(
-                "{} memory orphan(s), {} audit orphan(s)",
-                memory_orphans, audit_orphans
+                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s)"
             ),
         });
 
@@ -9123,6 +9137,88 @@ required = {caps:?}
                     parent_check.message.contains("1 self-parent reference"),
                     "check message should count self-parent refs: {}",
                     parent_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_intent_dispatched_duplicate_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let intent_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: intent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "duplicate-dispatch intent".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: None,
+            })
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: me.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id,
+                        intent_text: "duplicate-dispatch intent".into(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(b"duplicate-dispatch intent"),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let duplicates: Vec<_> = drift
+                    .iter()
+                    .filter(|item| {
+                        item.kind == "intent_dispatched_duplicate"
+                            && item.id.as_deref() == Some(&intent_id.to_string())
+                    })
+                    .collect();
+                assert_eq!(
+                    duplicates.len(),
+                    1,
+                    "exactly one intent_dispatched_duplicate row per intent_id: {drift:?}"
+                );
+                assert!(
+                    duplicates[0].message.contains("2 IntentDispatched"),
+                    "message should record the observed count: {}",
+                    duplicates[0].message
+                );
+                assert!(
+                    !drift.iter().any(|item| item.kind == "memory_without_audit"
+                        || item.kind == "audit_without_memory"),
+                    "matched intent must not also be reported as an orphan: {drift:?}"
+                );
+                let audit_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ audit")
+                    .unwrap_or_else(|| panic!("expected memory ↔ audit check: {checks:?}"));
+                assert!(!audit_check.passed);
+                assert!(
+                    audit_check.message.contains("1 duplicate intent"),
+                    "check message should count duplicates: {}",
+                    audit_check.message
                 );
                 assert!(orphans_total >= 1);
             }

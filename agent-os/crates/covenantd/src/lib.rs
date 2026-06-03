@@ -6202,6 +6202,7 @@ impl Server {
         let mut nil_budget_preempt_failed_intent_id_audit_refs = 0_u64;
         let mut nil_budget_unseeded_intent_id_audit_refs = 0_u64;
         let mut nil_memory_repair_applied_memory_id_audit_refs = 0_u64;
+        let mut nil_external_payment_settled_receipt_id_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6469,6 +6470,20 @@ impl Server {
                     });
                 }
             }
+            if let AuditKind::ExternalPaymentSettled { receipt_id, .. } = &event.kind {
+                if receipt_id.is_nil() {
+                    nil_external_payment_settled_receipt_id_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_external_payment_settled_receipt_id_nil".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::ExternalPaymentSettled with receipt_id = {}; production ExternalPaymentSettled audit writes always source receipt_id from let receipt_id = Uuid::new_v4() at the top of record_paid_call in covenantd x402.rs, which does not produce the nil UUID",
+                            event.id, receipt_id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; production ExternalPaymentSettled audit writes always source receipt_id from let receipt_id = Uuid::new_v4() at the top of record_paid_call in covenantd x402.rs, so a nil receipt_id detaches the x402 paid-call row from the matching SettlementReceipt, breaking every ExternalPaymentSettled ↔ SettlementReceipt correlation that joins on receipt_id and erasing the audit trail an operator uses to trace a paid call back to the settlement receipt that recorded the credit debit".into(),
+                    });
+                }
+            }
         }
         orphans_total += zero_timestamp_audit_refs
             + nil_id_audit_refs
@@ -6488,7 +6503,8 @@ impl Server {
             + nil_budget_preempted_intent_id_audit_refs
             + nil_budget_preempt_failed_intent_id_audit_refs
             + nil_budget_unseeded_intent_id_audit_refs
-            + nil_memory_repair_applied_memory_id_audit_refs;
+            + nil_memory_repair_applied_memory_id_audit_refs
+            + nil_external_payment_settled_receipt_id_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
             passed: zero_timestamp_audit_refs == 0
@@ -6509,9 +6525,10 @@ impl Server {
                 && nil_budget_preempted_intent_id_audit_refs == 0
                 && nil_budget_preempt_failed_intent_id_audit_refs == 0
                 && nil_budget_unseeded_intent_id_audit_refs == 0
-                && nil_memory_repair_applied_memory_id_audit_refs == 0,
+                && nil_memory_repair_applied_memory_id_audit_refs == 0
+                && nil_external_payment_settled_receipt_id_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s)"
             ),
         });
 
@@ -12047,6 +12064,79 @@ required = {caps:?}
                         .message
                         .contains("1 nil-memory-id MemoryRepairApplied audit event"),
                     "check message should count nil-memory-id MemoryRepairApplied events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_external_payment_settled_receipt_id_nil_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::ExternalPaymentSettled {
+                    provider: "hyre".into(),
+                    endpoint: "https://api.hyre.example/v1/data".into(),
+                    network: "base-sepolia".into(),
+                    asset: "USDC".into(),
+                    amount: "10000".into(),
+                    receipt_id: Uuid::nil(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_external_payment_settled_receipt_id_nil"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_external_payment_settled_receipt_id_nil: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::ExternalPaymentSettled"),
+                    "drift message should name the ExternalPaymentSettled variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("receipt_id ="),
+                    "drift message should name the nil-receipt-id invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("Uuid::new_v4") && row.repair.contains("receipt_id"),
+                    "repair hint should name Uuid::new_v4 and receipt_id: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 nil-receipt-id ExternalPaymentSettled audit event"),
+                    "check message should count nil-receipt-id ExternalPaymentSettled events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

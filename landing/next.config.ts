@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
 
+// Next.js dev (Turbopack) + React rely on eval() for HMR and debugging. Allow it
+// only in development; production CSP stays strict (no unsafe-eval).
+const isDev = process.env.NODE_ENV !== "production";
+
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
@@ -17,7 +21,7 @@ const securityHeaders = [
       "img-src 'self' data: blob: https://api.web3modal.org https://*.walletconnect.com",
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
-      "script-src 'self' 'unsafe-inline'",
+      `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
       // Solana RPC + Jupiter price + Reown AppKit/WalletConnect (config, relay, analytics)
       "connect-src 'self' https://docs.opencovenant.org https://api.opencovenant.org https://*.helius-rpc.com https://api.mainnet-beta.solana.com https://api.devnet.solana.com https://lite-api.jup.ag https://api.web3modal.org https://*.walletconnect.org https://*.walletconnect.com wss://*.helius-rpc.com wss://api.mainnet-beta.solana.com wss://api.devnet.solana.com wss://*.walletconnect.org wss://*.walletconnect.com",
       "frame-ancestors 'none'",

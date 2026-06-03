@@ -57,11 +57,15 @@ export function PixelReveal({
     }
 
     function coverFit(rect: DOMRect) {
-      // Intrinsic size, centered. Mesh samples with the same projection so
+      // Contain-fit: scale the whole image to fit the region, centered, so the
+      // full figure is always visible. Mesh samples with the same projection so
       // glyphs line up with the underlying figure.
-      const scale = 1;
-      const drawW = img.naturalWidth;
-      const drawH = img.naturalHeight;
+      const scale = Math.min(
+        rect.width / img.naturalWidth,
+        rect.height / img.naturalHeight,
+      );
+      const drawW = img.naturalWidth * scale;
+      const drawH = img.naturalHeight * scale;
       const offsetX = (rect.width - drawW) / 2;
       const offsetY = (rect.height - drawH) / 2;
       return { scale, drawW, drawH, offsetX, offsetY };

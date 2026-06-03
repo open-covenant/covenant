@@ -145,12 +145,29 @@ function MeshCanvas({ backgroundImageSrc }: { backgroundImageSrc: string }) {
         return { contourX: 1, contourY: 0, detail: 0.3, luminance: 0.5 };
       }
 
-      // Intrinsic size, centered — matches PixelReveal's projection so the
-      // mesh glyphs sit on the same pixels they're sampling.
-      const offsetX = (rect.width - imageSample.width) / 2;
-      const offsetY = (rect.height - imageSample.height) / 2;
-      const imageX = containerX - offsetX;
-      const imageY = containerY - offsetY;
+      // Contain-fit, centered — matches PixelReveal's projection so the mesh
+      // glyphs sit on the same pixels they're sampling.
+      const scale = Math.min(
+        rect.width / imageSample.width,
+        rect.height / imageSample.height,
+      );
+      const drawW = imageSample.width * scale;
+      const drawH = imageSample.height * scale;
+      const offsetX = (rect.width - drawW) / 2;
+      const offsetY = (rect.height - drawH) / 2;
+      const imageX = (containerX - offsetX) / scale;
+      const imageY = (containerY - offsetY) / scale;
+
+      // Outside the projected image there is no figure to sit on — render the
+      // glyph dim so the side margins stay quiet instead of smearing edges.
+      if (
+        imageX < 0 ||
+        imageY < 0 ||
+        imageX >= imageSample.width ||
+        imageY >= imageSample.height
+      ) {
+        return { contourX: 1, contourY: 0, detail: 0.06, luminance: 0.04 };
+      }
 
       const luminance = sampleLuminance(imageX, imageY);
       const left = sampleLuminance(imageX - 1.2, imageY);
@@ -535,15 +552,6 @@ export function HeroMesh({ src }: { src: string }) {
           zIndex: 2,
           background:
             "radial-gradient(ellipse at center, transparent 0%, transparent 28%, rgba(3,3,3,0.45) 62%, rgba(3,3,3,0.92) 100%)",
-        }}
-      />
-      <div
-        aria-hidden
-        className="absolute inset-0"
-        style={{
-          zIndex: 3,
-          background:
-            "linear-gradient(to bottom, rgba(3,3,3,0.45) 0%, rgba(3,3,3,0.18) 18%, transparent 35%)",
         }}
       />
     </div>

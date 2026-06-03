@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AgentTerminalDock } from "./AgentTerminalDock";
 import { HeroMesh } from "./HeroMesh";
 import { SiteFooter } from "./SiteFooter";
 import { SiteHeader } from "./SiteHeader";
@@ -39,22 +40,47 @@ export default function Page() {
         </p>
       </div>
 
-      <HeroMesh src="/hero-bg.jpg" />
-
       <SiteHeader />
 
-      <a
-        href="https://sandbox.opencovenant.org"
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Try the interactive Covenant sandbox"
-        className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 translate-y-[calc(-50%+50px)] whitespace-nowrap rounded-full border border-neutral-500/40 bg-black/30 px-4 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-200 backdrop-blur-sm transition-colors hover:border-neutral-50/70 hover:text-neutral-50 sm:px-6 sm:text-[12px]"
-      >
-        Try the sandbox →
-      </a>
+      <AgentTerminalDock />
+
+      <div className="absolute inset-0 z-10 flex flex-col items-center justify-start gap-3 px-6 pt-24 text-center sm:justify-center sm:gap-6 sm:pt-0 xl:pr-[31rem]">
+        <div className="relative aspect-[1168/774] w-full overflow-hidden sm:aspect-auto sm:h-[53vh]">
+          <HeroMesh src="/hero-bg.jpg" />
+        </div>
+        <div className="flex max-w-2xl flex-col gap-3 sm:gap-4">
+          <h2 className="text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white">
+            An operating system that builds itself
+          </h2>
+          <p className="text-balance text-[15px] font-light leading-relaxed text-neutral-200 sm:text-lg">
+          Not a chatbot. Not an agent framework. An open operating layer where
+          every agent runs under a <span className="text-white">signed grant</span>,
+          every action leaves a <span className="text-white">receipt</span>, and the
+          system itself is built in the open by the{" "}
+          <span className="text-white">autonomous infrastructure it provides</span>.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <a
+            href="https://sandbox.opencovenant.org"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Try the interactive Covenant sandbox"
+            className="rounded-full bg-white px-5 py-2.5 text-[11px] uppercase tracking-[0.28em] text-black transition-colors hover:bg-neutral-200 sm:px-6 sm:text-[12px]"
+          >
+            Try the sandbox →
+          </a>
+          <Link
+            href="/about"
+            className="rounded-full border border-neutral-700/50 px-5 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-400 transition-colors hover:border-neutral-500 hover:text-neutral-100 sm:px-6 sm:text-[12px]"
+          >
+            Learn about Covenant
+          </Link>
+        </div>
+      </div>
 
       <SiteFooter
-        className="absolute inset-x-0 z-20"
+        className="absolute inset-x-0 z-20 xl:pr-[31rem]"
         style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
       />
     </main>

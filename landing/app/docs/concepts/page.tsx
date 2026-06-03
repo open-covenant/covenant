@@ -25,7 +25,7 @@ export default function ConceptsPage() {
         user (or another agent) and routed to whichever agent can fulfil it.
         Every intent has a stable UUID, an issuer (an{" "}
         <code>AgentId</code>), an issuing timestamp, a priority, and an
-        optional parent. Intents do not carry credentials — the issuer&apos;s
+        optional parent. Intents do not carry credentials; the issuer&apos;s
         capabilities are determined by their identity.
       </p>
 
@@ -46,8 +46,8 @@ export default function ConceptsPage() {
 
       <ul>
         <li>
-          a stable <code>agent.id</code> — ASCII{" "}
-          <code>[A-Za-z0-9_.-]+</code>; the daemon synthesises{" "}
+          a stable <code>agent.id</code> (ASCII{" "}
+          <code>[A-Za-z0-9_.-]+</code>); the daemon synthesises{" "}
           <code>&lt;id&gt;@agent</code> as the agent&apos;s{" "}
           <code>AgentId.display</code>,
         </li>
@@ -110,7 +110,7 @@ export default function ConceptsPage() {
       </p>
 
       <p>
-        At dispatch, the daemon enforces capabilities <em>hard</em> — a
+        At dispatch, the daemon enforces capabilities <em>hard</em>: a
         request whose required actions are not all present in the active
         set is rejected, and the rejection itself is audited.
       </p>
@@ -129,16 +129,16 @@ export default function ConceptsPage() {
 
       <ul>
         <li>
-          <strong>working</strong> — short-lived per-task scratch.
+          <strong>working</strong>: short-lived per-task scratch.
           Persists until purged via the memory garbage-collection
           primitive.
         </li>
         <li>
-          <strong>episodic</strong> — task-grained records that survive
+          <strong>episodic</strong>: task-grained records that survive
           across runs.
         </li>
         <li>
-          <strong>long-term</strong> — durable, intentionally retained
+          <strong>long-term</strong>: durable, intentionally retained
           context; the slowest tier and the one most likely to influence
           future routing.
         </li>
@@ -207,12 +207,12 @@ export default function ConceptsPage() {
 
       <ul>
         <li>
-          <strong>Unix socket</strong> at <code>$COVENANT_HOME/sock</code> —
+          <strong>Unix socket</strong> at <code>$COVENANT_HOME/sock</code>:
           the canonical, length-prefixed JSON IPC. The CLI and TUI use
           this transport.
         </li>
         <li>
-          <strong>HTTP gateway</strong> at <code>127.0.0.1:8421</code> —
+          <strong>HTTP gateway</strong> at <code>127.0.0.1:8421</code>:
           for browser-facing UIs and third-party tooling. Same surface,
           JSON over HTTP. See{" "}
           <Link href="/http-api">HTTP API</Link>.
@@ -230,7 +230,7 @@ export default function ConceptsPage() {
         Covenant accounts for resource usage as it happens. Every
         memory write, every tool call, and (eventually) every external
         compute or LLM token spent produces a{" "}
-        <strong>settlement receipt</strong> — a UUID, a payer, a resource
+        <strong>settlement receipt</strong>: a UUID, a payer, a resource
         kind, a credits-consumed integer, a timestamp, a memory record id
         when the resource is memory, and an optional on-chain signature.
         Receipts accumulate in{" "}

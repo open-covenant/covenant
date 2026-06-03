@@ -164,11 +164,11 @@ COVENANT_A2A_AUTO_RETRY_SCAN_LIMIT=100`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/a2a">Agent-to-agent</Link> — A2A envelopes and mailbox
+          <Link href="/a2a">Agent-to-agent</Link>: A2A envelopes and mailbox
           surface.
         </li>
         <li>
-          <Link href="/live-coverage">Live coverage</Link> — boundary test
+          <Link href="/live-coverage">Live coverage</Link>: boundary test
           inventory.
         </li>
       </ul>

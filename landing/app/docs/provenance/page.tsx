@@ -103,14 +103,14 @@ node agent-os/scripts/provenance.mjs audit-root verify \\
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/audit">Audit log</Link> — runtime event evidence.
+          <Link href="/audit">Audit log</Link>: runtime event evidence.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — current trust
+          <Link href="/security">Security model</Link>: current trust
           boundaries and operator responsibilities.
         </li>
         <li>
-          <Link href="/architecture">System architecture</Link> — where
+          <Link href="/architecture">System architecture</Link>: where
           provenance fits in the operating layer.
         </li>
       </ul>

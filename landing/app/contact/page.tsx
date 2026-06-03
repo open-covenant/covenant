@@ -5,25 +5,25 @@ import { SiteHeader } from "../SiteHeader";
 import { ContactForm } from "./ContactForm";
 
 export const metadata: Metadata = {
-  title: "Contact — Covenant Partnerships & Security",
+  title: "Contact: Covenant Partnerships & Security",
   description:
-    "Get in touch with the Covenant team — partnerships, integrations, research collaboration, and security disclosures.",
+    "Get in touch with the Covenant team about partnerships, integrations, research collaboration, and security disclosures.",
   alternates: { canonical: "/contact" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/contact",
-    title: "Contact — Covenant Partnerships & Security",
+    title: "Contact: Covenant Partnerships & Security",
     description:
-      "Get in touch with the Covenant team — partnerships, integrations, research collaboration, and security disclosures.",
+      "Get in touch with the Covenant team about partnerships, integrations, research collaboration, and security disclosures.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    title: "Contact — Covenant Partnerships & Security",
+    title: "Contact: Covenant Partnerships & Security",
     description:
-      "Get in touch with the Covenant team — partnerships, integrations, research collaboration, and security disclosures.",
+      "Get in touch with the Covenant team about partnerships, integrations, research collaboration, and security disclosures.",
     images: "/twitter-image.jpg",
   },
 };
@@ -42,7 +42,7 @@ export default function ContactPage() {
             </h1>
             <p className="mt-3 max-w-xl text-sm leading-relaxed text-neutral-400">
               Partnership inquiries, integrations, research collaboration, and
-              responsible disclosure of security issues — all routed to the
+              responsible disclosure of security issues. All routed to the
               team.
             </p>
           </div>

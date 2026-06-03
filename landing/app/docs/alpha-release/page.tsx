@@ -58,11 +58,11 @@ git diff --check`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/validation">Validation profile</Link> — release gates and
+          <Link href="/validation">Validation profile</Link>: release gates and
           operating surfaces.
         </li>
         <li>
-          <Link href="/provenance">Provenance</Link> — consistency evidence and
+          <Link href="/provenance">Provenance</Link>: consistency evidence and
           audit-root attestations.
         </li>
       </ul>

@@ -256,8 +256,8 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
         report the <code>row_count</code> an apply would change without
         writing.
         Dry-run requires the <code>memory.backfill.dry_run</code>{" "}
-        capability; apply requires <code>memory.backfill.apply</code> —
-        see <Link href="/docs/capabilities">capabilities</Link> for the
+        capability; apply requires <code>memory.backfill.apply</code>.
+        See <Link href="/docs/capabilities">capabilities</Link> for the
         scope contract. The daemon recomputes correlations server-side
         from the operator&apos;s own memory and receipt rows; clients
         cannot supply correlations directly. Apply wraps the row updates
@@ -283,7 +283,7 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
 
       <ul>
         <li>
-          The router is skipped — no agent runs.
+          The router is skipped; no agent runs.
         </li>
         <li>
           No memory record is written.
@@ -323,14 +323,14 @@ covenant memory purge --older-than-ms $((7*24*60*60*1000))
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/cli">CLI</Link> — every memory subcommand.
+          <Link href="/cli">CLI</Link>: every memory subcommand.
         </li>
         <li>
-          <Link href="/audit">Audit log</Link> — where{" "}
+          <Link href="/audit">Audit log</Link>: where{" "}
           <code>IntentIgnored</code> lands.
         </li>
         <li>
-          <Link href="/settlement">Settlement</Link> — memory
+          <Link href="/settlement">Settlement</Link>: memory
           writes pair 1:1 with receipts.
         </li>
       </ul>

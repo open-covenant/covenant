@@ -42,7 +42,7 @@ export default function SettlementPage() {
       <p>
         Receipts accumulate in{" "}
         <code>$COVENANT_HOME/receipts/working.jsonl</code>. The daemon
-        writes one receipt per resource event — for example, every
+        writes one receipt per resource event. For example, every
         memory write produces a receipt with{" "}
         <code>{'resource = "memory"'}</code>,{" "}
         <code>memory_record_id</code>, and <code>credits_consumed</code>{" "}
@@ -72,18 +72,18 @@ export default function SettlementPage() {
 
       <ul>
         <li>
-          <code>initialize</code> — one-shot setup of a{" "}
+          <code>initialize</code>: one-shot setup of a{" "}
           <code>Config</code> PDA under seed{" "}
           <code>b&quot;settlement-config&quot;</code>; records the
           authority, mints, and rates.
         </li>
         <li>
-          <code>buy_credits(amount_covnt)</code> — transfer{" "}
+          <code>buy_credits(amount_covnt)</code>: transfer{" "}
           <code>$COVNT</code> into the treasury in exchange for
           credits at the configured rate.
         </li>
         <li>
-          <code>consume_credits(amount, receipt_hash)</code> —
+          <code>consume_credits(amount, receipt_hash)</code>:
           destroy credits at the point of consumption (memory write,
           tool call, etc.). <code>receipt_hash</code> binds the
           on-chain consumption to a specific local receipt batch for
@@ -148,8 +148,8 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
         settlement receipts by <code>memory_record_id</code> when the
         receipt carries one, with owner/resource count fallback for older
         rows. Missing, duplicate, orphaned, or wrong-payer correlations
-        surface as drift. The daemon is fail-soft on receipt write — a
-        failed receipt does not cancel the memory write — so drift in this
+        surface as drift. The daemon is fail-soft on receipt write (a
+        failed receipt does not cancel the memory write), so drift in this
         dimension is the principal operator-visible indicator of a
         settlement-side fault.
       </p>
@@ -166,7 +166,7 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
         <code>--dry-run</code> to report the <code>row_count</code> an
         apply would change without writing. Dry-run requires the{" "}
         <code>settlement.backfill.dry_run</code> capability; apply requires{" "}
-        <code>settlement.backfill.apply</code> — see{" "}
+        <code>settlement.backfill.apply</code>. See{" "}
         <Link href="/docs/capabilities">capabilities</Link> for the scope
         contract. An apply path writes a rollback checkpoint sibling file
         before mutation, fsyncs both the rewrite and the rename, then emits
@@ -189,16 +189,16 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/architecture">Architecture</Link> — the
+          <Link href="/architecture">Architecture</Link>: the
           settlement scaffold in the broader system map.
         </li>
         <li>
-          <Link href="/identity">Identity and keys</Link> — the
+          <Link href="/identity">Identity and keys</Link>: the
           same local identity signs capability grants today and is the
           planned signer boundary for future settlement transactions.
         </li>
         <li>
-          <Link href="/audit">Audit log</Link> — settlement
+          <Link href="/audit">Audit log</Link>: settlement
           receipts pair 1:1 with memory writes; drift shows up here.
         </li>
       </ul>

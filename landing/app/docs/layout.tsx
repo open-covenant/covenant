@@ -5,11 +5,11 @@ import { Sidebar } from "./Sidebar";
 export const metadata: Metadata = {
   metadataBase: new URL("https://docs.opencovenant.org"),
   title: {
-    default: "Documentation — Covenant",
-    template: "%s — Covenant docs",
+    default: "Documentation: Covenant",
+    template: "%s: Covenant docs",
   },
   description:
-    "Reference, concepts, and operational guides for Covenant — the open, agent-native operating layer.",
+    "Reference, concepts, and operational guides for Covenant, the open, agent-native operating layer.",
   // No canonical here: each docs page declares its own absolute canonical via buildDocsMetadata.
   openGraph: {
     type: "website",
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
         url: "https://opencovenant.org/opengraph-image.jpg",
         width: 1200,
         height: 630,
-        alt: "Covenant — open agent-native operating layer",
+        alt: "Covenant: open agent-native operating layer",
       },
     ],
   },

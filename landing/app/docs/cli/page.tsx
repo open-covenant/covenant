@@ -245,7 +245,7 @@ export default function CliPage() {
               <code>2</code>
             </td>
             <td>
-              Usage error — bad subcommand, missing argument, malformed
+              Usage error: bad subcommand, missing argument, malformed
               flag value.
             </td>
           </tr>
@@ -480,7 +480,7 @@ $ covenant tools call echo --args '{"text":"hello"}' --json
               <code>COVENANT_HOME</code>
             </td>
             <td>
-              Root of all on-disk state — socket, identity, memory,
+              Root of all on-disk state: socket, identity, memory,
               receipts, audit, capabilities, peers, budget, a2a,
               agents, and the runtime/gvisor scratch directory.
             </td>
@@ -506,19 +506,19 @@ $ covenant tools call echo --args '{"text":"hello"}' --json
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/http-api">HTTP API</Link> — same surface
+          <Link href="/http-api">HTTP API</Link>: same surface
           over HTTP, suitable for browser-facing UIs.
         </li>
         <li>
-          <Link href="/ipc">Local IPC</Link> — the wire protocol
+          <Link href="/ipc">Local IPC</Link>: the wire protocol
           underneath the CLI.
         </li>
         <li>
-          <Link href="/audit-integrity">Audit integrity</Link> — what{" "}
+          <Link href="/audit-integrity">Audit integrity</Link>: what{" "}
           <code>audit verify</code> checks.
         </li>
         <li>
-          <Link href="/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link>:
           what <code>capabilities grant</code>/<code>revoke</code>{" "}
           actually mints.
         </li>

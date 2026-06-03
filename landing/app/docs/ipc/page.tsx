@@ -14,7 +14,7 @@ export default function IpcPage() {
       <h1>Local IPC</h1>
       <p>
         The daemon&apos;s canonical wire protocol. Clients on the same
-        host — the CLI, the TUI, operator UIs, third-party tooling —
+        host (the CLI, the TUI, operator UIs, third-party tooling)
         communicate with the daemon over length-prefixed JSON on a Unix
         socket at{" "}
         <code>$COVENANT_HOME/sock</code>. The HTTP gateway is a thin
@@ -210,8 +210,8 @@ export default function IpcPage() {
 
       <h2 id="streaming-responses-ipc-v2">Streaming responses (IPC v2)</h2>
       <p>
-        Three request kinds — <code>recent_memory</code>,{" "}
-        <code>recent_audit</code>, and <code>submit_intent</code> —
+        Three request kinds (<code>recent_memory</code>,{" "}
+        <code>recent_audit</code>, and <code>submit_intent</code>)
         accept an optional <code>prefer_stream</code> boolean. When
         the client sets <code>prefer_stream: true</code>, the daemon
         replaces the single canonical response frame with a sequence
@@ -268,15 +268,15 @@ export default function IpcPage() {
         <code>stream_end</code> closes the stream. For{" "}
         <code>submit_intent</code> the <code>summary</code> field
         carries <code>intent_id</code>, <code>status</code>, and{" "}
-        <code>settlement</code> — IntentResult bookkeeping that does
+        <code>settlement</code>: IntentResult bookkeeping that does
         not fit in an AgentResult chunk. <code>recent_memory</code>{" "}
         and <code>recent_audit</code> omit <code>summary</code>.
       </p>
       <p>
         <code>stream_error</code> is reserved for streams that opened
         successfully and then failed mid-flight. <em>Streaming
-        refused</em> — capability gate failure, ignore-rule match,
-        budget exhaustion — is signaled by the daemon returning the
+        refused</em> (capability gate failure, ignore-rule match,
+        budget exhaustion) is signaled by the daemon returning the
         v1 single-Response frame (typically{" "}
         <code>{"{ \"kind\": \"error\", \"message\": \"…\" }"}</code>)
         instead of opening a stream; the consumer disambiguates the
@@ -323,7 +323,7 @@ export default function IpcPage() {
         <li>
           <strong>Compatibility.</strong> <code>protocol_info</code> is
           intentionally minimal and treated as stable across protocol
-          versions 1 and 2 — the response shape did not change at the
+          versions 1 and 2: the response shape did not change at the
           v2 bump, only <code>max_supported</code> advanced. Clients
           should ignore unknown fields; adding new required fields
           implies a protocol version bump.
@@ -342,11 +342,11 @@ export default function IpcPage() {
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/http-api">HTTP API</Link> — the same
+          <Link href="/http-api">HTTP API</Link>: the same
           surface for clients that prefer JSON over HTTP.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — what the
+          <Link href="/security">Security model</Link>: what the
           socket-as-credential design costs you.
         </li>
       </ul>

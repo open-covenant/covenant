@@ -83,19 +83,19 @@ COVENANT_LIVE_GVISOR_ROOTFS=/path/to/rootfs \\
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/architecture">System architecture</Link> — the
+          <Link href="/architecture">System architecture</Link>: the
           surfaces under test.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — why real boundary
+          <Link href="/security">Security model</Link>: why real boundary
           tests matter.
         </li>
         <li>
-          <Link href="/gvisor-live-runner">Linux gVisor runner</Link> — host
+          <Link href="/gvisor-live-runner">Linux gVisor runner</Link>: host
           setup for the sandbox live path.
         </li>
         <li>
-          <Link href="/provenance">Provenance</Link> — evidence attached to
+          <Link href="/provenance">Provenance</Link>: evidence attached to
           committed autonomous work.
         </li>
       </ul>

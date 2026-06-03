@@ -4,14 +4,14 @@ import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
 export const metadata: Metadata = {
-  title: "Terms of Service — Covenant Sandbox & Staking",
+  title: "Terms of Service: Covenant Sandbox & Staking",
   description:
     "Legal terms for Covenant services, sandbox, and staking program. Covers acceptable use, alpha disclaimers, and operator responsibilities.",
   alternates: { canonical: "/terms" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/terms",
-    title: "Terms of Service — Covenant Sandbox & Staking",
+    title: "Terms of Service: Covenant Sandbox & Staking",
     description:
       "Acceptable use, alpha-software disclaimers, and operator responsibilities for the Covenant public services.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    title: "Terms of Service — Covenant Sandbox & Staking",
+    title: "Terms of Service: Covenant Sandbox & Staking",
     description:
       "Acceptable use, alpha-software disclaimers, and operator responsibilities for the Covenant public services.",
     images: "/twitter-image.jpg",

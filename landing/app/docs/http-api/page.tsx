@@ -22,7 +22,7 @@ export default function HttpApiPage() {
         variable and the bind address with{" "}
         <code>COVENANT_HTTP_BIND_ADDR</code>. Changing the bind address
         away from <code>127.0.0.1</code> widens the network exposure of
-        every protected route to the chosen interface — only do so when
+        every protected route to the chosen interface. Only do so when
         the host firewall and bearer-token policy account for it.
       </p>
 
@@ -57,9 +57,9 @@ export default function HttpApiPage() {
 
       <h2 id="streaming-responses">Streaming responses</h2>
       <p>
-        Three read-style routes — <code>GET /memory/recent</code>,{" "}
+        Three read-style routes (<code>GET /memory/recent</code>,{" "}
         <code>GET /audit/recent</code>, and{" "}
-        <code>POST /intent</code> — accept a per-request switch
+        <code>POST /intent</code>) accept a per-request switch
         between the default buffered JSON response and a Server-Sent
         Events stream of the same logical content. Clients opt in by
         sending <code>Accept: text/event-stream</code>; any other
@@ -71,7 +71,7 @@ export default function HttpApiPage() {
         comparison is case-insensitive and tolerates{" "}
         <code>q=</code> values; comma-separated media types are split
         and trimmed. <code>*/*</code> and <code>text/*</code> do{" "}
-        <em>not</em> trigger the SSE branch — the buffered fallback is
+        <em>not</em> trigger the SSE branch; the buffered fallback is
         the safe default for callers that did not explicitly ask to
         stream.
       </p>
@@ -82,7 +82,7 @@ Cache-Control:    no-cache
 X-Accel-Buffering: no`}</code>
       </pre>
       <p>
-        <code>Content-Type</code> is the bare media type — strict{" "}
+        <code>Content-Type</code> is the bare media type: strict{" "}
         <code>EventSource</code> implementations reject a{" "}
         <code>charset=utf-8</code> suffix. <code>Cache-Control</code>
         keeps intermediate caches forwarding every chunk;{" "}
@@ -126,8 +126,8 @@ data: <single-line JSON of the envelope>
         budget exhaustion on <code>/intent</code>) renders as a
         buffered JSON document with{" "}
         <code>Content-Type: application/json</code> regardless of the
-        Accept header — distinguishing the two on the wire keeps a
-        consumer&apos;s error-handling logic honest.
+        Accept header, so a consumer can distinguish a refusal from a
+        mid-flight failure by the response content type.
       </p>
 
       <h2>Routes</h2>
@@ -240,12 +240,12 @@ POST /memory/records/backfill
         <code>/memory/records/backfill</code> defaults to apply
         (<code>dry_run: false</code>); pass <code>dry_run: true</code> to
         plan without mutating. The <code>savepoint_name</code> is always a
-        non-null string — the daemon allocates one even in dry-run mode so
+        non-null string: the daemon allocates one even in dry-run mode so
         consumers can correlate planning runs against later mutation runs.
         Apply wraps the row updates in a SQLite SAVEPOINT so a per-row
         failure rolls the entire batch back to zero rows changed. The
         envelope uses the versioned schema discriminator
-        (<code>schema</code>, not <code>kind</code>) — see the IPC docs
+        (<code>schema</code>, not <code>kind</code>); see the IPC docs
         for the full pin.
       </p>
       <p>
@@ -295,10 +295,10 @@ data: { "kind": "stream_end", "stream_id": "…" }`}</code>
         <code>null</code> in dry-run mode and a filesystem path on the
         daemon&apos;s local host once an apply pass writes its rollback
         evidence sibling file. <code>scope_pubkey</code> is reserved for
-        a future delegated mode and is not yet wired — a request that
+        a future delegated mode and is not yet wired: a request that
         sets it is rejected before the capability check. The envelope
         uses the versioned schema discriminator (<code>schema</code>,
-        not <code>kind</code>) — see the IPC docs for the full pin.
+        not <code>kind</code>); see the IPC docs for the full pin.
       </p>
 
       <h3>Budget</h3>
@@ -513,7 +513,7 @@ POST /a2a/compact
 → 200 { "kind": "a2_a_compacted", "dropped": 7 }`}</code>
       </pre>
       <p>
-        Write paths (<code>POST</code>) require capability tokens —
+        Write paths (<code>POST</code>) require capability tokens;
         see <Link href="/a2a">Agent-to-agent</Link> for the
         exact actions. <code>/a2a/repair</code> is the operator-driven
         recovery verb for stuck leases or runaway tasks; the{" "}
@@ -571,7 +571,7 @@ POST /peers/revoke
         <code>live</code> or <code>revoked</code>; anything else (or
         absent) means no status filter. <code>/peers/rotate</code> issues a
         new operator token; the rotated token replaces the bootstrap file
-        and the caller&apos;s current connection keeps working — new
+        and the caller&apos;s current connection keeps working; new
         connections must authenticate with <code>token_b58</code>.{" "}
         <code>/peers/revoke</code> takes the 6-char <code>token_prefix</code>
         from a <code>/peers/list</code> row; the five-case{" "}
@@ -595,15 +595,15 @@ POST /peers/revoke
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/cli">CLI</Link> — same surface, but talking
+          <Link href="/cli">CLI</Link>: same surface, but talking
           to the Unix socket.
         </li>
         <li>
-          <Link href="/ipc">Local IPC</Link> — the wire protocol
+          <Link href="/ipc">Local IPC</Link>: the wire protocol
           on the Unix socket.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — what the
+          <Link href="/security">Security model</Link>: what the
           loopback-only assumption costs you.
         </li>
       </ul>

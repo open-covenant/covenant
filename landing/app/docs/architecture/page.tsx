@@ -13,7 +13,7 @@ export default function ArchitecturePage() {
       />
       <h1>System architecture</h1>
       <p>
-        Covenant is a single long-running daemon — <code>covenantd</code> —
+        Covenant is a single long-running daemon (<code>covenantd</code>)
         plus a thin set of clients (the CLI, the TUI, the web UI, third-party
         tooling over HTTP) and a number of agent processes. The daemon is the only
         component that holds state; everything else is replaceable.
@@ -87,7 +87,7 @@ export default function ArchitecturePage() {
         flags an in-flight process as on track to exceed its remaining
         credit budget. The wall-clock kill at the agent-declared{" "}
         <code>cpu_ms_per_task</code> remains as the final backstop.{" "}
-        <code>hermes</code>-runtime agents are not subprocesses — the
+        <code>hermes</code>-runtime agents are not subprocesses; the
         daemon delegates the intent to a configured Hermes HTTP endpoint
         and treats the response as the agent result. In either model,
         agents have no direct access to the daemon&apos;s state; every
@@ -388,7 +388,7 @@ export default function ArchitecturePage() {
             </td>
             <td>
               ed25519 identity: keypair generation, on-disk persistence,
-              signing, and verification helpers — the same key signs
+              signing, and verification helpers. The same key signs
               on-chain settlement transactions, so there is no second
               keypair system.
             </td>
@@ -403,7 +403,7 @@ export default function ArchitecturePage() {
               with 6-char b58 prefix-only operator visibility (full
               tokens never leave the daemon), jsonl-backed event log,
               revocation tombstones with prefix-based discovery, and
-              live/revoked/all status-filter queries — plus an
+              live/revoked/all status-filter queries, plus an
               in-memory backend for tests.
             </td>
           </tr>
@@ -502,7 +502,7 @@ export default function ArchitecturePage() {
               <code>covenant-mcp</code>
             </td>
             <td>
-              Model Context Protocol integration — tool trait following
+              Model Context Protocol integration: tool trait following
               the public MCP wire shapes (<code>name</code>,{" "}
               <code>description</code>, <code>inputSchema</code>,{" "}
               <code>Content</code> blocks, <code>isError</code>) so the

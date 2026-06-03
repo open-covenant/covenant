@@ -6,7 +6,7 @@ import { NetworkBanner } from "../stake/NetworkBanner";
 import { PositionsClient } from "./PositionsClient";
 
 export const metadata: Metadata = {
-  title: "Positions — Covenant Stake",
+  title: "Positions: Covenant Stake",
   description:
     "Manage your locked $CVNT positions, claim accrued SOL, and withdraw principal once the lock period elapses.",
   alternates: { canonical: "/positions" },
@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/positions",
-    title: "Positions — Covenant Stake",
+    title: "Positions: Covenant Stake",
     description:
       "Manage your locked $CVNT positions, claim accrued SOL, and withdraw principal once the lock period elapses.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    title: "Positions — Covenant Stake",
+    title: "Positions: Covenant Stake",
     description:
       "Manage your locked $CVNT positions, claim accrued SOL, and withdraw principal once the lock period elapses.",
     images: "/twitter-image.jpg",

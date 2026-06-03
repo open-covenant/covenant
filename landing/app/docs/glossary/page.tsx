@@ -4,7 +4,7 @@ import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 const META_ARGS = [
   "glossary",
   "Glossary",
-  "Canonical one-line definitions of the eight Covenant primitives and the core artifacts agents exchange — intent, capability, memory record, audit event, and settlement receipt.",
+  "Canonical one-line definitions of the eight Covenant primitives and the core artifacts agents exchange: intent, capability, memory record, audit event, and settlement receipt.",
 ] as const;
 export const metadata = buildDocsMetadata(...META_ARGS);
 

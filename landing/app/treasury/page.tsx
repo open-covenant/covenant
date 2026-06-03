@@ -6,14 +6,14 @@ import { NetworkBanner } from "../stake/NetworkBanner";
 import { TreasuryClient } from "./TreasuryClient";
 
 export const metadata: Metadata = {
-  title: "Treasury Dashboard — Covenant Stake On-Chain Metrics",
+  title: "Treasury Dashboard: Covenant Stake On-Chain Metrics",
   description:
     "Public read-only dashboard of the Covenant staking program's on-chain state: cumulative SOL distributions, protocol holdings, and active staker count.",
   alternates: { canonical: "/treasury" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/treasury",
-    title: "Treasury Dashboard — Covenant Stake On-Chain Metrics",
+    title: "Treasury Dashboard: Covenant Stake On-Chain Metrics",
     description:
       "Public read-only dashboard of the Covenant staking program's on-chain state.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    title: "Treasury Dashboard — Covenant Stake On-Chain Metrics",
+    title: "Treasury Dashboard: Covenant Stake On-Chain Metrics",
     description:
       "Public read-only dashboard of the Covenant staking program's on-chain state.",
     images: "/twitter-image.jpg",

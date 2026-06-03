@@ -56,19 +56,19 @@ git diff --check`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/alpha-release">Alpha release contract</Link> — source
+          <Link href="/alpha-release">Alpha release contract</Link>: source
           alpha boundary and release evidence bundle.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — current trust
+          <Link href="/security">Security model</Link>: current trust
           boundary.
         </li>
         <li>
-          <Link href="/live-coverage">Live coverage</Link> — real-boundary
+          <Link href="/live-coverage">Live coverage</Link>: real-boundary
           validation matrix.
         </li>
         <li>
-          <Link href="/provenance">Provenance</Link> — release evidence path.
+          <Link href="/provenance">Provenance</Link>: release evidence path.
         </li>
       </ul>
     </>

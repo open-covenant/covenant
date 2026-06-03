@@ -253,11 +253,11 @@ GET  /a2a/queue?limit=N&min_lease_age_ms=5000&deadline_within_ms=60000&state_fil
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/concepts">Concepts</Link> — agents in
+          <Link href="/concepts">Concepts</Link>: agents in
           context.
         </li>
         <li>
-          <Link href="/mcp">MCP integration</Link> — the
+          <Link href="/mcp">MCP integration</Link>: the
           companion surface for tools.
         </li>
       </ul>

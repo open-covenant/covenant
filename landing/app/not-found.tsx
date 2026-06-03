@@ -4,7 +4,7 @@ import { SiteFooter } from "./SiteFooter";
 import { SiteHeader } from "./SiteHeader";
 
 export const metadata: Metadata = {
-  title: "Page not found — Covenant",
+  title: "Page not found: Covenant",
   robots: { index: false, follow: false },
 };
 

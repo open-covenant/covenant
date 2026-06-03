@@ -6,14 +6,14 @@ import { WalletProvider } from "./WalletProvider";
 import { NetworkBanner } from "./NetworkBanner";
 
 export const metadata: Metadata = {
-  title: "Covenant Stake — lock $CVNT for a share of protocol revenue",
+  title: "Covenant Stake: lock $CVNT for a share of protocol revenue",
   description:
     "Lock $CVNT for 7–180 days and earn a pro-rata share of protocol revenue in SOL. Distribution amounts reflect actual protocol revenue and are not guaranteed.",
   alternates: { canonical: "/stake" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/stake",
-    title: "Covenant Stake — lock $CVNT for a share of protocol revenue",
+    title: "Covenant Stake: lock $CVNT for a share of protocol revenue",
     description:
       "Lock $CVNT for 7–180 days and earn a pro-rata share of protocol revenue distributed in SOL.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    title: "Covenant Stake — lock $CVNT for a share of protocol revenue",
+    title: "Covenant Stake: lock $CVNT for a share of protocol revenue",
     description:
       "Lock $CVNT for 7–180 days and earn a pro-rata share of protocol revenue distributed in SOL.",
     images: "/twitter-image.jpg",

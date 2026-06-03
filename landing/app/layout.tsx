@@ -3,7 +3,7 @@ import "./globals.css";
 
 const SITE_URL = "https://opencovenant.org";
 const SITE_NAME = "Covenant";
-const TITLE = "Covenant — open agent-native operating layer";
+const TITLE = "Covenant: open agent-native operating layer";
 const DESCRIPTION =
   "Covenant is the coordination layer for agentic software. Intent, runtime, memory, identity, permissions, comms, and settlement are host-level primitives for humans and agents.";
 
@@ -24,7 +24,7 @@ export const metadata: Metadata = {
         url: "/opengraph-image.jpg",
         width: 1200,
         height: 630,
-        alt: "Covenant — open agent-native operating layer",
+        alt: "Covenant: open agent-native operating layer",
       },
     ],
   },
@@ -37,7 +37,7 @@ export const metadata: Metadata = {
     images: [
       {
         url: "/twitter-image.jpg",
-        alt: "Covenant — open agent-native operating layer",
+        alt: "Covenant: open agent-native operating layer",
       },
     ],
   },

@@ -60,13 +60,13 @@ ToolCallResult {
 
       <ul>
         <li>
-          <code>echo</code> — returns its <code>text</code> argument
+          <code>echo</code> returns its <code>text</code> argument
           verbatim. Performs schema validation (missing or non-string{" "}
           <code>text</code> is rejected). Serves as the reference
           implementation for argument validation against the registry.
         </li>
         <li>
-          <code>clock</code> — no arguments; returns{" "}
+          <code>clock</code> takes no arguments; returns{" "}
           <code>{"{ \"epoch_ms\": <u64> }"}</code>. Provides a daemon
           liveness probe that does not require additional capability
           grants.
@@ -92,7 +92,7 @@ covenant tools call echo --args '{"text":"hi"}'
         <code>CapabilityCheck</code> event used by agent dispatch; the
         audit row carries an <code>agent_id</code> of{" "}
         <code>tool:&lt;name&gt;</code> so operators can distinguish
-        tool calls from agent dispatches at a glance.
+        tool calls from agent dispatches.
       </p>
 
       <h2>External MCP servers</h2>
@@ -144,15 +144,15 @@ env     = { LOG_LEVEL = "info" }`}</code>
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link>:
           the gate on every <code>tools/call</code>.
         </li>
         <li>
-          <Link href="/audit">Audit log</Link> — where every
+          <Link href="/audit">Audit log</Link>: where every
           capability check and every tool call lands.
         </li>
         <li>
-          <Link href="/cli">CLI</Link> — <code>tools list</code>{" "}
+          <Link href="/cli">CLI</Link>: <code>tools list</code>{" "}
           and <code>tools call</code>.
         </li>
       </ul>

@@ -3,14 +3,14 @@ import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
 export const metadata: Metadata = {
-  title: "Development Roadmap — Covenant",
+  title: "Development Roadmap: Covenant",
   description:
     "Covenant roadmap: foundation (M0), production & tools (M1), native integration (M2), distributed operation (M3), and 1.0 stability (M4).",
   alternates: { canonical: "/roadmap" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/roadmap",
-    title: "Development Roadmap — From M0 Foundation to M4 Stability",
+    title: "Development Roadmap: From M0 Foundation to M4 Stability",
     description:
       "Development milestones for Covenant across the local control plane, distributed agent networks, and 1.0 stability commitment.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    title: "Development Roadmap — From M0 Foundation to M4 Stability",
+    title: "Development Roadmap: From M0 Foundation to M4 Stability",
     description:
       "Development milestones for Covenant across the local control plane, distributed agent networks, and 1.0 stability commitment.",
     images: "/twitter-image.jpg",
@@ -56,19 +56,19 @@ const MILESTONES: Milestone[] = [
     title: "Production, Tools, and Marketplace Foundation",
     status: "Next",
     intro:
-      "The next release. Live agent visibility, the tools agents actually need, and the marketplace foundation — landing as a single push.",
+      "The next release. Live agent visibility, the core tools agents need, and the marketplace foundation, landing as a single push.",
     bullets: [
-      "Live progress streaming — watch an agent work in real time across the CLI, console, and HTTP gateway",
-      "Unified model provider — plug in Anthropic, OpenAI, DeepSeek, or local Ollama once; Covenant handles fallback, response caching, and cost tracking",
-      "Plugin catalog — install vetted tools from a one-click catalog inside the console, starting with filesystem access",
+      "Live progress streaming: watch an agent work in real time across the CLI, console, and HTTP gateway",
+      "Unified model provider: plug in Anthropic, OpenAI, DeepSeek, or local Ollama once; Covenant handles fallback, response caching, and cost tracking",
+      "Plugin catalog: install vetted tools from a one-click catalog inside the console, starting with filesystem access",
       "Production-grade isolated runtime for untrusted agent code on Linux",
       "Mid-task save and resume when an agent reaches its resource budget",
       "Signed installers: Homebrew, Debian, RPM, and notarized macOS packages",
       "Stable wire formats for SDK and integration compatibility",
-      "Browser tool — agents that navigate, click, and read pages",
-      "Isolated code execution — agents that write, run, and iterate on real code in a contained environment",
-      "Git host integration — read repositories, comment on issues, propose pull requests",
-      "Replay and state debugger — pick any moment from the activity log, see full state, re-run from there",
+      "Browser tool: agents that navigate, click, and read pages",
+      "Isolated code execution: agents that write, run, and iterate on real code in a contained environment",
+      "Git host integration: read repositories, comment on issues, propose pull requests",
+      "Replay and state debugger: pick any moment from the activity log, see full state, re-run from there",
       "On-chain agent registry with slashable identity stakes and a reputation primitive",
       "SDKs published to PyPI, npm, and crates.io",
       "Editor integration for Visual Studio Code",
@@ -96,7 +96,7 @@ const MILESTONES: Milestone[] = [
     intro:
       "Multi-host operation, federated identity, and cross-organization workflows.",
     bullets: [
-      "Multi-host operation with name@host.tld resolution — agent teams across machines",
+      "Multi-host operation with name@host.tld resolution for agent teams across machines",
       "Public agent registry with one-line install and signed manifests",
       "Microvm-grade isolation",
       "Multi-device memory synchronization for a single identity",

@@ -21,7 +21,7 @@ export default function CapabilitiesPage() {
 
       <h2>Shape</h2>
       <p>
-        A token is a <code>SignedCapability</code> — a{" "}
+        A token is a <code>SignedCapability</code>: a{" "}
         <code>Capability</code> wrapped with a 64-byte ed25519 signature
         encoded in base58.
       </p>
@@ -47,37 +47,37 @@ export default function CapabilitiesPage() {
       </p>
       <ul>
         <li>
-          <code>intent.</code> — actions over intent dispatch.
+          <code>intent.</code>: actions over intent dispatch.
         </li>
         <li>
-          <code>memory.</code> — actions over memory tiers.
+          <code>memory.</code>: actions over memory tiers.
         </li>
         <li>
-          <code>identity.</code> — actions over the local identity.
+          <code>identity.</code>: actions over the local identity.
         </li>
         <li>
-          <code>tool.</code> — actions over the tool surface, including{" "}
+          <code>tool.</code>: actions over the tool surface, including{" "}
           <code>tool.call.&lt;name&gt;</code> for individual tool
           dispatch.
         </li>
         <li>
-          <code>agent.</code> — actions over agent registration and
+          <code>agent.</code>: actions over agent registration and
           execution.
         </li>
         <li>
-          <code>a2a.</code> — actions over agent-to-agent task and
+          <code>a2a.</code>: actions over agent-to-agent task and
           result flows.
         </li>
         <li>
-          <code>audit.</code> — actions over the audit log and
+          <code>audit.</code>: actions over the audit log and
           integrity surface.
         </li>
         <li>
-          <code>peers.</code> — actions over peer registration and
+          <code>peers.</code>: actions over peer registration and
           revocation.
         </li>
         <li>
-          <code>chain.</code> — actions over chain receipt reads and
+          <code>chain.</code>: actions over chain receipt reads and
           flushing.
         </li>
       </ul>
@@ -190,13 +190,13 @@ covenant capabilities grant tool.web_search --expires-at 1714938191234`}</code>
 
       <ul>
         <li>
-          <code>verify(signed)</code> — reconstructs the canonical
+          <code>verify(signed)</code>: reconstructs the canonical
           message and verifies the signature against{" "}
           <code>capability.granted_by.pubkey</code>. Returns{" "}
           <code>BadSignature</code> on mismatch.
         </li>
         <li>
-          <code>verify_with_clock(signed, now_ms)</code> — same as
+          <code>verify_with_clock(signed, now_ms)</code>: same as
           <code>verify</code>, plus rejects tokens whose{" "}
           <code>expires_at</code> is in the past relative to{" "}
           <code>now_ms</code>.
@@ -221,8 +221,8 @@ covenant capabilities grant tool.web_search --expires-at 1714938191234`}</code>
         Revocations are tombstones written to{" "}
         <code>$COVENANT_HOME/capabilities/revoked.jsonl</code>. Each
         tombstone references a token by its base58 signature. The
-        active set is the granted set with revocations subtracted —
-        tokens can be re-granted after revocation, but the prior
+        active set is the granted set with revocations subtracted.
+        Tokens can be re-granted after revocation, but the prior
         signature is permanently dead.
       </p>
 
@@ -295,15 +295,15 @@ covenant capabilities revoke 4qXP…8tF1 --json
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/identity">Identity and keys</Link> — the
+          <Link href="/identity">Identity and keys</Link>. The
           ed25519 keypair behind every signature.
         </li>
         <li>
-          <Link href="/audit">Audit log</Link> — where grants,
+          <Link href="/audit">Audit log</Link>. Where grants,
           revoke rejections, and capability checks are recorded.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — the
+          <Link href="/security">Security model</Link>. The
           assumptions the capability layer rests on.
         </li>
       </ul>

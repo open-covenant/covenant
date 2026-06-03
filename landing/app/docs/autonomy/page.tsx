@@ -50,7 +50,7 @@ export default function AutonomyPage() {
         Sprint and handoff summaries are derived from tracked task state and
         the transition log. They report scoped task counts, state counts,
         active work, blocked work, recently integrated tasks, and recent
-        transition events — deterministic outputs that a fresh session can
+        transition events: deterministic outputs that a fresh session can
         consume without private context.
       </p>
 
@@ -76,10 +76,10 @@ export default function AutonomyPage() {
           </a>
         </li>
         <li>
-          <Link href="/provenance">Provenance</Link> — commit-scoped evidence.
+          <Link href="/provenance">Provenance</Link>: commit-scoped evidence.
         </li>
         <li>
-          <Link href="/live-coverage">Live coverage</Link> — opt-in
+          <Link href="/live-coverage">Live coverage</Link>: opt-in
           real-boundary tests.
         </li>
       </ul>

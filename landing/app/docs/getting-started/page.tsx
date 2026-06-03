@@ -39,18 +39,18 @@ export default function GettingStartedPage() {
           <tr>
             <td>Node.js</td>
             <td>22+</td>
-            <td>Optional — required only to run the landing site locally.</td>
+            <td>Optional; required only to run the landing site locally.</td>
           </tr>
           <tr>
             <td>pnpm</td>
             <td>10+</td>
-            <td>Optional — same as Node.js.</td>
+            <td>Optional; same as Node.js.</td>
           </tr>
           <tr>
             <td>Anchor + solana-cli</td>
             <td>Anchor 0.31+</td>
             <td>
-              Optional — required only to build the on-chain settlement
+              Optional; required only to build the on-chain settlement
               program.
             </td>
           </tr>
@@ -75,15 +75,15 @@ cargo build --workspace --exclude covenant-settlement-program`}</code>
 
       <ul>
         <li>
-          <code>covenantd</code> — the daemon. Long-running. Listens on a
+          <code>covenantd</code>: the daemon. Long-running. Listens on a
           Unix socket and an HTTP gateway.
         </li>
         <li>
-          <code>covenant</code> — the command-line client. Speaks to the
+          <code>covenant</code>: the command-line client. Speaks to the
           daemon over the Unix socket.
         </li>
         <li>
-          <code>covenant-tui</code> — the terminal UI client. Renders
+          <code>covenant-tui</code>: the terminal UI client. Renders
           intent, memory, audit, capabilities, A2A, chain-receipts, and
           peer-registry views over the same Unix socket.
         </li>
@@ -153,7 +153,7 @@ model    = "nomic-embed-text"
         </li>
         <li>
           Loads each agent package under{" "}
-          <code>$COVENANT_HOME/agents/</code> — every subdirectory
+          <code>$COVENANT_HOME/agents/</code>, every subdirectory
           containing an <code>agent.toml</code>; flat{" "}
           <code>*.toml</code> files at the top of{" "}
           <code>agents/</code> are silently skipped.
@@ -265,23 +265,23 @@ covenant verify --window 100 --json`}</code>
 
       <ul>
         <li>
-          <Link href="/concepts">Concepts</Link> — data model: intents,
+          <Link href="/concepts">Concepts</Link>. Data model: intents,
           agents, capabilities, memory, audit, and settlement.
         </li>
         <li>
-          <Link href="/cli">CLI reference</Link> — complete subcommand
+          <Link href="/cli">CLI reference</Link>. Complete subcommand
           reference.
         </li>
         <li>
-          <Link href="/http-api">HTTP API</Link> — gateway routes for
+          <Link href="/http-api">HTTP API</Link>. Gateway routes for
           browser-facing UIs and third-party integrations.
         </li>
         <li>
-          <Link href="/agent-manifest">Agent manifest</Link> — full{" "}
+          <Link href="/agent-manifest">Agent manifest</Link>. Full{" "}
           <code>agent.toml</code> schema.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — trust
+          <Link href="/security">Security model</Link>. Trust
           boundaries and operator responsibilities.
         </li>
       </ul>

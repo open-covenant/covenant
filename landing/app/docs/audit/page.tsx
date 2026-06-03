@@ -16,7 +16,7 @@ export default function AuditPage() {
         Every state-changing surface in Covenant emits an{" "}
         <code>AuditEvent</code> to the append-only log at{" "}
         <code>$COVENANT_HOME/audit/events.jsonl</code>. The log is the
-        ground truth — operators read it directly,{" "}
+        ground truth: operators read it directly,{" "}
         <code>covenant verify</code> cross-checks it against the other
         state files, <code>covenant audit verify</code> checks the local
         hash-chain sidecar, and the <code>covenant audit recent</code>{" "}
@@ -100,7 +100,7 @@ export default function AuditPage() {
       </pre>
       <p>
         Emitted when the daemon refuses a <code>CreateCapability</code>{" "}
-        request at scope validation — for example, a{" "}
+        request at scope validation. For example, a{" "}
         <code>memory.write</code> grant whose scope object does not
         match the action&apos;s schema. Distinct from{" "}
         <code>CapabilityRevokeRejected</code> (rejection on the revoke
@@ -125,7 +125,7 @@ export default function AuditPage() {
       <p>
         Emitted at dispatch time when the caller holds a capability for{" "}
         <code>action</code> but the request falls outside its{" "}
-        <code>scope</code> — for example, an{" "}
+        <code>scope</code>. For example, an{" "}
         <code>audit.purge</code> call whose <code>before_ms</code>{" "}
         predates the scope window, or a <code>memory.write</code> at a
         tier the grant did not authorise. <code>agent_id</code> is a
@@ -136,7 +136,7 @@ export default function AuditPage() {
         scope-mismatch message returned to the caller. Distinct from{" "}
         <code>CapabilityCheck</code> with{" "}
         <code>passed: false</code>, which fires when a required action
-        is missing entirely from the issuer&apos;s capability set —
+        is missing entirely from the issuer&apos;s capability set;
         scope rejection assumes the action <em>is</em> present and the
         rejection is on its bound scope.
       </p>
@@ -153,7 +153,7 @@ export default function AuditPage() {
       </pre>
       <p>
         Emitted when the daemon refuses a capability revocation
-        request — for example, an issuer that does not own the
+        request. For example, an issuer that does not own the
         signature or a payload whose signature does not verify.
         Successful revocations are <em>not</em> audit events;
         they write tombstone rows to the capability store
@@ -173,7 +173,7 @@ export default function AuditPage() {
 }`}</code>
       </pre>
       <p>
-        Emitted on every rejected authentication attempt — a bad first
+        Emitted on every rejected authentication attempt: a bad first
         frame on the IPC socket, a missing or malformed{" "}
         <code>Authorization</code> header on HTTP, or a token the
         registry does not resolve. <code>transport</code> is{" "}
@@ -210,7 +210,7 @@ export default function AuditPage() {
         <code>peer_pubkey_b58</code> is the unforgeable identifier
         (display is wire-supplied). <code>token_prefix</code> is the
         same 6-char base58 redaction that{" "}
-        <code>OperatorTokenRotated</code> records — full token bytes
+        <code>OperatorTokenRotated</code> records. Full token bytes
         never enter the audit log, and the prefix lets an operator
         confirm a revoked entry matches the durable on-disk peer
         registry. Distinct from <code>OperatorPeerRevokeRejected</code>{" "}
@@ -237,7 +237,7 @@ export default function AuditPage() {
         <code>RevokeOutcome::SelfRevokeForbidden</code> and the
         registry is unchanged. The operator IS both the issuer and the
         audience here, so the row surfaces in their own{" "}
-        <code>/audit</code> feed for self-fat-finger triage —
+        <code>/audit</code> feed for self-fat-finger triage,
         deliberately distinct from <code>OperatorPeerRevokeRejected</code>,
         which records a non-operator&apos;s probe under the
         daemon-as-issuer audience so the operator can see the probe on
@@ -263,7 +263,7 @@ export default function AuditPage() {
       <p>
         Emitted when the operator rotates their bootstrap token via{" "}
         <code>RotateOperatorToken</code>. The issuer is the operator
-        (peer-event audience — the recording path asserts the
+        (peer-event audience: the recording path asserts the
         issuer&apos;s pubkey matches the acting peer&apos;s). Full
         token bytes never enter the audit log: both prefixes are the
         same 6-char base58 redaction that <code>PeerRevoked</code>{" "}
@@ -293,20 +293,20 @@ export default function AuditPage() {
         Emitted when <code>RotateOperatorToken</code> is rejected
         because the authenticated peer&apos;s pubkey does not match
         the operator identity. The gate is silent in v0 single-peer
-        — only the operator can authenticate, so the rejection branch
-        is dead code — and becomes load-bearing at Phase-1 multi-peer
+        (only the operator can authenticate, so the rejection branch
+        is dead code) and becomes load-bearing at Phase-1 multi-peer
         where a guest peer reaching this path is a probe worth
         surfacing on the operator&apos;s <code>/audit</code> feed.
         The issuer is the daemon identity (not the rejected peer) so
         the row passes the cross-peer audit-feed isolation filter,
         mirroring <code>AuthenticationFailed</code>&apos;s audience
         model. <code>peer_pubkey_b58</code> is the unforgeable
-        identity — <code>display</code> is wire-supplied and a future
+        identity; <code>display</code> is wire-supplied and a future
         attacker could register <code>user@local</code> against any
         pubkey, so the base58 form (matching{" "}
         <code>bs58::encode(peer.pubkey)</code>) is the durable probe
         attribution. Distinct from <code>AuthenticationFailed</code>{" "}
-        (the peer authenticated successfully — they failed an
+        (the peer authenticated successfully; they failed an
         authorization check, not authentication).
       </p>
 
@@ -333,17 +333,17 @@ export default function AuditPage() {
         (a) hide the probe from the operator under the cross-peer
         audit-feed isolation filter and (b) turn the rejected
         peer&apos;s own feed into a probe-was-logged oracle.{" "}
-        <code>peer_pubkey_b58</code> is the unforgeable identity —
+        <code>peer_pubkey_b58</code> is the unforgeable identity;{" "}
         <code>peer_display</code> is wire-supplied and a future
         attacker could register <code>user@local</code> against any
         pubkey, so the base58 form (matching{" "}
         <code>bs58::encode(peer.pubkey)</code>) is the durable probe
         attribution that survives operator grep through the audit
         log unmodified. Distinct from{" "}
-        <code>CapabilityCheck</code> (no capability is checked — the
+        <code>CapabilityCheck</code> (no capability is checked: the
         gate is identity-pubkey equality) and from{" "}
         <code>AuthenticationFailed</code> (the peer authenticated
-        successfully — they failed an authorization check, not
+        successfully; they failed an authorization check, not
         authentication).
       </p>
 
@@ -362,12 +362,12 @@ export default function AuditPage() {
         authenticated peer&apos;s pubkey does not match the operator
         identity. Daemon-as-issuer audience model matching{" "}
         <code>OperatorTokenRotationRejected</code> and{" "}
-        <code>OperatorPeersListRejected</code> — recording the
+        <code>OperatorPeersListRejected</code>: recording the
         rejection under the rejected peer would (a) hide the probe
         from the operator&apos;s <code>/audit</code> feed under the
         cross-peer audit-feed isolation filter and (b) turn the
         rejected peer&apos;s own feed into a probe-was-logged oracle.{" "}
-        <code>peer_pubkey_b58</code> is the unforgeable identifier —
+        <code>peer_pubkey_b58</code> is the unforgeable identifier;{" "}
         <code>peer_display</code> is wire-supplied and a future
         attacker could register <code>user@local</code> against any
         pubkey, so the base58 form (matching{" "}
@@ -378,9 +378,9 @@ export default function AuditPage() {
         <code>PeerSelfRevokeBlocked</code> (operator-issuer
         fat-finger guard where the operator is both issuer and
         audience). Distinct from <code>CapabilityCheck</code> (no
-        capability is checked — the gate is identity-pubkey equality)
+        capability is checked: the gate is identity-pubkey equality)
         and from <code>AuthenticationFailed</code> (the peer
-        authenticated successfully — they failed an authorization
+        authenticated successfully; they failed an authorization
         check, not authentication).
       </p>
 
@@ -426,7 +426,7 @@ export default function AuditPage() {
         from <code>BudgetExhausted</code> (a post-completion debit
         rejection on a finished run): preempt actively kills a
         running process. <code>signal_sent</code> classifies the
-        path the daemon took — <code>&quot;SIGTERM&quot;</code> for
+        path the daemon took: <code>&quot;SIGTERM&quot;</code> for
         the cooperative-grace attempt, <code>&quot;SIGKILL&quot;</code>{" "}
         when the subprocess outlived the grace window, and{" "}
         <code>&quot;none&quot;</code> when the subprocess exited
@@ -456,7 +456,7 @@ export default function AuditPage() {
         Emitted when the budget-hard-preempt path attempted to signal
         the subprocess but the signal-send syscall returned an error.
         The <code>errno</code> field is operationally load-bearing
-        for triage: <code>3</code> (<code>ESRCH</code>) is benign — the
+        for triage: <code>3</code> (<code>ESRCH</code>) is benign, since the
         subprocess exited before the daemon could signal it, which the
         daemon may also surface as a <code>BudgetPreempted</code> row
         with <code>signal_sent: &quot;none&quot;</code> on a different
@@ -483,7 +483,7 @@ export default function AuditPage() {
         Emitted when <code>dispatch_intent</code> falls into the
         NoCapacity fail-open arm: the manifest opted in to budget
         enforcement (<code>budget_credits_per_hour &gt; 0</code>) but
-        no bucket was seeded for the agent — the operator forgot to
+        no bucket was seeded for the agent: the operator forgot to
         call <code>register_agent_budgets</code>, or a hot-reload
         added the manifest without re-seeding. v0 logs the row and
         passes the dispatch. The variant is deliberately distinct
@@ -515,7 +515,7 @@ export default function AuditPage() {
         through the repair response; the audit row keeps the durable
         who/what/why envelope without duplicating memory text into the
         audit log. The issuer is the requesting peer (operator-as-issuer
-        audience — the recording path asserts the issuer&apos;s pubkey
+        audience: the recording path asserts the issuer&apos;s pubkey
         matches the acting peer&apos;s), recorded only after the
         dispatch-time capability check and the{" "}
         <code>memory.repair.{`<mode>`}</code> scope check both pass; if
@@ -525,7 +525,7 @@ export default function AuditPage() {
         rejection row for the same request. <code>action</code> and{" "}
         <code>mode</code> are parser-fixed snake_case tokens produced by{" "}
         <code>memory_repair_action</code> and{" "}
-        <code>memory_repair_mode</code> in covenantd — the three valid{" "}
+        <code>memory_repair_mode</code> in covenantd. The three valid{" "}
         <code>action</code> values are{" "}
         <code>&quot;detach_parent&quot;</code>,{" "}
         <code>&quot;delete_record&quot;</code>, and{" "}
@@ -534,7 +534,7 @@ export default function AuditPage() {
         <code>&quot;dry_run&quot;</code>. <code>changed</code> is{" "}
         <code>true</code> only when <code>mode</code> is{" "}
         <code>&quot;apply&quot;</code> <em>and</em> the planner reported
-        a would-change outcome — a dry-run row always reports{" "}
+        a would-change outcome; a dry-run row always reports{" "}
         <code>changed: false</code>, and an apply that found the record
         already in the requested state also reports{" "}
         <code>changed: false</code>. The flag is the mutation-vs-no-op
@@ -567,7 +567,7 @@ export default function AuditPage() {
         peer (operator-as-issuer audience), recorded only after the{" "}
         <code>memory.compact.{`<mode>`}</code> capability gate{" "}
         <em>and</em> a follow-up operator-identity equality check both
-        pass — even a guest peer that somehow holds{" "}
+        pass. Even a guest peer that somehow holds{" "}
         <code>memory.compact.apply</code> is rejected with an
         operator-identity error before any compaction runs, so a
         non-operator <code>issuer</code> on this row should be read as a
@@ -576,7 +576,7 @@ export default function AuditPage() {
         <code>MemoryCompactionApplied</code> row never coexists with a
         rejection row for the same request. <code>mode</code> shares the
         parser-fixed snake_case vocabulary produced by{" "}
-        <code>memory_repair_mode</code> in covenantd —{" "}
+        <code>memory_repair_mode</code> in covenantd:{" "}
         <code>&quot;apply&quot;</code> or{" "}
         <code>&quot;dry_run&quot;</code>. <code>deleted</code>,{" "}
         <code>stale_marked</code>, and <code>parents_detached</code>{" "}
@@ -585,14 +585,14 @@ export default function AuditPage() {
         while operators retain enough to correlate against{" "}
         <code>memory plan-compaction</code> dry-run output.{" "}
         <code>changed</code> is the compaction-mutation-vs-no-op triage
-        signal — a refactor that{" "}
+        signal; a refactor that{" "}
         <code>#[serde(default)]</code>-ed any of the three id lists
         would let a malformed row decode with empty lists and erase
         which ids were touched (the test pin in{" "}
         <code>covenant-audit</code> documents this exact regression).
         Distinct from <code>MemoryRepairApplied</code> (single-record
         path keyed on a <code>memory_id</code> and one of three{" "}
-        <code>action</code> tokens — bulk compaction reports id arrays
+        <code>action</code> tokens; bulk compaction reports id arrays
         instead, one row per run rather than per record).
       </p>
 
@@ -612,7 +612,7 @@ export default function AuditPage() {
       </pre>
       <p>
         Emitted when <code>covenantd::Server</code> repairs an in-flight
-        A2A mailbox lease — either via an operator{" "}
+        A2A mailbox lease, either via an operator{" "}
         <code>RepairA2A</code> request after the{" "}
         <code>a2a.repair</code> scope check passes, or by the
         disabled-by-default A2A auto-retry scheduler running as the
@@ -623,7 +623,7 @@ export default function AuditPage() {
         <code>&quot;requeue&quot;</code> or{" "}
         <code>&quot;force_error&quot;</code> for operator-issued repairs
         and <code>&quot;auto_requeue&quot;</code> for scheduler-issued
-        ones — the slug is the only triage signal that separates a
+        ones; the slug is the only triage signal that separates a
         scheduler-driven retry from an operator-driven one on the
         operator&apos;s <code>/audit</code> feed.{" "}
         <code>attempt</code> is the lease&apos;s retry-count after the
@@ -633,7 +633,7 @@ export default function AuditPage() {
       <p>
         The wire-form <code>type</code> discriminator is{" "}
         <code>&quot;a2_a_repair_applied&quot;</code>, <em>not</em>{" "}
-        <code>a2a_repair_applied</code> — serde&apos;s{" "}
+        <code>a2a_repair_applied</code>: serde&apos;s{" "}
         <code>rename_all = &quot;snake_case&quot;</code> splits the{" "}
         <code>A2A</code> prefix on each digit/uppercase boundary so the
         durable on-disk slug carries the extra underscore. A refactor
@@ -644,7 +644,7 @@ export default function AuditPage() {
         <code>lease_id</code> and <code>duplicate_risk</code> are{" "}
         <code>Option</code> fields but carry no{" "}
         <code>#[serde(skip_serializing_if)]</code>, so both keys always
-        surface on the wire — <code>null</code> when the daemon did not
+        surface on the wire, set to <code>null</code> when the daemon did not
         bind them. The wire shape stays at exactly seven keys across
         every repair row regardless of whether the daemon classified the
         lease&apos;s duplicate-risk; a doc example that elided either
@@ -652,7 +652,7 @@ export default function AuditPage() {
         <code>skip_serializing_if</code> regression masquerade as the
         documented contract. Distinct from{" "}
         <code>MemoryRepairApplied</code> (different subject: an A2A
-        mailbox lease, not a memory record — the audit-feed audience
+        mailbox lease, not a memory record; the audit-feed audience
         and scope vocabularies are operator-only on both, but
         cross-feed joins should key on this slug, not on the
         peer-event audience).
@@ -687,7 +687,7 @@ export default function AuditPage() {
         <code>record_daemon_event</code>, not{" "}
         <code>record_peer_event</code>), so the audience model mirrors{" "}
         <code>AuthenticationFailed</code> rather than{" "}
-        <code>A2ARepairApplied</code> — even though both A2A rows share
+        <code>A2ARepairApplied</code>: even though both A2A rows share
         the <code>a2_a_</code> slug stem, joins that key on the
         peer-event audience will miss every scan row. The policy
         snapshot fields (<code>enabled</code>,{" "}
@@ -696,11 +696,11 @@ export default function AuditPage() {
         configuration the scan ran under, so an operator can correlate a
         sudden requeued-count change with a policy edit without rereading
         the daemon log. <code>skipped_by_reason</code> is a JSON object
-        keyed by skip-reason with per-reason counts — it makes the
+        keyed by skip-reason with per-reason counts; it makes the
         operator-misconfig-vs-policy-gate breakdown legible without
         landing the full task payloads on the audit stream. The wire
         slug is <code>&quot;a2_a_auto_retry_scheduler_scan&quot;</code>,{" "}
-        <em>not</em> <code>a2a_auto_retry_scheduler_scan</code> — the
+        <em>not</em> <code>a2a_auto_retry_scheduler_scan</code>: the
         same serde <code>rename_all = &quot;snake_case&quot;</code>{" "}
         digit/upper split that <code>A2ARepairApplied</code> carries,
         pinned in <code>covenant-audit</code>. <code>error</code> is{" "}
@@ -709,7 +709,7 @@ export default function AuditPage() {
         as JSON <code>null</code> on success scans and the eleven-key
         wire shape stays stable across success and failure rows.
         Distinct from <code>A2ARepairApplied</code> (one summary row per
-        scan vs one row per repaired lease — joining the two surfaces by{" "}
+        scan vs one row per repaired lease; joining the two surfaces by{" "}
         <code>task_id</code> reconstructs which leases the scan
         touched).
       </p>
@@ -735,8 +735,8 @@ export default function AuditPage() {
         it, a malicious peer could route arbitrary{" "}
         <code>intent_text</code> into the recipient&apos;s{" "}
         <code>RecentA2ATasks</code> view via the bidirectional filter.
-        The issuer is the <em>sender</em> peer (their failed attempt)
-        — but the missing cap belongs to a <em>different subject</em>,
+        The issuer is the <em>sender</em> peer (their failed attempt),
+        but the missing cap belongs to a <em>different subject</em>,
         the recipient, which is the entire reason the variant exists as
         its own kind rather than as a <code>CapabilityCheck</code> row.
         Both <code>sender_display</code> and{" "}
@@ -748,7 +748,7 @@ export default function AuditPage() {
         without recomputing the missing-cap string. The wire-form{" "}
         <code>type</code> slug is{" "}
         <code>&quot;a2_a_recipient_rejected&quot;</code>, <em>not</em>{" "}
-        <code>a2a_recipient_rejected</code> — the same serde{" "}
+        <code>a2a_recipient_rejected</code>: the same serde{" "}
         <code>rename_all = &quot;snake_case&quot;</code> A2A
         digit/upper split pinned in <code>covenant-audit</code>.
         Distinct from <code>CapabilityCheck</code> with{" "}
@@ -773,7 +773,7 @@ export default function AuditPage() {
         Emitted when <code>SendA2ATask</code> is rejected because the
         supplied <code>task.sender</code> does not match the
         authenticated peer on the connection. The gate closes the
-        sender-spoof attack class — a malicious local process claiming
+        sender-spoof attack class: a malicious local process claiming
         to be a different agent on the wire than the one bound to its
         peer token. The check fires as a precondition before any cap
         check runs, so a spoof attempt never even reaches{" "}
@@ -782,7 +782,7 @@ export default function AuditPage() {
         <code>SendA2ATask</code>. The issuer is the actual{" "}
         <em>authenticated</em> peer (the recording path uses{" "}
         <code>peer.clone()</code> against{" "}
-        <code>record_peer_event_required</code>) — not the spoofed
+        <code>record_peer_event_required</code>), not the spoofed
         identity, so an attacker can&apos;t hide the attempt behind the
         impersonated peer&apos;s audit feed. <code>peer_display</code>{" "}
         and <code>claimed_sender_display</code> are both load-bearing
@@ -791,10 +791,10 @@ export default function AuditPage() {
         spoof event into a one-sided diagnostic and lose the
         attribution. The wire-form <code>type</code> slug is{" "}
         <code>&quot;a2_a_sender_mismatch&quot;</code>, <em>not</em>{" "}
-        <code>a2a_sender_mismatch</code> — the same serde{" "}
+        <code>a2a_sender_mismatch</code>: the same serde{" "}
         <code>rename_all = &quot;snake_case&quot;</code> A2A
         digit/upper split. Distinct from{" "}
-        <code>A2ARecipientRejected</code> (post-spoof-gate path — a
+        <code>A2ARecipientRejected</code> (post-spoof-gate path: a
         recipient-side cap gap on an honestly-attributed sender) and
         from <code>AuthenticationFailed</code> (no peer authenticated;
         no <code>task.sender</code> claim to compare against).
@@ -812,7 +812,7 @@ export default function AuditPage() {
       </pre>
       <p>
         Emitted when <code>PostA2AResult</code> is rejected upstream of
-        any capability check — currently when{" "}
+        any capability check, currently when{" "}
         <code>mailbox.lookup_task_sender(task_id)</code> returns no
         sender, meaning the supplied <code>task_id</code> was never
         dispatched through this daemon. The reason field carries the
@@ -823,7 +823,7 @@ export default function AuditPage() {
         <code>PostA2AResult</code> request. The issuer is the
         authenticated peer that submitted the bogus{" "}
         <code>task_id</code> (peer-as-issuer audience via{" "}
-        <code>record_peer_event</code>) — the peer&apos;s own audit
+        <code>record_peer_event</code>): the peer&apos;s own audit
         feed surfaces the row so a benign client bug stays visible to
         its operator without leaking the rejection to other peers. The
         variant is a stronger compromise indicator than a missing-cap
@@ -833,11 +833,11 @@ export default function AuditPage() {
         fabricated the id or replayed one from a different daemon. The
         wire-form <code>type</code> slug is{" "}
         <code>&quot;a2_a_result_rejected&quot;</code>, <em>not</em>{" "}
-        <code>a2a_result_rejected</code> — the same serde{" "}
+        <code>a2a_result_rejected</code>: the same serde{" "}
         <code>rename_all = &quot;snake_case&quot;</code> A2A
         digit/upper split. Distinct from <code>CapabilityCheck</code>{" "}
         with <code>passed: false</code> (which assumes the{" "}
-        <code>task_id</code> is valid and only the cap is short — a
+        <code>task_id</code> is valid and only the cap is short; a
         refactor that moved the unknown-task gate behind the cap
         check would silently absorb this stronger signal into a
         routine cap miss) and from <code>A2ASenderMismatch</code>{" "}
@@ -862,7 +862,7 @@ export default function AuditPage() {
         <code>runtime_trace_to_audit_kind</code>) when a Hermes-runtime
         agent starts a tool invocation inside its run loop.{" "}
         <code>intent_id</code> stamps the parent intent so the audit
-        row ties back to the broader intent context — a refactor that
+        row ties back to the broader intent context; a refactor that
         dropped the stamping would strand every Hermes tool invocation
         from the originating <code>IntentDispatched</code> row.{" "}
         <code>run_id</code> is the Hermes-side run identifier and is
@@ -870,7 +870,7 @@ export default function AuditPage() {
         <code>HermesToolCompleted</code> row (joining on{" "}
         <code>intent_id + run_id + tool</code> reconstructs the
         tool-call duration). <code>preview_hash_hex</code> is the
-        SHA-256 of Hermes&apos;s short tool-input preview — the raw
+        SHA-256 of Hermes&apos;s short tool-input preview: the raw
         preview text is hashed via <code>covenant_audit::hash_hex</code>{" "}
         before persisting, so the audit chain never embeds raw tool
         input. That redaction floor is load-bearing: a refactor that
@@ -880,7 +880,7 @@ export default function AuditPage() {
         preview verbatim into the persisted audit chain, which is why
         the wire form pins <code>preview_hash_hex</code> rather than
         any unhashed alternative. Distinct from{" "}
-        <code>IntentDispatched</code> (one row per intent — Hermes runs
+        <code>IntentDispatched</code> (one row per intent; Hermes runs
         emit many <code>HermesToolInvoked</code> rows per intent, one
         per tool call) and from <code>HermesToolCompleted</code>{" "}
         (end-of-tool row carrying <code>duration_ms</code> and{" "}
@@ -902,14 +902,14 @@ export default function AuditPage() {
       </pre>
       <p>
         Emitted when a tool invocation in a Hermes run finishes. The
-        end-of-tool counterpart to <code>HermesToolInvoked</code> — pair
+        end-of-tool counterpart to <code>HermesToolInvoked</code>; pair
         them by <code>intent_id + run_id + tool</code> to reconstruct
         tool-call latency. <code>duration_ms</code> is the latency the
         audit row carries verbatim from the runtime trace; operators
         key Hermes latency dashboards on this field, so a refactor that
         coerced to a different width or unit would silently shift every
         dashboard built against milliseconds. <code>error</code> is{" "}
-        <code>true</code> iff the tool itself raised — a{" "}
+        <code>true</code> iff the tool itself raised; a{" "}
         <code>false</code> here followed by a failed overall run status
         means Hermes failed elsewhere in the loop (model error, policy
         denial, transport issue), so this flag is the only reliable
@@ -924,7 +924,7 @@ export default function AuditPage() {
         <code>preview_hash_hex</code> vs end-of-tool with{" "}
         <code>duration_ms</code> and <code>error</code>) and from{" "}
         <code>HermesApprovalRequested</code> (a run pausing for
-        operator approval is not a tool completion — approval rows do
+        operator approval is not a tool completion; approval rows do
         not carry <code>tool</code> or <code>duration_ms</code>).
       </p>
 
@@ -940,7 +940,7 @@ export default function AuditPage() {
 }`}</code>
       </pre>
       <p>
-        Emitted when a Hermes run pauses pending operator approval —
+        Emitted when a Hermes run pauses pending operator approval,
         recorded so a run stalled at the approval prompt stays
         auditable even when the operator console is closed.{" "}
         <code>intent_id</code> stamps the parent intent so the audit
@@ -958,7 +958,7 @@ export default function AuditPage() {
         invariant is pinned in <code>covenant-audit</code>). Distinct
         from <code>HermesToolInvoked</code> and{" "}
         <code>HermesToolCompleted</code> (the approval pause is not a
-        tool — there is no <code>tool</code> or{" "}
+        tool, so there is no <code>tool</code> or{" "}
         <code>preview_hash_hex</code> or <code>duration_ms</code>) and
         from <code>HermesApprovalResolved</code> (start-of-pause vs
         end-of-pause; the pair shares{" "}
@@ -981,7 +981,7 @@ export default function AuditPage() {
       </pre>
       <p>
         Emitted when an operator (or auto-policy) answers a pending
-        Hermes approval — the end-of-pause counterpart to{" "}
+        Hermes approval: the end-of-pause counterpart to{" "}
         <code>HermesApprovalRequested</code>, paired by{" "}
         <code>intent_id + run_id</code> so operators reconstruct
         approval latency by joining the two rows.{" "}
@@ -991,7 +991,7 @@ export default function AuditPage() {
         <code>run_id</code> is the same Hermes-side run identifier the
         request row carries. <code>choice</code> is the selected
         string from the originally presented{" "}
-        <code>choices</code> vector — the invariant is that the value
+        <code>choices</code> vector; the invariant is that the value
         matches one of the entries the request row recorded, so a
         free-form unrelated string here would silently break
         approval-lifecycle reconstruction across deployments.{" "}
@@ -1007,7 +1007,7 @@ export default function AuditPage() {
         single selected <code>choice</code> and the{" "}
         <code>resolved</code> count) and from{" "}
         <code>HermesToolCompleted</code> (an approval response is not
-        a tool completion — there is no <code>tool</code>,{" "}
+        a tool completion, so there is no <code>tool</code>,{" "}
         <code>duration_ms</code>, or <code>error</code> field).
       </p>
 
@@ -1027,7 +1027,7 @@ export default function AuditPage() {
         Emitted when the Hermes runner observes an SSE{" "}
         <code>file.written</code> event during a run and the daemon folds
         the resulting <code>RuntimeTrace::HermesFileWritten</code> into the
-        audit chain — the workspace-mutation counterpart to the tool- and
+        audit chain: the workspace-mutation counterpart to the tool- and
         approval-lifecycle Hermes rows. <code>intent_id</code> stamps the
         parent intent so a file write stays attributable to the originating{" "}
         <code>IntentDispatched</code> even after the run terminates; the
@@ -1041,13 +1041,13 @@ export default function AuditPage() {
         and passes through verbatim: operator file-tree views key on it, so
         a redaction would break the join from the audit row to the rendered
         file path. <code>bytes</code> is the file size as a{" "}
-        <code>u64</code> — the width is load-bearing, since a narrowing to{" "}
-        <code>u32</code> would silently truncate any write above 4 GiB — and
+        <code>u64</code> (the width is load-bearing, since a narrowing to{" "}
+        <code>u32</code> would silently truncate any write above 4 GiB), and
         it serializes as a JSON number, not a string, so size-based client
         logic does not break on a quoted value that never appears on the
         wire. Distinct from <code>HermesToolInvoked</code> and{" "}
-        <code>HermesToolCompleted</code> (a file write is not a tool call —
-        there is no <code>tool</code>, <code>duration_ms</code>, or{" "}
+        <code>HermesToolCompleted</code> (a file write is not a tool call,
+        so there is no <code>tool</code>, <code>duration_ms</code>, or{" "}
         <code>error</code> field).
       </p>
 
@@ -1076,9 +1076,9 @@ export default function AuditPage() {
         <code>SettlementReceiptBackfillApplied</code> row never coexists
         with a rejection row for the same request. The row is emitted
         only after <code>backfill_receipts</code> returned{" "}
-        <code>Ok</code> — i.e. after the rollback checkpoint, the
+        <code>Ok</code> (i.e. after the rollback checkpoint, the
         rewritten store contents, and the renamed store file are
-        fsynced — so the audit log cannot claim a mutation whose data
+        fsynced), so the audit log cannot claim a mutation whose data
         did not durably land. <code>row_count</code> is the count of
         legacy rows the backfill plan would change on a dry run and the
         count it actually rewrote on an apply; an apply that found
@@ -1096,11 +1096,11 @@ export default function AuditPage() {
         nothing; the field carries no{" "}
         <code>#[serde(skip_serializing_if)]</code> so the wire form is
         always four keys (the key stays present as <code>null</code>{" "}
-        when None) — a consumer that filters on the applied-vs-dry
+        when None): a consumer that filters on the applied-vs-dry
         split reads <code>dry_run</code> while one that wants the
         rollback checkpoint reads <code>rollback_path</code>, so both
         must stay on the wire across the Some and None cases. The row
-        is best-effort like every other completed-mutation kind — the
+        is best-effort like every other completed-mutation kind: the
         rewrite is already durable and the rollback file is on disk,
         so audit-write success is not a precondition for the response
         (the variant is intentionally absent from{" "}
@@ -1109,7 +1109,7 @@ export default function AuditPage() {
         an attacker probe). Distinct from{" "}
         <code>MemoryRepairApplied</code> and{" "}
         <code>MemoryCompactionApplied</code> (different subject: the
-        settlement receipt store rewrite vs a memory-record mutation —
+        settlement receipt store rewrite vs a memory-record mutation;
         the rollback evidence here is an on-disk checkpoint sibling of
         the store rather than a SQLite savepoint or per-record
         before/after payload, and the action vocabulary collapses to
@@ -1143,11 +1143,11 @@ export default function AuditPage() {
         a rejection row for the same request. The row is emitted only
         after{" "}
         <code>SqliteStore::backfill_receipt_correlation</code> returned{" "}
-        <code>Ok</code> — i.e. after the{" "}
+        <code>Ok</code> (i.e. after the{" "}
         <code>BEGIN IMMEDIATE</code> +{" "}
         <code>SAVEPOINT backfill_receipt_correlation</code> + per-row{" "}
         <code>UPDATE</code> + <code>RELEASE SAVEPOINT</code> +{" "}
-        <code>COMMIT</code> all succeed — so the audit log cannot claim
+        <code>COMMIT</code> all succeed), so the audit log cannot claim
         a mutation whose data did not durably land.{" "}
         <code>row_count</code> is the count of memory records the
         planner would correlate on a dry run and the count actually
@@ -1170,14 +1170,14 @@ export default function AuditPage() {
         nothing; the field carries no{" "}
         <code>#[serde(skip_serializing_if)]</code> so the wire form is
         always four keys (the key stays present as <code>null</code>{" "}
-        when None) — a consumer that filters on the applied-vs-dry
+        when None): a consumer that filters on the applied-vs-dry
         split reads <code>dry_run</code> while one that wants the
         SAVEPOINT identifier reads <code>savepoint_name</code>, so both
         must stay on the wire across the Some and None cases, and the
         stable column set is what lets operator dashboards JOIN this
         row with <code>SettlementReceiptBackfillApplied</code> under
         the same backfill-family schema. The row is best-effort like
-        every other completed-mutation kind — the SAVEPOINT-wrapped
+        every other completed-mutation kind: the SAVEPOINT-wrapped
         batch already <code>COMMIT</code>ted, so audit-write success is
         not a precondition for the response (the variant is
         intentionally absent from{" "}
@@ -1189,7 +1189,7 @@ export default function AuditPage() {
         receipts JSONL store under an on-disk rollback checkpoint
         rather than{" "}
         <code>metadata.receipt_id</code> onto memory records under a
-        SQLite SAVEPOINT — same correlation operation, opposite
+        SQLite SAVEPOINT: same correlation operation, opposite
         direction and different rollback mechanism), and from{" "}
         <code>MemoryRepairApplied</code> and{" "}
         <code>MemoryCompactionApplied</code> (different action
@@ -1230,19 +1230,19 @@ export default function AuditPage() {
           rolling window:
           <ul>
             <li>
-              memory ↔ audit — every memory record has a matching{" "}
+              memory ↔ audit: every memory record has a matching{" "}
               <code>IntentDispatched</code>.
             </li>
             <li>
-              memory parent references — every parent id resolves in
+              memory parent references: every parent id resolves in
               the memory store.
             </li>
             <li>
-              capability ↔ audit — every granted capability has a
+              capability ↔ audit: every granted capability has a
               matching <code>CapabilityGranted</code>.
             </li>
             <li>
-              memory ↔ receipts — memory writes and settlement
+              memory ↔ receipts: memory writes and settlement
               receipts pair by <code>memory_record_id</code>, with
               legacy count fallback.
             </li>
@@ -1299,19 +1299,19 @@ curl -s 127.0.0.1:8421/audit/verify \\
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/audit-integrity">Audit integrity</Link> — local
+          <Link href="/audit-integrity">Audit integrity</Link>: local
           hash-chain verification and its limits.
         </li>
         <li>
-          <Link href="/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link>:
           where grants and checks originate.
         </li>
         <li>
-          <Link href="/cli">CLI</Link> — <code>verify</code> and
+          <Link href="/cli">CLI</Link>: <code>verify</code> and
           its drift-check rules.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — what the
+          <Link href="/security">Security model</Link>: what the
           local-trust assumption costs you.
         </li>
       </ul>

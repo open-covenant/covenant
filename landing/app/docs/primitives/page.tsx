@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-const META_ARGS = ["primitives", "The eight primitives", 'Intent, runtime, memory, identity, permissions, comms, compositor, settlement — the OS-level vocabulary Covenant exposes.'] as const;
+const META_ARGS = ["primitives", "The eight primitives", 'Intent, runtime, memory, identity, permissions, comms, compositor, settlement: the OS-level vocabulary Covenant exposes.'] as const;
 export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function PrimitivesPage() {
@@ -27,8 +27,8 @@ export default function PrimitivesPage() {
       <p>
         A natural-language request, addressed to the daemon. Intents are
         the entry point into the rest of the system. Every interaction
-        between a human and an agent — and most interactions between
-        agents — is mediated by an intent.
+        between a human and an agent (and most interactions between
+        agents) is mediated by an intent.
       </p>
       <p>
         Stable UUID, issuer (an <code>AgentId</code>), issuing
@@ -44,7 +44,7 @@ export default function PrimitivesPage() {
         spawns each agent as a child process and shuttles JSON over
         stdin/stdout under a wall-clock budget with hard-preempt on
         projected overshoot. The trait is small and designed to back
-        stricter isolation — gVisor, Firecracker — without changing the
+        stricter isolation (gVisor, Firecracker) without changing the
         dispatch contract.
       </p>
       <p>
@@ -117,18 +117,18 @@ export default function PrimitivesPage() {
       </p>
       <ul>
         <li>
-          <strong>Local IPC</strong> — length-prefixed JSON over a Unix
+          <strong>Local IPC</strong>: length-prefixed JSON over a Unix
           socket. The CLI and TUI use this. Documented in{" "}
           <Link href="/ipc">Local IPC</Link>.
         </li>
         <li>
-          <strong>HTTP gateway</strong> — JSON over HTTP on{" "}
+          <strong>HTTP gateway</strong>: JSON over HTTP on{" "}
           <code>127.0.0.1:8421</code>. Same surface as the IPC, for
           browser-facing UIs. Documented in{" "}
           <Link href="/http-api">HTTP API</Link>.
         </li>
         <li>
-          <strong>MCP and A2A adapters</strong> — protocol-grade
+          <strong>MCP and A2A adapters</strong>: protocol-grade
           surfaces for tool integration and agent-to-agent traffic.
           Documented in <Link href="/mcp">MCP integration</Link>{" "}
           and <Link href="/a2a">Agent-to-agent</Link>.
@@ -146,7 +146,7 @@ export default function PrimitivesPage() {
         peer-registry views over the daemon IPC.
       </p>
       <p>
-        Every visualization reads from the same daemon — there is no
+        Every visualization reads from the same daemon: there is no
         duplicated state and no privileged shortcut around the IPC and
         HTTP surfaces.
       </p>

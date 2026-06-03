@@ -127,11 +127,11 @@ cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runne
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/security">Security model</Link> — current trust
+          <Link href="/security">Security model</Link>: current trust
           boundaries and unsupported claims.
         </li>
         <li>
-          <Link href="/live-coverage">Live coverage</Link> — real-boundary test
+          <Link href="/live-coverage">Live coverage</Link>: real-boundary test
           inventory.
         </li>
         <li>
@@ -142,7 +142,7 @@ cargo test -p covenant-runtime --test live_gvisor -- --ignored live_gvisor_runne
           >
             Runtime sandbox security
           </a>{" "}
-          — source-of-truth runner contract and CI workflow.
+          provides the source-of-truth runner contract and CI workflow.
         </li>
       </ul>
     </>

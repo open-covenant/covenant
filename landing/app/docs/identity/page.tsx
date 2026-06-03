@@ -55,24 +55,24 @@ export default function IdentityPage() {
       </p>
       <ul>
         <li>
-          <code>LocalIdentity::generate(display)</code> — fresh
+          <code>LocalIdentity::generate(display)</code>: fresh
           ed25519 keypair plus display string.
         </li>
         <li>
-          <code>LocalIdentity::load_or_create(path, display)</code> —
+          <code>LocalIdentity::load_or_create(path, display)</code>:
           loads from disk if present, else generates and persists.
         </li>
         <li>
-          <code>LocalIdentity::sign(&amp;self, message)</code> —
+          <code>LocalIdentity::sign(&amp;self, message)</code>:
           signs arbitrary bytes.
         </li>
         <li>
-          <code>verify_with_pubkey(pubkey, message, signature)</code>{" "}
-          — read-side verification; returns{" "}
+          <code>verify_with_pubkey(pubkey, message, signature)</code>:{" "}
+          read-side verification; returns{" "}
           <code>Result&lt;(), IdentityError&gt;</code>.
         </li>
         <li>
-          <code>verifying_key_from_bytes(pubkey)</code> — converts a
+          <code>verifying_key_from_bytes(pubkey)</code>: converts a
           32-byte pubkey to an <code>ed25519_dalek::VerifyingKey</code>.
         </li>
       </ul>
@@ -153,15 +153,15 @@ export default function IdentityPage() {
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/capabilities">Capability tokens</Link> —
+          <Link href="/capabilities">Capability tokens</Link>:
           everything that depends on the signing helpers.
         </li>
         <li>
-          <Link href="/settlement">Settlement</Link> — the
+          <Link href="/settlement">Settlement</Link>: the
           on-chain side that signs with the same key.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — the
+          <Link href="/security">Security model</Link>: the
           file-permissions, threat-model context.
         </li>
       </ul>

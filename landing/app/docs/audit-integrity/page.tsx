@@ -100,15 +100,15 @@ node agent-os/scripts/provenance.mjs audit-root verify \\
       <h2>Related</h2>
       <ul>
         <li>
-          <Link href="/audit">Audit log</Link> — event variants and JSONL
+          <Link href="/audit">Audit log</Link>: event variants and JSONL
           reading.
         </li>
         <li>
-          <Link href="/security">Security model</Link> — the local trust
+          <Link href="/security">Security model</Link>: the local trust
           boundary.
         </li>
         <li>
-          <Link href="/provenance">Provenance</Link> — verifier commands and
+          <Link href="/provenance">Provenance</Link>: verifier commands and
           current attestation limits.
         </li>
       </ul>

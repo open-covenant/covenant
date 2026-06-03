@@ -4,14 +4,14 @@ import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — Covenant",
+  title: "Privacy Policy: Covenant",
   description:
-    "Privacy policy for opencovenant.org, docs.opencovenant.org, and sandbox.opencovenant.org — what we collect, how we use it, and the third parties involved.",
+    "Privacy policy for opencovenant.org, docs.opencovenant.org, and sandbox.opencovenant.org: what we collect, how we use it, and the third parties involved.",
   alternates: { canonical: "/privacy" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/privacy",
-    title: "Privacy Policy — Covenant",
+    title: "Privacy Policy: Covenant",
     description:
       "What Covenant's public sites collect, why, and the third parties involved.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     site: "@OpenCovenant",
     creator: "@OpenCovenant",
-    title: "Privacy Policy — Covenant",
+    title: "Privacy Policy: Covenant",
     description:
       "What Covenant's public sites collect, why, and the third parties involved.",
     images: "/twitter-image.jpg",
@@ -93,8 +93,8 @@ const SECTIONS: Section[] = [
                 ·
               </span>
               <span>
-                Output of the run — files the agent wrote in the sandbox, terminal output, and
-                the response — long enough to render it back in your browser.
+                Output of the run, including files the agent wrote in the sandbox, terminal
+                output, and the response, held only long enough to render it back in your browser.
               </span>
             </li>
             <li className="flex gap-3 text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
@@ -112,9 +112,9 @@ const SECTIONS: Section[] = [
                 ·
               </span>
               <span>
-                Entries in the append-only audit chain the daemon writes for each run — agent
-                name, tool invocations, run durations, the paths and byte counts of files the
-                sandbox wrote. The intent text is included.
+                Entries in the append-only audit chain the daemon writes for each run, covering
+                agent name, tool invocations, run durations, and the paths and byte counts of
+                files the sandbox wrote. The intent text is included.
               </span>
             </li>
           </ul>
@@ -160,7 +160,7 @@ const SECTIONS: Section[] = [
           "Reply to your contact message.",
           "Run your sandbox task and stream the result back to your browser.",
           "Refuse bot traffic and rate-limit clients that try to exhaust the daily budget.",
-          "Keep a tamper-evident record of what each run did — the audit chain is one of Covenant's core security guarantees.",
+          "Keep a tamper-evident record of what each run did. The audit chain is one of Covenant's core security guarantees.",
         ].map((line) => (
           <li
             key={line}
@@ -191,7 +191,7 @@ const SECTIONS: Section[] = [
     body: (
       <ul className="space-y-3">
         <li className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <strong className="text-neutral-100">Cloudflare</strong> — bot detection on the
+          <strong className="text-neutral-100">Cloudflare</strong>. Bot detection on the
           sandbox via Turnstile, in interaction-only mode. See{" "}
           <a
             href="https://www.cloudflare.com/privacypolicy/"
@@ -204,7 +204,7 @@ const SECTIONS: Section[] = [
           and the Turnstile Privacy Addendum referenced there.
         </li>
         <li className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <strong className="text-neutral-100">Resend</strong> — delivers the contact form
+          <strong className="text-neutral-100">Resend</strong>. Delivers the contact form
           emails to our inbox. See{" "}
           <a
             href="https://resend.com/legal/privacy-policy"
@@ -217,7 +217,7 @@ const SECTIONS: Section[] = [
           .
         </li>
         <li className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <strong className="text-neutral-100">Anthropic</strong> — runs the underlying coding
+          <strong className="text-neutral-100">Anthropic</strong>. Runs the underlying coding
           model that powers sandbox runs. Your intent text and any context the model needs to
           do its job are sent to Anthropic. See{" "}
           <a
@@ -231,7 +231,7 @@ const SECTIONS: Section[] = [
           .
         </li>
         <li className="text-[13px] leading-relaxed text-neutral-300 sm:text-[14px]">
-          <strong className="text-neutral-100">E2B</strong> — provisions the ephemeral microVM
+          <strong className="text-neutral-100">E2B</strong>. Provisions the ephemeral microVM
           your sandbox run executes in. See{" "}
           <a
             href="https://e2b.dev/privacy"

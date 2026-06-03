@@ -6171,6 +6171,7 @@ impl Server {
         let mut zero_timestamp_audit_refs = 0_u64;
         let mut nil_id_audit_refs = 0_u64;
         let mut zeroed_issuer_audit_refs = 0_u64;
+        let mut empty_cap_granted_sig_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6208,15 +6209,33 @@ impl Server {
                     repair: "review the audit JSONL row and the writer that produced it; production audit writes always source issuer.pubkey from LocalIdentity::pubkey_bytes (daemon-issued events) or from an authenticated peer's AgentId (peer-issued events), so a zeroed pubkey collapses every audit row to one anonymous issuer and breaks the issuer-based incident-response workflow audit chains exist to support".into(),
                 });
             }
+            if let AuditKind::CapabilityGranted { signature_b58, .. } = &event.kind {
+                if signature_b58.is_empty() {
+                    empty_cap_granted_sig_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_capability_granted_signature_b58_empty".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = \"\"; bs58::encode(signed.signature) on a 64-byte ed25519 signature never produces an empty string",
+                            event.id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; production CapabilityGranted audit writes always source signature_b58 from bs58::encode(signed.signature).into_string() where signed.signature is the 64-byte ed25519 signature produced by sign_capability, so an empty signature_b58 detaches the audit row from the SignedCapability join key and breaks every capability ↔ audit correlation that uses signature_b58 as the lookup".into(),
+                    });
+                }
+            }
         }
-        orphans_total += zero_timestamp_audit_refs + nil_id_audit_refs + zeroed_issuer_audit_refs;
+        orphans_total += zero_timestamp_audit_refs
+            + nil_id_audit_refs
+            + zeroed_issuer_audit_refs
+            + empty_cap_granted_sig_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
             passed: zero_timestamp_audit_refs == 0
                 && nil_id_audit_refs == 0
-                && zeroed_issuer_audit_refs == 0,
+                && zeroed_issuer_audit_refs == 0
+                && empty_cap_granted_sig_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s)"
             ),
         });
 
@@ -10615,6 +10634,77 @@ required = {caps:?}
                         .message
                         .contains("1 zeroed-issuer-pubkey audit event"),
                     "check message should count zeroed-issuer events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_capability_granted_signature_b58_empty_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::CapabilityGranted {
+                    subject_display: me.display.clone(),
+                    action: "memory.read".into(),
+                    granted_by_display: me.display.clone(),
+                    signature_b58: String::new(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_capability_granted_signature_b58_empty"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_capability_granted_signature_b58_empty: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::CapabilityGranted"),
+                    "drift message should name the CapabilityGranted variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("signature_b58 = \"\""),
+                    "drift message should name the empty-signature invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("sign_capability") && row.repair.contains("bs58::encode"),
+                    "repair hint should name sign_capability and bs58::encode: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 empty-signature-b58 CapabilityGranted audit event"),
+                    "check message should count empty-signature CapabilityGranted events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

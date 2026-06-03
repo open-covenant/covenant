@@ -20,6 +20,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* All h1s render uppercase site-wide (text content is unchanged, so screen
+   readers still read the original casing). */
+h1 {
+  text-transform: uppercase;
+}
+
 ::selection {
   background: var(--color-fg);
   color: var(--color-bg);

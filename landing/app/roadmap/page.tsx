@@ -44,7 +44,7 @@ const MILESTONES: Milestone[] = [
       "Local control plane for engineers and researchers building governed autonomous software systems.",
     bullets: [
       "Daemon, CLI, TUI, local HTTP gateway, identity, permissions, durable memory, append-only activity log, agent-to-agent messaging, model-context-protocol bridge, budget ledger, and local resource receipts",
-      "Subprocess runtime with budget enforcement (projection-tick preempt and wall-clock backstop) and an opt-in Linux isolation path",
+      "Process runtime with budget enforcement (preempts on projected overspend, plus a hard time limit) and optional Linux sandboxing",
       "Signed permission lifecycle with grant, scope check, expiry, and revocation",
       "Verifiable workflow records and commit-scoped provenance for every privileged action",
       "Public sandbox at sandbox.opencovenant.org",

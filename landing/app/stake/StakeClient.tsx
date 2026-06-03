@@ -333,7 +333,7 @@ export function StakeClient() {
                 value={config ? `${config.activeLockCount} / ${config.maxActiveLocks}` : "—"}
               />
               <StatRow
-                label="Reward vault"
+                label="Reward pool"
                 value={
                   rewardVaultLamports !== null
                     ? `${formatSol(rewardVaultLamports, { maxFrac: 4 })} SOL`

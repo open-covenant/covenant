@@ -69,7 +69,7 @@ export function HeaderStats() {
       {s.live && <Cell label="live" value={s.live} />}
       {s.crates && <Cell label="crates" value={s.crates} />}
       <Cell label="up" value={uptime(s.alphaSince)} />
-      <Cell label="commited" value={s.head ?? "—"} accent />
+      <Cell label="committed" value={s.head ?? "—"} accent />
     </div>
   );
 }

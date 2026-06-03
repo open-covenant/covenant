@@ -142,10 +142,9 @@ function Dashboard({ state }: { state: TreasuryState }) {
             Protocol revenue, allocated by position weight
           </h2>
           <p className="mt-4 text-[13px] leading-relaxed text-neutral-400">
-            Each protocol revenue tick is split four ways at the keeper layer.
-            The staker share is then folded into a per-weight accumulator,
-            ensuring every open position earns a strictly pro-rata share of
-            every distribution since it was opened.
+            Protocol revenue is split four ways as it comes in. The stakers&apos;
+            share is allocated by position weight, so every open position earns
+            its proportional cut of each distribution made since it was opened.
           </p>
 
           <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -156,18 +155,18 @@ function Dashboard({ state }: { state: TreasuryState }) {
           </div>
 
           <div className="mt-8 border-t border-neutral-900 pt-6">
-            <PanelEyebrow>Accumulator</PanelEyebrow>
+            <PanelEyebrow>Reward pool</PanelEyebrow>
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <DetailRow
-                label="Total weight"
+                label="Total staked weight"
                 value={`${formatCvnt(config.totalWeight, { maxFrac: 0 })} CVNT-weighted`}
               />
               <DetailRow
-                label="Pending pre-accrual"
+                label="Pending to distribute"
                 value={`${formatSol(config.pendingSolLamports, { maxFrac: 4 })} SOL`}
               />
               <DetailRow
-                label="Reward vault balance"
+                label="Pool balance"
                 value={`${formatSol(rewardVaultLamports, { maxFrac: 4 })} SOL`}
               />
               <DetailRow
@@ -188,9 +187,9 @@ function Dashboard({ state }: { state: TreasuryState }) {
               <StatusPill ok={!config.paused} label={config.paused ? "Paused" : "Active"} />
             </div>
             <p className="mt-4 text-[12px] leading-relaxed text-neutral-500">
-              When paused, new positions and reward claims are blocked. Principal
-              withdrawal after lock expiry remains available regardless of pause
-              state.
+              If the protocol is paused, you cannot open new positions or claim
+              rewards. You can still withdraw your principal once your lock
+              period ends.
             </p>
           </Panel>
 
@@ -226,7 +225,7 @@ function Dashboard({ state }: { state: TreasuryState }) {
             <li>All values on this page are read directly from the program&apos;s on-chain state at the most recent confirmed slot.</li>
             <li>Distribution amounts reflect actual protocol revenue and are not guaranteed. Past distributions do not predict future amounts.</li>
             <li>Locked principal is non-transferable. Positions cannot be withdrawn before their lock period elapses.</li>
-            <li>Protocol-held CVNT is acquired with protocol revenue. The current program version has no path to remove it.</li>
+            <li>Protocol-held CVNT is bought with protocol revenue and is not currently redeemable.</li>
           </ul>
         </Panel>
       </div>

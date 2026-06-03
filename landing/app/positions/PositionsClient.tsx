@@ -189,7 +189,7 @@ export function PositionsClient() {
               <Step
                 index="01"
                 title="Claim accrued rewards"
-                body="Available at any moment without affecting your position. Claim transfers pending SOL to your wallet and resets the position's reward debt."
+                body="Available at any moment without affecting your position. Claim transfers your pending SOL to your wallet and resets your pending rewards to zero."
               />
               <Step
                 index="02"

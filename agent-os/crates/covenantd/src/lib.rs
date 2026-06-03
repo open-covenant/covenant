@@ -6071,8 +6071,32 @@ impl Server {
         // (Uuid::default() is nil), an import/replay tool that constructed
         // events without Uuid::new_v4(), or a direct JSONL edit zeroing
         // the id to break cross-event correlation by event id.
+        //
+        // AuditEvent.issuer.pubkey is the 32-byte ed25519 public key of
+        // the daemon identity (self.identity.agent_id() at every
+        // daemon-issued event site — record_auth_failure, capability
+        // grant/revoke/purge, settlement annotation, etc.) or of an
+        // authenticated peer (peer.clone() at every peer-issued event
+        // site). Both paths source the bytes from
+        // LocalIdentity::pubkey_bytes (covenant-identity/src/lib.rs)
+        // which returns the ed25519 verifying-key bytes derived from a
+        // freshly-generated or persisted signing key. ed25519 verifying
+        // keys are never the all-zero 32-byte sequence in practice, and
+        // a peer whose token resolves to [0u8; 32] would fail signature
+        // verification on every subsequent capability check. A persisted
+        // audit event with issuer.pubkey == [0u8; 32] is therefore
+        // out-of-band evidence on the same shape as audit_event_id_nil:
+        // a serde regression that dropped the pubkey field at row
+        // hydration (Default for [u8; 32] is all-zero), an import/replay
+        // tool that constructed events with a placeholder AgentId, or a
+        // JSONL edit zeroing the pubkey to anonymize issuer attribution
+        // and collapse incident-response correlation to a single
+        // identity. The covenant-identity test
+        // `agent_id_returns_self_display_and_pubkey_bytes` documents the
+        // matching write-time regression class.
         let mut zero_timestamp_audit_refs = 0_u64;
         let mut nil_id_audit_refs = 0_u64;
+        let mut zeroed_issuer_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6098,13 +6122,27 @@ impl Server {
                     repair: "review the audit JSONL row and the writer that produced it; production audit writes always allocate event id via Uuid::new_v4() so the row can be referenced by id from drift, capability, and memory correlation tables".into(),
                 });
             }
+            if event.issuer.pubkey == [0u8; 32] {
+                zeroed_issuer_audit_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "audit_event_issuer_pubkey_zeroed".into(),
+                    id: Some(event.id.to_string()),
+                    message: format!(
+                        "audit event {} has issuer.pubkey = [0u8; 32]; ed25519 verifying keys are never the all-zero sequence",
+                        event.id
+                    ),
+                    repair: "review the audit JSONL row and the writer that produced it; production audit writes always source issuer.pubkey from LocalIdentity::pubkey_bytes (daemon-issued events) or from an authenticated peer's AgentId (peer-issued events), so a zeroed pubkey collapses every audit row to one anonymous issuer and breaks the issuer-based incident-response workflow audit chains exist to support".into(),
+                });
+            }
         }
-        orphans_total += zero_timestamp_audit_refs + nil_id_audit_refs;
+        orphans_total += zero_timestamp_audit_refs + nil_id_audit_refs + zeroed_issuer_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
-            passed: zero_timestamp_audit_refs == 0 && nil_id_audit_refs == 0,
+            passed: zero_timestamp_audit_refs == 0
+                && nil_id_audit_refs == 0
+                && zeroed_issuer_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s)"
             ),
         });
 
@@ -10228,6 +10266,69 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 nil-id audit event"),
                     "check message should count nil-id events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_event_issuer_pubkey_zeroed_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: AgentId::new("user@local", [0u8; 32]),
+                kind: AuditKind::AuthenticationFailed {
+                    transport: "ipc".into(),
+                    reason: "fixture".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_event_issuer_pubkey_zeroed"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_event_issuer_pubkey_zeroed: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("[0u8; 32]"),
+                    "drift message should name the zeroed-pubkey invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("LocalIdentity::pubkey_bytes"),
+                    "repair hint should name the identity source: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 zeroed-issuer-pubkey audit event"),
+                    "check message should count zeroed-issuer events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

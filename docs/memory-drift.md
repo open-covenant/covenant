@@ -29,6 +29,7 @@ The verifier returns two layers:
 | `memory_nan_embedding` | A memory record's `embedding` contains NaN values; cosine similarity poisons every ranking the record competes in. |
 | `receipt_confirmed_without_chain` | A settlement receipt carries `confirmed_at` but `chain` is unset; only `annotate_receipt` writes `confirmed_at`, and it always sets `chain` from the same confirmation. |
 | `receipt_chain_partial` | A settlement receipt has a strict subset (1-3 of 4) of the `chain`/`cluster`/`batch_id`/`merkle_root` bundle set; `annotate_receipt` writes the bundle as a unit. |
+| `receipt_tx_sig_onchain_sig_diverged` | A settlement receipt has both `tx_sig` and `onchain_sig` populated but the values disagree; `annotate_receipt` writes both fields from the same `confirmation.tx_sig.clone()`, so a divergence is out-of-band. `Some`+`None` in either direction is tolerated for legacy/forward compatibility. |
 
 ## Operator Posture
 

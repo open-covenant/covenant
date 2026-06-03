@@ -5863,17 +5863,26 @@ impl Server {
         // Check 6: settlement receipt integrity. annotate_receipt is the
         // sole production path that fills chain provenance, and it sets the
         // bundle (chain, cluster, batch_id, merkle_root) together from the
-        // same ChainConfirmation. Two signals fold into this row:
+        // same ChainConfirmation. It also writes both receipt.tx_sig and
+        // receipt.onchain_sig from the same confirmation.tx_sig.clone(), so
+        // when both fields are populated they must be byte-identical. Three
+        // signals fold into this row:
         //   - confirmed_at = Some(_) with chain = None. annotate_receipt
         //     would have set chain too, so this is out-of-band evidence.
         //   - chain-bundle partial state: a strict subset (1-3 of the four
         //     fields) is Some. A bundle that is fully unset (0) or fully
         //     set (4) is fine; anything in between is a half-torn provenance
         //     anchor.
+        //   - tx_sig / onchain_sig divergence: both fields are Some(_) but
+        //     disagree. covenant-settlement treats Some+None in either
+        //     direction as legacy-compatible "onchain settled" state
+        //     (covenant-settlement/src/lib.rs:164), so partial population
+        //     is tolerated; only a two-Some disagreement is out-of-band.
         // Remediation is a settlement-team decision and intentionally
         // outside the memory-side repair set.
         let mut confirmed_without_chain_refs = 0_u64;
         let mut chain_partial_refs = 0_u64;
+        let mut tx_sig_onchain_sig_diverged_refs = 0_u64;
         for receipt in &receipts {
             if receipt.confirmed_at.is_some() && receipt.chain.is_none() {
                 confirmed_without_chain_refs += 1;
@@ -5910,13 +5919,32 @@ impl Server {
                     repair: "review settlement provenance before retaining; annotate_receipt fills chain/cluster/batch_id/merkle_root as a single bundle".into(),
                 });
             }
+            if let (Some(tx_sig), Some(onchain_sig)) =
+                (receipt.tx_sig.as_deref(), receipt.onchain_sig.as_deref())
+            {
+                if tx_sig != onchain_sig {
+                    tx_sig_onchain_sig_diverged_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_tx_sig_onchain_sig_diverged".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} tx_sig and onchain_sig disagree: tx_sig={tx_sig} onchain_sig={onchain_sig}",
+                            receipt.id
+                        ),
+                        repair: "review settlement provenance before retaining; annotate_receipt writes tx_sig and onchain_sig from the same confirmation.tx_sig.clone()".into(),
+                    });
+                }
+            }
         }
-        orphans_total += confirmed_without_chain_refs + chain_partial_refs;
+        orphans_total +=
+            confirmed_without_chain_refs + chain_partial_refs + tx_sig_onchain_sig_diverged_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
-            passed: confirmed_without_chain_refs == 0 && chain_partial_refs == 0,
+            passed: confirmed_without_chain_refs == 0
+                && chain_partial_refs == 0
+                && tx_sig_onchain_sig_diverged_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s)"
             ),
         });
 
@@ -9511,6 +9539,169 @@ required = {caps:?}
                     integrity.message
                 );
                 assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_tx_sig_onchain_sig_diverged_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: Some("sig-from-annotate".into()),
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: Some("sig-rewritten-out-of-band".into()),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_tx_sig_onchain_sig_diverged"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected receipt_tx_sig_onchain_sig_diverged: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("tx_sig=sig-from-annotate")
+                        && row
+                            .message
+                            .contains("onchain_sig=sig-rewritten-out-of-band"),
+                    "drift message should record both signature values: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("annotate_receipt"),
+                    "repair hint should name annotate_receipt: {}",
+                    row.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_confirmed_without_chain"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "confirmed_at=None must not co-fire confirmed_without_chain: {drift:?}"
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_chain_partial"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "chain bundle fully unset must not co-fire chain_partial: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 tx-sig/onchain-sig-diverged receipt"),
+                    "check message should count diverged receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_tolerates_tx_sig_only_and_onchain_sig_only_legacy_state() {
+        // covenant-settlement/src/lib.rs:164 treats tx_sig.is_some() ||
+        // onchain_sig.is_some() as "onchain_settled" for legacy/forward
+        // compatibility. The diverged check must not fire when only one
+        // field is populated; only a two-Some disagreement is out-of-band.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let tx_only_id = Uuid::new_v4();
+        let onchain_only_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: tx_only_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: Some("tx-only".into()),
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        s.settlement
+            .record(SettlementReceipt {
+                id: onchain_only_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: Some("onchain-only".into()),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport { drift, checks, .. } => {
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_tx_sig_onchain_sig_diverged"
+                            && (item.id.as_deref() == Some(&tx_only_id.to_string())
+                                || item.id.as_deref() == Some(&onchain_only_id.to_string()))
+                    }),
+                    "Some+None in either direction must not fire diverged: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(
+                    integrity
+                        .message
+                        .contains("0 tx-sig/onchain-sig-diverged receipt"),
+                    "diverged counter must remain zero for legacy-compat singletons: {}",
+                    integrity.message
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }

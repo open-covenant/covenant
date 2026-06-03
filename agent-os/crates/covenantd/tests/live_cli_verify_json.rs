@@ -6,6 +6,7 @@
 //! after `cargo build -p covenant`.
 
 use covenant_memory::{MemoryStore, SqliteStore};
+use covenant_types::{MemoryRecord, MemoryTier};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -486,6 +487,121 @@ async fn live_cli_verify_json_repair_clears_stale_parent_drift() {
     assert!(
         stale_parent_drift_for(&clean, memory_id).is_none(),
         "targeted stale parent drift should be gone after repair: {clean:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, injects a two-node parent cycle via SqliteStore, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_parent_cycle_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+
+    run_cli(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "memory.write"],
+    )
+    .await;
+    let intent_stdout = run_cli(
+        &cli_exe,
+        home.path(),
+        &["intent", "--json", "verify cycle fixture"],
+    )
+    .await;
+    let intent: Value =
+        serde_json::from_str(intent_stdout.trim()).expect("intent --json must be JSON");
+    let a_id: Uuid = intent["intent_id"]
+        .as_str()
+        .expect("intent_id")
+        .parse()
+        .expect("intent_id must be uuid");
+
+    let _ = child.kill().await;
+
+    let store = SqliteStore::open(&home.path().join("memory.db")).expect("open memory db");
+    let mut a = store
+        .get(a_id)
+        .await
+        .expect("load A")
+        .expect("memory record A exists");
+    let b_id = Uuid::new_v4();
+    let b = MemoryRecord {
+        id: b_id,
+        tier: MemoryTier::Working,
+        owner: a.owner.clone(),
+        text: "cycle node B".into(),
+        embedding: vec![],
+        metadata: serde_json::json!({}),
+        created_at: a.created_at,
+        parent: Some(a_id),
+    };
+    store.put(b).await.expect("insert B");
+    a.parent = Some(b_id);
+    store.put(a).await.expect("rewrite A parent");
+    let reread_a = store
+        .get(a_id)
+        .await
+        .expect("reload A")
+        .expect("A persists");
+    assert_eq!(
+        reread_a.parent,
+        Some(b_id),
+        "SqliteStore must persist the cycle parent through put"
+    );
+    drop(store);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when cycle drift exists: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let cycle = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("memory_parent_cycle")
+                && item["id"].as_str() == Some(&a_id.to_string())
+        })
+        .unwrap_or_else(|| panic!("expected memory_parent_cycle drift for {a_id}: {drift:?}"));
+    assert!(
+        cycle["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("detach_parent")),
+        "parent cycle drift repair should name detach_parent: {cycle:?}"
+    );
+    assert!(
+        !drift["drift"].as_array().unwrap().iter().any(|item| {
+            (item["kind"].as_str() == Some("memory_stale_parent")
+                || item["kind"].as_str() == Some("memory_self_parent"))
+                && item["id"].as_str() == Some(&a_id.to_string())
+        }),
+        "cycle must not double-report as stale or self parent for A: {drift:?}"
     );
 
     let _ = restarted.kill().await;

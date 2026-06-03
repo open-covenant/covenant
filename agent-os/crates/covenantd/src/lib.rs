@@ -5988,11 +5988,34 @@ impl Server {
         // Uuid::new_v4(), or a JSONL edit zeroing the id to break the
         // memory-record metadata.receipt_id back-reference and chain-batch
         // correlation, both of which key on the receipt id.
+        //
+        // SettlementReceipt.payer.pubkey is the 32-byte ed25519 public
+        // key of the receipt's paying identity. Every production
+        // settlement receipt write sources payer from either an
+        // authenticated peer's AgentId (issuer.clone() on the intent
+        // settlement path at lib.rs:3898) or from
+        // self.identity.agent_id() (daemon-initiated settlement). Both
+        // paths route through LocalIdentity::pubkey_bytes which
+        // returns the ed25519 verifying-key bytes derived from a
+        // freshly-generated or persisted signing key. ed25519
+        // verifying keys are never the all-zero 32-byte sequence in
+        // practice, and a peer whose token resolved to [0u8; 32]
+        // would fail signature verification on every subsequent
+        // capability check. A persisted SettlementReceipt with
+        // payer.pubkey == [0u8; 32] is therefore out-of-band evidence
+        // on the same shape as receipt_id_nil: a serde regression that
+        // dropped the pubkey field at row hydration (Default for
+        // [u8; 32] is all-zero), an import/replay tool that
+        // constructed receipts with a placeholder AgentId, or a JSONL
+        // edit zeroing the pubkey to break the payer-based accounting
+        // and per-peer settlement queries the daemon and on-chain
+        // bridge rely on.
         let mut confirmed_without_chain_refs = 0_u64;
         let mut chain_partial_refs = 0_u64;
         let mut tx_sig_onchain_sig_diverged_refs = 0_u64;
         let mut zero_settled_at_refs = 0_u64;
         let mut nil_id_receipt_refs = 0_u64;
+        let mut zeroed_payer_receipt_refs = 0_u64;
         for receipt in &receipts {
             if receipt.settled_at == 0 {
                 zero_settled_at_refs += 1;
@@ -6069,21 +6092,35 @@ impl Server {
                     });
                 }
             }
+            if receipt.payer.pubkey == [0u8; 32] {
+                zeroed_payer_receipt_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_payer_pubkey_zeroed".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt {} has payer.pubkey = [0u8; 32]; ed25519 verifying keys are never the all-zero sequence",
+                        receipt.id
+                    ),
+                    repair: "review the receipt JSONL row and the writer that produced it; production receipt writes always source payer.pubkey from LocalIdentity::pubkey_bytes (daemon-initiated settlement) or from an authenticated peer's AgentId (issuer.clone() on the intent settlement path), so a zeroed pubkey collapses every receipt to one anonymous payer and breaks the payer-based credit accounting, per-peer settlement queries, and on-chain bridge correlation the daemon relies on".into(),
+                });
+            }
         }
         orphans_total += confirmed_without_chain_refs
             + chain_partial_refs
             + tx_sig_onchain_sig_diverged_refs
             + zero_settled_at_refs
-            + nil_id_receipt_refs;
+            + nil_id_receipt_refs
+            + zeroed_payer_receipt_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
                 && chain_partial_refs == 0
                 && tx_sig_onchain_sig_diverged_refs == 0
                 && zero_settled_at_refs == 0
-                && nil_id_receipt_refs == 0,
+                && nil_id_receipt_refs == 0
+                && zeroed_payer_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s)"
             ),
         });
 
@@ -10169,6 +10206,71 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 nil-id receipt"),
                     "check message should count nil-id receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_payer_pubkey_zeroed_drift() {
+        let s = server_with(vec![], "");
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: AgentId::new("user@local", [0u8; 32]),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_payer_pubkey_zeroed"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_payer_pubkey_zeroed: {drift:?}"));
+                assert!(
+                    row.message.contains("[0u8; 32]"),
+                    "drift message should name the zeroed-pubkey invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("LocalIdentity::pubkey_bytes"),
+                    "repair hint should name the identity source: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 zeroed-payer-pubkey receipt"),
+                    "check message should count zeroed-payer receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

@@ -6016,6 +6016,7 @@ impl Server {
         let mut zero_settled_at_refs = 0_u64;
         let mut nil_id_receipt_refs = 0_u64;
         let mut zeroed_payer_receipt_refs = 0_u64;
+        let mut nil_memory_record_id_receipt_refs = 0_u64;
         for receipt in &receipts {
             if receipt.settled_at == 0 {
                 zero_settled_at_refs += 1;
@@ -6104,13 +6105,26 @@ impl Server {
                     repair: "review the receipt JSONL row and the writer that produced it; production receipt writes always source payer.pubkey from LocalIdentity::pubkey_bytes (daemon-initiated settlement) or from an authenticated peer's AgentId (issuer.clone() on the intent settlement path), so a zeroed pubkey collapses every receipt to one anonymous payer and breaks the payer-based credit accounting, per-peer settlement queries, and on-chain bridge correlation the daemon relies on".into(),
                 });
             }
+            if receipt.memory_record_id == Some(Uuid::nil()) {
+                nil_memory_record_id_receipt_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_memory_record_id_nil".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt {} has memory_record_id = Some(Uuid::nil()); Uuid::new_v4() does not produce the nil UUID and production receipt writes either pass None or a real memory id",
+                        receipt.id
+                    ),
+                    repair: "review the receipt JSONL row and the writer that produced it; production receipt writes pass memory_record_id: None for resource paths with no associated memory record, or Some(memory_id) where memory_id is allocated via Uuid::new_v4() at the matching memory write, so Some(Uuid::nil()) is structural evidence of a serde regression (Uuid::default() is nil), an import tool that constructed receipts with a placeholder Uuid, or a JSONL edit that detached the row from the receipt ↔ memory record correlation".into(),
+                });
+            }
         }
         orphans_total += confirmed_without_chain_refs
             + chain_partial_refs
             + tx_sig_onchain_sig_diverged_refs
             + zero_settled_at_refs
             + nil_id_receipt_refs
-            + zeroed_payer_receipt_refs;
+            + zeroed_payer_receipt_refs
+            + nil_memory_record_id_receipt_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
@@ -6118,9 +6132,10 @@ impl Server {
                 && tx_sig_onchain_sig_diverged_refs == 0
                 && zero_settled_at_refs == 0
                 && nil_id_receipt_refs == 0
-                && zeroed_payer_receipt_refs == 0,
+                && zeroed_payer_receipt_refs == 0
+                && nil_memory_record_id_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s)"
             ),
         });
 
@@ -10393,6 +10408,72 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zeroed-payer-pubkey receipt"),
                     "check message should count zeroed-payer receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_memory_record_id_nil_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(Uuid::nil()),
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_memory_record_id_nil"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_memory_record_id_nil: {drift:?}"));
+                assert!(
+                    row.message.contains("Some(Uuid::nil())"),
+                    "drift message should name the nil-uuid invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("Uuid::new_v4()"),
+                    "repair hint should name Uuid::new_v4(): {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 nil-memory-record-id receipt"),
+                    "check message should count nil-memory-record-id receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

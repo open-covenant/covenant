@@ -6,7 +6,7 @@
 //! after `cargo build -p covenant`.
 
 use covenant_memory::{MemoryStore, SqliteStore};
-use covenant_types::{MemoryRecord, MemoryTier};
+use covenant_types::{AgentId, MemoryRecord, MemoryTier, ResourceKind, SettlementReceipt};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -487,6 +487,97 @@ async fn live_cli_verify_json_repair_clears_stale_parent_drift() {
     assert!(
         stale_parent_drift_for(&clean, memory_id).is_none(),
         "targeted stale parent drift should be gone after repair: {clean:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd, injects a Compute receipt carrying memory_record_id, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_resource_mismatch_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let receipts_dir = home.path().join("receipts");
+    std::fs::create_dir_all(&receipts_dir).expect("create receipts dir");
+    let receipt_id = Uuid::new_v4();
+    let mismatch = SettlementReceipt {
+        id: receipt_id,
+        payer: AgentId::new("user@local", [0u8; 32]),
+        resource: ResourceKind::Compute,
+        memory_record_id: Some(Uuid::new_v4()),
+        credits_consumed: 1,
+        settled_at: 1,
+        chain: None,
+        cluster: None,
+        batch_id: None,
+        merkle_root: None,
+        tx_sig: None,
+        slot: None,
+        confirmed_at: None,
+        onchain_sig: None,
+    };
+    let receipts_path = receipts_dir.join("working.jsonl");
+    use std::io::Write as _;
+    let mut receipts = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&receipts_path)
+        .expect("open receipts/working.jsonl for append");
+    writeln!(receipts, "{}", serde_json::to_string(&mismatch).unwrap())
+        .expect("append mismatched receipt");
+    drop(receipts);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when resource-mismatch drift exists: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let mismatch_row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("memory_receipt_resource_mismatch")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        })
+        .unwrap_or_else(|| panic!("expected resource-mismatch drift for {receipt_id}: {drift:?}"));
+    assert!(
+        mismatch_row["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("Compute")),
+        "drift message should record the observed resource: {mismatch_row:?}"
+    );
+    assert!(
+        !drift["drift"].as_array().unwrap().iter().any(|item| {
+            item["kind"].as_str() == Some("receipt_without_memory_record")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        }),
+        "cross-resource receipt must not double-report under receipt_without_memory_record: {drift:?}"
     );
 
     let _ = restarted.kill().await;

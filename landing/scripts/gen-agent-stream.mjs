@@ -14,6 +14,15 @@ const repoRoot = findRepoRoot(resolve(here, "..", ".."));
 const outFile = resolve(here, "..", "public", "agent-stream.json");
 
 const payload = generateStream({ repoRoot });
+
+// If git isn't available at build time (no .git / no git binary), generateStream
+// yields nothing. Keep the existing committed snapshot rather than clobbering it
+// with an empty one — the replay fallback must never go blank. Don't fail the build.
+if (!payload.lines.length) {
+  console.warn("gen-agent-stream: no git history available — keeping existing snapshot");
+  process.exit(0);
+}
+
 const json = JSON.stringify(payload);
 writeFileSync(outFile, json, "utf8");
 

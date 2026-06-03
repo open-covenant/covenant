@@ -83,6 +83,36 @@ services:
       - fromGroup: covenant-sandbox-shared
 
   - type: web
+    name: covenant-landing
+    runtime: node
+    plan: starter
+    region: frankfurt
+    autoDeploy: true
+    rootDir: landing
+    # Only rebuild on landing changes. The prebuild step regenerates the
+    # replay-snapshot fallback (public/agent-stream.json) from git history on
+    # each deploy, so the terminal's offline baseline stays current.
+    buildFilter:
+      paths:
+        - landing/**
+    buildCommand: pnpm install --ignore-workspace --frozen-lockfile=false && pnpm build
+    startCommand: pnpm start
+    # IMPORTANT: keep this a SINGLE instance. The live build-terminal SSE feed
+    # (/agent-stream/live) fans out from an in-process event bus, so the ingest
+    # POST and the SSE connection must land on the same process. Do not enable
+    # autoscaling / multiple instances without first moving the bus onto shared
+    # pub/sub (e.g. the covenant-redis in infra/render.yaml).
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Shared secret with scripts/agent-pusher.mjs running on the loop host.
+      # Set -> /api/agent/ingest accepts pushed events and the terminal goes
+      # LIVE. Unset -> ingest disabled, terminal serves the replay snapshot.
+      # Use the identical value here and on the pusher.
+      - key: AGENT_INGEST_TOKEN
+        sync: false  # secret; set in dashboard
+
+  - type: web
     name: covenant-fairscale-bridge
     runtime: node
     plan: starter

@@ -37,10 +37,6 @@ export function SiteHeader() {
             />
           </Link>
 
-          <div className="xl:hidden">
-            <MobileMenu items={NAV_LINKS} socials={SOCIAL_LINKS} />
-          </div>
-
           <nav aria-label="Primary" className="hidden items-center gap-2 xl:flex">
             {NAV_LINKS.map((item) =>
               item.external ? (
@@ -66,27 +62,33 @@ export function SiteHeader() {
           </nav>
         </div>
 
-        <div className="hidden shrink-0 items-center gap-4 xl:flex">
-          <HeaderStats />
-          <span aria-hidden className="h-4 w-px bg-neutral-700/50" />
-          <a
-            href={X_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="Covenant on X"
-            className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
-          >
-            <XIcon className="h-4 w-4" />
-          </a>
-          <a
-            href={GITHUB_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="Covenant on GitHub"
-            className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
-          >
-            <GithubIcon className="h-4 w-4" />
-          </a>
+        <div className="flex shrink-0 items-center gap-4">
+          <div className="hidden items-center gap-4 xl:flex">
+            <HeaderStats />
+            <span aria-hidden className="h-4 w-px bg-neutral-700/50" />
+            <a
+              href={X_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Covenant on X"
+              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+            >
+              <XIcon className="h-4 w-4" />
+            </a>
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Covenant on GitHub"
+              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+            >
+              <GithubIcon className="h-4 w-4" />
+            </a>
+          </div>
+
+          <div className="xl:hidden">
+            <MobileMenu items={NAV_LINKS} socials={SOCIAL_LINKS} />
+          </div>
         </div>
       </div>
     </header>

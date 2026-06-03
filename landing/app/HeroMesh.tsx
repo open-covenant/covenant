@@ -554,15 +554,6 @@ export function HeroMesh({ src }: { src: string }) {
             "radial-gradient(ellipse at center, transparent 0%, transparent 28%, rgba(3,3,3,0.45) 62%, rgba(3,3,3,0.92) 100%)",
         }}
       />
-      <div
-        aria-hidden
-        className="absolute inset-0"
-        style={{
-          zIndex: 3,
-          background:
-            "linear-gradient(to bottom, rgba(3,3,3,0.45) 0%, rgba(3,3,3,0.18) 18%, transparent 35%)",
-        }}
-      />
     </div>
   );
 }

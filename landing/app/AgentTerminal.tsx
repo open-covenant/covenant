@@ -55,7 +55,7 @@ function formatEvent(e: AgentEvent): Line[] {
 
 function Row({ line }: { line: Line }) {
   return (
-    <div className="overflow-hidden whitespace-pre" style={{ color: COLOR[line.k] ?? "#9a9a9a" }}>
+    <div className="whitespace-pre-wrap break-words" style={{ color: COLOR[line.k] ?? "#9a9a9a" }}>
       {line.t.length ? line.t : " "}
     </div>
   );
@@ -215,9 +215,6 @@ export function AgentTerminal({
         .join(" ")}
     >
       <div className="flex items-center gap-2 border-b border-neutral-800/70 px-3 py-2">
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${connected ? "animate-pulse bg-[#7f9f78]" : "bg-neutral-600"}`}
-        />
         <span className="text-[10px] uppercase tracking-[0.22em] text-neutral-500">
           Covenant build
         </span>
@@ -245,7 +242,7 @@ export function AgentTerminal({
           <Row key={i} line={line} />
         ))}
         <div
-          className="overflow-hidden whitespace-pre"
+          className="whitespace-pre-wrap break-words"
           style={{ color: COLOR[partial?.k ?? "cmd"] ?? "#cacaca" }}
         >
           {partial?.t ?? ""}

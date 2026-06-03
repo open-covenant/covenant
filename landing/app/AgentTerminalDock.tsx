@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Terminal, X } from "lucide-react";
+import { X } from "lucide-react";
 import { AgentTerminal } from "./AgentTerminal";
 
 /**
@@ -36,7 +36,7 @@ export function AgentTerminalDock() {
         className={[
           "fixed right-0 bottom-0 top-16 z-30 w-[88vw] max-w-[380px] shadow-[0_8px_40px_-12px_rgba(0,0,0,0.85)] transition-transform duration-300 ease-out",
           open ? "translate-x-0" : "translate-x-full",
-          "xl:absolute xl:left-auto xl:right-6 xl:top-[92px] xl:bottom-6 xl:z-10 xl:w-[min(38vw,440px)] xl:max-w-none xl:translate-x-0 xl:transition-none",
+          "xl:absolute xl:left-auto xl:right-6 xl:top-[92px] xl:bottom-3 xl:z-20 xl:w-[min(38vw,440px)] xl:max-w-none xl:translate-x-0 xl:transition-none",
         ].join(" ")}
       >
         <button
@@ -46,9 +46,24 @@ export function AgentTerminalDock() {
           aria-expanded={open}
           className="pointer-events-auto absolute left-0 top-1/2 flex -translate-x-full -translate-y-1/2 items-center gap-1.5 rounded-l-md border border-r-0 border-neutral-800/70 bg-[#050505]/90 px-2 py-4 text-neutral-400 backdrop-blur-md transition-colors hover:text-neutral-100 xl:hidden"
         >
-          {open ? <X className="h-4 w-4" /> : <Terminal className="h-4 w-4" />}
-          <span className="text-[9px] uppercase tracking-[0.18em] [writing-mode:vertical-rl]">
-            log
+          {open ? (
+            <X className="h-4 w-4" />
+          ) : (
+            <svg
+              className="h-4 w-4"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="4 17 10 11 4 5" />
+            </svg>
+          )}
+          <span className="whitespace-nowrap text-[9px] uppercase tracking-[0.18em] [writing-mode:vertical-rl]">
+            build log
           </span>
         </button>
 

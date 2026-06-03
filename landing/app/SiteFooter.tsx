@@ -20,7 +20,7 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
   return (
     <footer
       className={[
-        "flex flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 text-center",
+        "flex flex-wrap items-center justify-center gap-x-6 gap-y-2 px-4 text-center text-[12px] text-neutral-500 sm:text-[13px]",
         className ?? "",
       ]
         .filter(Boolean)
@@ -34,10 +34,9 @@ export function SiteFooter({ className, style }: SiteFooterProps) {
         height={15}
         className="h-auto w-[30px] opacity-70"
       />
-      <nav
-        aria-label="Footer"
-        className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[12px] text-neutral-500 sm:text-[13px]"
-      >
+      {/* `contents` lets the links flow in the footer's own wrap so the logo
+          shares a line with them instead of wrapping onto a line of its own */}
+      <nav aria-label="Footer" className="contents">
         {FOOTER_LINKS.map((item) =>
           item.external ? (
             <a

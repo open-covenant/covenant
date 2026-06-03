@@ -44,18 +44,22 @@ export default function Page() {
 
       <AgentTerminalDock />
 
-      <div className="absolute inset-0 z-10 flex -translate-y-[100px] flex-col items-center justify-center gap-6 px-6 pb-6 pt-[calc(88px_+_env(safe-area-inset-top))] text-center">
-        <div className="relative w-full max-h-[53vh] flex-1 overflow-hidden">
+      <div className="absolute inset-0 z-10 flex flex-col items-center justify-start gap-3 px-6 pt-24 text-center sm:justify-center sm:gap-6 sm:pt-0 xl:pr-[31rem]">
+        <div className="relative aspect-[1168/774] w-full overflow-hidden sm:aspect-auto sm:h-[53vh]">
           <HeroMesh src="/hero-bg.jpg" />
         </div>
-        <p className="max-w-2xl text-balance text-[15px] font-light leading-relaxed text-neutral-200 sm:text-lg">
+        <div className="flex max-w-2xl flex-col gap-3 sm:gap-4">
+          <h2 className="text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white">
+            An operating system that builds itself
+          </h2>
+          <p className="text-balance text-[15px] font-light leading-relaxed text-neutral-200 sm:text-lg">
           Not a chatbot. Not an agent framework. An open operating layer where
           every agent runs under a <span className="text-white">signed grant</span>,
           every action leaves a <span className="text-white">receipt</span>, and the
-          system itself is built in the open by an{" "}
-          <span className="text-white">autonomous loop that never stops</span> —
-          live, in public, onchain.
-        </p>
+          system itself is built in the open by the{" "}
+          <span className="text-white">autonomous infrastructure it provides</span>.
+          </p>
+        </div>
         <div className="flex flex-wrap items-center justify-center gap-3">
           <a
             href="https://sandbox.opencovenant.org"
@@ -76,7 +80,7 @@ export default function Page() {
       </div>
 
       <SiteFooter
-        className="absolute inset-x-0 z-20"
+        className="absolute inset-x-0 z-20 xl:pr-[31rem]"
         style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
       />
     </main>

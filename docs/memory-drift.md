@@ -30,6 +30,7 @@ The verifier returns two layers:
 | `receipt_confirmed_without_chain` | A settlement receipt carries `confirmed_at` but `chain` is unset; only `annotate_receipt` writes `confirmed_at`, and it always sets `chain` from the same confirmation. |
 | `receipt_chain_partial` | A settlement receipt has a strict subset (1-3 of 4) of the `chain`/`cluster`/`batch_id`/`merkle_root` bundle set; `annotate_receipt` writes the bundle as a unit. |
 | `receipt_tx_sig_onchain_sig_diverged` | A settlement receipt has both `tx_sig` and `onchain_sig` populated but the values disagree; `annotate_receipt` writes both fields from the same `confirmation.tx_sig.clone()`, so a divergence is out-of-band. `Some`+`None` in either direction is tolerated for legacy/forward compatibility. |
+| `audit_event_timestamp_zero` | An audit event has `timestamp_ms == 0`. Every production audit write goes through `epoch_ms()`, which returns 0 only when the system clock predates 1970-01-01 (impossible). A zero timestamp is therefore evidence of a serde regression, a writer that bypassed `epoch_ms()`, or an operator JSONL edit that anonymized when the event was recorded. The `AuditIntegrityReport` chain hash covers byte-tampering of the persisted file, not this semantic invariant. |
 
 ## Operator Posture
 

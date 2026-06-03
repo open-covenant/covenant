@@ -5948,6 +5948,40 @@ impl Server {
             ),
         });
 
+        // Check 7: audit event integrity. Every production audit event in
+        // covenantd is stamped with epoch_ms(), which returns 0 only when
+        // SystemTime::now().duration_since(UNIX_EPOCH) errors — i.e. when
+        // the system clock predates 1970-01-01, which is impossible in
+        // practice. A persisted audit event with timestamp_ms == 0 is
+        // therefore out-of-band evidence: a serde regression defaulting
+        // the u64 field at deserialization, a future audit writer that
+        // bypassed epoch_ms(), or a direct JSONL edit zeroing the
+        // timestamp to anonymize when the event was recorded. The
+        // AuditIntegrityReport chain hash covers byte-for-byte tampering
+        // of the persisted file, not the semantic invariant that
+        // timestamps reflect real wall time at write.
+        let mut zero_timestamp_audit_refs = 0_u64;
+        for event in &audits {
+            if event.timestamp_ms == 0 {
+                zero_timestamp_audit_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "audit_event_timestamp_zero".into(),
+                    id: Some(event.id.to_string()),
+                    message: format!(
+                        "audit event {} has timestamp_ms = 0; epoch_ms() does not produce 0 on any sane system clock",
+                        event.id
+                    ),
+                    repair: "review the audit JSONL row and the writer that produced it; production audit writes always stamp epoch_ms() at the time of record".into(),
+                });
+            }
+        }
+        orphans_total += zero_timestamp_audit_refs;
+        checks.push(VerifyCheck {
+            name: "audit event integrity".into(),
+            passed: zero_timestamp_audit_refs == 0,
+            message: format!("{zero_timestamp_audit_refs} zero-timestamp audit event(s)"),
+        });
+
         Response::VerifyReport {
             window,
             checks,
@@ -9702,6 +9736,66 @@ required = {caps:?}
                     "diverged counter must remain zero for legacy-compat singletons: {}",
                     integrity.message
                 );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_event_timestamp_zero_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: 0,
+                issuer: me.clone(),
+                kind: AuditKind::AuthenticationFailed {
+                    transport: "ipc".into(),
+                    reason: "fixture".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_event_timestamp_zero"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected audit_event_timestamp_zero: {drift:?}"));
+                assert!(
+                    row.message.contains("timestamp_ms = 0"),
+                    "drift message should name the zero invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("epoch_ms"),
+                    "repair hint should name epoch_ms: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 zero-timestamp audit event"),
+                    "check message should count zero-timestamp events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),
         }

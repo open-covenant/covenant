@@ -6188,6 +6188,7 @@ impl Server {
         let mut zeroed_issuer_audit_refs = 0_u64;
         let mut empty_cap_granted_sig_audit_refs = 0_u64;
         let mut empty_cap_revoke_rejected_sig_audit_refs = 0_u64;
+        let mut empty_intent_dispatched_result_hash_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6253,21 +6254,40 @@ impl Server {
                     });
                 }
             }
+            if let AuditKind::IntentDispatched {
+                result_hash_hex, ..
+            } = &event.kind
+            {
+                if result_hash_hex.is_empty() {
+                    empty_intent_dispatched_result_hash_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_intent_dispatched_result_hash_hex_empty".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::IntentDispatched with result_hash_hex = \"\"; production IntentDispatched audit writes always source result_hash_hex from covenant_audit::hash_hex (SHA-256 hex), which produces 64 lowercase characters and never an empty string",
+                            event.id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; production IntentDispatched audit writes always source result_hash_hex from hash_hex(text_out.as_bytes()) where hash_hex returns the 64-character SHA-256 hex of the dispatched result text, so an empty result_hash_hex detaches the dispatch row from the SettlementReceipt that pins the same text_out and breaks every audit ↔ receipt correlation that uses result_hash_hex as the lookup".into(),
+                    });
+                }
+            }
         }
         orphans_total += zero_timestamp_audit_refs
             + nil_id_audit_refs
             + zeroed_issuer_audit_refs
             + empty_cap_granted_sig_audit_refs
-            + empty_cap_revoke_rejected_sig_audit_refs;
+            + empty_cap_revoke_rejected_sig_audit_refs
+            + empty_intent_dispatched_result_hash_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
             passed: zero_timestamp_audit_refs == 0
                 && nil_id_audit_refs == 0
                 && zeroed_issuer_audit_refs == 0
                 && empty_cap_granted_sig_audit_refs == 0
-                && empty_cap_revoke_rejected_sig_audit_refs == 0,
+                && empty_cap_revoke_rejected_sig_audit_refs == 0
+                && empty_intent_dispatched_result_hash_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s)"
             ),
         });
 
@@ -10874,6 +10894,78 @@ required = {caps:?}
                         .message
                         .contains("1 empty-signature-b58 CapabilityRevokeRejected audit event"),
                     "check message should count empty-signature CapabilityRevokeRejected events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_intent_dispatched_result_hash_hex_empty_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::new_v4(),
+                    intent_text: "drift fixture".into(),
+                    matched_agent: None,
+                    result_hash_hex: String::new(),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_intent_dispatched_result_hash_hex_empty"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_intent_dispatched_result_hash_hex_empty: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::IntentDispatched"),
+                    "drift message should name the IntentDispatched variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("result_hash_hex = \"\""),
+                    "drift message should name the empty-hash invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("hash_hex") && row.repair.contains("result_hash_hex"),
+                    "repair hint should name hash_hex and result_hash_hex: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 empty-result-hash-hex IntentDispatched audit event"),
+                    "check message should count empty-result-hash IntentDispatched events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

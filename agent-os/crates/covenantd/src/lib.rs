@@ -6240,6 +6240,7 @@ impl Server {
         let mut zeroed_subject_cap_refs = 0_u64;
         let mut zeroed_grantor_cap_refs = 0_u64;
         let mut zero_expires_cap_refs = 0_u64;
+        let mut zeroed_signature_cap_refs = 0_u64;
         for cap in &caps {
             let signature_b58 = bs58::encode(cap.signature).into_string();
             if cap.capability.action.is_empty() {
@@ -6273,24 +6274,35 @@ impl Server {
                 zero_expires_cap_refs += 1;
                 drift.push(VerifyDrift {
                     kind: "capability_expires_at_zero".into(),
-                    id: Some(signature_b58),
+                    id: Some(signature_b58.clone()),
                     message: "capability has expires_at = Some(0); the cap is permanently expired before any check window and no production grant path records this value".into(),
                     repair: "review the granted.jsonl row and the writer that produced it; production capability grants pass None for perpetual caps or Some(future_epoch_ms) for time-bounded caps, and disabling a cap goes through revoke_capability so the action is recorded in the audit chain".into(),
+                });
+            }
+            if cap.signature == [0u8; 64] {
+                zeroed_signature_cap_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "capability_signature_zeroed".into(),
+                    id: Some(signature_b58),
+                    message: "capability has signature = [0u8; 64]; ed25519 signatures are never the all-zero sequence and sign_capability never produces this value".into(),
+                    repair: "review the granted.jsonl row and the writer that produced it; production capability grants always route through sign_capability, which signs the canonical capability bytes with the daemon's ed25519 signing key, so an all-zero signature is structural evidence of a serde regression, a placeholder writer, or a JSONL edit that wiped the trust-root binding".into(),
                 });
             }
         }
         orphans_total += empty_action_cap_refs
             + zeroed_subject_cap_refs
             + zeroed_grantor_cap_refs
-            + zero_expires_cap_refs;
+            + zero_expires_cap_refs
+            + zeroed_signature_cap_refs;
         checks.push(VerifyCheck {
             name: "capability integrity".into(),
             passed: empty_action_cap_refs == 0
                 && zeroed_subject_cap_refs == 0
                 && zeroed_grantor_cap_refs == 0
-                && zero_expires_cap_refs == 0,
+                && zero_expires_cap_refs == 0
+                && zeroed_signature_cap_refs == 0,
             message: format!(
-                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies)"
+                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies)"
             ),
         });
 
@@ -10835,6 +10847,68 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zero-expires-at capabilit"),
                     "check message should count zero-expiry caps: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_capability_signature_zeroed_drift() {
+        use covenant_permissions::SignedCapability;
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: "memory.read".into(),
+            scope: serde_json::json!({}),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let zeroed_b58 = bs58::encode([0u8; 64]).into_string();
+        s.capabilities
+            .record(SignedCapability {
+                capability: cap,
+                signature: [0u8; 64],
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "capability_signature_zeroed"
+                            && item.id.as_deref() == Some(zeroed_b58.as_str())
+                    })
+                    .unwrap_or_else(|| panic!("expected capability_signature_zeroed: {drift:?}"));
+                assert!(
+                    row.message.contains("[0u8; 64]"),
+                    "drift message should name the zeroed-signature invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("sign_capability"),
+                    "repair hint should name sign_capability as the canonical source: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "capability integrity")
+                    .unwrap_or_else(|| panic!("expected capability integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 zeroed-signature capabilit"),
+                    "check message should count zeroed-signature caps: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

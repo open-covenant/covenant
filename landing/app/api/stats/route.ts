@@ -69,6 +69,14 @@ export function GET() {
     metrics = readmeMetrics(root);
   }
 
+  // The runtime checkout can be shallow (Render clones depth=1), making the live
+  // rev-list count ~1. Fall back to the real total baked into the snapshot at
+  // build time, taking whichever is larger.
+  try {
+    const snap = JSON.parse(readFileSync(join(process.cwd(), "public", "agent-stream.json"), "utf8"));
+    if (snap.totalCommits) commits = Math.max(commits ?? 0, snap.totalCommits);
+  } catch {}
+
   const body = JSON.stringify({ commits, head, alphaSince, ...metrics });
   cache = { at: now, body };
   return new NextResponse(body, {

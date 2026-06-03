@@ -151,15 +151,11 @@ export default function AboutPage() {
           About
         </h1>
 
-        <p className="max-w-3xl text-pretty text-2xl font-light leading-snug text-neutral-100 sm:text-[2rem]">
-          Not a chatbot. Not an agent framework. An open operating layer where every agent runs
-          under a <span className="text-white">signed grant</span>, every action leaves a{" "}
-          <span className="text-white">receipt</span>, and the system itself is built in the open by
-          an <span className="text-white">autonomous loop that never stops</span> — live, in public,
-          on the record.
-        </p>
+        <h2 className="max-w-3xl text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.6rem]">
+          An operating system that builds itself
+        </h2>
 
-        <p className={`mt-8 max-w-2xl text-neutral-400 ${paragraph}`}>
+        <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
           Covenant is the coordination layer for agentic software. It gives humans and agents eight
           host-level primitives — intent, runtime, memory, identity, permissions, comms, a
           compositor, and settlement — so they can safely share one computer. It runs where your

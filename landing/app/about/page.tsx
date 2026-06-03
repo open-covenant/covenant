@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { CopyAddress } from "../CopyAddress";
 import { SiteFooter } from "../SiteFooter";
 import { SiteHeader } from "../SiteHeader";
 
@@ -189,6 +190,28 @@ export default function AboutPage() {
             );
           })}
         </ol>
+
+        <div className="mt-16 border-t border-neutral-800/80 pt-8 sm:mt-24">
+          <div className="mb-4 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <span className={eyebrow}>$CVNT</span>
+            <h2 className={headingTitle}>The token</h2>
+          </div>
+          <p className={`max-w-2xl ${paragraph}`}>
+            Covenant&apos;s token, $CVNT, lives on Solana. It launched on pump.fun, and you can lock
+            it on the{" "}
+            <a href="/stake" className={linkClass}>
+              stake page
+            </a>
+            .
+          </p>
+          <div className="mt-5">
+            <span className={`${eyebrow} mb-2 block`}>Contract address</span>
+            <CopyAddress
+              address="2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump"
+              label="Copy $CVNT contract address"
+            />
+          </div>
+        </div>
 
         <div className="mt-16 flex flex-wrap gap-x-6 gap-y-3 border-t border-neutral-800/80 pt-8 sm:mt-24">
           {CTA.map((c) => (

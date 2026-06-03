@@ -1,0 +1,5 @@
+# Canonical author identities for git shortlog, log, and blame.
+# Format: Proper Name <proper@email>  [Commit Name <commit@email>]
+mizuki0x <197570892+mizuki0x@users.noreply.github.com>
+Covenant <covenant@users.noreply.github.com> Open Covenant Automation <opencovenant@users.noreply.github.com>
+Covenant <covenant@users.noreply.github.com> Open Covenant Automation <automation@opencovenant.org>

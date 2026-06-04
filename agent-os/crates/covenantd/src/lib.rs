@@ -6021,6 +6021,7 @@ impl Server {
         let mut empty_batch_id_receipt_refs = 0_u64;
         let mut empty_merkle_root_receipt_refs = 0_u64;
         let mut empty_tx_sig_receipt_refs = 0_u64;
+        let mut empty_onchain_sig_receipt_refs = 0_u64;
         for receipt in &receipts {
             if receipt.settled_at == 0 {
                 zero_settled_at_refs += 1;
@@ -6177,6 +6178,20 @@ impl Server {
                     });
                 }
             }
+            if let Some(onchain_sig) = receipt.onchain_sig.as_deref() {
+                if onchain_sig.is_empty() {
+                    empty_onchain_sig_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_onchain_sig_empty".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has onchain_sig = Some(\"\"); annotate_receipt in covenant-settlement aliases receipt.onchain_sig = confirmation.tx_sig.clone() at lib.rs:377, and the sole production ChainConfirmation construction site in covenantd hardcodes tx_sig: None at lib.rs:5060, so no reachable production arm sets receipt.onchain_sig to Some(\"\")",
+                            receipt.id
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt whose onchain_sig assignment is the backwards-compat alias receipt.onchain_sig = confirmation.tx_sig.clone() at covenant-settlement/src/lib.rs:377, fed by a ChainConfirmation whose tx_sig field is the hardcoded literal None at flush_receipts in covenantd lib.rs:5060 — so Some(\"\") is out-of-band evidence of a serde regression that defaulted Option<String> to Some(String::new()) at hydration, an import tool that wrote a placeholder confirmation, or a JSONL edit that anonymized the legacy backwards-compat signature alias while leaving tx_sig either None or equally wiped to Some(\"\") (bypassing the receipt_tx_sig_onchain_sig_diverged guard that only fires when both fields are Some and disagree)".into(),
+                    });
+                }
+            }
         }
         orphans_total += confirmed_without_chain_refs
             + chain_partial_refs
@@ -6188,7 +6203,8 @@ impl Server {
             + empty_chain_receipt_refs
             + empty_batch_id_receipt_refs
             + empty_merkle_root_receipt_refs
-            + empty_tx_sig_receipt_refs;
+            + empty_tx_sig_receipt_refs
+            + empty_onchain_sig_receipt_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
@@ -6201,9 +6217,10 @@ impl Server {
                 && empty_chain_receipt_refs == 0
                 && empty_batch_id_receipt_refs == 0
                 && empty_merkle_root_receipt_refs == 0
-                && empty_tx_sig_receipt_refs == 0,
+                && empty_tx_sig_receipt_refs == 0
+                && empty_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
             ),
         });
 
@@ -11431,6 +11448,88 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 empty-tx-sig receipt"),
                     "check message should count empty-tx-sig receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_onchain_sig_empty_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("b".repeat(64)),
+                merkle_root: Some("m".repeat(64)),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: Some(String::new()),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_onchain_sig_empty"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_onchain_sig_empty: {drift:?}"));
+                assert!(
+                    row.message.contains("onchain_sig = Some(\"\")"),
+                    "drift message should name the Some(empty) invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("annotate_receipt")
+                        && row.repair.contains("confirmation.tx_sig.clone()")
+                        && row.repair.contains("receipt_tx_sig_onchain_sig_diverged"),
+                    "repair hint should name annotate_receipt, confirmation.tx_sig.clone(), and the receipt_tx_sig_onchain_sig_diverged bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_tx_sig_onchain_sig_diverged"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "tx_sig=None with onchain_sig=Some(\"\") must not double-report under receipt_tx_sig_onchain_sig_diverged: {drift:?}"
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_tx_sig_empty"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "tx_sig=None must not double-report under receipt_tx_sig_empty: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 empty-onchain-sig receipt"),
+                    "check message should count empty-onchain-sig receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

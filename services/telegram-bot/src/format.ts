@@ -146,3 +146,40 @@ export function renderNewStake(m: NewStakeMessage): string {
   );
   return lines.join("\n");
 }
+
+/** Abbreviate a base-unit token amount to a compact label: 2.2M, 73.9M, 1.4B. */
+export function abbreviateTokens(raw: bigint, decimals: number): string {
+  const whole = Number(raw / 10n ** BigInt(decimals));
+  if (whole >= 1e9) return `${(whole / 1e9).toFixed(1).replace(/\.0$/, "")}B`;
+  if (whole >= 1e6) return `${(whole / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
+  if (whole >= 1e3) return `${(whole / 1e3).toFixed(1).replace(/\.0$/, "")}K`;
+  return `${whole}`;
+}
+
+export interface StakeSummaryMessage {
+  /** BuyLock vault (locked), base units. */
+  lockedRaw: bigint;
+  /** Stake vault (staked), base units. */
+  stakedRaw: bigint;
+  decimals: number;
+  /** (locked + staked) share of supply, 0..100. */
+  combinedPct: number;
+  symbol: string;
+  /** Custom emoji used as the mid-line mark; falls back to 🔒 when unset. */
+  emojiId?: string;
+}
+
+/** The periodic stake-stats post: locked, staked, and combined % of supply. */
+export function renderStakeSummary(m: StakeSummaryMessage): string {
+  const sym = escapeHtml(m.symbol);
+  const mark = m.emojiId
+    ? `<tg-emoji emoji-id="${escapeHtml(m.emojiId)}">🔒</tg-emoji>`
+    : "🔒";
+  return [
+    `${abbreviateTokens(m.lockedRaw, m.decimals)} ${mark} $${sym} LOCKED`,
+    "",
+    `${abbreviateTokens(m.stakedRaw, m.decimals)} ${mark} $${sym} STAKED`,
+    "",
+    `${escapeHtml(m.combinedPct.toFixed(1))}% OF ${mark} $${sym} SUPPLY LOCKED`,
+  ].join("\n");
+}

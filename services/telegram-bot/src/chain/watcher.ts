@@ -22,9 +22,9 @@ import {
   extractPositionCreatedEvents,
   type PositionCreatedEvent,
 } from "./events.js";
-import { fetchStakeTotals } from "./totals.js";
+import { fetchStakeSummary, fetchStakeTotals } from "./totals.js";
 import type { BotNetwork } from "./network.js";
-import { renderNewStake } from "../format.js";
+import { renderNewStake, renderStakeSummary } from "../format.js";
 
 type LogFn = (obj: Record<string, unknown>, msg: string) => void;
 export interface WatcherLogger {
@@ -48,6 +48,10 @@ export interface StakeWatcherOptions {
   emojiId?: string;
   /** Caption mode for a header-image post: drops the redundant "NEW STAKE" title. */
   bannerMode?: boolean;
+  /** How often to post the locked/staked stats summary, in ms. 0 disables it. */
+  summaryIntervalMs?: number;
+  /** Posts the periodic stats summary (separate channel from per-stake `send`). */
+  sendSummary?: (html: string) => Promise<void>;
 }
 
 export interface StakeWatcherStatus {
@@ -59,6 +63,7 @@ export interface StakeWatcherStatus {
   lastPollAt: number | null;
   lastAnnouncedAt: number | null;
   announced: number;
+  lastSummaryAt: number | null;
   errors: number;
   lastError: string | null;
 }
@@ -110,10 +115,16 @@ export function startStakeWatcher(
   const fireUnit = options.fireUnit && options.fireUnit > 0 ? options.fireUnit : 250_000;
   const emojiId = options.emojiId;
   const bannerMode = options.bannerMode;
+  const summaryIntervalMs =
+    options.summaryIntervalMs && options.summaryIntervalMs > 0
+      ? options.summaryIntervalMs
+      : 0;
+  const sendSummary = options.sendSummary;
 
   const connection = new Connection(network.rpcUrl, "confirmed");
   const stateDir = resolveStateDir(options.stateDir, log);
   const cursorPath = join(stateDir, "stake-cursor.json");
+  const summaryPath = join(stateDir, "stake-summary.json");
 
   let decimals = DEFAULT_CVNT_DECIMALS;
   let stopped = false;
@@ -128,6 +139,7 @@ export function startStakeWatcher(
     lastPollAt: null,
     lastAnnouncedAt: null,
     announced: 0,
+    lastSummaryAt: null,
     errors: 0,
     lastError: null,
   };
@@ -163,8 +175,34 @@ export function startStakeWatcher(
     }
   }
 
+  function readSummaryAt(): number | null {
+    try {
+      if (!existsSync(summaryPath)) return null;
+      const parsed: unknown = JSON.parse(readFileSync(summaryPath, "utf8"));
+      const at = (parsed as { lastSummaryAt?: unknown }).lastSummaryAt;
+      return typeof at === "number" ? at : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeSummaryAt(at: number): void {
+    try {
+      writeFileSync(summaryPath, JSON.stringify({ lastSummaryAt: at }));
+    } catch (error) {
+      log.error({ err: errMessage(error) }, "stake-watcher:summary_persist_failed");
+    }
+  }
+
   let cursor = readCursor();
   status.lastSignature = cursor;
+
+  // Anchor the summary clock on first boot so the first post lands one full
+  // interval out; persisted across redeploys so the cadence never resets.
+  const persistedSummaryAt = readSummaryAt();
+  let lastSummaryAt: number = persistedSummaryAt ?? Date.now();
+  if (persistedSummaryAt === null) writeSummaryAt(lastSummaryAt);
+  status.lastSummaryAt = lastSummaryAt;
 
   async function drainNewSignatures(
     untilSig: string,
@@ -248,6 +286,39 @@ export function startStakeWatcher(
     );
   }
 
+  async function maybeSummary(): Promise<void> {
+    if (!sendSummary || summaryIntervalMs <= 0) return;
+    const now = Date.now();
+    if (now - lastSummaryAt < summaryIntervalMs) return;
+    // Advance the clock first so a transient failure waits a full interval
+    // instead of retrying every poll.
+    lastSummaryAt = now;
+    writeSummaryAt(now);
+    status.lastSummaryAt = now;
+    try {
+      const s = await fetchStakeSummary(connection, mint, network.tokenProgramId);
+      const html = renderStakeSummary({
+        lockedRaw: s.lockedRaw,
+        stakedRaw: s.stakedRaw,
+        decimals: s.decimals,
+        combinedPct: s.combinedPct,
+        symbol,
+        emojiId,
+      });
+      await sendSummary(html);
+      log.info(
+        {
+          locked: s.lockedRaw.toString(),
+          staked: s.stakedRaw.toString(),
+          pct: s.combinedPct,
+        },
+        "stake-watcher:summary_posted",
+      );
+    } catch (error) {
+      log.error({ err: errMessage(error) }, "stake-watcher:summary_failed");
+    }
+  }
+
   async function pollOnce(): Promise<void> {
     status.lastPollAt = Date.now();
 
@@ -293,6 +364,7 @@ export function startStakeWatcher(
     while (!stopped) {
       try {
         await pollOnce();
+        await maybeSummary();
         status.lastError = null;
       } catch (error) {
         status.errors += 1;

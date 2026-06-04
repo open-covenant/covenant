@@ -227,6 +227,12 @@ services:
       # Header banner on each post: `bundled` ships the committed Covenant banner.
       - key: STAKE_ANNOUNCE_HEADER_PHOTO
         value: bundled
+      # Periodic locked/staked stats summary: post every N hours (0 = off),
+      # with the bundled animated banner (`bundled`) via sendAnimation.
+      - key: STAKE_ANNOUNCE_SUMMARY_HOURS
+        value: "8"
+      - key: STAKE_ANNOUNCE_SUMMARY_HEADER
+        value: bundled
       - key: STAKE_WATCHER_STATE_DIR
         value: /data/telegram-bot
       # BotFather token; set in the dashboard, never committed.

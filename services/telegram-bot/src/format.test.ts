@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  abbreviateTokens,
   fireBar,
   formatTokenAmount,
   logoBar,
   renderNewStake,
+  renderStakeSummary,
   solscanTxUrl,
   LOGO_BAR_MAX,
   type NewStakeMessage,
@@ -149,5 +151,47 @@ describe("logoBar", () => {
 
   it("always shows at least one", () => {
     expect(count(logoBar(0n, 6, 250_000, id))).toBe(1);
+  });
+});
+
+describe("abbreviateTokens", () => {
+  it("compacts to K / M / B with one decimal, trimming .0", () => {
+    expect(abbreviateTokens(2_199_519_000_000n, 6)).toBe("2.2M");
+    expect(abbreviateTokens(73_922_642_000_000n, 6)).toBe("73.9M");
+    expect(abbreviateTokens(1_400_000_000_000_000n, 6)).toBe("1.4B");
+    expect(abbreviateTokens(12_300_000_000n, 6)).toBe("12.3K");
+    expect(abbreviateTokens(500_000_000n, 6)).toBe("500");
+  });
+});
+
+describe("renderStakeSummary", () => {
+  it("renders locked, staked, and combined % of supply", () => {
+    const html = renderStakeSummary({
+      lockedRaw: 2_199_519_000_000n,
+      stakedRaw: 73_922_642_000_000n,
+      decimals: 6,
+      combinedPct: 7.61,
+      symbol: "CVNT",
+      emojiId: "5841217997154295453",
+    });
+    expect(html).toContain("2.2M");
+    expect(html).toContain("$CVNT LOCKED");
+    expect(html).toContain("73.9M");
+    expect(html).toContain("$CVNT STAKED");
+    expect(html).toContain("7.6% OF");
+    expect(html).toContain("SUPPLY LOCKED");
+    expect(html).toContain('<tg-emoji emoji-id="5841217997154295453">');
+  });
+
+  it("falls back to 🔒 without a custom emoji", () => {
+    const html = renderStakeSummary({
+      lockedRaw: 0n,
+      stakedRaw: 1_000_000_000_000n,
+      decimals: 6,
+      combinedPct: 0.1,
+      symbol: "CVNT",
+    });
+    expect(html).toContain("🔒");
+    expect(html).not.toContain("tg-emoji");
   });
 });

@@ -32,6 +32,10 @@ export const SPL_TOKEN_PROGRAM_ID = new PublicKey(
 /** PDA seed for the locked-CVNT vault authority (`b"vault_auth"`). */
 export const VAULT_AUTHORITY_SEED = "vault_auth";
 
+/** PDA seed for the BuyLock vault authority (`b"buylock_auth"`) — buyback CVNT
+ * with no withdraw path, i.e. permanently locked. */
+export const BUYLOCK_AUTHORITY_SEED = "buylock_auth";
+
 // Lock-tier multiplier bps → human label. Mirrors the on-chain tiers:
 // 5000 / 10000 / 15000 / 20000 bps = 7 / 30 / 90 / 180 days.
 export const LOCK_TIER_LABELS: Record<number, string> = {

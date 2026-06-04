@@ -6217,6 +6217,7 @@ impl Server {
         let mut empty_a2a_repair_applied_action_audit_refs = 0_u64;
         let mut empty_a2a_recipient_rejected_action_audit_refs = 0_u64;
         let mut empty_authentication_failed_reason_audit_refs = 0_u64;
+        let mut empty_capability_grant_rejected_reason_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6715,6 +6716,20 @@ impl Server {
                     });
                 }
             }
+            if let AuditKind::CapabilityGrantRejected { reason, .. } = &event.kind {
+                if reason.is_empty() {
+                    empty_capability_grant_rejected_reason_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_capability_grant_rejected_reason_empty".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::CapabilityGrantRejected with reason = \"\"; the only production CapabilityGrantRejected write-site in covenantd is grant_capability's validate_scope-error branch which sets reason to e.to_string() where e is a PermissionError, and every PermissionError variant has a non-empty thiserror Display format (\"io: ...\", \"serde: ...\", \"ed25519: ...\", \"capability expired at ...\", \"signature does not verify against granted_by pubkey\", \"granted_by pubkey does not match the daemon trust root\", \"invalid capability scope: ...\")",
+                            event.id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production CapabilityGrantRejected write-site is grant_capability's validate_scope-error branch which sets reason to e.to_string() from a PermissionError, and every PermissionError variant emits a non-empty Display string (every variant carries a hardcoded prefix or a fully hardcoded literal), so an empty reason detaches the rejection row from the PermissionError classification that distinguishes scope-validation probes (invalid capability scope: ...) from cryptographic failures (signature does not verify against granted_by pubkey / granted_by pubkey does not match the daemon trust root) and erases the audit signal an operator uses to triage capability-grant failures by root cause".into(),
+                    });
+                }
+            }
         }
         orphans_total += zero_timestamp_audit_refs
             + nil_id_audit_refs
@@ -6749,7 +6764,8 @@ impl Server {
             + empty_a2a_result_rejected_reason_audit_refs
             + empty_a2a_repair_applied_action_audit_refs
             + empty_a2a_recipient_rejected_action_audit_refs
-            + empty_authentication_failed_reason_audit_refs;
+            + empty_authentication_failed_reason_audit_refs
+            + empty_capability_grant_rejected_reason_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
             passed: zero_timestamp_audit_refs == 0
@@ -6785,9 +6801,10 @@ impl Server {
                 && empty_a2a_result_rejected_reason_audit_refs == 0
                 && empty_a2a_repair_applied_action_audit_refs == 0
                 && empty_a2a_recipient_rejected_action_audit_refs == 0
-                && empty_authentication_failed_reason_audit_refs == 0,
+                && empty_authentication_failed_reason_audit_refs == 0
+                && empty_capability_grant_rejected_reason_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s)"
             ),
         });
 
@@ -12757,6 +12774,78 @@ required = {caps:?}
                         .message
                         .contains("1 empty-reason A2AResultRejected audit event"),
                     "check message should count empty-reason A2AResultRejected events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_capability_grant_rejected_reason_empty_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::CapabilityGrantRejected {
+                    subject_display: "user@local".into(),
+                    action: "memory.write".into(),
+                    reason: String::new(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_capability_grant_rejected_reason_empty"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_capability_grant_rejected_reason_empty: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::CapabilityGrantRejected"),
+                    "drift message should name the CapabilityGrantRejected variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("reason = \"\""),
+                    "drift message should name the empty-reason invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("validate_scope")
+                        && row.repair.contains("PermissionError")
+                        && row.repair.contains("grant_capability"),
+                    "repair hint should name validate_scope, PermissionError, and grant_capability: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 empty-reason CapabilityGrantRejected audit event"),
+                    "check message should count empty-reason CapabilityGrantRejected events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

@@ -119,6 +119,18 @@ describe("renderNewStake", () => {
     expect(html).toContain("</tg-emoji> <tg-emoji");
     expect(html).not.toContain("🔥🔥");
   });
+
+  it("drops the NEW STAKE title in bannerMode but keeps the bar + body", () => {
+    const html = renderNewStake({
+      ...base,
+      bannerMode: true,
+      emojiId: "5841217997154295453",
+    });
+    expect(html).not.toContain("NEW STAKE");
+    expect(html.startsWith("<tg-emoji")).toBe(true); // caption leads with the bar
+    expect(html).toContain("9,988,818 $CVNT · 7d lock");
+    expect(html).toContain("Total staked: 201,109,469.72 $CVNT");
+  });
 });
 
 describe("logoBar", () => {

@@ -1,5 +1,6 @@
+import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
-import { Bot, type Context, type NextFunction } from 'grammy';
+import { Bot, InputFile, type Context, type NextFunction } from 'grammy';
 import { MOCK_LEADERBOARD, MOCK_TASKS } from './mock.js';
 import { resolveBotNetwork } from './chain/network.js';
 import { renderNewStake } from './format.js';
@@ -29,6 +30,14 @@ const FIRE_UNIT = Number(process.env.STAKE_ANNOUNCE_FIRE_UNIT ?? '250000');
 // Telegram custom_emoji_id rendered as the branded bar instead of 🔥. Must be
 // from a custom-emoji set this bot owns. Unset → falls back to 🔥.
 const ANNOUNCE_EMOJI_ID = process.env.STAKE_ANNOUNCE_EMOJI_ID?.trim() || undefined;
+// Header image on each announcement. Unset → text-only post. `bundled` → the
+// committed Covenant banner (re-uploaded per post, so no file_id can go stale).
+// Any other value is passed straight to Telegram as a file_id or image URL.
+const HEADER_PHOTO = process.env.STAKE_ANNOUNCE_HEADER_PHOTO?.trim() || undefined;
+const HEADER_ENABLED = Boolean(HEADER_PHOTO);
+const BUNDLED_HEADER_PATH = fileURLToPath(
+  new URL('../assets/stake-banner.png', import.meta.url),
+);
 const WATCHER_POLL_MS = Number(process.env.STAKE_WATCHER_POLL_MS ?? '15000');
 const WATCHER_STATE_DIR = process.env.STAKE_WATCHER_STATE_DIR;
 
@@ -189,10 +198,21 @@ function maybeStartAnnouncer(bot: Bot): void {
   watcher = startStakeWatcher({
     network,
     send: async (html) => {
-      await bot.api.sendMessage(chatId, html, {
-        parse_mode: 'HTML',
-        link_preview_options: { is_disabled: true },
-      });
+      if (HEADER_PHOTO) {
+        const photo =
+          HEADER_PHOTO === 'bundled'
+            ? new InputFile(BUNDLED_HEADER_PATH)
+            : HEADER_PHOTO;
+        await bot.api.sendPhoto(chatId, photo, {
+          caption: html,
+          parse_mode: 'HTML',
+        });
+      } else {
+        await bot.api.sendMessage(chatId, html, {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+        });
+      }
     },
     log: {
       info: (obj, msg) => app.log.info(obj, msg),
@@ -206,6 +226,7 @@ function maybeStartAnnouncer(bot: Bot): void {
     solscanBase: SOLSCAN_BASE,
     fireUnit: FIRE_UNIT,
     emojiId: ANNOUNCE_EMOJI_ID,
+    bannerMode: HEADER_ENABLED,
   });
   app.log.info(
     {

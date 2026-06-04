@@ -224,6 +224,9 @@ services:
       # Bot-owned custom emoji rendered as the bar instead of 🔥 (cvnt_by_CovenantStakeBot).
       - key: STAKE_ANNOUNCE_EMOJI_ID
         value: "5841217997154295453"
+      # Header banner on each post: `bundled` ships the committed Covenant banner.
+      - key: STAKE_ANNOUNCE_HEADER_PHOTO
+        value: bundled
       - key: STAKE_WATCHER_STATE_DIR
         value: /data/telegram-bot
       # BotFather token; set in the dashboard, never committed.

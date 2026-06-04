@@ -113,6 +113,9 @@ export interface NewStakeMessage {
   fireUnit: number;
   /** Telegram custom_emoji_id for the branded bar; falls back to 🔥 when unset. */
   emojiId?: string;
+  /** When the post leads with a header image that already says "NEW STAKE",
+   * drop the redundant title line (the bar + body stay). */
+  bannerMode?: boolean;
 }
 
 export function renderNewStake(m: NewStakeMessage): string {
@@ -125,13 +128,13 @@ export function renderNewStake(m: NewStakeMessage): string {
   const solscan = escapeHtml(solscanTxUrl(m.solscanBase, m.txSignature, m.cluster));
   const stake = escapeHtml(m.stakeUrl);
 
-  const lines: string[] = [
-    "<b>NEW STAKE</b>",
-    "",
+  const lines: string[] = [];
+  if (!m.bannerMode) lines.push("<b>NEW STAKE</b>", "");
+  lines.push(
     bar,
     "",
     `${escapeHtml(amount)} $${sym} · ${escapeHtml(lock)} lock`,
-  ];
+  );
   if (m.totals) {
     const total = formatTokenAmount(m.totals.totalStakedRaw, m.decimals, 2);
     lines.push(`Total staked: ${escapeHtml(total)} $${sym}`);

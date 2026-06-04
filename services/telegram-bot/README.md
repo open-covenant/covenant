@@ -109,6 +109,7 @@ is bot-controlled (numbers + our own URLs) and still HTML-escaped.
 | `STAKE_ANNOUNCE_SOLSCAN_BASE` | no | `https://solscan.io` | Explorer base for the tx link |
 | `STAKE_ANNOUNCE_FIRE_UNIT` | no | `250000` | Whole `$CVNT` per bar icon (🔥 cap 50, logo cap 12) |
 | `STAKE_ANNOUNCE_EMOJI_ID` | no | — | Telegram custom_emoji_id (from a set this bot owns) used as the bar instead of 🔥 |
+| `STAKE_ANNOUNCE_HEADER_PHOTO` | no | — | Header image on each post. `bundled` = committed banner; else a file_id / image URL. Unset = text-only. Set → the "NEW STAKE" title is dropped (the banner carries it) |
 
 ## Endpoints
 

@@ -46,6 +46,8 @@ export interface StakeWatcherOptions {
   fireUnit?: number;
   /** Telegram custom_emoji_id for the branded bar; falls back to 🔥 when unset. */
   emojiId?: string;
+  /** Caption mode for a header-image post: drops the redundant "NEW STAKE" title. */
+  bannerMode?: boolean;
 }
 
 export interface StakeWatcherStatus {
@@ -107,6 +109,7 @@ export function startStakeWatcher(
   const solscanBase = options.solscanBase ?? "https://solscan.io";
   const fireUnit = options.fireUnit && options.fireUnit > 0 ? options.fireUnit : 250_000;
   const emojiId = options.emojiId;
+  const bannerMode = options.bannerMode;
 
   const connection = new Connection(network.rpcUrl, "confirmed");
   const stateDir = resolveStateDir(options.stateDir, log);
@@ -225,6 +228,7 @@ export function startStakeWatcher(
       solscanBase,
       fireUnit,
       emojiId,
+      bannerMode,
     });
 
     // A send failure propagates so the cursor does NOT advance past this

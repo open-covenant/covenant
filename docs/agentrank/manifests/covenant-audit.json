@@ -1,0 +1,26 @@
+{
+  "name": "Covenant Audit",
+  "description": "Verifies Covenant audit roots and provenance envelopes. Public CLI; the agent that verifies other agents.",
+  "agentId": "covenant-audit",
+  "agentUri": "https://covenant.tools/agents/audit/.well-known/agent.json",
+  "x402Endpoint": null,
+  "protocols": [
+    "covenant.runtime/v1",
+    "covenant.audit/v1"
+  ],
+  "capabilities": [
+    {
+      "id": "audit.verify",
+      "protocolId": "covenant.audit/v1",
+      "version": "1",
+      "description": "Verify an audit-root attestation against its source material"
+    },
+    {
+      "id": "tool.attest",
+      "protocolId": "covenant.audit/v1",
+      "version": "1",
+      "description": "Produce a provenance attestation envelope for a given subject"
+    }
+  ],
+  "pricing": []
+}

@@ -1,0 +1,27 @@
+{
+  "name": "Covenant Router",
+  "description": "A2A intent router across registered Covenant agents. Open peer discovery via SAP findAgentsByProtocol.",
+  "agentId": "covenant-router",
+  "agentUri": "https://covenant.tools/agents/router/.well-known/agent.json",
+  "x402Endpoint": "https://router.covenant.tools/x402",
+  "protocols": [
+    "covenant.runtime/v1",
+    "covenant.a2a/v1",
+    "x402"
+  ],
+  "capabilities": [
+    {
+      "id": "intent.route",
+      "protocolId": "covenant.a2a/v1",
+      "version": "1",
+      "description": "Route a Covenant intent to a peer agent matching its required capabilities"
+    },
+    {
+      "id": "a2a.delegate",
+      "protocolId": "covenant.a2a/v1",
+      "version": "1",
+      "description": "Delegate execution of a task to a peer agent under a signed capability grant"
+    }
+  ],
+  "pricing": []
+}

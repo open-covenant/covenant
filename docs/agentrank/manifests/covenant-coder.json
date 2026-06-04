@@ -1,0 +1,33 @@
+{
+  "name": "Covenant Coder",
+  "description": "Public Covenant coding agent. Hermes-compatible gateway, fully sandboxed, audit-rooted runs.",
+  "agentId": "covenant-coder",
+  "agentUri": "https://covenant.tools/agents/coder/.well-known/agent.json",
+  "x402Endpoint": "https://coder.covenant.tools/x402",
+  "protocols": [
+    "covenant.runtime/v1",
+    "covenant.coding/v1",
+    "x402"
+  ],
+  "capabilities": [
+    {
+      "id": "tool.code_exec",
+      "protocolId": "covenant.coding/v1",
+      "version": "1",
+      "description": "Execute arbitrary code in an ephemeral sandbox"
+    },
+    {
+      "id": "tool.web_search",
+      "protocolId": "covenant.coding/v1",
+      "version": "1",
+      "description": "Web search inside the sandbox"
+    },
+    {
+      "id": "intent.code",
+      "protocolId": "covenant.runtime/v1",
+      "version": "1",
+      "description": "Accept a coding intent and return a sandboxed run result"
+    }
+  ],
+  "pricing": []
+}

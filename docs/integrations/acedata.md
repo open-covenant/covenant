@@ -1,7 +1,8 @@
 # AceData integration — Attested Generative Capabilities
 
-Status: proposed (design)
+Status: phase 1 shipped (provider crate + tools + provenance)
 Branch: `feat/acedatacloud-integration`
+Crate: `agent-os/crates/covenant-acedata`
 
 ## Summary
 
@@ -93,13 +94,36 @@ Start narrow and high-signal rather than exposing all 50+ services:
 - `acedata.search` — Google SERP
 - (phase 2) `acedata.video.generate` — Sora / Veo / Kling · `acedata.tts` — Fish · `acedata.chat` — LLM gateway
 
+## Configuration (phase 1)
+
+Off by default. The daemon reads these env vars at startup (the API key is a Bearer billing
+credential, kept off-repo — see `.env.example`):
+
+- `COVENANT_ACEDATA_ENABLED` — `1` / `true` / `yes` to register the tools
+- `COVENANT_ACEDATA_API_KEY` — token from the platform.acedata.cloud console (required)
+- `COVENANT_ACEDATA_BASE_URL` — API host override (default `https://api.acedata.cloud`)
+- `COVENANT_ACEDATA_ALLOW` — comma-separated tool allowlist (empty = all three)
+- `COVENANT_ACEDATA_IMAGE_MODEL` / `COVENANT_ACEDATA_MUSIC_MODEL` — default models
+
+Tools registered: `acedata.image.generate` (Flux), `acedata.music.generate` (Suno),
+`acedata.search` (Google SERP). Each call returns two result blocks — the raw API response,
+then a `provenance` record: `{ provider, tool, model, prompt_sha256, output_sha256, assets,
+task_id }`. The output hash is taken over the canonical JSON (JCS) of the response; hashing the
+asset bytes themselves is a phase-2 refinement. Because the tools register into the daemon's
+tool registry, every call is already capability-gated and audited like any other tool — no new
+enforcement path was needed for phase 1.
+
 ## Phasing
 
-1. **MVP (first PR):** `covenant-acedata` crate, Bearer client, 3 flagship tools (image, music,
-   search), tool-registry wiring, `AceDataGeneration` audit events, capability scope predicate,
-   `secrets.toml` config. Fully governed + audited. No chain. Demoable.
-2. **Provenance surfaced:** settlement receipts + a "Generations / Provenance" panel in
-   `covenant-web` (model, cost, content hash per generation); end-to-end per-session budget caps.
+1. **MVP — shipped.** `covenant-acedata` crate: Bearer client, 3 flagship tools (image, music,
+   search), per-call provenance records, env-gated daemon wiring, unit tests + a live smoke
+   example. Governed via the existing tool-registry capability path; audited via the existing
+   tool-call trail. No chain.
+2. **Provenance surfaced + tightened governance:** a dedicated `AuditKind::AceDataGeneration`
+   event and a `acedata_generate_scope_allows` capability predicate (model allowlist +
+   per-session budget cap), deferred out of phase 1 to keep the first change off the shared
+   audit/permissions crates; settlement receipts + a "Generations / Provenance" panel in
+   `covenant-web` (model, cost, content hash per generation).
 3. **On-chain provenance certificate:** anchor audit/provenance roots via the SAP bridge; optional
    x402-via-xona Solana pay-per-call. Explore alignment with AceData's OOBE/Synapse Solana work.
 4. **North star (optional):** attested AI-media *resale* — Covenant already models resale

@@ -193,6 +193,15 @@ async fn main() -> Result<()> {
         Arc::new(covenant_mcp::native::EchoTool),
         Arc::new(covenant_mcp::native::ClockTool),
     ];
+    if let Some((client, cfg)) = acedata_from_env() {
+        let added = covenant_acedata::acedata_tools(Arc::new(client), &cfg);
+        if added.is_empty() {
+            tracing::warn!("acedata enabled but allowlist registered no tools");
+        } else {
+            info!(count = added.len(), base_url = %cfg.base_url, "acedata provider enabled");
+            tools_vec.extend(added);
+        }
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -658,6 +667,62 @@ fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
         signer_binary,
         signer_env,
     })
+}
+
+/// Build the AceData provider (client + config) from env, or None when
+/// the operator hasn't opted in. AceData is a Bearer-token generative
+/// provider — the key is a billing credential, not a funding key.
+///
+/// - `COVENANT_ACEDATA_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_ACEDATA_API_KEY` — Bearer billing token (required)
+/// - `COVENANT_ACEDATA_BASE_URL` — override the API host (optional)
+/// - `COVENANT_ACEDATA_ALLOW` — comma-separated tool-name allowlist (optional)
+/// - `COVENANT_ACEDATA_IMAGE_MODEL` / `COVENANT_ACEDATA_MUSIC_MODEL` — default models (optional)
+fn acedata_from_env() -> Option<(covenant_acedata::AceDataClient, covenant_acedata::AceDataConfig)> {
+    let enabled = std::env::var("COVENANT_ACEDATA_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let api_key = match std::env::var("COVENANT_ACEDATA_API_KEY") {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            tracing::warn!(
+                "COVENANT_ACEDATA_ENABLED set but COVENANT_ACEDATA_API_KEY missing; acedata disabled"
+            );
+            return None;
+        }
+    };
+    let mut cfg = covenant_acedata::AceDataConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_ACEDATA_BASE_URL") {
+        if !url.trim().is_empty() {
+            cfg.base_url = url;
+        }
+    }
+    if let Ok(list) = std::env::var("COVENANT_ACEDATA_ALLOW") {
+        cfg.allow = Some(
+            list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
+    }
+    if let Ok(m) = std::env::var("COVENANT_ACEDATA_IMAGE_MODEL") {
+        if !m.trim().is_empty() {
+            cfg.image_model = m;
+        }
+    }
+    if let Ok(m) = std::env::var("COVENANT_ACEDATA_MUSIC_MODEL") {
+        if !m.trim().is_empty() {
+            cfg.music_model = m;
+        }
+    }
+    let client = covenant_acedata::AceDataClient::new(cfg.base_url.clone(), api_key);
+    Some((client, cfg))
 }
 
 /// Build the Hyre provider config from env, or None when the operator

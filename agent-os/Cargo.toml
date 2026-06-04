@@ -19,6 +19,7 @@ members = [
     "crates/covenant-budget",
     "crates/covenant-x402",
     "crates/covenant-hyre",
+    "crates/covenant-acedata",
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenantd",

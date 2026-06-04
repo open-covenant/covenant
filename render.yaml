@@ -187,6 +187,52 @@ services:
         sync: false
       - fromGroup: covenant-sandbox-shared
 
+  # Telegram bot: posts a "NEW STAKE" message to a group whenever a $CVNT
+  # PositionCreated event lands on-chain, plus the deny-by-default /status +
+  # /tasks command surface. Private service — it long-polls the Telegram API
+  # and pushes announcements out; nothing calls it inbound. The signature
+  # cursor lives on the attached disk so a restart never replays or skips.
+  - type: pserv
+    name: covenant-telegram-bot
+    runtime: node
+    plan: starter
+    region: frankfurt
+    autoDeploy: true
+    rootDir: services/telegram-bot
+    buildCommand: pnpm install --ignore-workspace --frozen-lockfile=false && pnpm build
+    startCommand: pnpm start
+    healthCheckPath: /healthz
+    buildFilter:
+      paths:
+        - services/telegram-bot/**
+    disk:
+      name: telegram-bot-data
+      mountPath: /data/telegram-bot
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: COVENANT_SOLANA_CLUSTER
+        value: mainnet
+      # Use a real RPC — the public mainnet endpoint rate-limits polling.
+      - key: COVENANT_SOLANA_RPC_URL
+        sync: false
+      - key: COVNT_MINT
+        value: 2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump
+      - key: COVENANT_TOKEN_SYMBOL
+        value: CVNT
+      - key: STAKE_WATCHER_STATE_DIR
+        value: /data/telegram-bot
+      # BotFather token; set in the dashboard, never committed.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      # Target group/channel id, e.g. -1001234567890.
+      - key: TELEGRAM_ANNOUNCE_CHAT_ID
+        sync: false
+      # Comma-separated numeric ids allowed to run /status, /tasks, /stakepreview.
+      - key: TELEGRAM_ALLOWED_USER_IDS
+        sync: false
+
   - type: cron
     name: covenant-sandbox-reset
     runtime: node

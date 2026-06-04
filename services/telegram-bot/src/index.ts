@@ -1,14 +1,36 @@
 import Fastify from 'fastify';
 import { Bot, type Context, type NextFunction } from 'grammy';
-import { MOCK_LEADERBOARD, MOCK_TASKS, resolveSolanaNetwork } from '@covenant/sdk';
+import { MOCK_LEADERBOARD, MOCK_TASKS } from './mock.js';
+import { resolveBotNetwork } from './chain/network.js';
+import { renderNewStake } from './format.js';
+import { startStakeWatcher, type StakeWatcherHandle } from './chain/watcher.js';
 
 const app = Fastify({ logger: true, bodyLimit: 32 * 1024 });
-const PORT = Number(process.env.TELEGRAM_PORT ?? 8788);
+// Render injects PORT and health-checks it, so prefer it; TELEGRAM_PORT is a
+// local-dev override, 8788 the final fallback.
+const PORT = Number(process.env.PORT ?? process.env.TELEGRAM_PORT ?? 8788);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const network = resolveSolanaNetwork();
+const network = resolveBotNetwork();
 const RATE_LIMIT_PER_MIN = Number(process.env.TELEGRAM_RATE_LIMIT_PER_MIN ?? 5);
 
+// Stake announcer config. The announcer posts a "NEW STAKE" message to
+// TELEGRAM_ANNOUNCE_CHAT_ID whenever a PositionCreated event lands on-chain.
+// It is independent of the command allowlist (it broadcasts, never replies).
+const ANNOUNCE_CHAT_ID = process.env.TELEGRAM_ANNOUNCE_CHAT_ID?.trim();
+const TOKEN_SYMBOL =
+  process.env.COVENANT_TOKEN_SYMBOL ??
+  process.env.NEXT_PUBLIC_COVENANT_TOKEN_SYMBOL ??
+  'CVNT';
+const STAKE_URL =
+  process.env.STAKE_ANNOUNCE_STAKE_URL ?? 'https://opencovenant.org/stake';
+const SOLSCAN_BASE =
+  process.env.STAKE_ANNOUNCE_SOLSCAN_BASE ?? 'https://solscan.io';
+const FIRE_UNIT = Number(process.env.STAKE_ANNOUNCE_FIRE_UNIT ?? '250000');
+const WATCHER_POLL_MS = Number(process.env.STAKE_WATCHER_POLL_MS ?? '15000');
+const WATCHER_STATE_DIR = process.env.STAKE_WATCHER_STATE_DIR;
+
 let botRunning = false;
+let watcher: StakeWatcherHandle | null = null;
 
 // Telegram numeric user-ids permitted to invoke any bot command. Empty set
 // means deny-all — commands silently log + drop, no reply to the caller so
@@ -98,6 +120,15 @@ async function maybeStartBot() {
       MOCK_TASKS.map((task) => `${task.taskId} · ${task.status} · ${task.paymentAmount}`).join('\n'),
     ),
   );
+  // Renders a sample NEW STAKE message to the caller so an operator can verify
+  // formatting without waiting for a real stake. Allowlist-gated like the rest;
+  // the content is fully bot-controlled, so HTML parse mode is safe here.
+  bot.command('stakepreview', (ctx) =>
+    ctx.reply(renderStakePreview(), {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+    }),
+  );
   bot.catch((err) => {
     app.log.error({ err: err.error }, 'telegram-bot:handler_error');
   });
@@ -118,6 +149,69 @@ async function maybeStartBot() {
   return bot;
 }
 
+function renderStakePreview(): string {
+  // Mirrors the canonical example: a ~9.99M CVNT 7-day lock against a ~201M
+  // total at ~20% of supply. Static so the command renders instantly without
+  // an RPC round-trip.
+  return renderNewStake({
+    amountRaw: 9_988_818n * 1_000_000n,
+    decimals: 6,
+    multiplierBps: 5000,
+    totals: { totalStakedRaw: 201_109_469_720_000n, pct: 20.1 },
+    txSignature:
+      '5uA7rQ9mZQ7tJ4o8h4q9LkT7o6r8mQ2p5z6x7c8v9b1n2m3q4w5e6r7t8y9u1111',
+    cluster: network.cluster,
+    symbol: TOKEN_SYMBOL,
+    stakeUrl: STAKE_URL,
+    solscanBase: SOLSCAN_BASE,
+    fireUnit: FIRE_UNIT,
+  });
+}
+
+function maybeStartAnnouncer(bot: Bot): void {
+  if (!ANNOUNCE_CHAT_ID) {
+    app.log.warn(
+      'telegram-bot: TELEGRAM_ANNOUNCE_CHAT_ID unset; stake announcer disabled',
+    );
+    return;
+  }
+  if (!network.cvntMint) {
+    app.log.warn(
+      'telegram-bot: no $CVNT mint for the active cluster (set COVNT_MINT); stake announcer disabled',
+    );
+    return;
+  }
+  const chatId = ANNOUNCE_CHAT_ID;
+  watcher = startStakeWatcher({
+    network,
+    send: async (html) => {
+      await bot.api.sendMessage(chatId, html, {
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+      });
+    },
+    log: {
+      info: (obj, msg) => app.log.info(obj, msg),
+      warn: (obj, msg) => app.log.warn(obj, msg),
+      error: (obj, msg) => app.log.error(obj, msg),
+    },
+    pollMs: WATCHER_POLL_MS,
+    stateDir: WATCHER_STATE_DIR,
+    symbol: TOKEN_SYMBOL,
+    stakeUrl: STAKE_URL,
+    solscanBase: SOLSCAN_BASE,
+    fireUnit: FIRE_UNIT,
+  });
+  app.log.info(
+    {
+      chat_id: chatId,
+      cluster: network.cluster,
+      mint: network.cvntMint.toBase58(),
+    },
+    'telegram-bot:stake_announcer_started',
+  );
+}
+
 app.get('/healthz', async () => ({
   ok: true,
   cluster: network.cluster,
@@ -125,10 +219,18 @@ app.get('/healthz', async () => ({
   bot_running: botRunning,
   allowlist_size: ALLOWED_USERS.size,
   rate_limit_per_min: RATE_LIMIT_PER_MIN,
+  announcer: {
+    configured: Boolean(ANNOUNCE_CHAT_ID && network.cvntMint),
+    ...(watcher ? watcher.status() : { running: false }),
+  },
 }));
 
 app.get('/summary', async () => ({
   text: renderSummary(),
+}));
+
+app.get('/announce/preview', async () => ({
+  text: renderStakePreview(),
 }));
 
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
@@ -141,6 +243,7 @@ if (isEntry) {
     app.log.error({ err: err.message }, 'telegram-bot:uncaught_exception');
     process.exit(1);
   });
-  await maybeStartBot();
+  const startedBot = await maybeStartBot();
+  if (startedBot) maybeStartAnnouncer(startedBot);
   await app.listen({ port: PORT, host: '0.0.0.0' });
 }

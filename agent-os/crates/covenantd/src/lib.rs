@@ -5576,6 +5576,7 @@ impl Server {
         const MAX_PARENT_HOPS: usize = 32;
         let mut stale_parent_refs = 0_u64;
         let mut self_parent_refs = 0_u64;
+        let mut nil_parent_refs = 0_u64;
         let mut cycle_parent_refs = 0_u64;
         for record in &memories {
             let Some(parent) = record.parent else {
@@ -5588,6 +5589,16 @@ impl Server {
                     id: Some(record.id.to_string()),
                     message: "memory record's parent references itself".into(),
                     repair: "detach the self-referential parent through an explicit detach_parent repair command".into(),
+                });
+                continue;
+            }
+            if parent.is_nil() {
+                nil_parent_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_record_parent_nil".into(),
+                    id: Some(record.id.to_string()),
+                    message: "memory record's parent is the all-zeros nil UUID sentinel".into(),
+                    repair: "detach the nil-sentinel parent through an explicit detach_parent repair command".into(),
                 });
                 continue;
             }
@@ -5642,14 +5653,15 @@ impl Server {
                 }
             }
         }
-        orphans_total += stale_parent_refs + self_parent_refs + cycle_parent_refs;
+        orphans_total += stale_parent_refs + self_parent_refs + nil_parent_refs + cycle_parent_refs;
         checks.push(VerifyCheck {
             name: "memory parent references".into(),
             passed: stale_parent_refs == 0
                 && self_parent_refs == 0
+                && nil_parent_refs == 0
                 && cycle_parent_refs == 0,
             message: format!(
-                "{stale_parent_refs} stale parent reference(s), {self_parent_refs} self-parent reference(s), {cycle_parent_refs} parent cycle(s)"
+                "{stale_parent_refs} stale parent reference(s), {self_parent_refs} self-parent reference(s), {nil_parent_refs} nil-sentinel parent reference(s), {cycle_parent_refs} parent cycle(s)"
             ),
         });
 
@@ -11068,6 +11080,77 @@ required = {caps:?}
                 assert!(
                     parent_check.message.contains("1 self-parent reference"),
                     "check message should count self-parent refs: {}",
+                    parent_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_parent_nil_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "nil-parent memory".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: Some(Uuid::nil()),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let nil_parent = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_parent_nil"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected memory_record_parent_nil: {drift:?}"));
+                assert!(
+                    nil_parent.repair.contains("detach_parent"),
+                    "repair hint should name detach_parent: {}",
+                    nil_parent.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "memory_stale_parent"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    }),
+                    "nil-parent must not double-report as memory_stale_parent: {drift:?}"
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "memory_self_parent"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    }),
+                    "nil-parent must not double-report as memory_self_parent: {drift:?}"
+                );
+                let parent_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory parent references")
+                    .unwrap_or_else(|| panic!("expected parent references check: {checks:?}"));
+                assert!(!parent_check.passed);
+                assert!(
+                    parent_check
+                        .message
+                        .contains("1 nil-sentinel parent reference"),
+                    "check message should count nil-sentinel parent refs: {}",
                     parent_check.message
                 );
                 assert!(orphans_total >= 1);

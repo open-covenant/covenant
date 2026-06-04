@@ -6821,6 +6821,101 @@ async fn live_cli_verify_json_reports_audit_operator_token_rotated_old_token_pre
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, appends an OperatorTokenRotated audit event with old_token_prefix=\"abc\", and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_audit_operator_token_rotated_old_token_prefix_wrong_length_drift(
+) {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let audit_dir = home.path().join("audit");
+    std::fs::create_dir_all(&audit_dir).expect("create audit dir");
+    let event_id = Uuid::new_v4();
+    let event = AuditEvent {
+        id: event_id,
+        timestamp_ms: 1_700_000_000_000,
+        issuer: AgentId::new("user@local", [1u8; 32]),
+        kind: AuditKind::OperatorTokenRotated {
+            peer_display: "operator@local".into(),
+            old_token_prefix: "abc".into(),
+            new_token_prefix: "abcdef".into(),
+        },
+    };
+    let audit_path = audit_dir.join("events.jsonl");
+    use std::io::Write as _;
+    let mut audit_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .expect("open audit/events.jsonl for append");
+    writeln!(audit_file, "{}", serde_json::to_string(&event).unwrap())
+        .expect("append wrong-length-old_token_prefix OperatorTokenRotated event");
+    drop(audit_file);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when OperatorTokenRotated old_token_prefix length != 6: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let event_id_str = event_id.to_string();
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str()
+                == Some("audit_operator_token_rotated_old_token_prefix_wrong_length")
+                && item["id"].as_str() == Some(event_id_str.as_str())
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected audit_operator_token_rotated_old_token_prefix_wrong_length drift for {event_id_str}: {drift:?}"
+            )
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("AuditKind::OperatorTokenRotated"),
+        "drift message should name the OperatorTokenRotated variant: {message:?}"
+    );
+    assert!(
+        message.contains("\"abc\"") && message.contains("len = 3"),
+        "drift message should name the wrong-length prefix value and its length: {message:?}"
+    );
+    assert!(
+        row["repair"].as_str().is_some_and(|repair| repair
+            .contains("token_b58_prefix")
+            && repair.contains("32 bytes")
+            && repair.contains("6-char")),
+        "wrong-length-old-token-prefix OperatorTokenRotated drift repair string should name token_b58_prefix, the 32-byte PeerToken invariant, and the 6-char redaction: {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, appends an OperatorTokenRotated audit event with new_token_prefix=\"\", and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_audit_operator_token_rotated_new_token_prefix_empty_drift() {
     let home = tempfile::tempdir().expect("tempdir");

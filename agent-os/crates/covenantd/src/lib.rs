@@ -5940,6 +5940,7 @@ impl Server {
         let mut nil_id_memory_refs = 0_u64;
         let mut zero_created_at_memory_refs = 0_u64;
         let mut zeroed_owner_memory_refs = 0_u64;
+        let mut metadata_non_object_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -5998,21 +5999,43 @@ impl Server {
                     repair: "review the memory store row and the writer that produced it; production memory writes always source owner.pubkey from LocalIdentity::pubkey_bytes (operator-initiated writes) or from an authenticated peer's AgentId (issuer.clone() on the intent path), so a zeroed pubkey collapses every memory record to one anonymous owner and breaks the owner-based scope, capability, and retrieval routing the daemon relies on".into(),
                 });
             }
+            if record.metadata.as_object().is_none() {
+                metadata_non_object_memory_refs += 1;
+                let shape = match &record.metadata {
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Bool(_) => "bool",
+                    serde_json::Value::Number(_) => "number",
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Array(_) => "array",
+                    serde_json::Value::Object(_) => "object",
+                };
+                drift.push(VerifyDrift {
+                    kind: "memory_record_metadata_non_object".into(),
+                    id: Some(record.id.to_string()),
+                    message: format!(
+                        "memory record {} has metadata of JSON type {shape}; production memory writes always serialize metadata as an object via serde_json::json!({{...}})",
+                        record.id
+                    ),
+                    repair: "review the memory store row and the writer that produced it; running an apply_provenance repair through covenant-memory wraps the non-object value under previous_metadata so the metadata.receipt_id back-reference contract holds again".into(),
+                });
+            }
         }
         orphans_total += empty_text_refs
             + nan_embedding_refs
             + nil_id_memory_refs
             + zero_created_at_memory_refs
-            + zeroed_owner_memory_refs;
+            + zeroed_owner_memory_refs
+            + metadata_non_object_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
                 && nan_embedding_refs == 0
                 && nil_id_memory_refs == 0
                 && zero_created_at_memory_refs == 0
-                && zeroed_owner_memory_refs == 0,
+                && zeroed_owner_memory_refs == 0
+                && metadata_non_object_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s)"
             ),
         });
 
@@ -11446,6 +11469,68 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zeroed-owner-pubkey record"),
                     "check message should count zeroed-owner records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_metadata_non_object_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "non-object metadata fixture".into(),
+                embedding: vec![0.5; 8],
+                created_at: epoch_ms(),
+                metadata: serde_json::Value::Array(vec![]),
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_non_object"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_metadata_non_object: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("JSON type array"),
+                    "drift message should name the JSON shape: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("previous_metadata"),
+                    "repair hint should name the provenance-merge wrapper: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 non-object-metadata record"),
+                    "check message should count non-object metadata records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

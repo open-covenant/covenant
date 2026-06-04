@@ -9625,6 +9625,103 @@ async fn live_cli_verify_json_reports_audit_memory_compaction_applied_reason_emp
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, appends a MemoryCompactionApplied audit event with a nil UUID in parents_detached, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_audit_memory_compaction_applied_parents_detached_uuid_nil_drift(
+) {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let audit_dir = home.path().join("audit");
+    std::fs::create_dir_all(&audit_dir).expect("create audit dir");
+    let event_id = Uuid::new_v4();
+    let event = AuditEvent {
+        id: event_id,
+        timestamp_ms: 1_700_000_000_000,
+        issuer: AgentId::new("user@local", [1u8; 32]),
+        kind: AuditKind::MemoryCompactionApplied {
+            mode: "apply".into(),
+            changed: true,
+            reason: "test".into(),
+            deleted: Vec::new(),
+            stale_marked: Vec::new(),
+            parents_detached: vec![Uuid::nil()],
+        },
+    };
+    let audit_path = audit_dir.join("events.jsonl");
+    use std::io::Write as _;
+    let mut audit_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .expect("open audit/events.jsonl for append");
+    writeln!(audit_file, "{}", serde_json::to_string(&event).unwrap())
+        .expect("append nil-parents_detached MemoryCompactionApplied event");
+    drop(audit_file);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when MemoryCompactionApplied has a nil UUID in parents_detached: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let event_id_str = event_id.to_string();
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str()
+                == Some("audit_memory_compaction_applied_parents_detached_uuid_nil")
+                && item["id"].as_str() == Some(event_id_str.as_str())
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected audit_memory_compaction_applied_parents_detached_uuid_nil drift for {event_id_str}: {drift:?}"
+            )
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("AuditKind::MemoryCompactionApplied"),
+        "drift message should name the MemoryCompactionApplied variant: {message:?}"
+    );
+    assert!(
+        message.contains("nil UUID in parents_detached"),
+        "drift message should name the nil-parents_detached invariant: {message:?}"
+    );
+    assert!(
+        row["repair"].as_str().is_some_and(|repair| repair
+            .contains("plan_compaction")
+            && repair.contains("Uuid::new_v4()")),
+        "nil-parents_detached MemoryCompactionApplied drift repair string should name plan_compaction and the Uuid::new_v4() write-time source: {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, appends a MemoryCompactionApplied audit event with a nil UUID in stale_marked, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_audit_memory_compaction_applied_stale_marked_uuid_nil_drift()
 {

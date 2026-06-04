@@ -85,11 +85,7 @@ export function HeaderStats() {
 
   return (
     <div className="flex items-center gap-4">
-      <Cell
-        label="commits"
-        value={num(s.commits)}
-        href="https://github.com/open-covenant/covenant/commits/main"
-      />
+      <Cell label="commits" value={num(s.commits)} />
       {s.tests && <Cell label="tests" value={s.tests} />}
       {s.live && <Cell label="live" value={s.live} />}
       {s.crates && <Cell label="crates" value={s.crates} />}

@@ -395,9 +395,9 @@ importers:
 
   services/telegram-bot:
     dependencies:
-      '@covenant/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
+      '@solana/web3.js':
+        specifier: ^1.95.5
+        version: 1.98.4(bufferutil@4.1.0)(typescript@6.0.3)(utf-8-validate@6.0.6)
       fastify:
         specifier: 5.8.5
         version: 5.8.5

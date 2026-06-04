@@ -11536,6 +11536,111 @@ async fn live_cli_verify_json_reports_audit_a2a_auto_retry_scheduler_scan_skippe
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, appends an A2AAutoRetrySchedulerScan audit event with skipped_by_reason key=\"timeout\", and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_audit_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_not_recognized_drift(
+) {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let audit_dir = home.path().join("audit");
+    std::fs::create_dir_all(&audit_dir).expect("create audit dir");
+    let event_id = Uuid::new_v4();
+    let mut skipped_by_reason = std::collections::BTreeMap::new();
+    skipped_by_reason.insert("timeout".to_string(), 4u64);
+    let event = AuditEvent {
+        id: event_id,
+        timestamp_ms: 1_700_000_000_000,
+        issuer: AgentId::new("user@local", [1u8; 32]),
+        kind: AuditKind::A2AAutoRetrySchedulerScan {
+            enabled: true,
+            considered: 5,
+            requeued: 1,
+            skipped: 4,
+            skipped_by_reason,
+            min_lease_age_ms: 60_000,
+            max_attempts: 3,
+            max_requeues: 10,
+            scan_limit: 100,
+            error: None,
+        },
+    };
+    let audit_path = audit_dir.join("events.jsonl");
+    use std::io::Write as _;
+    let mut audit_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .expect("open audit/events.jsonl for append");
+    writeln!(audit_file, "{}", serde_json::to_string(&event).unwrap())
+        .expect("append not-recognized-key A2AAutoRetrySchedulerScan event");
+    drop(audit_file);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when A2AAutoRetrySchedulerScan has a non-recognized skipped_by_reason key: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let event_id_str = event_id.to_string();
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str()
+                == Some("audit_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_not_recognized")
+                && item["id"].as_str() == Some(event_id_str.as_str())
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected audit_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_not_recognized drift for {event_id_str}: {drift:?}"
+            )
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("AuditKind::A2AAutoRetrySchedulerScan"),
+        "drift message should name the A2AAutoRetrySchedulerScan variant: {message:?}"
+    );
+    assert!(
+        message.contains("\"timeout\""),
+        "drift message should name the non-recognized key value: {message:?}"
+    );
+    assert!(
+        row["repair"].as_str().is_some_and(|repair| repair
+            .contains("A2AAutoRetrySkipReason::as_str")
+            && repair.contains("missing_lease")
+            && repair.contains("max_attempts_reached")
+            && repair.contains("capability_scope_mismatch")),
+        "not-recognized-key A2AAutoRetrySchedulerScan drift repair string should name as_str and three of the nine skip-reason literals: {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, appends an A2AAutoRetrySchedulerScan audit event with a 0-valued skipped_by_reason bucket, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_audit_a2a_auto_retry_scheduler_scan_skipped_by_reason_value_zero_drift(
 ) {

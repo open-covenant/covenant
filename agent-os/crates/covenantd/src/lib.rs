@@ -6119,6 +6119,7 @@ impl Server {
         let mut chain_partial_refs = 0_u64;
         let mut tx_sig_onchain_sig_diverged_refs = 0_u64;
         let mut zero_settled_at_refs = 0_u64;
+        let mut zero_credits_consumed_receipt_refs = 0_u64;
         let mut nil_id_receipt_refs = 0_u64;
         let mut zeroed_payer_receipt_refs = 0_u64;
         let mut nil_memory_record_id_receipt_refs = 0_u64;
@@ -6138,6 +6139,18 @@ impl Server {
                         receipt.id
                     ),
                     repair: "review the receipt JSONL row and the writer that produced it; production receipt writes always stamp epoch_ms() at the time of record".into(),
+                });
+            }
+            if receipt.credits_consumed == 0 {
+                zero_credits_consumed_receipt_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_credits_consumed_zero".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt {} has credits_consumed = 0; production receipt writes price memory writes via memory_write_credits which has a .max(1) floor and intent dispatches via the constant intent_dispatch_credits = 1",
+                        receipt.id
+                    ),
+                    repair: "review the receipt JSONL row and the writer that produced it; production receipt writes always source credits_consumed from covenant_settlement::memory_write_credits (((bytes as u64).div_ceil(1024)).max(1)) or covenant_settlement::INTENT_DISPATCH_CREDITS (the constant 1), so a zero value collapses the per-payer burn surface that the CLI receipt summary, on-chain bridge batch totals, and /chain/receipt-batches HTTP endpoint join on for credit accounting".into(),
                 });
             }
             if receipt.id.is_nil() {
@@ -6302,6 +6315,7 @@ impl Server {
             + chain_partial_refs
             + tx_sig_onchain_sig_diverged_refs
             + zero_settled_at_refs
+            + zero_credits_consumed_receipt_refs
             + nil_id_receipt_refs
             + zeroed_payer_receipt_refs
             + nil_memory_record_id_receipt_refs
@@ -6316,6 +6330,7 @@ impl Server {
                 && chain_partial_refs == 0
                 && tx_sig_onchain_sig_diverged_refs == 0
                 && zero_settled_at_refs == 0
+                && zero_credits_consumed_receipt_refs == 0
                 && nil_id_receipt_refs == 0
                 && zeroed_payer_receipt_refs == 0
                 && nil_memory_record_id_receipt_refs == 0
@@ -6325,7 +6340,7 @@ impl Server {
                 && empty_tx_sig_receipt_refs == 0
                 && empty_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
             ),
         });
 
@@ -12306,6 +12321,74 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zero-settled-at receipt"),
                     "check message should count zero-settled-at receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_credits_consumed_zero_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 0,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_credits_consumed_zero"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_credits_consumed_zero: {drift:?}"));
+                assert!(
+                    row.message.contains("credits_consumed = 0"),
+                    "drift message should name the zero invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("memory_write_credits"),
+                    "repair hint should name memory_write_credits: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 zero-credits-consumed receipt"),
+                    "check message should count zero-credits-consumed receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

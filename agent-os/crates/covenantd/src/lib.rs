@@ -5937,6 +5937,7 @@ impl Server {
         // retrieval routing the daemon relies on.
         let mut empty_text_refs = 0_u64;
         let mut nan_embedding_refs = 0_u64;
+        let mut infinite_embedding_refs = 0_u64;
         let mut nil_id_memory_refs = 0_u64;
         let mut zero_created_at_memory_refs = 0_u64;
         let mut zeroed_owner_memory_refs = 0_u64;
@@ -5958,6 +5959,18 @@ impl Server {
                     id: Some(record.id.to_string()),
                     message: format!(
                         "memory record {} embedding contains NaN values",
+                        record.id
+                    ),
+                    repair: "the embedding is unusable for cosine ranking; safe removals go through an explicit delete_record repair command".into(),
+                });
+            }
+            if record.embedding.iter().any(|v| v.is_infinite()) {
+                infinite_embedding_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_record_embedding_infinite".into(),
+                    id: Some(record.id.to_string()),
+                    message: format!(
+                        "memory record {} embedding contains infinite values",
                         record.id
                     ),
                     repair: "the embedding is unusable for cosine ranking; safe removals go through an explicit delete_record repair command".into(),
@@ -6022,6 +6035,7 @@ impl Server {
         }
         orphans_total += empty_text_refs
             + nan_embedding_refs
+            + infinite_embedding_refs
             + nil_id_memory_refs
             + zero_created_at_memory_refs
             + zeroed_owner_memory_refs
@@ -6030,12 +6044,13 @@ impl Server {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
                 && nan_embedding_refs == 0
+                && infinite_embedding_refs == 0
                 && nil_id_memory_refs == 0
                 && zero_created_at_memory_refs == 0
                 && zeroed_owner_memory_refs == 0
                 && metadata_non_object_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s)"
             ),
         });
 
@@ -11289,6 +11304,68 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 NaN-embedding record"),
                     "check message should count NaN-embedding records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_embedding_infinite_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let memory_id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "infinite-embedding fixture".into(),
+                embedding: vec![1.0, f32::INFINITY, 0.5],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_embedding_infinite"
+                            && item.id.as_deref() == Some(&memory_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_embedding_infinite: {drift:?}")
+                    });
+                assert!(
+                    row.repair.contains("delete_record"),
+                    "repair hint should name delete_record: {}",
+                    row.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| item.kind == "memory_nan_embedding"
+                        && item.id.as_deref() == Some(&memory_id.to_string())),
+                    "infinite-embedding must not double-report as memory_nan_embedding: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 infinite-embedding record"),
+                    "check message should count infinite-embedding records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

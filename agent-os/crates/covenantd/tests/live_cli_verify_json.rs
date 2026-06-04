@@ -1139,6 +1139,110 @@ async fn live_cli_verify_json_reports_memory_record_parent_nil_drift() {
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, rewrites a memory record's embedding to contain f32::INFINITY, and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_memory_record_embedding_infinite_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+
+    run_cli(
+        &cli_exe,
+        home.path(),
+        &["capabilities", "grant", "memory.write"],
+    )
+    .await;
+    let intent_stdout = run_cli(
+        &cli_exe,
+        home.path(),
+        &["intent", "--json", "verify infinite-embedding fixture"],
+    )
+    .await;
+    let intent: Value =
+        serde_json::from_str(intent_stdout.trim()).expect("intent --json must be JSON");
+    let memory_id: Uuid = intent["intent_id"]
+        .as_str()
+        .expect("intent_id")
+        .parse()
+        .expect("intent_id must be uuid");
+
+    let _ = child.kill().await;
+
+    let store = SqliteStore::open(&home.path().join("memory.db")).expect("open memory db");
+    let mut record = store
+        .get(memory_id)
+        .await
+        .expect("load memory")
+        .expect("memory record exists");
+    record.embedding = vec![1.0, f32::INFINITY, 0.5];
+    store.put(record).await.expect("inject infinite-embedding");
+    let reread = store
+        .get(memory_id)
+        .await
+        .expect("reload memory")
+        .expect("memory record persists");
+    assert!(
+        reread.embedding.iter().any(|v| v.is_infinite()),
+        "SqliteStore must persist infinite-embedding through put; otherwise the live coverage is meaningless: embedding={:?}",
+        reread.embedding
+    );
+    drop(store);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when infinite-embedding drift exists: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let infinite = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("memory_record_embedding_infinite")
+                && item["id"].as_str() == Some(&memory_id.to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("expected memory_record_embedding_infinite drift for {memory_id}: {drift:?}")
+        });
+    assert!(
+        infinite["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("delete_record")),
+        "infinite-embedding drift repair string should name delete_record: {infinite:?}"
+    );
+    assert!(
+        !drift["drift"].as_array().unwrap().iter().any(|item| {
+            item["kind"].as_str() == Some("memory_nan_embedding")
+                && item["id"].as_str() == Some(&memory_id.to_string())
+        }),
+        "infinite-embedding must not double-report as memory_nan_embedding: {drift:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, rewrites a memory record's metadata to a JSON array, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_memory_record_metadata_non_object_drift() {
     let home = tempfile::tempdir().expect("tempdir");

@@ -6017,6 +6017,7 @@ impl Server {
         let mut nil_id_receipt_refs = 0_u64;
         let mut zeroed_payer_receipt_refs = 0_u64;
         let mut nil_memory_record_id_receipt_refs = 0_u64;
+        let mut empty_chain_receipt_refs = 0_u64;
         for receipt in &receipts {
             if receipt.settled_at == 0 {
                 zero_settled_at_refs += 1;
@@ -6117,6 +6118,20 @@ impl Server {
                     repair: "review the receipt JSONL row and the writer that produced it; production receipt writes pass memory_record_id: None for resource paths with no associated memory record, or Some(memory_id) where memory_id is allocated via Uuid::new_v4() at the matching memory write, so Some(Uuid::nil()) is structural evidence of a serde regression (Uuid::default() is nil), an import tool that constructed receipts with a placeholder Uuid, or a JSONL edit that detached the row from the receipt ↔ memory record correlation".into(),
                 });
             }
+            if let Some(chain) = receipt.chain.as_deref() {
+                if chain.is_empty() {
+                    empty_chain_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_chain_empty".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has chain = Some(\"\"); the sole production annotate_receipt call site in covenantd builds ChainConfirmation with chain: \"solana\".to_string() at lib.rs:5060, so no reachable production arm sets receipt.chain to Some(\"\")",
+                            receipt.id
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose chain field is the hardcoded literal \"solana\" set at flush_receipts in covenantd lib.rs:5060, so Some(\"\") is out-of-band evidence of a serde regression that defaulted Option<String> to Some(String::new()) at hydration, an import tool that wrote a placeholder confirmation, or a JSONL edit that anonymized the chain attribution while leaving the bundle 4-of-4 set (which would otherwise bypass the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count)".into(),
+                    });
+                }
+            }
         }
         orphans_total += confirmed_without_chain_refs
             + chain_partial_refs
@@ -6124,7 +6139,8 @@ impl Server {
             + zero_settled_at_refs
             + nil_id_receipt_refs
             + zeroed_payer_receipt_refs
-            + nil_memory_record_id_receipt_refs;
+            + nil_memory_record_id_receipt_refs
+            + empty_chain_receipt_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
@@ -6133,9 +6149,10 @@ impl Server {
                 && zero_settled_at_refs == 0
                 && nil_id_receipt_refs == 0
                 && zeroed_payer_receipt_refs == 0
-                && nil_memory_record_id_receipt_refs == 0,
+                && nil_memory_record_id_receipt_refs == 0
+                && empty_chain_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s)"
             ),
         });
 
@@ -11063,6 +11080,81 @@ required = {caps:?}
                         .message
                         .contains("1 tx-sig/onchain-sig-diverged receipt"),
                     "check message should count diverged receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_chain_empty_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some(String::new()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("b".repeat(64)),
+                merkle_root: Some("m".repeat(64)),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_chain_empty"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_chain_empty: {drift:?}"));
+                assert!(
+                    row.message.contains("chain = Some(\"\")"),
+                    "drift message should name the Some(empty) invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("annotate_receipt")
+                        && row.repair.contains("\"solana\"")
+                        && row.repair.contains("receipt_chain_partial"),
+                    "repair hint should name annotate_receipt, the hardcoded \"solana\" literal, and the receipt_chain_partial bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_chain_partial"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "all-four-Some bundle must not double-report under receipt_chain_partial: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 empty-chain receipt"),
+                    "check message should count empty-chain receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

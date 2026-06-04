@@ -193,15 +193,20 @@ async fn main() -> Result<()> {
         Arc::new(covenant_mcp::native::EchoTool),
         Arc::new(covenant_mcp::native::ClockTool),
     ];
-    if let Some((client, cfg)) = acedata_from_env() {
-        let added = covenant_acedata::acedata_tools(Arc::new(client), &cfg);
-        if added.is_empty() {
-            tracing::warn!("acedata enabled but allowlist registered no tools");
-        } else {
-            info!(count = added.len(), base_url = %cfg.base_url, "acedata provider enabled");
-            tools_vec.extend(added);
+    let acedata_cfg = match acedata_from_env() {
+        Some((client, cfg)) => {
+            let added = covenant_acedata::acedata_tools(Arc::new(client), &cfg);
+            if added.is_empty() {
+                tracing::warn!("acedata enabled but allowlist registered no tools");
+                None
+            } else {
+                info!(count = added.len(), base_url = %cfg.base_url, "acedata provider enabled");
+                tools_vec.extend(added);
+                Some(cfg)
+            }
         }
-    }
+        None => None,
+    };
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -361,6 +366,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        None => server,
+    };
+
+    let server = match acedata_cfg {
+        Some(cfg) => server.with_acedata(cfg),
         None => server,
     };
 

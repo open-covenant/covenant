@@ -431,6 +431,25 @@ pub enum AuditKind {
         amount: String,
         receipt_id: Uuid,
     },
+    /// A generative call through the AceData provider completed. Records
+    /// the provenance of one image / music / search result against the
+    /// calling agent: the model, a SHA-256 of the prompt, a SHA-256 over
+    /// the canonical response, the asset references, and AceData's task
+    /// id. This is the row a verifiable-generation certificate is built
+    /// from — it rolls into the same hash-chained log (and optional
+    /// on-chain anchor) as every other event. `agent_id` is `tool:<name>`,
+    /// matching the [`AuditKind::CapabilityScopeRejected`] convention so
+    /// the operator's per-tool audit view groups generations with their
+    /// capability checks.
+    AceDataGeneration {
+        agent_id: String,
+        tool: String,
+        model: String,
+        prompt_sha256: String,
+        output_sha256: String,
+        assets: Vec<String>,
+        task_id: Option<String>,
+    },
     /// Logged when the operator runs the settlement receipt backfill. A
     /// dry run records `row_count` from the plan with `dry_run = true`
     /// and no `rollback_path`; an apply records the rewritten

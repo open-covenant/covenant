@@ -27,7 +27,7 @@ pub mod tools;
 pub use client::AceDataClient;
 pub use config::AceDataConfig;
 pub use provenance::Provenance;
-pub use tools::{acedata_tools, PROVIDER};
+pub use tools::{acedata_tools, IMAGE_TOOL, MUSIC_TOOL, PROVIDER, SEARCH_TOOL};
 
 /// Errors surfaced by the AceData client.
 #[derive(Debug, thiserror::Error)]

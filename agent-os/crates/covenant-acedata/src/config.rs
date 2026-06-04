@@ -7,6 +7,7 @@
 //! written to disk.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Production API host.
 pub const BASE_URL: &str = "https://api.acedata.cloud";
@@ -66,6 +67,26 @@ impl AceDataConfig {
             Some(list) => list.iter().any(|t| t == tool),
         }
     }
+
+    /// The model a call to `tool` resolves to, given its arguments: the
+    /// explicit `model` argument, else the configured default for that
+    /// tool, else empty for tools that select no model (search). The
+    /// daemon reads this to gate a call against a capability's model
+    /// allowlist before the request leaves the host.
+    pub fn model_for(&self, tool: &str, args: &Value) -> String {
+        if let Some(m) = args.get("model").and_then(Value::as_str) {
+            if !m.is_empty() {
+                return m.to_string();
+            }
+        }
+        if tool == crate::tools::IMAGE_TOOL {
+            self.image_model.clone()
+        } else if tool == crate::tools::MUSIC_TOOL {
+            self.music_model.clone()
+        } else {
+            String::new()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -90,6 +111,27 @@ mod tests {
         assert!(!c.allows("acedata.image.generate"));
         c.allow = Some(vec![]);
         assert!(!c.allows("acedata.search"));
+    }
+
+    #[test]
+    fn model_for_uses_arg_then_default_then_empty() {
+        let c = AceDataConfig::default();
+        // explicit arg wins
+        assert_eq!(
+            c.model_for("acedata.image.generate", &serde_json::json!({ "model": "flux-dev" })),
+            "flux-dev"
+        );
+        // falls back to the configured default per tool
+        assert_eq!(
+            c.model_for("acedata.image.generate", &serde_json::json!({})),
+            DEFAULT_IMAGE_MODEL
+        );
+        assert_eq!(
+            c.model_for("acedata.music.generate", &serde_json::json!({})),
+            DEFAULT_MUSIC_MODEL
+        );
+        // search selects no model
+        assert_eq!(c.model_for("acedata.search", &serde_json::json!({})), "");
     }
 
     #[test]

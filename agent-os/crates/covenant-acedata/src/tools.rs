@@ -22,9 +22,12 @@ use crate::provenance::Provenance;
 
 pub use crate::provenance::PROVIDER;
 
-const IMAGE_TOOL: &str = "acedata.image.generate";
-const MUSIC_TOOL: &str = "acedata.music.generate";
-const SEARCH_TOOL: &str = "acedata.search";
+/// Tool name for image generation (Flux).
+pub const IMAGE_TOOL: &str = "acedata.image.generate";
+/// Tool name for music generation (Suno).
+pub const MUSIC_TOOL: &str = "acedata.music.generate";
+/// Tool name for Google search (SERP).
+pub const SEARCH_TOOL: &str = "acedata.search";
 
 /// Build the AceData tool set permitted by `cfg.allow`, sharing one
 /// client. Returns an empty vec when the config is disabled.

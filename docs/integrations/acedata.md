@@ -1,6 +1,6 @@
 # AceData integration — Attested Generative Capabilities
 
-Status: phase 1 shipped (provider crate + tools + provenance)
+Status: phases 1–3 shipped (provider + provenance + governance + on-chain-by-construction)
 Branch: `feat/acedatacloud-integration`
 Crate: `agent-os/crates/covenant-acedata`
 
@@ -119,13 +119,22 @@ enforcement path was needed for phase 1.
    search), per-call provenance records, env-gated daemon wiring, unit tests + a live smoke
    example. Governed via the existing tool-registry capability path; audited via the existing
    tool-call trail. No chain.
-2. **Provenance surfaced + tightened governance:** a dedicated `AuditKind::AceDataGeneration`
-   event and a `acedata_generate_scope_allows` capability predicate (model allowlist +
-   per-session budget cap), deferred out of phase 1 to keep the first change off the shared
-   audit/permissions crates; settlement receipts + a "Generations / Provenance" panel in
-   `covenant-web` (model, cost, content hash per generation).
-3. **On-chain provenance certificate:** anchor audit/provenance roots via the SAP bridge; optional
-   x402-via-xona Solana pay-per-call. Explore alignment with AceData's OOBE/Synapse Solana work.
+2. **Provenance surfaced + tightened governance — shipped.** A dedicated
+   `AuditKind::AceDataGeneration` event (provenance becomes a first-class, hash-chained row, not a
+   generic tool-call), a `acedata_generate_scope_allows` capability predicate (a grant may pin a
+   `{"models": [...]}` allowlist), enforced by a per-call model gate in an `acedata.*` daemon
+   dispatch branch that also records a `ResourceKind::Tool` settlement receipt — all bound to the
+   calling agent. Plus a "Generations" panel in `covenant-web` (`/generations`) that reads the
+   audit feed and shows model, prompt/output hashes, assets, and task id per generation. Per-call
+   cost in the receipt is `0` until AceData returns cost metadata (a partner ask).
+3. **On-chain provenance certificate — achieved by construction.** The SAP bridge already anchors
+   the *whole* audit-log Merkle root on-chain (`covenant-sap-bridge` `publish_audit_root`, fed by
+   the daemon's `verify_integrity` root). Because every generation is an `AceDataGeneration` event
+   *in* that log, its provenance is included under the anchored root the moment the SAP bridge is
+   enabled (`COVENANT_SAP_ENABLED=1`) — no AceData-specific on-chain code. A verifiable-generation
+   certificate is therefore: the `AceDataGeneration` row + the audit integrity proof + the SAP
+   on-chain root that covers it. Remaining optional work: a per-generation Merkle *inclusion* proof
+   export, and x402-via-xona Solana pay-per-call.
 4. **North star (optional):** attested AI-media *resale* — Covenant already models resale
    descriptors; an agent-generated asset becomes a verifiably-sourced, tradeable artifact.
 

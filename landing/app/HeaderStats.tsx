@@ -39,7 +39,7 @@ function Cell({
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-1 text-[12px] tabular-nums text-white no-underline hover:text-[#7f9f78] hover:no-underline"
+          className="mt-1 text-[12px] tabular-nums text-[#7f9f78] no-underline hover:text-white hover:no-underline"
         >
           {value}
         </a>
@@ -85,7 +85,11 @@ export function HeaderStats() {
 
   return (
     <div className="flex items-center gap-4">
-      <Cell label="commits" value={num(s.commits)} />
+      <Cell
+        label="commits"
+        value={num(s.commits)}
+        href="https://github.com/open-covenant/covenant/commits/main"
+      />
       {s.tests && <Cell label="tests" value={s.tests} />}
       {s.live && <Cell label="live" value={s.live} />}
       {s.crates && <Cell label="crates" value={s.crates} />}

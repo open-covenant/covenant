@@ -1313,6 +1313,105 @@ async fn live_cli_verify_json_reports_confirmed_without_chain_drift() {
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, appends an all-four-Some receipt with chain=Some(\"\"), and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_receipt_chain_empty_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let receipts_dir = home.path().join("receipts");
+    std::fs::create_dir_all(&receipts_dir).expect("create receipts dir");
+    let receipt_id = Uuid::new_v4();
+    let empty_chain = SettlementReceipt {
+        id: receipt_id,
+        payer: AgentId::new("user@local", [0u8; 32]),
+        resource: ResourceKind::Compute,
+        memory_record_id: None,
+        credits_consumed: 1,
+        settled_at: 1_000,
+        chain: Some(String::new()),
+        cluster: Some("devnet".to_string()),
+        batch_id: Some("b".repeat(64)),
+        merkle_root: Some("m".repeat(64)),
+        tx_sig: None,
+        slot: None,
+        confirmed_at: Some(2_000),
+        onchain_sig: None,
+    };
+    let receipts_path = receipts_dir.join("working.jsonl");
+    use std::io::Write as _;
+    let mut receipts = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&receipts_path)
+        .expect("open receipts/working.jsonl for append");
+    writeln!(receipts, "{}", serde_json::to_string(&empty_chain).unwrap())
+        .expect("append empty-chain receipt");
+    drop(receipts);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when receipt has chain=Some(\"\"): status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("receipt_chain_empty")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("expected receipt_chain_empty drift for {receipt_id}: {drift:?}")
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("chain = Some(\"\")"),
+        "drift message should name the Some(empty) invariant: {message:?}"
+    );
+    assert!(
+        row["repair"].as_str().is_some_and(|repair| repair
+            .contains("annotate_receipt")
+            && repair.contains("\"solana\"")
+            && repair.contains("receipt_chain_partial")),
+        "empty-chain drift repair string should name annotate_receipt, the hardcoded \"solana\" literal, and the receipt_chain_partial bypass: {row:?}"
+    );
+    assert!(
+        !drift["drift"].as_array().unwrap().iter().any(|item| {
+            item["kind"].as_str() == Some("receipt_chain_partial")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        }),
+        "all-four-Some bundle must not double-report under receipt_chain_partial: {drift:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, appends a partial-chain-bundle receipt, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_chain_partial_drift() {
     let home = tempfile::tempdir().expect("tempdir");

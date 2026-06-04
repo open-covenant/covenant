@@ -519,6 +519,13 @@ pub enum Request {
     RevokeCapability {
         signature_b58: String,
     },
+    /// Sign a domain-separated attestation message with the daemon identity key,
+    /// for device pairing (proves the daemon's ed25519 identity to a remote peer).
+    /// Gated by the `identity.attest` capability + a freshness window.
+    SignAttestation {
+        message_b58: String,
+        ts: u64,
+    },
     Verify {
         #[serde(default = "default_verify_window")]
         window: usize,
@@ -835,6 +842,11 @@ pub enum Response {
     CapabilityRevoked {
         signature_b58: String,
         removed: bool,
+    },
+    IdentityAttestation {
+        signature_b58: String,
+        pubkey_b58: String,
+        ts: u64,
     },
     IgnoreReport {
         ignored: bool,

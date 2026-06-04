@@ -1834,6 +1834,9 @@ impl Server {
             Request::RevokeCapability { signature_b58 } => {
                 self.revoke_capability(signature_b58, peer).await
             }
+            Request::SignAttestation { message_b58, ts } => {
+                self.sign_attestation(message_b58, ts, peer).await
+            }
             Request::SearchMemory {
                 query,
                 tier,
@@ -4359,6 +4362,58 @@ impl Server {
             signature_b58,
             subject_display: peer.display.clone(),
             action,
+        }
+    }
+
+    /// Signs a domain-separated attestation message with the daemon identity key,
+    /// gated by the `identity.attest` capability and a 120s freshness window. The
+    /// domain prefix ensures an attestation signature can never be replayed as a
+    /// capability signature — the same identity key signs both.
+    async fn sign_attestation(&self, message_b58: String, ts: u64, peer: &AgentId) -> Response {
+        const ATTEST_DOMAIN: &[u8] = b"covenant.identity.attest.v1\n";
+        let check = self
+            .check_capabilities(
+                "identity:attest".to_string(),
+                vec!["identity.attest".to_string()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "identity attestation requires capability \"identity.attest\". \
+                          Grant it with `covenant capabilities grant identity.attest`."
+                    .to_string(),
+            };
+        }
+        let skew = epoch_ms().abs_diff(ts);
+        if skew > 120_000 {
+            return Response::Error {
+                message: format!(
+                    "identity attestation timestamp outside freshness window ({skew}ms > 120000ms)"
+                ),
+            };
+        }
+        let message = match bs58::decode(message_b58.as_bytes()).into_vec() {
+            Ok(m) if (1..=4096).contains(&m.len()) => m,
+            Ok(_) => {
+                return Response::Error {
+                    message: "identity attestation message must decode to 1..=4096 bytes"
+                        .to_string(),
+                }
+            }
+            Err(e) => {
+                return Response::Error {
+                    message: format!("identity attestation message_b58 invalid: {e}"),
+                }
+            }
+        };
+        let mut signed = ATTEST_DOMAIN.to_vec();
+        signed.extend_from_slice(&message);
+        let sig = self.identity.sign(&signed);
+        Response::IdentityAttestation {
+            signature_b58: bs58::encode(sig.to_bytes()).into_string(),
+            pubkey_b58: bs58::encode(self.identity.agent_id().pubkey).into_string(),
+            ts,
         }
     }
 

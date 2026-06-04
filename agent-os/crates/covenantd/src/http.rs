@@ -137,6 +137,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/capabilities/recent", get(capabilities_recent))
         .route("/capabilities/grant", post(grant_capability))
         .route("/capabilities/revoke", post(revoke_capability))
+        .route("/identity/sign", post(identity_sign))
         .route("/tools", get(list_tools))
         .route("/tools/call", post(call_tool))
         .route("/audit/recent", get(audit_recent))
@@ -599,6 +600,30 @@ async fn revoke_capability(
             .respond(
                 Request::RevokeCapability {
                     signature_b58: b.signature_b58,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+#[derive(Deserialize)]
+struct SignBody {
+    message_b58: String,
+    ts: u64,
+}
+
+async fn identity_sign(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<SignBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::SignAttestation {
+                    message_b58: b.message_b58,
+                    ts: b.ts,
                 },
                 &peer,
             )

@@ -1727,6 +1727,108 @@ async fn live_cli_verify_json_reports_receipt_chain_empty_drift() {
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, appends an all-four-Some receipt with confirmed_at=Some(0), and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_receipt_confirmed_at_zero_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let receipts_dir = home.path().join("receipts");
+    std::fs::create_dir_all(&receipts_dir).expect("create receipts dir");
+    let receipt_id = Uuid::new_v4();
+    let zero_confirmed_at = SettlementReceipt {
+        id: receipt_id,
+        payer: AgentId::new("user@local", [1u8; 32]),
+        resource: ResourceKind::Compute,
+        memory_record_id: None,
+        credits_consumed: 1,
+        settled_at: 1_000,
+        chain: Some("solana".to_string()),
+        cluster: Some("devnet".to_string()),
+        batch_id: Some("b".repeat(64)),
+        merkle_root: Some("m".repeat(64)),
+        tx_sig: Some("t".repeat(88)),
+        slot: Some(42),
+        confirmed_at: Some(0),
+        onchain_sig: Some("t".repeat(88)),
+    };
+    let receipts_path = receipts_dir.join("working.jsonl");
+    use std::io::Write as _;
+    let mut receipts = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&receipts_path)
+        .expect("open receipts/working.jsonl for append");
+    writeln!(
+        receipts,
+        "{}",
+        serde_json::to_string(&zero_confirmed_at).unwrap()
+    )
+    .expect("append zero-confirmed-at receipt");
+    drop(receipts);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when receipt has confirmed_at=Some(0): status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("receipt_confirmed_at_zero")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("expected receipt_confirmed_at_zero drift for {receipt_id}: {drift:?}")
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("confirmed_at = Some(0)"),
+        "drift message should name the Some(0) invariant: {message:?}"
+    );
+    assert!(
+        row["repair"]
+            .as_str()
+            .is_some_and(|repair| repair.contains("annotate_receipt")),
+        "zero-confirmed-at drift repair string should name annotate_receipt: {row:?}"
+    );
+    assert!(
+        !drift["drift"].as_array().unwrap().iter().any(|item| {
+            item["kind"].as_str() == Some("receipt_confirmed_without_chain")
+                && item["id"].as_str() == Some(&receipt_id.to_string())
+        }),
+        "all-four-Some bundle must not double-report as receipt_confirmed_without_chain: {drift:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, appends a receipt with credits_consumed=0, and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_receipt_credits_consumed_zero_drift() {
     let home = tempfile::tempdir().expect("tempdir");

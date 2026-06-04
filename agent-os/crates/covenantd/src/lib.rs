@@ -6019,6 +6019,7 @@ impl Server {
         let mut nil_memory_record_id_receipt_refs = 0_u64;
         let mut empty_chain_receipt_refs = 0_u64;
         let mut empty_batch_id_receipt_refs = 0_u64;
+        let mut empty_merkle_root_receipt_refs = 0_u64;
         for receipt in &receipts {
             if receipt.settled_at == 0 {
                 zero_settled_at_refs += 1;
@@ -6147,6 +6148,20 @@ impl Server {
                     });
                 }
             }
+            if let Some(merkle_root) = receipt.merkle_root.as_deref() {
+                if merkle_root.is_empty() {
+                    empty_merkle_root_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_merkle_root_empty".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has merkle_root = Some(\"\"); production receipt confirmation derives merkle_root from hex32(level[0]) at build_receipt_batch in covenant-settlement (where level[0] is the SHA-256 root of the receipt-hash merkle tree), which produces a 64-character hex string, so no reachable production arm sets receipt.merkle_root to Some(\"\")",
+                            receipt.id
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose merkle_root field is sourced from build_receipt_batch in covenant-settlement, which sets merkle_root = hex32(level[0]) — the deterministic 64-character hex SHA-256 root of the receipt-hash merkle tree — so Some(\"\") is out-of-band evidence of a serde regression that defaulted Option<String> to Some(String::new()) at hydration, an import tool that wrote a placeholder confirmation, or a JSONL edit that anonymized the cryptographic anchor binding the receipt to its on-chain batch commitment, while leaving the bundle 4-of-4 set (bypassing the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count)".into(),
+                    });
+                }
+            }
         }
         orphans_total += confirmed_without_chain_refs
             + chain_partial_refs
@@ -6156,7 +6171,8 @@ impl Server {
             + zeroed_payer_receipt_refs
             + nil_memory_record_id_receipt_refs
             + empty_chain_receipt_refs
-            + empty_batch_id_receipt_refs;
+            + empty_batch_id_receipt_refs
+            + empty_merkle_root_receipt_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
@@ -6167,9 +6183,10 @@ impl Server {
                 && zeroed_payer_receipt_refs == 0
                 && nil_memory_record_id_receipt_refs == 0
                 && empty_chain_receipt_refs == 0
-                && empty_batch_id_receipt_refs == 0,
+                && empty_batch_id_receipt_refs == 0
+                && empty_merkle_root_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s)"
             ),
         });
 
@@ -11247,6 +11264,81 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 empty-batch-id receipt"),
                     "check message should count empty-batch-id receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_merkle_root_empty_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("b".repeat(64)),
+                merkle_root: Some(String::new()),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_merkle_root_empty"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_merkle_root_empty: {drift:?}"));
+                assert!(
+                    row.message.contains("merkle_root = Some(\"\")"),
+                    "drift message should name the Some(empty) invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("build_receipt_batch")
+                        && row.repair.contains("hex32(level[0])")
+                        && row.repair.contains("receipt_chain_partial"),
+                    "repair hint should name build_receipt_batch, hex32(level[0]), and the receipt_chain_partial bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_chain_partial"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "all-four-Some bundle must not double-report under receipt_chain_partial: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 empty-merkle-root receipt"),
+                    "check message should count empty-merkle-root receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

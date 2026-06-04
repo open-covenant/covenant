@@ -9337,6 +9337,102 @@ async fn live_cli_verify_json_reports_audit_budget_preempted_signal_sent_empty_d
 }
 
 #[tokio::test]
+#[ignore = "live: spawns covenantd, appends a BudgetPreempted audit event with signal_sent=\"SIGHUP\", and runs `covenant verify --json`"]
+async fn live_cli_verify_json_reports_audit_budget_preempted_signal_sent_not_recognized_drift() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let cli_exe = covenant_cli_bin();
+
+    let port = pick_free_port();
+    let mut child = spawn_daemon(home.path(), port).await;
+    wait_for_daemon(home.path(), &mut child).await;
+    let _ = child.kill().await;
+
+    let audit_dir = home.path().join("audit");
+    std::fs::create_dir_all(&audit_dir).expect("create audit dir");
+    let event_id = Uuid::new_v4();
+    let event = AuditEvent {
+        id: event_id,
+        timestamp_ms: 1_700_000_000_000,
+        issuer: AgentId::new("user@local", [1u8; 32]),
+        kind: AuditKind::BudgetPreempted {
+            agent_display: "card@local".into(),
+            intent_id: Uuid::new_v4(),
+            reason: "budget_overshoot".into(),
+            signal_sent: "SIGHUP".into(),
+            exit_code: None,
+        },
+    };
+    let audit_path = audit_dir.join("events.jsonl");
+    use std::io::Write as _;
+    let mut audit_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&audit_path)
+        .expect("open audit/events.jsonl for append");
+    writeln!(audit_file, "{}", serde_json::to_string(&event).unwrap())
+        .expect("append not-recognized-signal-sent BudgetPreempted event");
+    drop(audit_file);
+
+    let restart_port = pick_free_port();
+    let mut restarted = spawn_daemon(home.path(), restart_port).await;
+    wait_for_daemon(home.path(), &mut restarted).await;
+
+    let drift_output = run_cli_raw(
+        &cli_exe,
+        home.path(),
+        &["verify", "--json", "--window", "25"],
+    )
+    .await;
+    let drift_stdout = String::from_utf8_lossy(&drift_output.stdout).to_string();
+    let drift_stderr = String::from_utf8_lossy(&drift_output.stderr).to_string();
+    assert!(
+        !drift_output.status.success(),
+        "verify must exit non-zero when BudgetPreempted signal_sent is not in the recognized set: status={:?} stdout={drift_stdout:?} stderr={drift_stderr:?}",
+        drift_output.status
+    );
+    assert!(
+        drift_stderr.trim().is_empty(),
+        "verify --json must keep drift on stdout without stderr noise: {drift_stderr:?}"
+    );
+    let drift: Value =
+        serde_json::from_str(drift_stdout.trim()).expect("verify drift stdout must be JSON");
+
+    let event_id_str = event_id.to_string();
+    let row = drift["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .find(|item| {
+            item["kind"].as_str() == Some("audit_budget_preempted_signal_sent_not_recognized")
+                && item["id"].as_str() == Some(event_id_str.as_str())
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected audit_budget_preempted_signal_sent_not_recognized drift for {event_id_str}: {drift:?}"
+            )
+        });
+    let message = row["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("AuditKind::BudgetPreempted"),
+        "drift message should name the BudgetPreempted variant: {message:?}"
+    );
+    assert!(
+        message.contains("\"SIGHUP\""),
+        "drift message should name the non-recognized signal_sent value: {message:?}"
+    );
+    assert!(
+        row["repair"].as_str().is_some_and(|repair| repair
+            .contains("preempt_intent")
+            && repair.contains("PreemptOutcome")
+            && repair.contains("SIGTERM")
+            && repair.contains("SIGKILL")),
+        "not-recognized-signal-sent BudgetPreempted drift repair string should name preempt_intent, PreemptOutcome, SIGTERM, and SIGKILL: {row:?}"
+    );
+
+    let _ = restarted.kill().await;
+}
+
+#[tokio::test]
 #[ignore = "live: spawns covenantd, appends an IntentDispatched audit event with status=\"failed\", and runs `covenant verify --json`"]
 async fn live_cli_verify_json_reports_audit_intent_dispatched_status_not_ok_drift() {
     let home = tempfile::tempdir().expect("tempdir");

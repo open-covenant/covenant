@@ -6462,6 +6462,7 @@ impl Server {
         let mut empty_a2a_sender_mismatch_claimed_sender_display_audit_refs = 0_u64;
         let mut empty_a2a_result_rejected_reason_audit_refs = 0_u64;
         let mut empty_a2a_repair_applied_action_audit_refs = 0_u64;
+        let mut not_recognized_a2a_repair_applied_action_audit_refs = 0_u64;
         let mut empty_a2a_repair_applied_reason_audit_refs = 0_u64;
         let mut nil_a2a_repair_applied_task_id_audit_refs = 0_u64;
         let mut nil_a2a_repair_applied_lease_id_audit_refs = 0_u64;
@@ -7263,6 +7264,17 @@ impl Server {
                         ),
                         repair: "review the audit JSONL row and the writer that produced it; production A2ARepairApplied audit writes always source action from one of three hardcoded dispatch literals (\"requeue\" / \"force_error\" via a2a_repair_action at the operator-initiated repair path, \"auto_requeue\" via retry_a2a_stale at the scheduler-initiated retry path), so an empty action detaches the repair row from the dispatch classification that distinguishes operator-initiated requeue/force_error mutations from scheduler-initiated auto_requeue activity, erasing the load-bearing source-path attribution the repair-history correlation chain leans on to triage repair churn".into(),
                     });
+                } else if !matches!(action.as_str(), "requeue" | "force_error" | "auto_requeue") {
+                    not_recognized_a2a_repair_applied_action_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_a2a_repair_applied_action_not_recognized".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::A2ARepairApplied with action = {action:?}; the two production A2ARepairApplied write-sites in covenantd source action exclusively from hardcoded literals: repair_a2a_task (lib.rs:2329) takes action via a2a_repair_action() which is an exhaustive match returning the &'static str literals \"requeue\" for A2ARepairCommand::Requeue and \"force_error\" for A2ARepairCommand::ForceError (lib.rs:578-583), and retry_a2a_stale (lib.rs:2581) assigns the hardcoded literal \"auto_requeue\" via .into(); no other reachable production arm ever assigns any value outside this closed set",
+                            event.id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; production A2ARepairApplied audit writes always source action from one of three hardcoded dispatch literals (\"requeue\" / \"force_error\" via a2a_repair_action at the operator-initiated repair path lib.rs:2329, \"auto_requeue\" via retry_a2a_stale at the scheduler-initiated retry path lib.rs:2581), so any non-recognized non-empty action detaches the repair row from the dispatch classification that distinguishes operator-initiated requeue/force_error mutations from scheduler-initiated auto_requeue activity, erasing the load-bearing source-path attribution the repair-history correlation chain leans on to triage repair churn".into(),
+                    });
                 }
                 if reason.is_empty() {
                     empty_a2a_repair_applied_reason_audit_refs += 1;
@@ -7817,6 +7829,7 @@ impl Server {
             + empty_a2a_sender_mismatch_claimed_sender_display_audit_refs
             + empty_a2a_result_rejected_reason_audit_refs
             + empty_a2a_repair_applied_action_audit_refs
+            + not_recognized_a2a_repair_applied_action_audit_refs
             + empty_a2a_repair_applied_reason_audit_refs
             + empty_a2a_recipient_rejected_action_audit_refs
             + empty_a2a_recipient_rejected_sender_display_audit_refs
@@ -7905,6 +7918,7 @@ impl Server {
                 && empty_a2a_sender_mismatch_claimed_sender_display_audit_refs == 0
                 && empty_a2a_result_rejected_reason_audit_refs == 0
                 && empty_a2a_repair_applied_action_audit_refs == 0
+                && not_recognized_a2a_repair_applied_action_audit_refs == 0
                 && empty_a2a_repair_applied_reason_audit_refs == 0
                 && empty_a2a_recipient_rejected_action_audit_refs == 0
                 && empty_a2a_recipient_rejected_sender_display_audit_refs == 0
@@ -7945,7 +7959,7 @@ impl Server {
                 && empty_capability_check_required_actions_audit_refs == 0
                 && empty_intent_dispatched_matched_agent_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_granted_subject_display_audit_refs} empty-subject-display CapabilityGranted audit event(s), {empty_cap_granted_granted_by_display_audit_refs} empty-granted-by-display CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {zero_budget_exhausted_requested_audit_refs} zero-requested BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {zero_budget_unseeded_requested_audit_refs} zero-requested BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {empty_peer_revoked_peer_display_audit_refs} empty-peer-display PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotation_rejected_peer_display_audit_refs} empty-peer-display OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_peer_display_audit_refs} empty-peer-display OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peers_list_rejected_peer_display_audit_refs} empty-peer-display OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_display_audit_refs} empty-peer-display OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_peer_display_audit_refs} empty-peer-display PeerSelfRevokeBlocked audit event(s), {empty_a2a_sender_mismatch_peer_display_audit_refs} empty-peer-display A2ASenderMismatch audit event(s), {empty_a2a_sender_mismatch_claimed_sender_display_audit_refs} empty-claimed-sender-display A2ASenderMismatch audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {empty_a2a_repair_applied_reason_audit_refs} empty-reason A2ARepairApplied audit event(s), {nil_a2a_repair_applied_task_id_audit_refs} nil-task-id A2ARepairApplied audit event(s), {nil_a2a_repair_applied_lease_id_audit_refs} nil-lease-id A2ARepairApplied audit event(s), {zero_a2a_repair_applied_attempt_audit_refs} zero-attempt A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_sender_display_audit_refs} empty-sender-display A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_recipient_display_audit_refs} empty-recipient-display A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s), {empty_capability_grant_rejected_subject_display_audit_refs} empty-subject-display CapabilityGrantRejected audit event(s), {empty_intent_ignored_matched_pattern_audit_refs} empty-matched-pattern IntentIgnored audit event(s), {empty_budget_preempted_signal_sent_audit_refs} empty-signal-sent BudgetPreempted audit event(s), {empty_budget_preempted_reason_audit_refs} empty-reason BudgetPreempted audit event(s), {empty_budget_preempted_agent_display_audit_refs} empty-agent-display BudgetPreempted audit event(s), {empty_budget_preempt_failed_reason_audit_refs} empty-reason BudgetPreemptFailed audit event(s), {empty_budget_preempt_failed_agent_display_audit_refs} empty-agent-display BudgetPreemptFailed audit event(s), {zero_budget_preempt_failed_errno_audit_refs} zero-errno BudgetPreemptFailed audit event(s), {empty_budget_unseeded_agent_display_audit_refs} empty-agent-display BudgetUnseeded audit event(s), {empty_budget_exhausted_agent_display_audit_refs} empty-agent-display BudgetExhausted audit event(s), {empty_intent_dispatched_status_audit_refs} empty-status IntentDispatched audit event(s), {not_ok_intent_dispatched_status_audit_refs} not-ok-status IntentDispatched audit event(s), {empty_memory_repair_applied_action_audit_refs} empty-action MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_mode_audit_refs} empty-mode MemoryCompactionApplied audit event(s), {empty_memory_repair_applied_mode_audit_refs} empty-mode MemoryRepairApplied audit event(s), {empty_memory_repair_applied_reason_audit_refs} empty-reason MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_reason_audit_refs} empty-reason MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_deleted_audit_refs} nil-deleted MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_stale_marked_audit_refs} nil-stale-marked MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_parents_detached_audit_refs} nil-parents-detached MemoryCompactionApplied audit event(s), {empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} empty-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {zero_a2a_auto_retry_scheduler_scan_skipped_by_reason_value_audit_refs} zero-skipped-by-reason-value A2AAutoRetrySchedulerScan audit event(s), {empty_a2a_auto_retry_scheduler_scan_error_audit_refs} empty-error A2AAutoRetrySchedulerScan audit event(s), {empty_memory_record_backfill_applied_savepoint_name_audit_refs} empty-savepoint-name MemoryRecordBackfillApplied audit event(s), {empty_settlement_receipt_backfill_applied_rollback_path_audit_refs} empty-rollback-path SettlementReceiptBackfillApplied audit event(s), {empty_a2a_repair_applied_duplicate_risk_audit_refs} empty-duplicate-risk A2ARepairApplied audit event(s), {empty_capability_revoke_rejected_reason_audit_refs} empty-reason CapabilityRevokeRejected audit event(s), {empty_capability_scope_rejected_agent_id_audit_refs} empty-agent-id CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_action_audit_refs} empty-action CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_reason_audit_refs} empty-reason CapabilityScopeRejected audit event(s), {empty_capability_check_agent_id_audit_refs} empty-agent-id CapabilityCheck audit event(s), {empty_capability_check_required_actions_audit_refs} empty-required-actions CapabilityCheck audit event(s), {empty_intent_dispatched_matched_agent_audit_refs} empty-matched-agent IntentDispatched audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_granted_subject_display_audit_refs} empty-subject-display CapabilityGranted audit event(s), {empty_cap_granted_granted_by_display_audit_refs} empty-granted-by-display CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {zero_budget_exhausted_requested_audit_refs} zero-requested BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {zero_budget_unseeded_requested_audit_refs} zero-requested BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {empty_peer_revoked_peer_display_audit_refs} empty-peer-display PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotation_rejected_peer_display_audit_refs} empty-peer-display OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_peer_display_audit_refs} empty-peer-display OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peers_list_rejected_peer_display_audit_refs} empty-peer-display OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_display_audit_refs} empty-peer-display OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_peer_display_audit_refs} empty-peer-display PeerSelfRevokeBlocked audit event(s), {empty_a2a_sender_mismatch_peer_display_audit_refs} empty-peer-display A2ASenderMismatch audit event(s), {empty_a2a_sender_mismatch_claimed_sender_display_audit_refs} empty-claimed-sender-display A2ASenderMismatch audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_action_audit_refs} not-recognized-action A2ARepairApplied audit event(s), {empty_a2a_repair_applied_reason_audit_refs} empty-reason A2ARepairApplied audit event(s), {nil_a2a_repair_applied_task_id_audit_refs} nil-task-id A2ARepairApplied audit event(s), {nil_a2a_repair_applied_lease_id_audit_refs} nil-lease-id A2ARepairApplied audit event(s), {zero_a2a_repair_applied_attempt_audit_refs} zero-attempt A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_sender_display_audit_refs} empty-sender-display A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_recipient_display_audit_refs} empty-recipient-display A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s), {empty_capability_grant_rejected_subject_display_audit_refs} empty-subject-display CapabilityGrantRejected audit event(s), {empty_intent_ignored_matched_pattern_audit_refs} empty-matched-pattern IntentIgnored audit event(s), {empty_budget_preempted_signal_sent_audit_refs} empty-signal-sent BudgetPreempted audit event(s), {empty_budget_preempted_reason_audit_refs} empty-reason BudgetPreempted audit event(s), {empty_budget_preempted_agent_display_audit_refs} empty-agent-display BudgetPreempted audit event(s), {empty_budget_preempt_failed_reason_audit_refs} empty-reason BudgetPreemptFailed audit event(s), {empty_budget_preempt_failed_agent_display_audit_refs} empty-agent-display BudgetPreemptFailed audit event(s), {zero_budget_preempt_failed_errno_audit_refs} zero-errno BudgetPreemptFailed audit event(s), {empty_budget_unseeded_agent_display_audit_refs} empty-agent-display BudgetUnseeded audit event(s), {empty_budget_exhausted_agent_display_audit_refs} empty-agent-display BudgetExhausted audit event(s), {empty_intent_dispatched_status_audit_refs} empty-status IntentDispatched audit event(s), {not_ok_intent_dispatched_status_audit_refs} not-ok-status IntentDispatched audit event(s), {empty_memory_repair_applied_action_audit_refs} empty-action MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_mode_audit_refs} empty-mode MemoryCompactionApplied audit event(s), {empty_memory_repair_applied_mode_audit_refs} empty-mode MemoryRepairApplied audit event(s), {empty_memory_repair_applied_reason_audit_refs} empty-reason MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_reason_audit_refs} empty-reason MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_deleted_audit_refs} nil-deleted MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_stale_marked_audit_refs} nil-stale-marked MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_parents_detached_audit_refs} nil-parents-detached MemoryCompactionApplied audit event(s), {empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} empty-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {zero_a2a_auto_retry_scheduler_scan_skipped_by_reason_value_audit_refs} zero-skipped-by-reason-value A2AAutoRetrySchedulerScan audit event(s), {empty_a2a_auto_retry_scheduler_scan_error_audit_refs} empty-error A2AAutoRetrySchedulerScan audit event(s), {empty_memory_record_backfill_applied_savepoint_name_audit_refs} empty-savepoint-name MemoryRecordBackfillApplied audit event(s), {empty_settlement_receipt_backfill_applied_rollback_path_audit_refs} empty-rollback-path SettlementReceiptBackfillApplied audit event(s), {empty_a2a_repair_applied_duplicate_risk_audit_refs} empty-duplicate-risk A2ARepairApplied audit event(s), {empty_capability_revoke_rejected_reason_audit_refs} empty-reason CapabilityRevokeRejected audit event(s), {empty_capability_scope_rejected_agent_id_audit_refs} empty-agent-id CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_action_audit_refs} empty-action CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_reason_audit_refs} empty-reason CapabilityScopeRejected audit event(s), {empty_capability_check_agent_id_audit_refs} empty-agent-id CapabilityCheck audit event(s), {empty_capability_check_required_actions_audit_refs} empty-required-actions CapabilityCheck audit event(s), {empty_intent_dispatched_matched_agent_audit_refs} empty-matched-agent IntentDispatched audit event(s)"
             ),
         });
 
@@ -18438,6 +18452,81 @@ required = {caps:?}
                         .message
                         .contains("1 empty-action A2ARepairApplied audit event"),
                     "check message should count empty-action A2ARepairApplied events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_a2a_repair_applied_action_not_recognized_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::A2ARepairApplied {
+                    task_id: Uuid::new_v4(),
+                    action: "rejected".into(),
+                    reason: "operator-initiated repair".into(),
+                    lease_id: Some(Uuid::new_v4()),
+                    duplicate_risk: Some("idempotent".into()),
+                    attempt: 1,
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_a2a_repair_applied_action_not_recognized"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_a2a_repair_applied_action_not_recognized: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::A2ARepairApplied"),
+                    "drift message should name the A2ARepairApplied variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("\"rejected\""),
+                    "drift message should name the non-recognized action value: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("a2a_repair_action")
+                        && row.repair.contains("retry_a2a_stale")
+                        && row.repair.contains("auto_requeue"),
+                    "repair hint should name the production write-site helpers and literals: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 not-recognized-action A2ARepairApplied audit event"),
+                    "check message should count not-recognized-action A2ARepairApplied events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

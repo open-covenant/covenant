@@ -6213,6 +6213,7 @@ impl Server {
         let mut empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs = 0_u64;
         let mut empty_peer_self_revoke_blocked_token_prefix_audit_refs = 0_u64;
+        let mut empty_a2a_result_rejected_reason_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6655,6 +6656,20 @@ impl Server {
                     });
                 }
             }
+            if let AuditKind::A2AResultRejected { reason, .. } = &event.kind {
+                if reason.is_empty() {
+                    empty_a2a_result_rejected_reason_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_a2a_result_rejected_reason_empty".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::A2AResultRejected with reason = \"\"; the only production A2AResultRejected write-site in covenantd is post_a2a_result's lookup_task_sender Ok(None) branch which always sets reason to the hardcoded literal \"unknown_task\", and no production code path ever sets the field to an empty string",
+                            event.id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production A2AResultRejected write-site sets reason to the hardcoded literal \"unknown_task\" at the post_a2a_result Ok(None) branch, so an empty reason detaches the row from the server-derived rejection cause that distinguishes upstream-compromise probes (no honest agent generates a nonexistent task_id) from generic capability-check rejections, erasing the load-bearing classification the upstream-compromise audit correlation chain joins on".into(),
+                    });
+                }
+            }
         }
         orphans_total += zero_timestamp_audit_refs
             + nil_id_audit_refs
@@ -6685,7 +6700,8 @@ impl Server {
             + empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs
             + empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs
             + empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs
-            + empty_peer_self_revoke_blocked_token_prefix_audit_refs;
+            + empty_peer_self_revoke_blocked_token_prefix_audit_refs
+            + empty_a2a_result_rejected_reason_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
             passed: zero_timestamp_audit_refs == 0
@@ -6717,9 +6733,10 @@ impl Server {
                 && empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs == 0
                 && empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs == 0
                 && empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs == 0
-                && empty_peer_self_revoke_blocked_token_prefix_audit_refs == 0,
+                && empty_peer_self_revoke_blocked_token_prefix_audit_refs == 0
+                && empty_a2a_result_rejected_reason_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s)"
             ),
         });
 
@@ -12620,6 +12637,75 @@ required = {caps:?}
                         .message
                         .contains("1 empty-token-prefix PeerSelfRevokeBlocked audit event"),
                     "check message should count empty-token-prefix PeerSelfRevokeBlocked events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_a2a_result_rejected_reason_empty_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::A2AResultRejected {
+                    task_id: Uuid::new_v4(),
+                    reason: String::new(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_a2a_result_rejected_reason_empty"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_a2a_result_rejected_reason_empty: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::A2AResultRejected"),
+                    "drift message should name the A2AResultRejected variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("reason = \"\""),
+                    "drift message should name the empty-reason invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("unknown_task") && row.repair.contains("post_a2a_result"),
+                    "repair hint should name unknown_task and post_a2a_result: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 empty-reason A2AResultRejected audit event"),
+                    "check message should count empty-reason A2AResultRejected events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

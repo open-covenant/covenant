@@ -31,23 +31,25 @@ function Cell({
   accent?: boolean;
   href?: string;
 }) {
-  const text = (
-    <span
-      className="mt-1 text-[12px] tabular-nums"
-      style={{ color: accent ? "#7f9f78" : "#e0e0e0" }}
-    >
-      {value}
-    </span>
-  );
   return (
     <div className="flex flex-col items-end leading-none">
       <span className="text-[9px] uppercase tracking-[0.18em] text-neutral-400">{label}</span>
       {href ? (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline">
-          {text}
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 text-[12px] tabular-nums text-white no-underline hover:text-[#7f9f78] hover:no-underline"
+        >
+          {value}
         </a>
       ) : (
-        text
+        <span
+          className="mt-1 text-[12px] tabular-nums"
+          style={{ color: accent ? "#7f9f78" : "#e0e0e0" }}
+        >
+          {value}
+        </span>
       )}
     </div>
   );
@@ -91,7 +93,6 @@ export function HeaderStats() {
       <Cell
         label="committed"
         value={s.head ?? "—"}
-        accent
         href={s.head ? `https://github.com/open-covenant/covenant/commit/${s.head}` : undefined}
       />
     </div>

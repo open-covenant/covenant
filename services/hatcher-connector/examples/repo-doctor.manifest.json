@@ -1,0 +1,17 @@
+{
+  "spec": "covenant.hatcher-agent.v0",
+  "agent": {
+    "name": "repo-doctor",
+    "pubkey": "9SedqWy2y5tmacogukqmPrRhVrbAN55FsnYaJERgh214",
+    "description": "Inspects a repo, runs tests, and reports an auditable trace. (pubkey: replace with your paired daemon identity.)"
+  },
+  "runner": { "kind": "covenant-local", "min_daemon_protocol": 2, "requires": ["hermes"] },
+  "capabilities": [
+    { "tool": "filesystem", "mode": "read", "paths": ["./"] },
+    { "tool": "filesystem", "mode": "write", "paths": ["./"] },
+    { "tool": "terminal", "commands": ["pnpm test", "cargo test", "git status"] },
+    { "tool": "github", "scopes": ["repo:read", "pr:comment"] }
+  ],
+  "limits": { "max_run_ms": 1800000, "max_files": 40, "deadline_required": true },
+  "proof": { "spec": "covenant.connector-trace.v0", "audit_root": true }
+}

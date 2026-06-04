@@ -6121,6 +6121,7 @@ impl Server {
         let mut zero_settled_at_refs = 0_u64;
         let mut zero_credits_consumed_receipt_refs = 0_u64;
         let mut zero_confirmed_at_receipt_refs = 0_u64;
+        let mut zero_slot_receipt_refs = 0_u64;
         let mut nil_id_receipt_refs = 0_u64;
         let mut zeroed_payer_receipt_refs = 0_u64;
         let mut nil_memory_record_id_receipt_refs = 0_u64;
@@ -6164,6 +6165,18 @@ impl Server {
                         receipt.id
                     ),
                     repair: "review the receipt JSONL row and the writer that produced it; production receipt writes pass ChainConfirmation { confirmed_at: None, .. } at lib.rs:5115-5123 and covenant_settlement::annotate_receipt copies the field unchanged, so a Some(0) value renders as 1970-01-01 in operator-facing CLI receipt summaries and the /chain/receipt-batches HTTP endpoint and signals a future on-chain integration regression where the unconfirmed branch defaulted Option<u64> to Some(0) instead of None".into(),
+                });
+            }
+            if receipt.slot == Some(0) {
+                zero_slot_receipt_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_slot_zero".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt {} has slot = Some(0); the sole production ChainConfirmation builder sets slot: None and annotate_receipt would propagate a real Solana confirmation slot (>=1 for any post-genesis transaction) when on-chain confirmation lands",
+                        receipt.id
+                    ),
+                    repair: "review the receipt JSONL row and the writer that produced it; production receipt writes pass ChainConfirmation { slot: None, .. } at lib.rs:5115-5123 and covenant_settlement::annotate_receipt copies the field unchanged, so a Some(0) value points operator-facing CLI receipt summaries and the /chain/receipt-batches HTTP endpoint at the genesis block (which contains no transactions) and signals a future on-chain integration regression where the unconfirmed branch defaulted Option<u64> to Some(0) instead of None".into(),
                 });
             }
             if receipt.id.is_nil() {
@@ -6330,6 +6343,7 @@ impl Server {
             + zero_settled_at_refs
             + zero_credits_consumed_receipt_refs
             + zero_confirmed_at_receipt_refs
+            + zero_slot_receipt_refs
             + nil_id_receipt_refs
             + zeroed_payer_receipt_refs
             + nil_memory_record_id_receipt_refs
@@ -6346,6 +6360,7 @@ impl Server {
                 && zero_settled_at_refs == 0
                 && zero_credits_consumed_receipt_refs == 0
                 && zero_confirmed_at_receipt_refs == 0
+                && zero_slot_receipt_refs == 0
                 && nil_id_receipt_refs == 0
                 && zeroed_payer_receipt_refs == 0
                 && nil_memory_record_id_receipt_refs == 0
@@ -6355,7 +6370,7 @@ impl Server {
                 && empty_tx_sig_receipt_refs == 0
                 && empty_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
             ),
         });
 
@@ -12409,6 +12424,86 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zero-confirmed-at receipt"),
                     "check message should count zero-confirmed-at receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_slot_zero_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: epoch_ms(),
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("b".repeat(64)),
+                merkle_root: Some("m".repeat(64)),
+                tx_sig: Some("t".repeat(88)),
+                slot: Some(0),
+                confirmed_at: Some(42),
+                onchain_sig: Some("t".repeat(88)),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_slot_zero"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_slot_zero: {drift:?}"));
+                assert!(
+                    row.message.contains("slot = Some(0)"),
+                    "drift message should name the Some(0) invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("annotate_receipt"),
+                    "repair hint should name annotate_receipt: {}",
+                    row.repair
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_confirmed_without_chain"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "all-four-Some chain bundle must not double-report as receipt_confirmed_without_chain: {drift:?}"
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_chain_partial"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "all-four-Some chain bundle must not double-report as receipt_chain_partial: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 zero-slot receipt"),
+                    "check message should count zero-slot receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

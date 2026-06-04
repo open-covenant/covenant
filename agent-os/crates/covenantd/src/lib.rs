@@ -6229,6 +6229,7 @@ impl Server {
         let mut empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs = 0_u64;
         let mut empty_a2a_auto_retry_scheduler_scan_error_audit_refs = 0_u64;
         let mut empty_memory_record_backfill_applied_savepoint_name_audit_refs = 0_u64;
+        let mut empty_settlement_receipt_backfill_applied_rollback_path_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
                 zero_timestamp_audit_refs += 1;
@@ -6911,6 +6912,25 @@ impl Server {
                     });
                 }
             }
+            if let AuditKind::SettlementReceiptBackfillApplied {
+                rollback_path: Some(rollback_path),
+                ..
+            } = &event.kind
+            {
+                if rollback_path.is_empty() {
+                    empty_settlement_receipt_backfill_applied_rollback_path_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_settlement_receipt_backfill_applied_rollback_path_empty"
+                            .into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::SettlementReceiptBackfillApplied with rollback_path = Some(\"\"); the sole production write-site in covenantd at settlement_backfill_receipts applies outcome.rollback_path.map(|path| path.display().to_string()), where covenant-settlement's backfill_receipts returns rollback_path = Some(PathBuf) on the apply branch and the PathBuf is built by rollback_checkpoint_path as store_path.with_file_name(format!(\"{{file_name}}.backfill-rollback-{{unix_ms}}.jsonl\")), embedding the literal \".backfill-rollback-\" suffix; the dry-run / no-op apply path keeps rollback_path = None, so an empty Some indicates serde tamper or a regression that drops the checkpoint path",
+                            event.id
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production SettlementReceiptBackfillApplied write-site folds outcome.rollback_path.map(|path| path.display().to_string()) from covenant-settlement's backfill_receipts, where the apply branch sets rollback_path to Some(rollback_checkpoint_path(store_path)) producing a PathBuf with the literal \".backfill-rollback-\" suffix embedded between the file_name stem and the \".jsonl\" tail, with the dry-run / no-op apply path using None, so an empty Some erases the checkpoint path an operator joins on to locate the on-disk rollback file the mutator wrote before the atomic rewrite, detaching the row from the durable-rollback discriminator that distinguishes a real receipt-store rewrite from a dry-run or no-op apply".into(),
+                    });
+                }
+            }
         }
         orphans_total += zero_timestamp_audit_refs
             + nil_id_audit_refs
@@ -6957,7 +6977,8 @@ impl Server {
             + empty_memory_repair_applied_mode_audit_refs
             + empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs
             + empty_a2a_auto_retry_scheduler_scan_error_audit_refs
-            + empty_memory_record_backfill_applied_savepoint_name_audit_refs;
+            + empty_memory_record_backfill_applied_savepoint_name_audit_refs
+            + empty_settlement_receipt_backfill_applied_rollback_path_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
             passed: zero_timestamp_audit_refs == 0
@@ -7005,9 +7026,10 @@ impl Server {
                 && empty_memory_repair_applied_mode_audit_refs == 0
                 && empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs == 0
                 && empty_a2a_auto_retry_scheduler_scan_error_audit_refs == 0
-                && empty_memory_record_backfill_applied_savepoint_name_audit_refs == 0,
+                && empty_memory_record_backfill_applied_savepoint_name_audit_refs == 0
+                && empty_settlement_receipt_backfill_applied_rollback_path_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s), {empty_intent_ignored_matched_pattern_audit_refs} empty-matched-pattern IntentIgnored audit event(s), {empty_budget_preempted_signal_sent_audit_refs} empty-signal-sent BudgetPreempted audit event(s), {empty_budget_preempted_reason_audit_refs} empty-reason BudgetPreempted audit event(s), {empty_budget_preempt_failed_reason_audit_refs} empty-reason BudgetPreemptFailed audit event(s), {empty_intent_dispatched_status_audit_refs} empty-status IntentDispatched audit event(s), {empty_memory_repair_applied_action_audit_refs} empty-action MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_mode_audit_refs} empty-mode MemoryCompactionApplied audit event(s), {empty_memory_repair_applied_mode_audit_refs} empty-mode MemoryRepairApplied audit event(s), {empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} empty-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {empty_a2a_auto_retry_scheduler_scan_error_audit_refs} empty-error A2AAutoRetrySchedulerScan audit event(s), {empty_memory_record_backfill_applied_savepoint_name_audit_refs} empty-savepoint-name MemoryRecordBackfillApplied audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s), {empty_intent_ignored_matched_pattern_audit_refs} empty-matched-pattern IntentIgnored audit event(s), {empty_budget_preempted_signal_sent_audit_refs} empty-signal-sent BudgetPreempted audit event(s), {empty_budget_preempted_reason_audit_refs} empty-reason BudgetPreempted audit event(s), {empty_budget_preempt_failed_reason_audit_refs} empty-reason BudgetPreemptFailed audit event(s), {empty_intent_dispatched_status_audit_refs} empty-status IntentDispatched audit event(s), {empty_memory_repair_applied_action_audit_refs} empty-action MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_mode_audit_refs} empty-mode MemoryCompactionApplied audit event(s), {empty_memory_repair_applied_mode_audit_refs} empty-mode MemoryRepairApplied audit event(s), {empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} empty-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {empty_a2a_auto_retry_scheduler_scan_error_audit_refs} empty-error A2AAutoRetrySchedulerScan audit event(s), {empty_memory_record_backfill_applied_savepoint_name_audit_refs} empty-savepoint-name MemoryRecordBackfillApplied audit event(s), {empty_settlement_receipt_backfill_applied_rollback_path_audit_refs} empty-rollback-path SettlementReceiptBackfillApplied audit event(s)"
             ),
         });
 
@@ -13808,6 +13830,80 @@ required = {caps:?}
                         .message
                         .contains("1 empty-savepoint-name MemoryRecordBackfillApplied audit event"),
                     "check message should count empty-savepoint-name MemoryRecordBackfillApplied events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_settlement_receipt_backfill_applied_rollback_path_empty_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::SettlementReceiptBackfillApplied {
+                    row_count: 12,
+                    rollback_path: Some(String::new()),
+                    dry_run: false,
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind
+                            == "audit_settlement_receipt_backfill_applied_rollback_path_empty"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_settlement_receipt_backfill_applied_rollback_path_empty: {drift:?}")
+                    });
+                assert!(
+                    row.message
+                        .contains("AuditKind::SettlementReceiptBackfillApplied"),
+                    "drift message should name the SettlementReceiptBackfillApplied variant: {}",
+                    row.message
+                );
+                assert!(
+                    row.message.contains("rollback_path = Some(\"\")"),
+                    "drift message should name the empty-rollback-path invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("rollback_checkpoint_path")
+                        && row.repair.contains(".backfill-rollback-")
+                        && row.repair.contains("display"),
+                    "repair hint should name rollback_checkpoint_path, the embedded literal suffix, and the Display fold: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains(
+                        "1 empty-rollback-path SettlementReceiptBackfillApplied audit event"
+                    ),
+                    "check message should count empty-rollback-path SettlementReceiptBackfillApplied events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

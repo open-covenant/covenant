@@ -133,8 +133,16 @@ enforcement path was needed for phase 1.
    *in* that log, its provenance is included under the anchored root the moment the SAP bridge is
    enabled (`COVENANT_SAP_ENABLED=1`) — no AceData-specific on-chain code. A verifiable-generation
    certificate is therefore: the `AceDataGeneration` row + the audit integrity proof + the SAP
-   on-chain root that covers it. Remaining optional work: a per-generation Merkle *inclusion* proof
-   export, and x402-via-xona Solana pay-per-call.
+   on-chain root that covers it.
+   - **Per-generation inclusion proof — shipped.** `covenant-audit` now exports an
+     `AuditInclusionProof` (`AuditLog::prove_inclusion`) and an offline `verify_inclusion_proof`.
+     The audit log is a linear SHA-256 hash chain, so a proof carries the generation's exact event
+     line, the chain hash before it, and the per-event hashes after it; folding them reproduces the
+     anchored root. Fetch it for any generation via `GET /audit/inclusion/:event_id` (operator-only;
+     the `/generations` panel shows the event id), and verify it without trusting the daemon via
+     `cargo run -p covenant-audit --example verify_inclusion -- proof.json`. Then compare
+     `computed_root_hash_hex` to the SAP on-chain anchor. Remaining optional work: x402-via-xona
+     Solana pay-per-call.
 4. **North star (optional):** attested AI-media *resale* — Covenant already models resale
    descriptors; an agent-generated asset becomes a verifiably-sourced, tradeable artifact.
 

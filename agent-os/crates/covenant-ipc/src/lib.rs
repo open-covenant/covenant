@@ -12,7 +12,7 @@ use covenant_a2a::{
     A2AAutoRetryPolicy, A2AAutoRetryReport, A2ARepairOutcome, A2ARepairRequest, A2ATask,
     A2ATaskQueueEntry, A2ATaskQueueState, A2ATaskResult,
 };
-use covenant_audit::{AuditEvent, AuditIntegrityReport};
+use covenant_audit::{AuditEvent, AuditInclusionProof, AuditIntegrityReport};
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
@@ -557,6 +557,13 @@ pub enum Request {
         prefer_stream: Option<bool>,
     },
     VerifyAuditIntegrity,
+    /// Build a chain-inclusion proof for one audit event (operator only).
+    /// Proves the event is folded into the audit root the SAP bridge anchors
+    /// on-chain. The response carries the proof, or `None` when the id is
+    /// unknown.
+    ProveAuditInclusion {
+        event_id: Uuid,
+    },
     /// Drop audit events strictly older than `before_ms`. Operator-driven
     /// retention; no scheduled compaction in v0.
     PurgeAudit {
@@ -853,6 +860,9 @@ pub enum Response {
     },
     AuditIntegrity {
         report: AuditIntegrityReport,
+    },
+    AuditInclusion {
+        proof: Option<AuditInclusionProof>,
     },
     AuditPurged {
         purged: u64,

@@ -129,6 +129,10 @@ export default function GenerationsPage() {
               </div>
               <dl className="meta">
                 <div>
+                  <dt>event id</dt>
+                  <dd className="mono">{selectedGen.id}</dd>
+                </div>
+                <div>
                   <dt>when</dt>
                   <dd>{formatDateTime(selectedGen.timestamp_ms)}</dd>
                 </div>

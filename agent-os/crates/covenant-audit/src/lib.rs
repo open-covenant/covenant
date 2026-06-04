@@ -66,6 +66,52 @@ pub struct AuditIntegrityReport {
     pub failures: Vec<String>,
 }
 
+/// A self-contained proof that one audit event is folded into the audit
+/// root — the chain tip the SAP bridge anchors on-chain. The log is a
+/// linear SHA-256 hash chain (`c_0 = 0…0`, `c_{i+1} = H(c_i ‖ H(line_i))`),
+/// so a proof carries the target's exact serialized line, the chain hash
+/// immediately before it, and the per-event hash of every event after it.
+/// Folding those forward reproduces `root_hash_hex`. Verify offline with
+/// [`verify_inclusion_proof`] — no access to the rest of the log needed.
+///
+/// Because the chain is linear (not a binary Merkle tree), the proof is
+/// O(events-after-target) in size, not O(log n). That is inherent to the
+/// chain structure; the proof is still self-verifying against the anchored
+/// root.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditInclusionProof {
+    /// 0-based position of the proven event in the chain.
+    pub leaf_index: u64,
+    /// Audit event id of the proven event (also inside `leaf_line`).
+    pub event_id: Uuid,
+    /// The exact serialized event line whose SHA-256 is the leaf hash. The
+    /// verifier rehashes this and confirms it equals `leaf_event_hash_hex`,
+    /// binding the proof to this precise event content.
+    pub leaf_line: String,
+    /// SHA-256 of `leaf_line` — the per-event hash folded into the chain.
+    pub leaf_event_hash_hex: String,
+    /// Chain hash immediately before the leaf (`c_leaf_index`). The
+    /// all-zero hash when `leaf_index == 0`.
+    pub prev_chain_hash_hex: String,
+    /// SHA-256 of each event after the leaf, in order — folded forward to
+    /// the root. Empty when the leaf is the chain tip.
+    pub suffix_event_hashes_hex: Vec<String>,
+    /// The chain tip this proof reconstructs — the value the SAP bridge
+    /// anchors on-chain and `verify_integrity` reports.
+    pub root_hash_hex: String,
+}
+
+/// Outcome of [`verify_inclusion_proof`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditInclusionCheck {
+    pub valid: bool,
+    /// The root recomputed by folding the proof, for comparison with the
+    /// on-chain anchor.
+    pub computed_root_hash_hex: String,
+    /// `None` when valid; otherwise why the proof failed.
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuditKind {
@@ -515,6 +561,28 @@ pub trait AuditLog: Send + Sync {
     async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError>;
     /// Verify the audit log's local tamper-evidence chain.
     async fn verify_integrity(&self) -> Result<AuditIntegrityReport, AuditError>;
+
+    /// Build a chain-inclusion proof for the event with `event_id`, or
+    /// `None` when no event matches. The proof reconstructs the audit root
+    /// the SAP bridge anchors on-chain; verify it offline with
+    /// [`verify_inclusion_proof`]. The default implementation re-serializes
+    /// the events from [`AuditLog::recent`] (correct for the in-memory log);
+    /// [`JsonlAuditLog`] overrides it to hash the exact on-disk lines so the
+    /// reconstructed root matches [`AuditLog::verify_integrity`] byte-for-byte.
+    async fn prove_inclusion(
+        &self,
+        event_id: Uuid,
+    ) -> Result<Option<AuditInclusionProof>, AuditError> {
+        let events = self.recent(usize::MAX).await?;
+        let Some(index) = events.iter().position(|e| e.id == event_id) else {
+            return Ok(None);
+        };
+        let mut lines = Vec::with_capacity(events.len());
+        for event in &events {
+            lines.push(serde_json::to_string(event)?);
+        }
+        Ok(Some(inclusion_proof_from_lines(&lines, index, event_id)))
+    }
 }
 
 pub struct JsonlAuditLog {
@@ -553,6 +621,80 @@ fn chain_entry_for_line(
         previous_hash_hex: previous_hash_hex.into(),
         chain_hash_hex: chain_hash(previous_hash_hex, &event_hash_hex),
         event_hash_hex,
+    }
+}
+
+/// Build an [`AuditInclusionProof`] for the event at `index` from the
+/// ordered event lines (exactly as the chain hashes them). The caller
+/// supplies `event_id` since it located `index`. Panics-free: `index`
+/// must be in bounds (callers locate it from the same `lines`).
+fn inclusion_proof_from_lines(
+    lines: &[String],
+    index: usize,
+    event_id: Uuid,
+) -> AuditInclusionProof {
+    // Fold the prefix [0, index) to get c_index — the chain hash just
+    // before the leaf.
+    let mut prev = ZERO_CHAIN_HASH.to_string();
+    for line in &lines[..index] {
+        let event_hash = sha256_hex(line.as_bytes());
+        prev = chain_hash(&prev, &event_hash);
+    }
+    let prev_chain_hash_hex = prev;
+
+    let leaf_line = lines[index].clone();
+    let leaf_event_hash_hex = sha256_hex(leaf_line.as_bytes());
+
+    // Fold the leaf, then every event after it, accumulating the suffix
+    // hashes and the running chain hash that lands on the root.
+    let mut running = chain_hash(&prev_chain_hash_hex, &leaf_event_hash_hex);
+    let mut suffix_event_hashes_hex = Vec::with_capacity(lines.len().saturating_sub(index + 1));
+    for line in &lines[index + 1..] {
+        let event_hash = sha256_hex(line.as_bytes());
+        running = chain_hash(&running, &event_hash);
+        suffix_event_hashes_hex.push(event_hash);
+    }
+
+    AuditInclusionProof {
+        leaf_index: index as u64,
+        event_id,
+        leaf_line,
+        leaf_event_hash_hex,
+        prev_chain_hash_hex,
+        suffix_event_hashes_hex,
+        root_hash_hex: running,
+    }
+}
+
+/// Verify an [`AuditInclusionProof`] offline: confirm the leaf line hashes
+/// to the claimed leaf hash (binding the proof to this exact event), then
+/// fold the leaf and suffix forward from `prev_chain_hash_hex` and confirm
+/// the result equals `root_hash_hex`. Compare `computed_root_hash_hex`
+/// against the SAP on-chain anchor to complete the chain of custody.
+pub fn verify_inclusion_proof(proof: &AuditInclusionProof) -> AuditInclusionCheck {
+    let recomputed_leaf = sha256_hex(proof.leaf_line.as_bytes());
+    if recomputed_leaf != proof.leaf_event_hash_hex {
+        return AuditInclusionCheck {
+            valid: false,
+            computed_root_hash_hex: String::new(),
+            reason: Some("leaf_line does not hash to leaf_event_hash_hex".into()),
+        };
+    }
+    let mut running = chain_hash(&proof.prev_chain_hash_hex, &proof.leaf_event_hash_hex);
+    for event_hash in &proof.suffix_event_hashes_hex {
+        running = chain_hash(&running, event_hash);
+    }
+    if running != proof.root_hash_hex {
+        return AuditInclusionCheck {
+            valid: false,
+            computed_root_hash_hex: running,
+            reason: Some("folded chain does not reach root_hash_hex".into()),
+        };
+    }
+    AuditInclusionCheck {
+        valid: true,
+        computed_root_hash_hex: running,
+        reason: None,
     }
 }
 
@@ -854,6 +996,34 @@ impl AuditLog for JsonlAuditLog {
             failures,
         })
     }
+
+    async fn prove_inclusion(
+        &self,
+        event_id: Uuid,
+    ) -> Result<Option<AuditInclusionProof>, AuditError> {
+        let _g = self.lock.lock().await;
+        // Use the raw on-disk lines (not re-serialized events) so the
+        // reconstructed root matches `verify_integrity` byte-for-byte, and
+        // locate the leaf by event id via the chain sidecar.
+        let lines = read_event_lines(&self.path).await?;
+        let anchors = read_chain_entries(&self.chain_path()).await?;
+        let Some(index) = anchors
+            .iter()
+            .find(|entry| entry.event_id == event_id)
+            .map(|entry| entry.index as usize)
+        else {
+            return Ok(None);
+        };
+        if index >= lines.len() {
+            // Chain/events length skew — surface it rather than index past
+            // the events; the same corruption `record` refuses to extend.
+            return Err(AuditError::ChainCorruption {
+                events: lines.len(),
+                chain: anchors.len(),
+            });
+        }
+        Ok(Some(inclusion_proof_from_lines(&lines, index, event_id)))
+    }
 }
 
 #[derive(Default)]
@@ -948,6 +1118,97 @@ mod tests {
             result_hash_hex: hash_hex(b"some result"),
             status: status.into(),
         }
+    }
+
+    #[tokio::test]
+    async fn jsonl_inclusion_proof_reconstructs_root_and_verifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path).await.unwrap();
+        let mut ids = Vec::new();
+        for i in 0..5 {
+            let e = dummy(intent_kind(if i == 2 { "error" } else { "ok" }));
+            ids.push(e.id);
+            log.record(e).await.unwrap();
+        }
+        let root = log.verify_integrity().await.unwrap().root_hash_hex;
+
+        // A proof for any position reconstructs the same root verify_integrity
+        // reports (the value the SAP bridge anchors) and verifies offline.
+        for &idx in &[0usize, 2, 4] {
+            let proof = log.prove_inclusion(ids[idx]).await.unwrap().expect("proof");
+            assert_eq!(proof.leaf_index, idx as u64);
+            assert_eq!(proof.event_id, ids[idx]);
+            assert_eq!(
+                proof.root_hash_hex, root,
+                "proof root must equal verify_integrity root"
+            );
+            let check = verify_inclusion_proof(&proof);
+            assert!(check.valid, "proof must verify: {:?}", check.reason);
+            assert_eq!(check.computed_root_hash_hex, root);
+        }
+
+        // The tip's suffix is empty; the head's predecessor is the zero hash.
+        let last = log.prove_inclusion(ids[4]).await.unwrap().unwrap();
+        assert!(last.suffix_event_hashes_hex.is_empty());
+        let first = log.prove_inclusion(ids[0]).await.unwrap().unwrap();
+        assert_eq!(first.prev_chain_hash_hex, ZERO_CHAIN_HASH);
+        assert_eq!(first.suffix_event_hashes_hex.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn inclusion_proof_rejects_tampered_leaf_and_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path).await.unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let e = dummy(intent_kind("ok"));
+            ids.push(e.id);
+            log.record(e).await.unwrap();
+        }
+        let proof = log.prove_inclusion(ids[1]).await.unwrap().unwrap();
+        assert!(verify_inclusion_proof(&proof).valid);
+
+        // Swap the leaf content: it no longer hashes to leaf_event_hash_hex.
+        let mut tampered = proof.clone();
+        tampered.leaf_line = tampered.leaf_line.replace("find x", "find y");
+        let check = verify_inclusion_proof(&tampered);
+        assert!(!check.valid);
+        assert!(check.reason.unwrap().contains("leaf_line"));
+
+        // Claim a different root: folding no longer lands on it.
+        let mut wrong_root = proof;
+        wrong_root.root_hash_hex = "f".repeat(64);
+        let check = verify_inclusion_proof(&wrong_root);
+        assert!(!check.valid);
+        assert!(check.reason.unwrap().contains("root"));
+    }
+
+    #[tokio::test]
+    async fn inclusion_proof_unknown_event_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        assert!(log.prove_inclusion(Uuid::new_v4()).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn in_memory_inclusion_proof_matches_root() {
+        let log = InMemoryAuditLog::new();
+        let mut ids = Vec::new();
+        for _ in 0..4 {
+            let e = dummy(intent_kind("ok"));
+            ids.push(e.id);
+            log.record(e).await.unwrap();
+        }
+        let root = log.verify_integrity().await.unwrap().root_hash_hex;
+        let proof = log.prove_inclusion(ids[1]).await.unwrap().unwrap();
+        assert_eq!(proof.root_hash_hex, root);
+        let check = verify_inclusion_proof(&proof);
+        assert!(check.valid);
+        assert_eq!(check.computed_root_hash_hex, root);
     }
 
     #[tokio::test]

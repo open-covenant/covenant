@@ -1879,6 +1879,9 @@ impl Server {
                 prefer_stream: _,
             } => self.recent_audit(limit, since_ms, peer).await,
             Request::VerifyAuditIntegrity => self.verify_audit_integrity(peer).await,
+            Request::ProveAuditInclusion { event_id } => {
+                self.prove_audit_inclusion(event_id, peer).await
+            }
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::PurgeCapabilities { before_ms } => {
                 self.purge_capabilities(before_ms, peer).await
@@ -3343,6 +3346,25 @@ impl Server {
         }
         match self.audit.verify_integrity().await {
             Ok(report) => Response::AuditIntegrity { report },
+            Err(e) => Response::Error {
+                message: format!("audit: {e}"),
+            },
+        }
+    }
+
+    /// Build a chain-inclusion proof for one audit event (e.g. an
+    /// `AceDataGeneration` row) so it can be verified offline against the
+    /// audit root the SAP bridge anchors on-chain. Operator-only, matching
+    /// [`Self::verify_audit_integrity`]: the proof discloses the event's
+    /// full serialized line, which is the operator's own audit trail.
+    async fn prove_audit_inclusion(&self, event_id: Uuid, peer: &AgentId) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "audit inclusion proof requires the operator identity".into(),
+            };
+        }
+        match self.audit.prove_inclusion(event_id).await {
+            Ok(proof) => Response::AuditInclusion { proof },
             Err(e) => Response::Error {
                 message: format!("audit: {e}"),
             },

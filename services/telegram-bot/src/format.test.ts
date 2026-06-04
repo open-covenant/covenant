@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   fireBar,
   formatTokenAmount,
+  logoBar,
   renderNewStake,
   solscanTxUrl,
+  LOGO_BAR_MAX,
   type NewStakeMessage,
 } from "./format.js";
 
@@ -108,5 +110,32 @@ describe("renderNewStake", () => {
     expect(renderNewStake({ ...base, multiplierBps: 20_000 })).toContain(
       "· 180d lock",
     );
+  });
+
+  it("uses the branded custom-emoji bar when emojiId is set (no 🔥)", () => {
+    const html = renderNewStake({ ...base, emojiId: "5841217997154295453" });
+    expect(html).toContain('<tg-emoji emoji-id="5841217997154295453">🔥</tg-emoji>');
+    // a real-but-capped count, space-separated, and no raw fire emoji left
+    expect(html).toContain("</tg-emoji> <tg-emoji");
+    expect(html).not.toContain("🔥🔥");
+  });
+});
+
+describe("logoBar", () => {
+  const id = "5841217997154295453";
+  const count = (s: string) => (s.match(/<tg-emoji /g) ?? []).length;
+
+  it("emits space-separated custom emoji", () => {
+    const bar = logoBar(1_000_000_000_000n, 6, 250_000, id); // 1,000,000/250,000 = 4
+    expect(count(bar)).toBe(4);
+    expect(bar).toContain("</tg-emoji> <tg-emoji "); // a space between each
+  });
+
+  it("caps at LOGO_BAR_MAX", () => {
+    expect(count(logoBar(99_000_000_000_000n, 6, 250_000, id))).toBe(LOGO_BAR_MAX);
+  });
+
+  it("always shows at least one", () => {
+    expect(count(logoBar(0n, 6, 250_000, id))).toBe(1);
   });
 });

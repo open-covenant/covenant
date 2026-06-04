@@ -26,6 +26,9 @@ const STAKE_URL =
 const SOLSCAN_BASE =
   process.env.STAKE_ANNOUNCE_SOLSCAN_BASE ?? 'https://solscan.io';
 const FIRE_UNIT = Number(process.env.STAKE_ANNOUNCE_FIRE_UNIT ?? '250000');
+// Telegram custom_emoji_id rendered as the branded bar instead of 🔥. Must be
+// from a custom-emoji set this bot owns. Unset → falls back to 🔥.
+const ANNOUNCE_EMOJI_ID = process.env.STAKE_ANNOUNCE_EMOJI_ID?.trim() || undefined;
 const WATCHER_POLL_MS = Number(process.env.STAKE_WATCHER_POLL_MS ?? '15000');
 const WATCHER_STATE_DIR = process.env.STAKE_WATCHER_STATE_DIR;
 
@@ -165,6 +168,7 @@ function renderStakePreview(): string {
     stakeUrl: STAKE_URL,
     solscanBase: SOLSCAN_BASE,
     fireUnit: FIRE_UNIT,
+    emojiId: ANNOUNCE_EMOJI_ID,
   });
 }
 
@@ -201,6 +205,7 @@ function maybeStartAnnouncer(bot: Bot): void {
     stakeUrl: STAKE_URL,
     solscanBase: SOLSCAN_BASE,
     fireUnit: FIRE_UNIT,
+    emojiId: ANNOUNCE_EMOJI_ID,
   });
   app.log.info(
     {

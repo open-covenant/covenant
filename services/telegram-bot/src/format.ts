@@ -40,20 +40,50 @@ export function formatTokenAmount(
   return `${wholeStr}.${frac.toString().padStart(fd, "0")}`;
 }
 
-/** A row of 🔥 scaled to the stake size: 1 per `unitUi` whole tokens, 1..max. */
-export function fireBar(
+/** Bar length for a stake: 1 per `unitUi` whole tokens, clamped to 1..max. */
+export function barCount(
   raw: bigint,
   decimals: number,
   unitUi: number,
-  max = 50,
-): string {
+  max: number,
+): number {
   const base = 10n ** BigInt(decimals);
   const wholeUi = Number(raw / base);
   const unit = unitUi > 0 ? unitUi : 1;
   let n = Math.round(wholeUi / unit);
   if (!Number.isFinite(n) || n < 1) n = 1;
   if (n > max) n = max;
-  return "🔥".repeat(n);
+  return n;
+}
+
+/** A row of 🔥 scaled to the stake size — the fallback when no logo emoji is set. */
+export function fireBar(
+  raw: bigint,
+  decimals: number,
+  unitUi: number,
+  max = 50,
+): string {
+  return "🔥".repeat(barCount(raw, decimals, unitUi, max));
+}
+
+/** Default cap for the branded custom-emoji bar — lower than fire since the
+ * logo chips read denser and a spaced row past ~12 starts to wrap. */
+export const LOGO_BAR_MAX = 12;
+
+/**
+ * A space-separated row of the Covenant custom emoji, scaled to stake size.
+ * `emojiId` is a Telegram custom_emoji_id from a set the bot owns; the inner
+ * 🔥 is the fallback a client shows only if it can't render the custom emoji.
+ */
+export function logoBar(
+  raw: bigint,
+  decimals: number,
+  unitUi: number,
+  emojiId: string,
+  max = LOGO_BAR_MAX,
+): string {
+  const one = `<tg-emoji emoji-id="${escapeHtml(emojiId)}">🔥</tg-emoji>`;
+  return Array.from({ length: barCount(raw, decimals, unitUi, max) }, () => one).join(" ");
 }
 
 export function solscanTxUrl(
@@ -81,20 +111,24 @@ export interface NewStakeMessage {
   stakeUrl: string;
   solscanBase: string;
   fireUnit: number;
+  /** Telegram custom_emoji_id for the branded bar; falls back to 🔥 when unset. */
+  emojiId?: string;
 }
 
 export function renderNewStake(m: NewStakeMessage): string {
   const sym = escapeHtml(m.symbol);
   const amount = formatTokenAmount(m.amountRaw, m.decimals, 0);
   const lock = lockTierLabel(m.multiplierBps);
-  const fires = fireBar(m.amountRaw, m.decimals, m.fireUnit);
+  const bar = m.emojiId
+    ? logoBar(m.amountRaw, m.decimals, m.fireUnit, m.emojiId)
+    : fireBar(m.amountRaw, m.decimals, m.fireUnit);
   const solscan = escapeHtml(solscanTxUrl(m.solscanBase, m.txSignature, m.cluster));
   const stake = escapeHtml(m.stakeUrl);
 
   const lines: string[] = [
     "<b>NEW STAKE</b>",
     "",
-    fires,
+    bar,
     "",
     `${escapeHtml(amount)} $${sym} · ${escapeHtml(lock)} lock`,
   ];

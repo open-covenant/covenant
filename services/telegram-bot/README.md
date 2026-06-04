@@ -43,8 +43,10 @@ View on Solscan · Stake $CVNT →
   7d / 30d / 90d / 180d).
 - **Total staked** is the live balance of the locked-CVNT vault; **% of supply**
   divides that by the mint supply.
-- The 🔥 row scales with the stake size (one per `STAKE_ANNOUNCE_FIRE_UNIT`
-  whole tokens, capped at 50).
+- The icon row scales with the stake size (one per `STAKE_ANNOUNCE_FIRE_UNIT`
+  whole tokens). Set `STAKE_ANNOUNCE_EMOJI_ID` to a custom emoji this bot owns
+  and the row becomes the spaced Covenant logo (capped at 12); unset, it's 🔥
+  (capped at 50).
 
 **How it watches.** It polls `getSignaturesForAddress` from a persisted cursor
 rather than using a websocket subscription, so a redeploy or a dropped socket
@@ -105,7 +107,8 @@ is bot-controlled (numbers + our own URLs) and still HTML-escaped.
 | `STAKE_WATCHER_STATE_DIR` | no | `/data/telegram-bot` → tmp | Where the signature cursor is persisted |
 | `STAKE_ANNOUNCE_STAKE_URL` | no | `https://opencovenant.org/stake` | "Stake →" link target |
 | `STAKE_ANNOUNCE_SOLSCAN_BASE` | no | `https://solscan.io` | Explorer base for the tx link |
-| `STAKE_ANNOUNCE_FIRE_UNIT` | no | `250000` | Whole `$CVNT` per 🔥 (capped at 50) |
+| `STAKE_ANNOUNCE_FIRE_UNIT` | no | `250000` | Whole `$CVNT` per bar icon (🔥 cap 50, logo cap 12) |
+| `STAKE_ANNOUNCE_EMOJI_ID` | no | — | Telegram custom_emoji_id (from a set this bot owns) used as the bar instead of 🔥 |
 
 ## Endpoints
 

@@ -44,6 +44,8 @@ export interface StakeWatcherOptions {
   stakeUrl?: string;
   solscanBase?: string;
   fireUnit?: number;
+  /** Telegram custom_emoji_id for the branded bar; falls back to 🔥 when unset. */
+  emojiId?: string;
 }
 
 export interface StakeWatcherStatus {
@@ -104,6 +106,7 @@ export function startStakeWatcher(
   const stakeUrl = options.stakeUrl ?? "https://opencovenant.org/stake";
   const solscanBase = options.solscanBase ?? "https://solscan.io";
   const fireUnit = options.fireUnit && options.fireUnit > 0 ? options.fireUnit : 250_000;
+  const emojiId = options.emojiId;
 
   const connection = new Connection(network.rpcUrl, "confirmed");
   const stateDir = resolveStateDir(options.stateDir, log);
@@ -221,6 +224,7 @@ export function startStakeWatcher(
       stakeUrl,
       solscanBase,
       fireUnit,
+      emojiId,
     });
 
     // A send failure propagates so the cursor does NOT advance past this

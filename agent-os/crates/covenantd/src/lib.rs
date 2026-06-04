@@ -7721,6 +7721,7 @@ impl Server {
         let mut zeroed_grantor_cap_refs = 0_u64;
         let mut zero_expires_cap_refs = 0_u64;
         let mut zeroed_signature_cap_refs = 0_u64;
+        let mut scope_non_object_cap_refs = 0_u64;
         for cap in &caps {
             let signature_b58 = bs58::encode(cap.signature).into_string();
             if cap.capability.action.is_empty() {
@@ -7763,9 +7764,28 @@ impl Server {
                 zeroed_signature_cap_refs += 1;
                 drift.push(VerifyDrift {
                     kind: "capability_signature_zeroed".into(),
-                    id: Some(signature_b58),
+                    id: Some(signature_b58.clone()),
                     message: "capability has signature = [0u8; 64]; ed25519 signatures are never the all-zero sequence and sign_capability never produces this value".into(),
                     repair: "review the granted.jsonl row and the writer that produced it; production capability grants always route through sign_capability, which signs the canonical capability bytes with the daemon's ed25519 signing key, so an all-zero signature is structural evidence of a serde regression, a placeholder writer, or a JSONL edit that wiped the trust-root binding".into(),
+                });
+            }
+            if cap.capability.scope.as_object().is_none() {
+                scope_non_object_cap_refs += 1;
+                let shape = match &cap.capability.scope {
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Bool(_) => "bool",
+                    serde_json::Value::Number(_) => "number",
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Array(_) => "array",
+                    serde_json::Value::Object(_) => "object",
+                };
+                drift.push(VerifyDrift {
+                    kind: "capability_scope_non_object".into(),
+                    id: Some(signature_b58),
+                    message: format!(
+                        "capability has scope of JSON type {shape}; production grant_capability rejects non-object scope for every known namespace via covenant_permissions::validate_scope"
+                    ),
+                    repair: "review the granted.jsonl row and the writer that produced it; revoke and re-grant through grant_capability so validate_scope rejects the non-object shape at grant time and a fresh CapabilityGranted audit row records the corrected scope".into(),
                 });
             }
         }
@@ -7773,16 +7793,18 @@ impl Server {
             + zeroed_subject_cap_refs
             + zeroed_grantor_cap_refs
             + zero_expires_cap_refs
-            + zeroed_signature_cap_refs;
+            + zeroed_signature_cap_refs
+            + scope_non_object_cap_refs;
         checks.push(VerifyCheck {
             name: "capability integrity".into(),
             passed: empty_action_cap_refs == 0
                 && zeroed_subject_cap_refs == 0
                 && zeroed_grantor_cap_refs == 0
                 && zero_expires_cap_refs == 0
-                && zeroed_signature_cap_refs == 0,
+                && zeroed_signature_cap_refs == 0
+                && scope_non_object_cap_refs == 0,
             message: format!(
-                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies)"
+                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies), {scope_non_object_cap_refs} non-object-scope capabilit(ies)"
             ),
         });
 
@@ -18198,6 +18220,62 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zeroed-signature capabilit"),
                     "check message should count zeroed-signature caps: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_capability_scope_non_object_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: "memory.read".into(),
+            scope: serde_json::Value::Array(vec![]),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        let signature_b58 = bs58::encode(signed.signature).into_string();
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "capability_scope_non_object"
+                            && item.id.as_deref() == Some(signature_b58.as_str())
+                    })
+                    .unwrap_or_else(|| panic!("expected capability_scope_non_object: {drift:?}"));
+                assert!(
+                    row.message.contains("JSON type array"),
+                    "drift message should name the JSON shape: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("grant_capability"),
+                    "repair hint should name the canonical grant source: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "capability integrity")
+                    .unwrap_or_else(|| panic!("expected capability integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 non-object-scope capabilit"),
+                    "check message should count non-object-scope caps: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

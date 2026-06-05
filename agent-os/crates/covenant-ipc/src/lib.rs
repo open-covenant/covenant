@@ -11420,7 +11420,13 @@ mod tests {
             "credits": 8,
         });
         let decoded: Request = serde_json::from_value(no_dest).expect("destination is optional");
-        assert!(matches!(decoded, Request::AuthorizeSpend { destination: None, .. }));
+        assert!(matches!(
+            decoded,
+            Request::AuthorizeSpend {
+                destination: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -11433,7 +11439,10 @@ mod tests {
         };
         let wire = serde_json::to_value(&resp).unwrap();
         let obj = wire.as_object().expect("object");
-        assert_eq!(obj.get("kind"), Some(&serde_json::json!("spend_authorized")));
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("spend_authorized"))
+        );
         assert_eq!(obj.get("approved"), Some(&serde_json::json!(false)));
         assert_eq!(obj.get("decision_id"), Some(&serde_json::json!(id)));
         let back: Response = serde_json::from_value(wire).unwrap();
@@ -11446,7 +11455,14 @@ mod tests {
             "decision_id": id,
         });
         let decoded: Response = serde_json::from_value(approve).expect("reason is optional");
-        assert!(matches!(decoded, Response::SpendAuthorized { reason: None, approved: true, .. }));
+        assert!(matches!(
+            decoded,
+            Response::SpendAuthorized {
+                reason: None,
+                approved: true,
+                ..
+            }
+        ));
     }
 
     async fn frames_to_reader<I>(frames: I) -> std::io::Cursor<Vec<u8>>

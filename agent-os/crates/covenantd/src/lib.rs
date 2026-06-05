@@ -210,6 +210,96 @@ pub fn sap_bridge_config_from_env() -> SapBridgeConfig {
     SapBridgeConfig::from_env(std::env::vars())
 }
 
+/// Config for the autonomous SAP audit-root anchoring driver.
+///
+/// Default OFF. When enabled (`COVENANT_SAP_AUTO_ATTEST=1`), the daemon
+/// periodically reads its current audit-integrity root and appends it to
+/// the SAP ledger — but only when the root has CHANGED since the last
+/// anchor, so it never re-writes an unchanged root or spends SOL on a
+/// no-op. Anchoring costs SOL, so this is strictly opt-in and is also a
+/// silent no-op whenever the bridge itself is disabled.
+#[derive(Debug, Clone)]
+pub struct SapAttestConfig {
+    pub enabled: bool,
+    pub interval: Duration,
+}
+
+impl Default for SapAttestConfig {
+    fn default() -> Self {
+        // 15 min matches the Witness Loop's batch fallback cadence.
+        Self {
+            enabled: false,
+            interval: Duration::from_secs(900),
+        }
+    }
+}
+
+/// Resolve the auto-attest driver config from env. Infallible: a bad
+/// interval falls back to the default rather than refusing to boot.
+pub fn sap_attest_config_from_env() -> SapAttestConfig {
+    sap_attest_config_from_values(
+        std::env::var("COVENANT_SAP_AUTO_ATTEST").ok().as_deref(),
+        std::env::var("COVENANT_SAP_ATTEST_INTERVAL_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Pure resolver over the raw env values — no process-global reads, so
+/// tests can drive every branch deterministically.
+pub fn sap_attest_config_from_values(
+    enabled: Option<&str>,
+    interval_secs: Option<&str>,
+) -> SapAttestConfig {
+    let mut config = SapAttestConfig::default();
+    config.enabled = matches!(
+        enabled.map(str::trim),
+        Some("1") | Some("true") | Some("yes")
+    );
+    if let Some(secs) = interval_secs
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+    {
+        config.interval = Duration::from_secs(secs);
+    }
+    config
+}
+
+#[cfg(test)]
+mod sap_attest_config_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_off_with_fallback_interval() {
+        let c = sap_attest_config_from_values(None, None);
+        assert!(!c.enabled, "auto-attest must default OFF");
+        assert_eq!(c.interval, Duration::from_secs(900));
+    }
+
+    #[test]
+    fn parses_truthy_enabled_and_interval_override() {
+        for v in ["1", "true", "yes", " 1 "] {
+            assert!(sap_attest_config_from_values(Some(v), None).enabled, "v={v:?}");
+        }
+        for v in ["0", "false", "no", ""] {
+            assert!(!sap_attest_config_from_values(Some(v), None).enabled, "v={v:?}");
+        }
+        assert_eq!(
+            sap_attest_config_from_values(Some("1"), Some("120")).interval,
+            Duration::from_secs(120)
+        );
+        // Garbage / zero must fall back to the default, never disable the
+        // deadline by setting a zero interval.
+        for bad in ["abc", "0"] {
+            assert_eq!(
+                sap_attest_config_from_values(Some("1"), Some(bad)).interval,
+                Duration::from_secs(900),
+                "bad interval {bad:?} must fall back to default"
+            );
+        }
+    }
+}
+
 pub fn hermes_gateway_config_from_values(
     base_url: Option<&str>,
     api_key: Option<&str>,
@@ -507,6 +597,70 @@ pub fn spawn_projection_tick_driver(
                     "budget projection tick preempted in-flight intents"
                 );
             }
+        }
+    })
+}
+
+/// Path the auto-attest driver uses to remember the last audit root it
+/// anchored, so a daemon restart doesn't re-anchor (and re-pay for) an
+/// unchanged root. Resolved as a sibling of the worker's stats file when
+/// `COVENANT_SAP_STATS_PATH` is set, else under `COVENANT_HOME` /
+/// `~/.covenant`.
+fn sap_last_root_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("COVENANT_SAP_STATS_PATH") {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            if let Some(dir) = std::path::Path::new(trimmed).parent() {
+                return dir.join("sap-last-attested-root");
+            }
+        }
+    }
+    let home = std::env::var("COVENANT_HOME")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| {
+            let h = std::env::var("HOME").unwrap_or_default();
+            format!("{h}/.covenant")
+        });
+    std::path::PathBuf::from(home).join("sap-last-attested-root")
+}
+
+fn read_sap_last_root() -> Option<String> {
+    std::fs::read_to_string(sap_last_root_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn write_sap_last_root(root: &str) {
+    let path = sap_last_root_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, root);
+}
+
+/// Autonomous SAP audit-root anchoring driver.
+///
+/// On each tick it reads the current audit-integrity root and, if it has
+/// changed since the last anchor, appends it to the SAP ledger so the
+/// daemon's provenance accumulates on-chain without operator action. The
+/// last-anchored root is tracked in memory and persisted to disk, so a
+/// restart never re-anchors an unchanged root. Strictly opt-in
+/// (`COVENANT_SAP_AUTO_ATTEST`) and a silent no-op when the bridge is
+/// disabled — see [`SapAttestConfig`].
+pub fn spawn_sap_attest_driver(
+    server: Server,
+    config: SapAttestConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(config.interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_root = read_sap_last_root();
+        loop {
+            interval.tick().await;
+            server.run_sap_attest_iteration(&mut last_root).await;
         }
     })
 }
@@ -1117,6 +1271,56 @@ impl Server {
             Err(e) => Response::Error {
                 message: format!("sap publish_agent: {e}"),
             },
+        }
+    }
+
+    /// One iteration of the autonomous audit-root anchor (driven by
+    /// [`spawn_sap_attest_driver`]). Reads the current audit-integrity
+    /// root; if it changed since `last_root`, anchors it to the SAP
+    /// ledger and advances `last_root` in memory and on disk. Every
+    /// failure mode (bridge disabled / no signer / RPC error) is logged
+    /// and swallowed so the driver keeps ticking.
+    pub(crate) async fn run_sap_attest_iteration(&self, last_root: &mut Option<String>) {
+        let root = match self.audit.verify_integrity().await {
+            Ok(report) => report.root_hash_hex,
+            Err(e) => {
+                warn!(error = %e, "sap auto-attest: audit integrity check failed; skipping tick");
+                return;
+            }
+        };
+        // Nothing to do when the chain is empty or the root is unchanged.
+        if root.is_empty() || last_root.as_deref() == Some(root.as_str()) {
+            return;
+        }
+        let Some(bridge) = self.sap_bridge.as_ref() else {
+            return; // bridge not wired into this daemon
+        };
+        let attestation = covenant_sap_bridge::attestation::AuditRootAttestation {
+            root_hash_hex: root.clone(),
+            release_target: "covenant".to_string(),
+            release_subject: "witness-loop".to_string(),
+            release_scope: "audit".to_string(),
+            recorded_at: epoch_ms() / 1000,
+        };
+        match bridge.publish_audit_root(&attestation).await {
+            Ok(published) => {
+                info!(
+                    ledger_pda = %published.ledger_pda,
+                    signature = %published.signature,
+                    root = %root,
+                    "sap auto-anchored audit root"
+                );
+                *last_root = Some(root.clone());
+                write_sap_last_root(&root);
+            }
+            Err(covenant_sap_bridge::BridgeError::Disabled) => {
+                // Auto-attest is on but the bridge itself is off. Stay
+                // quiet and do NOT advance last_root, so the current root
+                // anchors as soon as the bridge is enabled.
+            }
+            Err(e) => {
+                warn!(error = %e, root = %root, "sap auto-attest: anchor failed; will retry next tick");
+            }
         }
     }
 

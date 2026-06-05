@@ -388,6 +388,24 @@ async fn main() -> Result<()> {
     let projection_tick_handle =
         covenantd::spawn_projection_tick_driver(server.clone(), projection_tick);
 
+    // Autonomous SAP audit-root anchoring (opt-in, default off). When on,
+    // the daemon anchors its audit-integrity root to the SAP ledger on a
+    // timer, but only when the root has changed — so it never re-pays for
+    // an unchanged root. No-op when the SAP bridge is disabled.
+    let sap_attest = covenantd::sap_attest_config_from_env();
+    let sap_attest_handle = if sap_attest.enabled {
+        info!(
+            interval_secs = sap_attest.interval.as_secs(),
+            "sap auto-attest driver enabled (anchors changed audit roots to SAP)"
+        );
+        Some(covenantd::spawn_sap_attest_driver(
+            server.clone(),
+            sap_attest,
+        ))
+    } else {
+        None
+    };
+
     // Fold live Hermes runtime traces into the audit chain as they stream in
     // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
     // Even when the drainer is off, the broadcast channel is created so the
@@ -484,6 +502,9 @@ async fn main() -> Result<()> {
         handle.abort();
     }
     projection_tick_handle.abort();
+    if let Some(handle) = sap_attest_handle {
+        handle.abort();
+    }
     if let Some(h) = runtime_event_drainer_handle {
         h.abort();
     }

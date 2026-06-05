@@ -72,6 +72,7 @@ use covenant_mcp::ToolSpec;
 use covenant_memory::memory_receipt_backfill_plan_json;
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
+use covenant_skills::SkillManifest;
 use covenant_types::{
     MemoryCompactionOutcome, MemoryCompactionPolicy, MemoryCompactionRequest, MemoryRecord,
     MemoryRepairCommand, MemoryRepairMode, MemoryRepairRequest, MemoryTier, ResourceKind,
@@ -4882,6 +4883,198 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        "skill" => {
+            if args.len() < 2 {
+                eprintln!("covenant skill: expected `add`, `list`, `show`, or `verify`");
+                std::process::exit(2);
+            }
+            match args[1].as_str() {
+                "add" => {
+                    if args.len() < 3 {
+                        eprintln!("covenant skill add: missing <dir>");
+                        std::process::exit(2);
+                    }
+                    let dir = args[2].clone();
+                    let mut url: Option<String> = None;
+                    let mut tag: Option<String> = None;
+                    let mut commit: Option<String> = None;
+                    let mut as_json = no_dna_active();
+                    let mut i = 3;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--url" => {
+                                i += 1;
+                                url = Some(args.get(i).context("--url needs a value")?.clone());
+                            }
+                            "--tag" => {
+                                i += 1;
+                                tag = Some(args.get(i).context("--tag needs a value")?.clone());
+                            }
+                            "--commit" => {
+                                i += 1;
+                                commit =
+                                    Some(args.get(i).context("--commit needs a value")?.clone());
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let url = url.context("skill add requires --url")?;
+                    let tag = tag.context("skill add requires --tag")?;
+                    let commit = commit.context("skill add requires --commit")?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SkillAdd {
+                            dir,
+                            url,
+                            tag,
+                            commit,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::Skill { skill } => {
+                            if as_json {
+                                println!("{}", serde_json::to_string(&skill_json(&skill))?);
+                            } else {
+                                println!(
+                                    "installed skill '{}' v{} ({})",
+                                    skill.name, skill.version, skill.digest
+                                );
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "list" => {
+                    let mut as_json = no_dna_active();
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(&mut stream, &Request::SkillList).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::Skills { skills } => {
+                            if as_json {
+                                println!("{}", serde_json::to_string(&skill_list_json(&skills))?);
+                            } else if skills.is_empty() {
+                                println!("(no skills installed)");
+                            } else {
+                                for s in &skills {
+                                    println!("{}\t{}\t{}", s.name, s.version, s.digest);
+                                }
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "show" => {
+                    if args.len() < 3 {
+                        eprintln!("covenant skill show: missing <name>");
+                        std::process::exit(2);
+                    }
+                    let name = args[2].clone();
+                    let mut as_json = no_dna_active();
+                    let mut i = 3;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(&mut stream, &Request::SkillShow { name }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::Skill { skill } => {
+                            if as_json {
+                                println!("{}", serde_json::to_string(&skill_json(&skill))?);
+                            } else {
+                                println!("{}", serde_json::to_string_pretty(&skill)?);
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "verify" => {
+                    if args.len() < 3 {
+                        eprintln!("covenant skill verify: missing <name>");
+                        std::process::exit(2);
+                    }
+                    let name = args[2].clone();
+                    let mut as_json = no_dna_active();
+                    let mut i = 3;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(&mut stream, &Request::SkillVerify { name }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SkillVerified {
+                            name,
+                            digest_ok,
+                            digest,
+                            declared_capabilities,
+                            declared_programs,
+                        } => {
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&skill_verify_json(
+                                        &name,
+                                        digest_ok,
+                                        &digest,
+                                        &declared_capabilities,
+                                        &declared_programs,
+                                    ))?
+                                );
+                            } else {
+                                println!(
+                                    "skill '{name}' digest {} ({digest})",
+                                    if digest_ok { "OK" } else { "MISMATCH" },
+                                );
+                                println!(
+                                    "  capabilities: {}",
+                                    if declared_capabilities.is_empty() {
+                                        "(none)".to_string()
+                                    } else {
+                                        declared_capabilities.join(", ")
+                                    },
+                                );
+                                println!(
+                                    "  programs: {}",
+                                    if declared_programs.is_empty() {
+                                        "(none)".to_string()
+                                    } else {
+                                        declared_programs.join(", ")
+                                    },
+                                );
+                            }
+                            if !digest_ok {
+                                std::process::exit(1);
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                other => {
+                    eprintln!("covenant skill: unknown subcommand '{other}'");
+                    print_usage();
+                    std::process::exit(2);
+                }
+            }
+        }
         other => {
             eprintln!("covenant: unknown command '{other}'");
             print_usage();
@@ -5218,6 +5411,37 @@ fn audit_verify_json(report: &AuditIntegrityReport) -> serde_json::Value {
     serde_json::json!({
         "kind": "audit_integrity",
         "report": report,
+    })
+}
+
+fn skill_json(skill: &SkillManifest) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "skill",
+        "skill": skill,
+    })
+}
+
+fn skill_list_json(skills: &[SkillManifest]) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "skill_list",
+        "skills": skills,
+    })
+}
+
+fn skill_verify_json(
+    name: &str,
+    digest_ok: bool,
+    digest: &str,
+    declared_capabilities: &[String],
+    declared_programs: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "skill_verify",
+        "name": name,
+        "digest_ok": digest_ok,
+        "digest": digest,
+        "declared_capabilities": declared_capabilities,
+        "declared_programs": declared_programs,
     })
 }
 
@@ -7253,6 +7477,61 @@ mod tests {
         assert_shape(&audit_recent_json(5, Some(1_699_999_999_000), &events));
         assert_shape(&audit_recent_json(5, Some(1_699_999_999_000), &[]));
         assert_shape(&audit_recent_json(5, None, &[]));
+    }
+
+    fn skill_manifest_fixture() -> SkillManifest {
+        SkillManifest {
+            name: "covenant".into(),
+            version: "0.1.0".into(),
+            description: "verifiable agent execution on Solana".into(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            source: covenant_skills::SkillSource {
+                url: "https://github.com/open-covenant/covenant-skill/tree/v0.1.0/skill".into(),
+                tag: "v0.1.0".into(),
+                commit: "0".repeat(40),
+            },
+            declared_capabilities: vec!["skill.use.covenant".into()],
+            declared_programs: vec!["11111111111111111111111111111111".into()],
+            sends_tx: true,
+        }
+    }
+
+    #[test]
+    fn skill_json_renders_stable_shape() {
+        let value = skill_json(&skill_manifest_fixture());
+        assert_eq!(value["kind"], "skill");
+        assert_eq!(value["skill"]["name"], "covenant");
+        assert_eq!(value["skill"]["version"], "0.1.0");
+        assert_eq!(
+            value["skill"]["digest"],
+            format!("sha256:{}", "0".repeat(64))
+        );
+    }
+
+    #[test]
+    fn skill_list_json_renders_stable_shape() {
+        let value = skill_list_json(&[skill_manifest_fixture()]);
+        assert_eq!(value["kind"], "skill_list");
+        assert_eq!(value["skills"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["skills"][0]["name"], "covenant");
+    }
+
+    #[test]
+    fn skill_verify_json_renders_stable_shape() {
+        let value = skill_verify_json(
+            "covenant",
+            false,
+            &format!("sha256:{}", "0".repeat(64)),
+            &["skill.use.covenant".to_string()],
+            &["11111111111111111111111111111111".to_string()],
+        );
+        assert_eq!(value["kind"], "skill_verify");
+        assert_eq!(value["name"], "covenant");
+        assert_eq!(value["digest_ok"], false);
+        assert_eq!(
+            value["declared_capabilities"].as_array().map(Vec::len),
+            Some(1)
+        );
     }
 
     #[test]

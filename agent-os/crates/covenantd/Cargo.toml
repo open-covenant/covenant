@@ -25,6 +25,7 @@ covenant-a2a = { path = "../covenant-a2a" }
 covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 covenant-router = { path = "../covenant-router" }
+covenant-skills = { path = "../covenant-skills" }
 covenant-runtime = { path = "../covenant-runtime" }
 covenant-sap-bridge = { path = "../covenant-sap-bridge" }
 covenant-settlement = { path = "../covenant-settlement" }

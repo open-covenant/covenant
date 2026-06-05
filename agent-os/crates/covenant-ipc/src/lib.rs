@@ -17,6 +17,7 @@ use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
 use covenant_permissions::SignedCapability;
+use covenant_skills::SkillManifest;
 use covenant_types::{
     MemoryCompactionOutcome, MemoryCompactionRequest, MemoryRecord, MemoryRepairOutcome,
     MemoryRepairRequest, MemoryTier, SettlementReceipt,
@@ -740,6 +741,35 @@ pub enum Request {
     SapPublishAgent {
         manifest_json: String,
     },
+    /// Install a Solana Agent Skill from a local directory. The daemon
+    /// reads `<dir>/SKILL.md` + `references/**`, pins the content digest
+    /// against the immutable `{url, tag, commit}` source coordinates,
+    /// copies the tree into its own skill store, and records
+    /// `SkillInstalled` in the audit chain. The installed manifest comes
+    /// back as [`Response::Skill`]; a parse/IO failure is
+    /// [`Response::Error`].
+    SkillAdd {
+        dir: String,
+        url: String,
+        tag: String,
+        commit: String,
+    },
+    /// List the skills the daemon has installed. Returns
+    /// [`Response::Skills`].
+    SkillList,
+    /// Show one installed skill's pinned manifest by `name`. Returns
+    /// [`Response::Skill`], or [`Response::Error`] when no skill is
+    /// installed under that name.
+    SkillShow {
+        name: String,
+    },
+    /// Re-verify an installed skill: recompute the on-disk content digest
+    /// and compare it to the pinned one, reporting the declared
+    /// capability surface. A mismatch records `SkillRefused` and comes
+    /// back as [`Response::SkillVerified`] with `digest_ok = false`.
+    SkillVerify {
+        name: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -983,6 +1013,27 @@ pub enum Response {
     SapPublishedAgent {
         agent_pda: String,
         signature: String,
+    },
+    /// One installed skill's pinned manifest — the reply to
+    /// [`Request::SkillAdd`] and [`Request::SkillShow`].
+    Skill {
+        skill: SkillManifest,
+    },
+    /// Every installed skill's manifest — the reply to
+    /// [`Request::SkillList`].
+    Skills {
+        skills: Vec<SkillManifest>,
+    },
+    /// The result of [`Request::SkillVerify`]: `digest_ok` is the
+    /// recompute-vs-pinned verdict, `digest` is the pinned content digest,
+    /// and the declared capability/program surface is surfaced so an
+    /// operator can review what the skill is authorized to do.
+    SkillVerified {
+        name: String,
+        digest_ok: bool,
+        digest: String,
+        declared_capabilities: Vec<String>,
+        declared_programs: Vec<String>,
     },
     Error {
         message: String,
@@ -11349,6 +11400,137 @@ mod tests {
             Some(200)
         );
         assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(id)));
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    fn skill_fixture() -> SkillManifest {
+        SkillManifest {
+            name: "covenant".into(),
+            version: "0.1.0".into(),
+            description: "verifiable agent execution on Solana".into(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            source: covenant_skills::SkillSource {
+                url: "https://github.com/open-covenant/covenant-skill/tree/v0.1.0/skill".into(),
+                tag: "v0.1.0".into(),
+                commit: "0".repeat(40),
+            },
+            declared_capabilities: vec!["skill.use.covenant".into()],
+            declared_programs: vec!["11111111111111111111111111111111".into()],
+            sends_tx: true,
+        }
+    }
+
+    #[test]
+    fn request_skill_add_serde_pins_wire_shape() {
+        let event = Request::SkillAdd {
+            dir: "/tmp/skill".into(),
+            url: "https://github.com/open-covenant/covenant-skill/tree/v0.1.0/skill".into(),
+            tag: "v0.1.0".into(),
+            commit: "0".repeat(40),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("skill_add")));
+        assert_eq!(obj.get("dir"), Some(&serde_json::json!("/tmp/skill")));
+        assert_eq!(obj.get("tag"), Some(&serde_json::json!("v0.1.0")));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "SkillAdd must round-trip verbatim");
+    }
+
+    #[test]
+    fn request_skill_list_serde_pins_wire_shape() {
+        let event = Request::SkillList;
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({ "kind": "skill_list" }),
+            "fieldless SkillList must serialize to exactly the kind tag",
+        );
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn request_skill_show_serde_pins_wire_shape() {
+        let event = Request::SkillShow {
+            name: "covenant".into(),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({ "kind": "skill_show", "name": "covenant" }),
+        );
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn request_skill_verify_serde_pins_wire_shape() {
+        let event = Request::SkillVerify {
+            name: "covenant".into(),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({ "kind": "skill_verify", "name": "covenant" }),
+        );
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn response_skill_serde_pins_wire_shape() {
+        let resp = Response::Skill {
+            skill: skill_fixture(),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("skill")));
+        assert_eq!(
+            obj.get("skill").and_then(|s| s.get("digest")),
+            Some(&serde_json::json!(format!("sha256:{}", "0".repeat(64)))),
+        );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, resp,
+            "Skill must round-trip the full manifest verbatim"
+        );
+    }
+
+    #[test]
+    fn response_skills_serde_pins_wire_shape() {
+        let resp = Response::Skills {
+            skills: vec![skill_fixture()],
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("skills")));
+        assert_eq!(
+            obj.get("skills").and_then(|s| s.as_array()).map(Vec::len),
+            Some(1),
+        );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn response_skill_verified_serde_pins_wire_shape() {
+        let resp = Response::SkillVerified {
+            name: "covenant".into(),
+            digest_ok: true,
+            digest: format!("sha256:{}", "0".repeat(64)),
+            declared_capabilities: vec!["skill.use.covenant".into()],
+            declared_programs: vec!["11111111111111111111111111111111".into()],
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("skill_verified")));
+        assert_eq!(obj.get("digest_ok"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            obj.get("declared_capabilities"),
+            Some(&serde_json::json!(["skill.use.covenant"])),
+        );
         let back: Response = serde_json::from_value(wire).unwrap();
         assert_eq!(back, resp);
     }

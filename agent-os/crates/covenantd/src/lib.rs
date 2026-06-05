@@ -57,6 +57,7 @@ use covenant_settlement::{
     build_receipt_batch, intent_dispatch_credits, memory_write_credits, ChainConfirmation,
     Settlement,
 };
+use covenant_skills::{install_skill, SkillIntegrityError, SkillManifest, SkillSource};
 use covenant_types::{
     AgentId, BudgetPauseCheckpoint, BudgetPauseReason, Capability, Intent, MemoryCompactionRequest,
     MemoryRecord, MemoryRepairCommand, MemoryRepairMode, MemoryTier, Priority, ResourceKind,
@@ -1909,6 +1910,224 @@ impl Server {
                 self.revoke_peer(token_prefix, force, match_limit, peer)
                     .await
             }
+            Request::SkillAdd {
+                dir,
+                url,
+                tag,
+                commit,
+            } => self.skill_add(dir, url, tag, commit, peer).await,
+            Request::SkillList => self.skill_list(peer).await,
+            Request::SkillShow { name } => self.skill_show(name, peer).await,
+            Request::SkillVerify { name } => self.skill_verify(name, peer).await,
+        }
+    }
+
+    async fn skill_add(
+        &self,
+        dir: String,
+        url: String,
+        tag: String,
+        commit: String,
+        peer: &AgentId,
+    ) -> Response {
+        let Some(home) = self.home.clone() else {
+            return Response::Error {
+                message: "skill add unavailable: server has no home directory configured".into(),
+            };
+        };
+        // Install writes to the daemon's shared skill store and audit chain,
+        // so it is an operator-only mutation — mirror revoke_peer. Gate before
+        // touching the caller-supplied path so a non-operator can neither
+        // install nor make the daemon walk an arbitrary directory tree.
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: self.identity.agent_id(),
+                kind: AuditKind::SkillRefused {
+                    skill_name: dir.clone(),
+                    reason: "skill install requires the operator identity".into(),
+                },
+            };
+            if let Err(e) = self.record_daemon_event_required(event).await {
+                return audit_failure_response(e);
+            }
+            return Response::Error {
+                message: "skill install requires the operator identity".into(),
+            };
+        }
+        let source = SkillSource { url, tag, commit };
+        let skill_dir = PathBuf::from(&dir);
+        let manifest = match install_skill(&skill_dir, source) {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("skill install failed: {e}"),
+                }
+            }
+        };
+        if !valid_skill_name(&manifest.name) {
+            return Response::Error {
+                message: format!(
+                    "skill name '{}' is not a safe store key (alphanumeric, '.', '_', '-' only)",
+                    manifest.name
+                ),
+            };
+        }
+        let store = home.join("skills").join(&manifest.name);
+        if let Err(e) = copy_skill_tree(&skill_dir, &store) {
+            return Response::Error {
+                message: format!("skill store write failed: {e}"),
+            };
+        }
+        let manifest_json = match serde_json::to_string_pretty(&manifest) {
+            Ok(json) => json,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("skill manifest serialize failed: {e}"),
+                }
+            }
+        };
+        if let Err(e) = std::fs::write(store.join("manifest.json"), manifest_json) {
+            return Response::Error {
+                message: format!("skill manifest write failed: {e}"),
+            };
+        }
+        let digest_hex = manifest
+            .digest
+            .strip_prefix("sha256:")
+            .unwrap_or(&manifest.digest)
+            .to_string();
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: self.identity.agent_id(),
+            kind: AuditKind::SkillInstalled {
+                name: manifest.name.clone(),
+                version: manifest.version.clone(),
+                digest_hex,
+                source_url: manifest.source.url.clone(),
+                source_tag: manifest.source.tag.clone(),
+                source_commit: manifest.source.commit.clone(),
+            },
+        };
+        if let Err(e) = self.record_daemon_event_required(event).await {
+            return audit_failure_response(e);
+        }
+        Response::Skill { skill: manifest }
+    }
+
+    async fn skill_list(&self, _peer: &AgentId) -> Response {
+        let Some(home) = self.home.clone() else {
+            return Response::Error {
+                message: "skill list unavailable: server has no home directory configured".into(),
+            };
+        };
+        let entries = match std::fs::read_dir(home.join("skills")) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Response::Skills { skills: Vec::new() }
+            }
+            Err(e) => {
+                return Response::Error {
+                    message: format!("skill store read failed: {e}"),
+                }
+            }
+        };
+        let mut skills = Vec::new();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("skill store read failed: {e}"),
+                    }
+                }
+            };
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            match read_skill_manifest(&path) {
+                Ok(Some(manifest)) => skills.push(manifest),
+                Ok(None) => continue,
+                Err(e) => return Response::Error { message: e },
+            }
+        }
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
+        Response::Skills { skills }
+    }
+
+    async fn skill_show(&self, name: String, _peer: &AgentId) -> Response {
+        let Some(home) = self.home.clone() else {
+            return Response::Error {
+                message: "skill show unavailable: server has no home directory configured".into(),
+            };
+        };
+        if !valid_skill_name(&name) {
+            return Response::Error {
+                message: format!("invalid skill name '{name}'"),
+            };
+        }
+        match read_skill_manifest(&home.join("skills").join(&name)) {
+            Ok(Some(skill)) => Response::Skill { skill },
+            Ok(None) => Response::Error {
+                message: format!("no skill installed named '{name}'"),
+            },
+            Err(e) => Response::Error { message: e },
+        }
+    }
+
+    async fn skill_verify(&self, name: String, _peer: &AgentId) -> Response {
+        let Some(home) = self.home.clone() else {
+            return Response::Error {
+                message: "skill verify unavailable: server has no home directory configured".into(),
+            };
+        };
+        if !valid_skill_name(&name) {
+            return Response::Error {
+                message: format!("invalid skill name '{name}'"),
+            };
+        }
+        let store = home.join("skills").join(&name);
+        let manifest = match read_skill_manifest(&store) {
+            Ok(Some(manifest)) => manifest,
+            Ok(None) => {
+                return Response::Error {
+                    message: format!("no skill installed named '{name}'"),
+                }
+            }
+            Err(e) => return Response::Error { message: e },
+        };
+        let digest_ok = match manifest.verify_against_disk(&store) {
+            Ok(()) => true,
+            Err(SkillIntegrityError::DigestMismatch { .. }) => false,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("skill verify failed: {e}"),
+                }
+            }
+        };
+        if !digest_ok {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: self.identity.agent_id(),
+                kind: AuditKind::SkillRefused {
+                    skill_name: name.clone(),
+                    reason: "content digest mismatch at verify".into(),
+                },
+            };
+            if let Err(e) = self.record_daemon_event_required(event).await {
+                return audit_failure_response(e);
+            }
+        }
+        Response::SkillVerified {
+            name,
+            digest_ok,
+            digest: manifest.digest,
+            declared_capabilities: manifest.declared_capabilities,
+            declared_programs: manifest.declared_programs,
         }
     }
 
@@ -9845,6 +10064,61 @@ fn epoch_ms() -> u64 {
 /// produce a rejection response indistinguishable from a normal rejection.
 /// Callers of these kinds must use `record_*_event_required` and fall back
 /// to `audit_failure_response` on error.
+/// A skill name is used directly as a store directory key, so it must be a
+/// single safe path component — no separators, no `.`/`..` traversal.
+fn valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Read `<skill_store>/manifest.json` into a [`SkillManifest`]. Missing
+/// manifest is `Ok(None)` (a non-skill dir); a read/parse failure is `Err`.
+fn read_skill_manifest(skill_store: &Path) -> Result<Option<SkillManifest>, String> {
+    match std::fs::read_to_string(skill_store.join("manifest.json")) {
+        Ok(json) => serde_json::from_str::<SkillManifest>(&json)
+            .map(Some)
+            .map_err(|e| format!("skill manifest parse failed: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("skill manifest read failed: {e}")),
+    }
+}
+
+/// Snapshot a skill's digest-covered surface (`SKILL.md` + `references/**`)
+/// into the daemon's own store so a later verify recomputes against a tree
+/// the daemon controls. Replaces any prior install for a clean snapshot.
+fn copy_skill_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if dst.exists() {
+        std::fs::remove_dir_all(dst)?;
+    }
+    std::fs::create_dir_all(dst)?;
+    std::fs::copy(src.join("SKILL.md"), dst.join("SKILL.md"))?;
+    let references = src.join("references");
+    if references.is_dir() {
+        copy_dir_recursive(&references, &dst.join("references"))?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &to)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
 fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
     matches!(
         kind,
@@ -9858,6 +10132,8 @@ fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
             | AuditKind::BudgetExhausted { .. }
             | AuditKind::BudgetPreempted { .. }
             | AuditKind::BudgetPreemptFailed { .. }
+            | AuditKind::SkillInstalled { .. }
+            | AuditKind::SkillRefused { .. }
     )
 }
 
@@ -30412,6 +30688,18 @@ budget_credits_per_hour = {credits}
                 tokens_remaining: 0,
                 refill_eta_ms: 1000,
             },
+            AuditKind::SkillInstalled {
+                name: "covenant".into(),
+                version: "0.1.0".into(),
+                digest_hex: "0".repeat(64),
+                source_url: "https://example.invalid/tree/v0/skill".into(),
+                source_tag: "v0".into(),
+                source_commit: "0".repeat(40),
+            },
+            AuditKind::SkillRefused {
+                skill_name: "covenant".into(),
+                reason: "content digest mismatch".into(),
+            },
         ];
         for kind in &must_persist {
             assert!(
@@ -30429,6 +30717,32 @@ budget_credits_per_hour = {credits}
             status: "ok".into(),
         };
         assert!(!audit_kind_requires_persistence(&best_effort));
+    }
+
+    #[test]
+    fn valid_skill_name_rejects_traversal_and_separators() {
+        for ok in ["covenant", "my-skill_1.0", "a", "A1", "v0.1.0"] {
+            assert!(valid_skill_name(ok), "{ok:?} should be accepted");
+        }
+        // A skill name keys a directory under the daemon's skill store, so
+        // anything that could escape it — `.`/`..`, path separators — or is
+        // otherwise unsafe must be refused before the store path is built.
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../etc",
+            "a/b",
+            "a\\b",
+            "skill name",
+            "sk\0ill",
+            "naïve",
+            "a:b",
+        ] {
+            assert!(!valid_skill_name(bad), "{bad:?} should be rejected");
+        }
+        assert!(valid_skill_name(&"x".repeat(128)));
+        assert!(!valid_skill_name(&"x".repeat(129)));
     }
 
     #[test]

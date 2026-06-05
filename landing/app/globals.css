@@ -58,6 +58,14 @@ label[for] {
   }
 }
 
+/* Scrollable without a visible scrollbar — used by the build terminal. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* Shared content width for top-level subpages (contact, roadmap, …).
    Single source of truth — change the width here, every subpage follows. */
 .page-container {

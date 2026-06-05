@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { type UIEvent, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 
 type Line = { k: string; t: string };
@@ -77,6 +77,7 @@ export function AgentTerminal({
   const beat = useRef(0);
   const live = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
 
   useEffect(() => {
     const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -196,13 +197,17 @@ export function AgentTerminal({
     };
   }, []);
 
-  // Keep the newest line in view. While content is shorter than the panel,
-  // scrollTop clamps to 0, so the stream fills from the top; once it overflows
-  // it tails the bottom and older lines scroll off the top.
+  // Tail the newest line, but only while the viewer is already at the bottom —
+  // scroll up to read history and the stream stops yanking you back down.
   useEffect(() => {
     const el = bodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
   });
+
+  const onScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
 
   return (
     <div
@@ -237,7 +242,11 @@ export function AgentTerminal({
           </button>
         )}
       </div>
-      <div ref={bodyRef} className="min-w-0 flex-1 overflow-hidden px-3 py-2">
+      <div
+        ref={bodyRef}
+        onScroll={onScroll}
+        className="no-scrollbar min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-3 py-2"
+      >
         {lines.map((line, i) => (
           <Row key={i} line={line} />
         ))}

@@ -7,79 +7,108 @@ import { findRepoRoot } from "@/lib/agentStream.mjs";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// The autonomous loop's git identity. The "UP" counter runs from this author's
-// very first commit — the moment the loop began building Covenant in the open.
-const LOOP_AUTHOR = "Open Covenant Automation";
-// Fallback if git is unavailable: the loop's first commit — see loopStartISO.
+const REPO = "open-covenant/covenant";
+const BRANCH = "main";
+// The loop's first commit — the moment Covenant began building in the open.
+// Immutable history, so a constant is authoritative.
 const ALPHA_SINCE = "2026-05-09T20:43:52+02:00";
-const TTL = 60_000;
+const TTL = 120_000;
+const FETCH_TIMEOUT = 4000;
 let cache: { at: number; body: string } | null = null;
 
 const git = (root: string, args: string[]) =>
   execFileSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).trim();
 
-// Time the "UP" counter from the autonomous loop's first commit. Immutable, so
-// any failure just falls back to the const.
-function loopStartISO(root: string): string {
-  try {
-    return (
-      git(root, ["log", "--reverse", `--author=${LOOP_AUTHOR}`, "--format=%cI", "HEAD"]).split("\n")[0] ||
-      ALPHA_SINCE
-    );
-  } catch {
-    return ALPHA_SINCE;
-  }
+function parseMetrics(md: string) {
+  return {
+    tests: md.match(/([\d,]+)\s+source-discovered Rust tests/i)?.[1] ?? null,
+    live: md.match(/([\d,]+)\s+live boundary tests/i)?.[1] ?? null,
+    crates: md.match(/(\d+)\s+Rust crates/i)?.[1] ?? null,
+  };
 }
 
-// Source the headline metrics from the repo's own README block rather than
-// inventing them — keeps the strip honest and self-updating.
-function readmeMetrics(root: string) {
-  try {
-    const md = readFileSync(join(root, "README.md"), "utf8");
-    return {
-      tests: md.match(/([\d,]+)\s+source-discovered Rust tests/i)?.[1] ?? null,
-      live: md.match(/([\d,]+)\s+live boundary tests/i)?.[1] ?? null,
-      crates: md.match(/(\d+)\s+Rust crates/i)?.[1] ?? null,
-    };
-  } catch {
-    return { tests: null, live: null, crates: null };
-  }
+function ghHeaders() {
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  return {
+    "user-agent": "covenant-hud",
+    accept: "application/vnd.github+json",
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
 }
 
-export function GET() {
+// Read head + total commit count straight from GitHub so the strip tracks
+// origin/main regardless of when the site last deployed — the deployed checkout
+// is frozen at deploy time and shallow, so its own git can't tell. per_page=1
+// returns the latest sha; the Link header's last page is the commit total.
+async function githubHead(signal: AbortSignal) {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/commits?sha=${BRANCH}&per_page=1`, {
+    headers: ghHeaders(),
+    signal,
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`gh ${res.status}`);
+  const arr = (await res.json()) as Array<{ sha?: string }>;
+  const last = (res.headers.get("link") ?? "").match(/[?&]page=(\d+)>;\s*rel="last"/i);
+  return {
+    head: arr[0]?.sha?.slice(0, 7) ?? null,
+    commits: last ? Number(last[1]) : arr.length ? 1 : null,
+  };
+}
+
+async function githubMetrics(signal: AbortSignal) {
+  const res = await fetch(`https://raw.githubusercontent.com/${REPO}/${BRANCH}/README.md`, {
+    signal,
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`readme ${res.status}`);
+  return parseMetrics(await res.text());
+}
+
+export async function GET() {
   const now = Date.now();
   if (cache && now - cache.at < TTL) {
     return new NextResponse(cache.body, { headers: { "content-type": "application/json" } });
   }
 
-  const root = findRepoRoot(process.cwd());
-  let commits: number | null = null;
   let head: string | null = null;
-  let alphaSince = ALPHA_SINCE;
+  let commits: number | null = null;
   let metrics = { tests: null as string | null, live: null as string | null, crates: null as string | null };
 
-  if (root) {
-    try {
-      commits = Number(git(root, ["rev-list", "--count", "HEAD"])) || null;
-    } catch {}
-    try {
-      head = git(root, ["rev-parse", "--short", "HEAD"]) || null;
-    } catch {}
-    alphaSince = loopStartISO(root);
-    metrics = readmeMetrics(root);
-  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
+  const [gh, gm] = await Promise.allSettled([githubHead(ctrl.signal), githubMetrics(ctrl.signal)]);
+  clearTimeout(timer);
+  if (gh.status === "fulfilled") ({ head, commits } = gh.value);
+  if (gm.status === "fulfilled") metrics = gm.value;
 
-  // The runtime checkout can be shallow (Render clones depth=1), making the live
-  // rev-list count ~1. Fall back to the real total baked into the snapshot at
-  // build time, taking whichever is larger.
+  // Fall back to the deployed checkout, then the build-time snapshot, when
+  // GitHub is unreachable. Never let the count regress below what we know.
+  const root = findRepoRoot(process.cwd());
+  if (root) {
+    if (head === null) {
+      try {
+        head = git(root, ["rev-parse", "--short", "HEAD"]) || null;
+      } catch {}
+    }
+    if (commits === null) {
+      try {
+        commits = Number(git(root, ["rev-list", "--count", "HEAD"])) || null;
+      } catch {}
+    }
+    if (metrics.tests === null) {
+      try {
+        metrics = parseMetrics(readFileSync(join(root, "README.md"), "utf8"));
+      } catch {}
+    }
+  }
   try {
     const snap = JSON.parse(readFileSync(join(process.cwd(), "public", "agent-stream.json"), "utf8"));
     if (snap.totalCommits) commits = Math.max(commits ?? 0, snap.totalCommits);
   } catch {}
 
-  const body = JSON.stringify({ commits, head, alphaSince, ...metrics });
+  const body = JSON.stringify({ commits, head, alphaSince: ALPHA_SINCE, ...metrics });
   cache = { at: now, body };
   return new NextResponse(body, {
-    headers: { "content-type": "application/json", "cache-control": "public, max-age=60" },
+    headers: { "content-type": "application/json", "cache-control": "public, max-age=120" },
   });
 }

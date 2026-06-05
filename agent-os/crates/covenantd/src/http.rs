@@ -166,6 +166,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/chain/receipt-batches", get(chain_receipt_batches))
         .route("/sap/stats", get(sap_stats))
         .route("/x402/pay", post(pay_x402_route))
+        .route("/spend/authorize", post(authorize_spend_route))
         .route(
             "/settlement/receipts/backfill",
             post(settlement_backfill_receipts),
@@ -1319,6 +1320,45 @@ async fn pay_x402_route(
                     asset: b.asset,
                     per_call_cap: b.per_call_cap,
                     credits: b.credits,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// HTTP body shape for `POST /spend/authorize`. Mirrors the
+/// [`Request::AuthorizeSpend`] fields except for the `kind` discriminator.
+/// `amount` and `per_call_cap` are decimal strings so atomic u128 amounts
+/// above JSON's 53-bit integer ceiling survive the wire.
+#[derive(Deserialize)]
+struct AuthorizeSpendBody {
+    provider: String,
+    network: String,
+    asset: String,
+    amount: String,
+    per_call_cap: String,
+    credits: u64,
+    #[serde(default)]
+    destination: Option<String>,
+}
+
+async fn authorize_spend_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<AuthorizeSpendBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::AuthorizeSpend {
+                    provider: b.provider,
+                    network: b.network,
+                    asset: b.asset,
+                    amount: b.amount,
+                    per_call_cap: b.per_call_cap,
+                    credits: b.credits,
+                    destination: b.destination,
                 },
                 &peer,
             )

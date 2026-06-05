@@ -1,0 +1,35 @@
+[package]
+name = "covenant-metaplex-signer"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Covenant contributors"]
+repository = "https://github.com/open-covenant/covenant"
+description = "Standalone Metaplex minting-key signer. Runs as a sidecar to covenantd so the solana-sdk 3.x + mpl-core dep tree and the minting key stay out of the daemon."
+
+# Standalone workspace on purpose. The daemon's main workspace has no
+# solana-sdk; the x402 signer pins solana-sdk v4. This sidecar pins
+# solana-sdk 3.x (what mpl-core / mpl-agent / mpl-bubblegum target).
+# Resolving each generation in its own subprocess workspace is what keeps
+# the version split from ever unifying in one Cargo graph.
+[workspace]
+
+[[bin]]
+name = "covenant-metaplex-signer"
+path = "src/main.rs"
+
+[dependencies]
+covenant-metaplex = { path = "../covenant-metaplex" }
+solana-sdk = "3"
+solana-program = "3"
+mpl-core = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+bincode = "1"
+base64 = "0.22"
+bs58 = "0.5"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

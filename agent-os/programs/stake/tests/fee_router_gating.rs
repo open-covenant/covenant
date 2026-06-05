@@ -9,9 +9,10 @@ fn deposit_sol_fees_rejects_non_fee_router_signer() {
     let stranger = Keypair::new();
     env.svm.airdrop(&stranger.pubkey(), 5_000_000_000).unwrap();
 
-    let data = anchor_lang::InstructionData::data(
-        &covenant_stake_program::instruction::DepositSolFees { amount: 100_000_000 },
-    );
+    let data =
+        anchor_lang::InstructionData::data(&covenant_stake_program::instruction::DepositSolFees {
+            amount: 100_000_000,
+        });
     let metas = vec![
         solana_sdk::instruction::AccountMeta::new(env.config, false),
         solana_sdk::instruction::AccountMeta::new(env.fee_router, false),
@@ -39,11 +40,9 @@ fn deposit_sol_fees_rejects_above_max_cap() {
     let mut env = boot();
     // Need at least one locker so internal_accrue exercises the math path.
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
 
-    let err = deposit_sol_fees(&mut env, MAX_DEPOSIT_LAMPORTS + 1)
-        .expect_err("exceeds cap");
+    let err = deposit_sol_fees(&mut env, MAX_DEPOSIT_LAMPORTS + 1).expect_err("exceeds cap");
     assert_eq!(custom_error(&err), Some(E_DEPOSIT_AMOUNT_EXCEEDED));
 }
 
@@ -51,8 +50,7 @@ fn deposit_sol_fees_rejects_above_max_cap() {
 fn deposit_sol_fees_rate_limited() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
 
     deposit_sol_fees(&mut env, 100_000_000).expect("first deposit");
     let err = deposit_sol_fees(&mut env, 100_000_000).expect_err("rate limited");
@@ -66,11 +64,12 @@ fn deposit_sol_fees_rate_limited() {
 fn rotate_fee_router_changes_authorized_signer() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS).expect("create");
 
     let new_router = Keypair::new();
-    env.svm.airdrop(&new_router.pubkey(), 5_000_000_000).unwrap();
+    env.svm
+        .airdrop(&new_router.pubkey(), 5_000_000_000)
+        .unwrap();
 
     let authority = env.payer.insecure_clone();
     rotate_fee_router(

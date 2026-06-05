@@ -34,8 +34,8 @@ fn create_position_locks_principal_and_records_weight() {
     let amount = 5_000_000_000; // 5000 CVNT
     let (owner, ata) = funded_owner(&mut env, amount);
 
-    let position = create_position(&mut env, &owner, &ata, 1, amount, TIER_90D_BPS)
-        .expect("create_position");
+    let position =
+        create_position(&mut env, &owner, &ata, 1, amount, TIER_90D_BPS).expect("create_position");
 
     let pos = position_state(&env, &position);
     assert_eq!(pos.owner, owner.pubkey());
@@ -59,8 +59,7 @@ fn deposit_fees_distributes_to_single_locker_and_claim_pays_out() {
     let mut env = boot();
     let amount = MIN_LOCK_AMOUNT;
     let (owner, ata) = funded_owner(&mut env, amount);
-    create_position(&mut env, &owner, &ata, 1, amount, TIER_30D_BPS)
-        .expect("create_position");
+    create_position(&mut env, &owner, &ata, 1, amount, TIER_30D_BPS).expect("create_position");
 
     let fee_amount = 1_000_000_000; // 1 SOL
     deposit_sol_fees(&mut env, fee_amount).expect("deposit_sol_fees");
@@ -82,11 +81,10 @@ fn close_position_returns_principal_after_lock_expires() {
     let mut env = boot();
     let amount = MIN_LOCK_AMOUNT;
     let (owner, ata) = funded_owner(&mut env, amount);
-    create_position(&mut env, &owner, &ata, 1, amount, TIER_30D_BPS)
-        .expect("create_position");
+    create_position(&mut env, &owner, &ata, 1, amount, TIER_30D_BPS).expect("create_position");
 
-    let err = close_position(&mut env, &owner, &ata, 1)
-        .expect_err("close before lock_end should fail");
+    let err =
+        close_position(&mut env, &owner, &ata, 1).expect_err("close before lock_end should fail");
     assert_eq!(custom_error(&err), Some(E_LOCK_NOT_EXPIRED));
 
     advance_clock(&mut env, TIER_30D_SECS + 1);
@@ -104,8 +102,7 @@ fn close_paid_out_unclaimed_lamports() {
     let mut env = boot();
     let amount = MIN_LOCK_AMOUNT;
     let (owner, ata) = funded_owner(&mut env, amount);
-    create_position(&mut env, &owner, &ata, 1, amount, TIER_30D_BPS)
-        .expect("create_position");
+    create_position(&mut env, &owner, &ata, 1, amount, TIER_30D_BPS).expect("create_position");
 
     let fee_amount = 500_000_000;
     deposit_sol_fees(&mut env, fee_amount).expect("deposit_sol_fees");
@@ -116,7 +113,10 @@ fn close_paid_out_unclaimed_lamports() {
     let owner_after = sol_balance(&env, &owner.pubkey());
 
     let delta = owner_after - owner_before;
-    assert!(delta >= fee_amount, "owner should receive at least the fee amount");
+    assert!(
+        delta >= fee_amount,
+        "owner should receive at least the fee amount"
+    );
 }
 
 #[test]
@@ -135,8 +135,7 @@ fn two_lockers_split_fees_pro_rata_by_weight() {
 
     create_position(&mut env, &alice, &alice_ata, 1, alice_amount, TIER_30D_BPS)
         .expect("alice create");
-    create_position(&mut env, &bob, &bob_ata, 1, bob_amount, TIER_180D_BPS)
-        .expect("bob create");
+    create_position(&mut env, &bob, &bob_ata, 1, bob_amount, TIER_180D_BPS).expect("bob create");
 
     let fee_amount = 3_000_000_000;
     deposit_sol_fees(&mut env, fee_amount).expect("deposit");

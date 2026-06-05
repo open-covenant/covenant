@@ -103,9 +103,12 @@ pub fn skill_content_digest(skill_dir: &Path) -> Result<String, SkillParseError>
         source,
     })?;
     entries.push(("SKILL.md".to_string(), skill_md_bytes));
-    let references_dir = skill_dir.join("references");
-    if references_dir.is_dir() {
-        collect_files(&references_dir, &references_dir, &mut entries)?;
+    for (rel, path) in reference_files(skill_dir)? {
+        let bytes = fs::read(&path).map_err(|source| SkillParseError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        entries.push((rel, bytes));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     let mut composite = Sha256::new();
@@ -122,12 +125,30 @@ pub fn skill_content_digest(skill_dir: &Path) -> Result<String, SkillParseError>
     Ok(format!("sha256:{}", hex_encode(&composite.finalize())))
 }
 
-fn collect_files(
-    base: &Path,
-    references_root: &Path,
-    out: &mut Vec<(String, Vec<u8>)>,
-) -> Result<(), SkillParseError> {
-    let mut stack = vec![base.to_path_buf()];
+/// Relative paths (`references/...`, forward-slashed, sorted) of every file
+/// under `skill_dir/references/**`. This is the bounded set of references a
+/// skill may progressively disclose at run-time; [`crate::install_skill`] pins
+/// it into the manifest so a load can be refused unless the path was declared
+/// at install. Returns an empty vec when the skill ships no `references/` tree.
+pub fn reference_paths(skill_dir: &Path) -> Result<Vec<String>, SkillParseError> {
+    Ok(reference_files(skill_dir)?
+        .into_iter()
+        .map(|(rel, _)| rel)
+        .collect())
+}
+
+/// Walk `skill_dir/references/**` and return `(relative_path, absolute_path)`
+/// for every regular file, sorted by relative path. Relative paths are
+/// `references/...` with forward slashes so the digest and the pinned manifest
+/// set agree byte-for-byte across platforms.
+fn reference_files(skill_dir: &Path) -> Result<Vec<(String, PathBuf)>, SkillParseError> {
+    let references_dir = skill_dir.join("references");
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    if !references_dir.is_dir() {
+        return Ok(out);
+    }
+    let strip_root = references_dir.parent().unwrap_or(&references_dir);
+    let mut stack = vec![references_dir.clone()];
     while let Some(dir) = stack.pop() {
         let read = fs::read_dir(&dir).map_err(|source| SkillParseError::Io {
             path: dir.clone(),
@@ -150,19 +171,16 @@ fn collect_files(
             if !file_type.is_file() {
                 continue;
             }
-            let bytes = fs::read(&path).map_err(|source| SkillParseError::Io {
-                path: path.clone(),
-                source,
-            })?;
             let rel = path
-                .strip_prefix(references_root.parent().unwrap_or(references_root))
+                .strip_prefix(strip_root)
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            out.push((rel, bytes));
+            out.push((rel, path));
         }
     }
-    Ok(())
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
 }
 
 fn normalize_bytes(bytes: &[u8]) -> Vec<u8> {
@@ -312,6 +330,34 @@ mod tests {
         assert_ne!(
             digest, digest_no_leaf,
             "adding a nested reference must change the digest",
+        );
+    }
+
+    #[test]
+    fn reference_paths_lists_sorted_relpaths() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("SKILL.md"), VALID_SKILL_MD).unwrap();
+        fs::create_dir_all(dir.path().join("references/deep")).unwrap();
+        fs::write(dir.path().join("references/z.md"), "z\n").unwrap();
+        fs::write(dir.path().join("references/a.md"), "a\n").unwrap();
+        fs::write(dir.path().join("references/deep/b.md"), "b\n").unwrap();
+        let paths = reference_paths(dir.path()).expect("reference paths");
+        assert_eq!(
+            paths,
+            vec!["references/a.md", "references/deep/b.md", "references/z.md"],
+            "reference paths must be `references/`-rooted, forward-slashed, and sorted",
+        );
+    }
+
+    #[test]
+    fn reference_paths_empty_without_references_dir() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("SKILL.md"), VALID_SKILL_MD).unwrap();
+        assert!(
+            reference_paths(dir.path())
+                .expect("reference paths")
+                .is_empty(),
+            "a skill with no references/ tree declares no references",
         );
     }
 }

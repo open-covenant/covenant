@@ -63,21 +63,22 @@ impl ChatMessage {
 
 // ---------- Agent context + skill injection ----------
 
-/// A skill's content as it enters an agent's system context: the pinned
-/// identity (`name` + install-time `digest`) plus the `SKILL.md` body and the
-/// `references/**` actually disclosed for this run. The daemon builds one from
-/// a verified skill before handing it to [`AgentContext::inject_skill`].
+/// A skill's identity as it enters an agent's system context: the pinned
+/// `name` + install-time `digest`, plus the `SKILL.md` body. References are
+/// *not* carried here — they load on demand via
+/// [`AgentContext::disclose_reference`], never upfront. The daemon builds one
+/// from a verified skill before handing it to [`AgentContext::inject_skill`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillContext {
     pub name: String,
     pub digest: String,
     pub body: String,
-    pub references: Vec<SkillReference>,
 }
 
-/// One progressively-disclosed `references/**` file injected alongside a skill
-/// body. `name` is the reference's relative path — what the audit row records;
-/// `body` is the text appended to the agent's system context.
+/// One progressively-disclosed `references/**` file. `name` is the reference's
+/// relative path — what the audit row records; `body` is the text the daemon
+/// loaded (bounded to the skill's declared set) and disclosed into the agent
+/// context via [`AgentContext::disclose_reference`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillReference {
     pub name: String,
@@ -118,20 +119,40 @@ impl AgentContext {
         Self { messages }
     }
 
-    /// Append `skill`'s body and disclosed references as system messages and
-    /// return the injection record. The append is strictly additive: existing
+    /// Append `skill`'s `SKILL.md` body as a system message and return the
+    /// injection record. Only the body is injected — references load on demand
+    /// via [`disclose_reference`](Self::disclose_reference), so the returned
+    /// `references` is empty. The append is strictly additive: existing
     /// messages keep their position, so a base system prompt seeded before the
     /// skill still precedes it. Inject before adding the user turn.
     pub fn inject_skill(&mut self, skill: &SkillContext) -> SkillContextInjected {
         self.messages.push(ChatMessage::system(skill.body.clone()));
-        for reference in &skill.references {
-            self.messages
-                .push(ChatMessage::system(reference.body.clone()));
-        }
         SkillContextInjected {
             skill_name: skill.name.clone(),
             skill_digest_hex: skill.digest.clone(),
-            references: skill.references.iter().map(|r| r.name.clone()).collect(),
+            references: Vec::new(),
+        }
+    }
+
+    /// Disclose one `references/**` file into the agent context on demand and
+    /// return its own injection record. Progressive disclosure is one row per
+    /// load: each call appends exactly `reference.body` and reports exactly the
+    /// reference it disclosed, so the audit chain replays the precise sequence
+    /// of instructions the agent pulled in — never the full declared set, and
+    /// never an unaudited load. The daemon bounds *which* references can reach
+    /// here (covenant-skills refuses undeclared paths); this binds the disclosed
+    /// reference to the skill identity for the audit row.
+    pub fn disclose_reference(
+        &mut self,
+        skill: &SkillContext,
+        reference: &SkillReference,
+    ) -> SkillContextInjected {
+        self.messages
+            .push(ChatMessage::system(reference.body.clone()));
+        SkillContextInjected {
+            skill_name: skill.name.clone(),
+            skill_digest_hex: skill.digest.clone(),
+            references: vec![reference.name.clone()],
         }
     }
 
@@ -839,31 +860,36 @@ async fn ollama_reachable(endpoint: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn skill_with_refs() -> SkillContext {
+    fn skill() -> SkillContext {
         SkillContext {
             name: "covenant".to_string(),
             digest: "sha256:deadbeef".to_string(),
             body: "# covenant\n\nnever sign without approval".to_string(),
-            references: vec![
-                SkillReference {
-                    name: "references/signing.md".to_string(),
-                    body: "signing policy body".to_string(),
-                },
-                SkillReference {
-                    name: "references/accounts.md".to_string(),
-                    body: "account model body".to_string(),
-                },
-            ],
+        }
+    }
+
+    fn signing_ref() -> SkillReference {
+        SkillReference {
+            name: "references/signing.md".to_string(),
+            body: "signing policy body".to_string(),
+        }
+    }
+
+    fn accounts_ref() -> SkillReference {
+        SkillReference {
+            name: "references/accounts.md".to_string(),
+            body: "account model body".to_string(),
         }
     }
 
     #[test]
-    fn inject_skill_appends_body_and_references_as_system_messages() {
-        let skill = skill_with_refs();
+    fn inject_skill_appends_only_the_body() {
+        // Failure mode: dumping every reference upfront. inject_skill seeds the
+        // SKILL.md body and nothing else — references arrive only via
+        // disclose_reference, on demand.
         let mut agent = AgentContext::new();
-        let record = agent.inject_skill(&skill);
+        let record = agent.inject_skill(&skill());
 
-        // Body + each reference land as their own system message, in order.
         let injected: Vec<&str> = agent
             .messages()
             .iter()
@@ -872,6 +898,44 @@ mod tests {
                 m.content.as_str()
             })
             .collect();
+        assert_eq!(injected, vec!["# covenant\n\nnever sign without approval"]);
+
+        // The record is the audit shape, carrying identity + digest verbatim,
+        // with no reference disclosed yet.
+        assert_eq!(record.skill_name, "covenant");
+        assert_eq!(record.skill_digest_hex, "sha256:deadbeef");
+        assert!(
+            record.references.is_empty(),
+            "the body injection discloses no reference",
+        );
+    }
+
+    #[test]
+    fn disclose_reference_appends_one_reference_and_audits_only_it() {
+        // Failure mode: a reference load that is not independently audited, or
+        // that injects the wrong text. Each disclose appends exactly its body
+        // and returns a record naming exactly that reference.
+        let skill = skill();
+        let mut agent = AgentContext::new();
+        agent.inject_skill(&skill);
+
+        let first = agent.disclose_reference(&skill, &signing_ref());
+        assert_eq!(
+            first.references,
+            vec!["references/signing.md"],
+            "each load is audited as exactly the reference it disclosed",
+        );
+        assert_eq!(first.skill_name, "covenant");
+        assert_eq!(first.skill_digest_hex, "sha256:deadbeef");
+
+        let second = agent.disclose_reference(&skill, &accounts_ref());
+        assert_eq!(second.references, vec!["references/accounts.md"]);
+
+        let injected: Vec<&str> = agent
+            .messages()
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect();
         assert_eq!(
             injected,
             vec![
@@ -879,56 +943,36 @@ mod tests {
                 "signing policy body",
                 "account model body",
             ],
-        );
-
-        // The record is the audit shape, carrying identity + digest verbatim.
-        assert_eq!(record.skill_name, "covenant");
-        assert_eq!(record.skill_digest_hex, "sha256:deadbeef");
-    }
-
-    #[test]
-    fn inject_skill_record_lists_reference_names_not_bodies() {
-        // Failure mode: an audit row that drops the refs it injected. The
-        // record must carry every disclosed reference name (load-on-demand
-        // order), never the bodies and never a truncated set.
-        let mut agent = AgentContext::new();
-        let record = agent.inject_skill(&skill_with_refs());
-        assert_eq!(
-            record.references,
-            vec!["references/signing.md", "references/accounts.md"],
-            "record must list injected reference names in disclosure order",
+            "disclosures append in call order, after the body",
         );
     }
 
     #[test]
-    fn inject_skill_with_no_references_yields_present_empty_list() {
+    fn inject_skill_record_has_present_empty_references() {
         // An empty `references` is still a present, empty Vec — not absent.
         // The daemon maps this straight onto AuditKind::SkillContextInjected,
         // whose `references` field is non-optional; a None/missing here would
         // surface as a malformed audit row.
-        let skill = SkillContext {
-            name: "minimal".to_string(),
-            digest: "sha256:abc".to_string(),
-            body: "body".to_string(),
-            references: Vec::new(),
-        };
         let mut agent = AgentContext::new();
-        let record = agent.inject_skill(&skill);
+        let record = agent.inject_skill(&skill());
         assert!(record.references.is_empty());
         assert_eq!(agent.messages().len(), 1, "only the body injects");
     }
 
     #[test]
-    fn inject_skill_preserves_existing_context_order() {
+    fn injection_and_disclosure_preserve_existing_context_order() {
         // Failure mode: injection that reorders or clobbers the base context.
         // A seeded system prompt + user turn must keep their positions, with
-        // the skill strictly appended after them.
+        // the skill body and any disclosed references strictly appended after.
         let base = vec![
             ChatMessage::system("you are a covenant agent"),
             ChatMessage::user("send 1 SOL"),
         ];
         let mut agent = AgentContext::from_messages(base);
-        agent.inject_skill(&skill_with_refs());
+        let skill = skill();
+        agent.inject_skill(&skill);
+        agent.disclose_reference(&skill, &signing_ref());
+        agent.disclose_reference(&skill, &accounts_ref());
 
         let msgs = agent.messages();
         assert_eq!(msgs[0].role, Role::System);
@@ -938,7 +982,7 @@ mod tests {
         assert_eq!(
             msgs.len(),
             5,
-            "two base messages plus body and two references",
+            "two base messages plus body and two disclosed references",
         );
         assert_eq!(msgs[2].content, "# covenant\n\nnever sign without approval");
     }
@@ -954,8 +998,9 @@ mod tests {
         let verifier = VerifierContext::from_messages(facts.clone());
         let mut agent = AgentContext::from_messages(facts);
 
-        let skill = skill_with_refs();
+        let skill = skill();
         agent.inject_skill(&skill);
+        agent.disclose_reference(&skill, &signing_ref());
 
         assert!(
             verifier
@@ -963,7 +1008,7 @@ mod tests {
                 .iter()
                 .all(|m| !m.content.contains("never sign without approval")
                     && !m.content.contains("signing policy body")),
-            "verifier context must never carry agent skill prose",
+            "verifier context must never carry agent skill prose — body or disclosed reference",
         );
         assert_eq!(verifier.messages().len(), 1, "verifier buffer is untouched");
         assert!(
@@ -977,21 +1022,23 @@ mod tests {
 
     #[test]
     fn injecting_two_skills_accumulates_messages_and_returns_independent_records() {
+        let covenant = skill();
         let mut agent = AgentContext::new();
-        let first = agent.inject_skill(&skill_with_refs());
+        let first = agent.inject_skill(&covenant);
+        agent.disclose_reference(&covenant, &signing_ref());
         let second = agent.inject_skill(&SkillContext {
             name: "spl-token".to_string(),
             digest: "sha256:feed".to_string(),
             body: "spl body".to_string(),
-            references: Vec::new(),
         });
         assert_eq!(first.skill_name, "covenant");
+        assert_eq!(first.references, Vec::<String>::new());
         assert_eq!(second.skill_name, "spl-token");
         assert_eq!(second.references, Vec::<String>::new());
         assert_eq!(
             agent.messages().len(),
-            4,
-            "first skill body+2 refs, then second skill body",
+            3,
+            "first skill body + its disclosed reference, then second skill body",
         );
     }
 

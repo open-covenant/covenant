@@ -7490,6 +7490,7 @@ mod tests {
                 tag: "v0.1.0".into(),
                 commit: "0".repeat(40),
             },
+            references: vec!["references/signing.md".into()],
             declared_capabilities: vec!["skill.use.covenant".into()],
             declared_programs: vec!["11111111111111111111111111111111".into()],
             sends_tx: true,

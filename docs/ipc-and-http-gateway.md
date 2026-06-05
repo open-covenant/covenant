@@ -79,7 +79,7 @@ Per-verb fields layer on top, asymmetrically:
 - `verb: "stake"` — adds `agent_key` (base58), `amount` (u64), `lock_until` (u64). Both values are echoed verbatim from the CLI arguments and serialize to the on-chain `stake` instruction.
 - `verb: "buy-credits"` — adds `owner` (base58 COVNT owner pubkey), `amount_covnt` (u64). The value is echoed verbatim from `--amount-covnt` and serializes to the on-chain `buy_credits` instruction.
 
-The verb-source-of-truth lives in the CLI emitters: `register_agent_confirmed_json` and `register_agent_timeout_json` at `agent-os/crates/covenant/src/main.rs:683` and `:700`, `stake_confirmed_json` and `stake_timeout_json` at `:883` and `:904`, `buy_credits_confirmed_json` and `buy_credits_timeout_json` at `:1191` and `:1210`. Six unit tests at `main.rs:10177`, `:10198`, `:10589`, `:10608`, `:10963`, `:10980` pin the kind strings, and six sibling `*_pins_top_level_schema` tests at `main.rs:10216`, `:10266`, `:10627`, `:10689`, `:10997`, `:11053` assert the full documented top-level key set so an undocumented field added to any helper fails review.
+The verb-source-of-truth lives in the CLI emitters: `register_agent_confirmed_json` and `register_agent_timeout_json` at `agent-os/crates/covenant/src/main.rs:683` and `:700`, `stake_confirmed_json` and `stake_timeout_json` at `:883` and `:904`, `buy_credits_confirmed_json` and `buy_credits_timeout_json` at `:1191` and `:1210`. Six unit tests at `main.rs:10178`, `:10199`, `:10590`, `:10609`, `:10964`, `:10981` pin the kind strings, and six sibling `*_pins_top_level_schema` tests at `main.rs:10217`, `:10267`, `:10628`, `:10690`, `:10998`, `:11054` assert the full documented top-level key set so an undocumented field added to any helper fails review.
 
 ## CLI Read Envelopes
 
@@ -94,8 +94,8 @@ In addition to the per-envelope `*_pins_top_level_schema` unit tests, the docs/e
 
 `covenant chain status --json` emits:
 
-- `kind`: literal string `"chain_status"`. Pinned at the value level by `main.rs:8258` (asserts `value["kind"].as_str() == Some("chain_status")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `status`: a structured `covenant_ipc::ChainStatus` object with the following fields. The top-level object has exactly two keys (`kind` and `status`); the inner `status` is pinned by the schema test at `main.rs:8259-8262` to be a JSON object, never a string blob.
+- `kind`: literal string `"chain_status"`. Pinned at the value level by `main.rs:8259` (asserts `value["kind"].as_str() == Some("chain_status")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `status`: a structured `covenant_ipc::ChainStatus` object with the following fields. The top-level object has exactly two keys (`kind` and `status`); the inner `status` is pinned by the schema test at `main.rs:8260-8263` to be a JSON object, never a string blob.
 
 The inner `ChainStatus` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:43`:
 
@@ -108,17 +108,17 @@ The inner `ChainStatus` shape, defined at `agent-os/crates/covenant-ipc/src/lib.
 - `ready` (bool) — true when every required config field is present.
 - `missing` (array of strings) — names of the absent config fields when `ready` is false; an empty array when `ready` is true.
 
-The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/covenant/src/main.rs:5536`. Two unit tests at `main.rs:8220` (`chain_status_json_renders_stable_shape`) and `main.rs:8242` (`chain_status_json_pins_top_level_schema`) enforce the top-level key set verbatim; the second test's failure message names this document as the forcing function for docs/emitter drift.
+The envelope source-of-truth lives at `chain_status_json` in `agent-os/crates/covenant/src/main.rs:5536`. Two unit tests at `main.rs:8221` (`chain_status_json_renders_stable_shape`) and `main.rs:8243` (`chain_status_json_pins_top_level_schema`) enforce the top-level key set verbatim; the second test's failure message names this document as the forcing function for docs/emitter drift.
 
 `covenant verify --json` emits a cross-check report comparing the audit log against memory and receipt rows. Envelope shape:
 
-- `kind`: literal string `"verify_report"`. Pinned at the value level by `main.rs:8330` (asserts `value["kind"].as_str() == Some("verify_report")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `window` (u64): the audit-window record count echoed back from the `--window` argument. Pinned as u64 by `main.rs:8331-8334` — never a string.
-- `checks` (array of `VerifyCheck`): per-check results, see below. Pinned as an array by `main.rs:8339-8342` — never null or a string.
-- `drift` (array of `VerifyDrift`): correlation gaps, see below. Pinned as an array by `main.rs:8343` — never null or a string blob.
-- `orphans_total` (u64): total number of unmatched rows the checks discovered. Pinned as u64 by `main.rs:8335-8338` — never a string-of-integer.
+- `kind`: literal string `"verify_report"`. Pinned at the value level by `main.rs:8331` (asserts `value["kind"].as_str() == Some("verify_report")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `window` (u64): the audit-window record count echoed back from the `--window` argument. Pinned as u64 by `main.rs:8332-8335` — never a string.
+- `checks` (array of `VerifyCheck`): per-check results, see below. Pinned as an array by `main.rs:8340-8343` — never null or a string.
+- `drift` (array of `VerifyDrift`): correlation gaps, see below. Pinned as an array by `main.rs:8344` — never null or a string blob.
+- `orphans_total` (u64): total number of unmatched rows the checks discovered. Pinned as u64 by `main.rs:8336-8339` — never a string-of-integer.
 
-Top-level keys are pinned to exactly these five by the test at `agent-os/crates/covenant/src/main.rs:8314` (`verify_report_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these five by the test at `agent-os/crates/covenant/src/main.rs:8315` (`verify_report_json_pins_top_level_schema`).
 
 `VerifyCheck` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:27`:
 
@@ -133,12 +133,12 @@ Top-level keys are pinned to exactly these five by the test at `agent-os/crates/
 - `message` (string) — drift description.
 - `repair` (string) — operator-facing remediation hint.
 
-The envelope source-of-truth lives at `verify_report_json` in `agent-os/crates/covenant/src/main.rs:5543`. The shape-pinning test at `main.rs:8314-8360` covers both the populated and empty cases (`assert_shape` runs against a one-check, one-drift report and an all-empty report).
+The envelope source-of-truth lives at `verify_report_json` in `agent-os/crates/covenant/src/main.rs:5543`. The shape-pinning test at `main.rs:8315-8361` covers both the populated and empty cases (`assert_shape` runs against a one-check, one-drift report and an all-empty report).
 
 `covenant tools list --json` emits the registered MCP-style tool catalog. Envelope shape:
 
-- `kind`: literal string `"tool_list"` (singular `tool_list`, not `tools_list`; consumers routing on `kind` must match the literal exactly). Pinned at the value level by `main.rs:8076` (asserts `value["kind"].as_str() == Some("tool_list")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `tools` (array of `ToolSpec`): the registered tools the daemon advertises via `tools/list`. The array is empty when no tools are registered; the unsuffixed CLI prints `(no tools registered)` for that case at `main.rs:3803`. Pinned as an array by `main.rs:8077-8080` — never null or a string blob.
+- `kind`: literal string `"tool_list"` (singular `tool_list`, not `tools_list`; consumers routing on `kind` must match the literal exactly). Pinned at the value level by `main.rs:8077` (asserts `value["kind"].as_str() == Some("tool_list")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `tools` (array of `ToolSpec`): the registered tools the daemon advertises via `tools/list`. The array is empty when no tools are registered; the unsuffixed CLI prints `(no tools registered)` for that case at `main.rs:3803`. Pinned as an array by `main.rs:8078-8081` — never null or a string blob.
 
 The inner `ToolSpec` shape, defined at `agent-os/crates/covenant-mcp/src/lib.rs:27`:
 
@@ -148,29 +148,29 @@ The inner `ToolSpec` shape, defined at `agent-os/crates/covenant-mcp/src/lib.rs:
 
 `ToolSpec` carries `#[serde(rename_all = "camelCase")]` (`covenant-mcp/src/lib.rs:26`) so the Rust field `input_schema` serializes on the wire as `inputSchema`. The naming matches the MCP wire format; JSON consumers must deserialize using `inputSchema`, not `input_schema`.
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:8060` (`tool_list_json_pins_top_level_schema`), which exercises both a populated single-tool case and an empty list.
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:8061` (`tool_list_json_pins_top_level_schema`), which exercises both a populated single-tool case and an empty list.
 
-The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/covenant/src/main.rs:5508`. Two unit tests at `main.rs:8036` (`tool_list_json_renders_stable_shape`) and `main.rs:8060` cover both cases. The CLI verb is wired at `main.rs:3117-3143`; without `--json`, the same response prints one line per tool in the form `<name> — <description>` at `main.rs:3806`.
+The envelope source-of-truth lives at `tool_list_json` in `agent-os/crates/covenant/src/main.rs:5508`. Two unit tests at `main.rs:8037` (`tool_list_json_renders_stable_shape`) and `main.rs:8061` cover both cases. The CLI verb is wired at `main.rs:3117-3143`; without `--json`, the same response prints one line per tool in the form `<name> — <description>` at `main.rs:3806`.
 
 `covenant tools call <name> [--args <json>] --json` emits the tool invocation result. Envelope shape:
 
-- `kind`: literal string `"tool_result"` (singular, not `tools_result`; consumers routing on `kind` must match the literal exactly). Pinned at the value level by `main.rs:8136` (asserts `value["kind"].as_str() == Some("tool_result")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `name` (string): the tool name echoed back from the CLI argument. Pinned as a string by `main.rs:8137` — never an object or array.
-- `content` (array of `Content`): the tool's output blocks. Each element is a tagged-enum object whose `type` discriminator selects the variant — `{type: "text", text: <string>}` for textual output or `{type: "json", value: <JSON>}` for structured output. The variants are defined at `agent-os/crates/covenant-mcp/src/lib.rs:39` with `#[serde(tag = "type", rename_all = "camelCase")]`; v0 ships text and json variants only. The array is empty when the tool produced no output blocks; the unsuffixed CLI prints each block sequentially at `main.rs:3184-3190`. Pinned as an array by `main.rs:8138-8141` — never null or a string.
-- `is_error` (boolean): `true` when the tool itself raised; pinned as a JSON boolean by the schema test (`main.rs:8142-8145`) — never `0`/`1` or a string. JSON consumers must branch on this boolean, not on the presence/absence of content. `is_error=true` paired with non-empty `content` describes a partial-success outcome with an error indicator.
+- `kind`: literal string `"tool_result"` (singular, not `tools_result`; consumers routing on `kind` must match the literal exactly). Pinned at the value level by `main.rs:8137` (asserts `value["kind"].as_str() == Some("tool_result")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `name` (string): the tool name echoed back from the CLI argument. Pinned as a string by `main.rs:8138` — never an object or array.
+- `content` (array of `Content`): the tool's output blocks. Each element is a tagged-enum object whose `type` discriminator selects the variant — `{type: "text", text: <string>}` for textual output or `{type: "json", value: <JSON>}` for structured output. The variants are defined at `agent-os/crates/covenant-mcp/src/lib.rs:39` with `#[serde(tag = "type", rename_all = "camelCase")]`; v0 ships text and json variants only. The array is empty when the tool produced no output blocks; the unsuffixed CLI prints each block sequentially at `main.rs:3184-3190`. Pinned as an array by `main.rs:8139-8142` — never null or a string.
+- `is_error` (boolean): `true` when the tool itself raised; pinned as a JSON boolean by the schema test (`main.rs:8143-8146`) — never `0`/`1` or a string. JSON consumers must branch on this boolean, not on the presence/absence of content. `is_error=true` paired with non-empty `content` describes a partial-success outcome with an error indicator.
 
-Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:8120` (`tool_result_json_pins_top_level_schema`), exercised against both a non-empty content + is_error=true case and an empty content + is_error=false case.
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:8121` (`tool_result_json_pins_top_level_schema`), exercised against both a non-empty content + is_error=true case and an empty content + is_error=false case.
 
-The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/covenant/src/main.rs:5515`. Two unit tests at `main.rs:8099` (`tool_result_json_renders_stable_shape`) and `main.rs:8120` cover the shape. The CLI verb is wired at `main.rs:3144-3190`; without `--json`, each `Content::Text` block prints its `text` directly and each `Content::Json` block prints its `value` as pretty-printed JSON.
+The envelope source-of-truth lives at `tool_result_json` in `agent-os/crates/covenant/src/main.rs:5515`. Two unit tests at `main.rs:8100` (`tool_result_json_renders_stable_shape`) and `main.rs:8121` cover the shape. The CLI verb is wired at `main.rs:3144-3190`; without `--json`, each `Content::Text` block prints its `text` directly and each `Content::Json` block prints its `value` as pretty-printed JSON.
 
 `covenant chain flush-receipts --json` emits a receipt-batch summary when it groups local settlement receipts into a single Solana receipt-root transaction. Envelope shape:
 
-- `kind`: literal string `"receipt_batch_flushed"`. Pinned at the value level by `main.rs:8398` (asserts `value["kind"].as_str() == Some("receipt_batch_flushed")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `limit` (u64): the batch-size cap echoed back from the `--limit` argument. Pinned as u64 by `main.rs:8399-8402` — never a string.
-- `receipts_updated` (u64): the number of local receipt rows updated to point at the new batch. Pinned as u64 by `main.rs:8403-8406` — never a string-of-integer.
-- `batch` (`ReceiptBatchSummary` object): the batch's wire shape, see below. Pinned as a structured object by `main.rs:8407-8410` — never a string blob.
+- `kind`: literal string `"receipt_batch_flushed"`. Pinned at the value level by `main.rs:8399` (asserts `value["kind"].as_str() == Some("receipt_batch_flushed")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `limit` (u64): the batch-size cap echoed back from the `--limit` argument. Pinned as u64 by `main.rs:8400-8403` — never a string.
+- `receipts_updated` (u64): the number of local receipt rows updated to point at the new batch. Pinned as u64 by `main.rs:8404-8407` — never a string-of-integer.
+- `batch` (`ReceiptBatchSummary` object): the batch's wire shape, see below. Pinned as a structured object by `main.rs:8408-8411` — never a string blob.
 
-Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:8382` (`flush_receipts_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:8383` (`flush_receipts_json_pins_top_level_schema`).
 
 `ReceiptBatchSummary` shape, defined at `agent-os/crates/covenant-ipc/src/lib.rs:55`:
 
@@ -180,17 +180,17 @@ Top-level keys are pinned to exactly these four by the test at `agent-os/crates/
 - `tx_sig` (string or null) — base58 Solana transaction signature once the batch confirms; null before submission completes.
 - `slot` (u64 or null) — confirmation slot once available; null until then.
 
-The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/covenant/src/main.rs:5558`. Two unit tests at `main.rs:8363` (`flush_receipts_json_renders_stable_shape`) and `main.rs:8382` (`flush_receipts_json_pins_top_level_schema`) cover both the unconfirmed (`tx_sig`/`slot` null) and confirmed (both present) batch states.
+The envelope source-of-truth lives at `flush_receipts_json` in `agent-os/crates/covenant/src/main.rs:5558`. Two unit tests at `main.rs:8364` (`flush_receipts_json_renders_stable_shape`) and `main.rs:8383` (`flush_receipts_json_pins_top_level_schema`) cover both the unconfirmed (`tx_sig`/`slot` null) and confirmed (both present) batch states.
 
 `covenant chain receipt-batches --json` emits the list of recent receipt batches recorded on-chain. Envelope shape:
 
-- `kind`: literal string `"receipt_batch_list"`. Pinned at the value level by `main.rs:8196` (asserts `value["kind"].as_str() == Some("receipt_batch_list")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `limit` (u64): the result cap echoed back from the `--limit` argument. Pinned as u64 by `main.rs:8197-8200` — never a string.
-- `batches` (array of `ReceiptBatchSummary`): the batches, in the order returned by the daemon. Each item uses the same `ReceiptBatchSummary` shape documented above (including the `tx_sig`/`slot` null convention for batches whose settlement transaction has not yet confirmed). The array may be empty. Pinned as an array by `main.rs:8201-8204` — never null or a string.
+- `kind`: literal string `"receipt_batch_list"`. Pinned at the value level by `main.rs:8197` (asserts `value["kind"].as_str() == Some("receipt_batch_list")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `limit` (u64): the result cap echoed back from the `--limit` argument. Pinned as u64 by `main.rs:8198-8201` — never a string.
+- `batches` (array of `ReceiptBatchSummary`): the batches, in the order returned by the daemon. Each item uses the same `ReceiptBatchSummary` shape documented above (including the `tx_sig`/`slot` null convention for batches whose settlement transaction has not yet confirmed). The array may be empty. Pinned as an array by `main.rs:8202-8205` — never null or a string.
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:8180` (`receipt_batch_list_json_pins_top_level_schema`).
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:8181` (`receipt_batch_list_json_pins_top_level_schema`).
 
-The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/crates/covenant/src/main.rs:5528`. Two unit tests at `main.rs:8162` (`receipt_batch_list_json_renders_stable_shape`) and `main.rs:8180` (`receipt_batch_list_json_pins_top_level_schema`) cover the populated and empty cases.
+The envelope source-of-truth lives at `receipt_batch_list_json` in `agent-os/crates/covenant/src/main.rs:5528`. Two unit tests at `main.rs:8163` (`receipt_batch_list_json_renders_stable_shape`) and `main.rs:8181` (`receipt_batch_list_json_pins_top_level_schema`) cover the populated and empty cases.
 
 `covenant receipts recent [-n|--limit <N>] [--since-ms <M>] --json` emits a window of local settlement receipts. Envelope shape:
 
@@ -344,7 +344,7 @@ The five `RevokeOutcome` variants the daemon may return:
 - `{type: "ambiguous", matches: [PeerSummary...], truncated: bool}` — more than one entry matched the prefix; the registry is unchanged. `matches.len()` is bounded by `--limit-matches`; `truncated` is `true` when more than that limit matched (see `RevokeOutcome::Ambiguous` at `covenant-peer-auth/src/lib.rs:207-211`). The field carries `#[serde(default)]` so a stale CLI built before `truncated` landed still deserialises a new daemon's response (degrading to the pre-bound assumption that the displayed matches are exhaustive); the daemon-side serializer always writes the field.
 - `{type: "self_revoke_forbidden", agent_id, token_prefix, registered_at, revoked_at}` — same inlined `PeerSummary` shape; the unique live match is the operator's own bootstrap row and the request did not pass `--force`. The registry is unchanged and `revoked_at` is `null` (the entry remained live). This is defence-in-depth against the "fat-finger via web UI bypassed by curl" failure mode where a UI-only confirmation guard is trivially circumvented by a direct daemon API call.
 
-**Exit-code coupling**: the `peer_revoke_is_failure` classifier at `agent-os/crates/covenant/src/main.rs:5695-5702` maps `not_found`, `ambiguous`, and `self_revoke_forbidden` to a CLI exit code of `1` — including in the `--json` path (`main.rs:4494-4496`). `revoked` and `already_revoked` map to exit `0`. JSON consumers must branch on `outcome.type` for success/failure semantics; transport success (exit `0`) is **not** synonymous with revocation success. The classifier's mapping is pinned by the test at `main.rs:8715` (`peer_revoke_json_exit_classification_matches_human_cli`).
+**Exit-code coupling**: the `peer_revoke_is_failure` classifier at `agent-os/crates/covenant/src/main.rs:5695-5702` maps `not_found`, `ambiguous`, and `self_revoke_forbidden` to a CLI exit code of `1` — including in the `--json` path (`main.rs:4494-4496`). `revoked` and `already_revoked` map to exit `0`. JSON consumers must branch on `outcome.type` for success/failure semantics; transport success (exit `0`) is **not** synonymous with revocation success. The classifier's mapping is pinned by the test at `main.rs:8716` (`peer_revoke_json_exit_classification_matches_human_cli`).
 
 Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:6198` (`peer_revoke_json_pins_top_level_schema`), which also asserts `outcome` is a tagged-enum object and exercises both the `Ambiguous` and `NotFound` variants.
 
@@ -382,41 +382,41 @@ The envelope source-of-truth lives at `audit_purge_json` in `agent-os/crates/cov
 
 `covenant audit verify --json` emits the audit-log hash-chain integrity report. Envelope shape:
 
-- `kind`: literal string `"audit_integrity"` — past-tense outcome name, distinct from the verb name `verify` and from the workspace-level `verify_report` envelope; consumers routing on `kind` must match this literal exactly rather than reusing either of those tokens. Pinned at the value level by `main.rs:7582` (asserts `value["kind"].as_str() == Some("audit_integrity")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `report` (object): a structured `covenant_audit::AuditIntegrityReport`, never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:7583-7586` to be a JSON object.
+- `kind`: literal string `"audit_integrity"` — past-tense outcome name, distinct from the verb name `verify` and from the workspace-level `verify_report` envelope; consumers routing on `kind` must match this literal exactly rather than reusing either of those tokens. Pinned at the value level by `main.rs:7583` (asserts `value["kind"].as_str() == Some("audit_integrity")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `report` (object): a structured `covenant_audit::AuditIntegrityReport`, never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:7584-7587` to be a JSON object.
 
 The inner `AuditIntegrityReport` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:61`:
 
 - `events` (u64) — total audit events the integrity walk visited.
 - `anchors` (u64) — count of anchor records (root-hash checkpoints) the walk crossed.
 - `valid` (bool) — `true` when the hash chain is intact end-to-end; `false` when one or more failures were recorded.
-- `root_hash_hex` (string) — the final root hash as lowercase hex, 64 characters (SHA-256). Pinned at the length level by the stable-shape test at `main.rs:7552-7558`.
-- `failures` (array of strings) — human-readable failure descriptions (e.g., `"chain hash mismatch at event 3"`), empty when `valid` is `true`. The empty case is pinned by the stable-shape test at `main.rs:7559-7562` (asserts `as_array().map(Vec::len) == Some(0)`).
+- `root_hash_hex` (string) — the final root hash as lowercase hex, 64 characters (SHA-256). Pinned at the length level by the stable-shape test at `main.rs:7553-7559`.
+- `failures` (array of strings) — human-readable failure descriptions (e.g., `"chain hash mismatch at event 3"`), empty when `valid` is `true`. The empty case is pinned by the stable-shape test at `main.rs:7560-7563` (asserts `as_array().map(Vec::len) == Some(0)`).
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:7566` (`audit_verify_json_pins_top_level_schema`), exercised against both a valid and an invalid report.
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:7567` (`audit_verify_json_pins_top_level_schema`), exercised against both a valid and an invalid report.
 
-The envelope source-of-truth lives at `audit_verify_json` in `agent-os/crates/covenant/src/main.rs:5410`. Two unit tests at `main.rs:7538` (`audit_verify_json_renders_stable_shape`) and `main.rs:7566` cover the shape. The CLI verb is wired at `main.rs:3278-3300`; without `--json`, the same response is printed as the bare `AuditIntegrityReport` JSON (no envelope wrapper) at `main.rs:3294`, so JSON consumers must use `--json` to get the kind-discriminated envelope — the unsuffixed output is structurally compatible with `report` but lacks the `kind` field.
+The envelope source-of-truth lives at `audit_verify_json` in `agent-os/crates/covenant/src/main.rs:5410`. Two unit tests at `main.rs:7539` (`audit_verify_json_renders_stable_shape`) and `main.rs:7567` cover the shape. The CLI verb is wired at `main.rs:3278-3300`; without `--json`, the same response is printed as the bare `AuditIntegrityReport` JSON (no envelope wrapper) at `main.rs:3294`, so JSON consumers must use `--json` to get the kind-discriminated envelope — the unsuffixed output is structurally compatible with `report` but lacks the `kind` field.
 
 `covenant memory purge --json` emits a summary of time-bounded memory-store garbage collection. Envelope shape:
 
-- `kind`: literal string `"memory_purged"`. Pinned at the value level by `main.rs:7637` (asserts `value["kind"].as_str() == Some("memory_purged")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `tier` (string or null): the memory tier slug — exactly one of `"working"`, `"episodic"`, or `"longterm"` (one word, per `memory_tier_slug` at `main.rs:1729-1734`). Null when `--tier` was omitted, meaning the purge applied to all tiers. Note an input-form asymmetry: the CLI parser at `main.rs:1739-1741` accepts `longterm`, `long-term`, and `long_term` for the `--tier` argument, but only the `longterm` slug is ever emitted in the envelope. Pinned as string-or-null by `main.rs:7638-7641` — never a structured object.
-- `before_ms` (u64): resolved Unix-epoch millisecond cutoff. Same `--before-ms` / `--older-than-ms` resolution semantics as `covenant capabilities purge --json` above. Pinned as u64 by `main.rs:7642-7645` — never a string-of-integer.
-- `purged` (u64): count of memory records removed. The unsuffixed CLI prints `purged <n> record(s)` at `main.rs:2853`, confirming the unit is a memory record. May legitimately be `0` when no rows matched. Pinned as u64 by `main.rs:7646-7649` — never a string-of-integer.
+- `kind`: literal string `"memory_purged"`. Pinned at the value level by `main.rs:7638` (asserts `value["kind"].as_str() == Some("memory_purged")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `tier` (string or null): the memory tier slug — exactly one of `"working"`, `"episodic"`, or `"longterm"` (one word, per `memory_tier_slug` at `main.rs:1729-1734`). Null when `--tier` was omitted, meaning the purge applied to all tiers. Note an input-form asymmetry: the CLI parser at `main.rs:1739-1741` accepts `longterm`, `long-term`, and `long_term` for the `--tier` argument, but only the `longterm` slug is ever emitted in the envelope. Pinned as string-or-null by `main.rs:7639-7642` — never a structured object.
+- `before_ms` (u64): resolved Unix-epoch millisecond cutoff. Same `--before-ms` / `--older-than-ms` resolution semantics as `covenant capabilities purge --json` above. Pinned as u64 by `main.rs:7643-7646` — never a string-of-integer.
+- `purged` (u64): count of memory records removed. The unsuffixed CLI prints `purged <n> record(s)` at `main.rs:2853`, confirming the unit is a memory record. May legitimately be `0` when no rows matched. Pinned as u64 by `main.rs:7647-7650` — never a string-of-integer.
 
-Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7621` (`memory_purge_json_pins_top_level_schema`), which also exercises the null-tier case.
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7622` (`memory_purge_json_pins_top_level_schema`), which also exercises the null-tier case.
 
-The envelope source-of-truth lives at `memory_purge_json` in `agent-os/crates/covenant/src/main.rs:5448`. Two unit tests at `main.rs:7609` (`memory_purge_json_renders_stable_shape`, both a Working-tier populated case and a no-tier null case) and `main.rs:7621` cover the populated and empty (`purged=0`, no-tier) cases. The CLI verb is wired at `main.rs:2130-2180`.
+The envelope source-of-truth lives at `memory_purge_json` in `agent-os/crates/covenant/src/main.rs:5448`. Two unit tests at `main.rs:7610` (`memory_purge_json_renders_stable_shape`, both a Working-tier populated case and a no-tier null case) and `main.rs:7622` cover the populated and empty (`purged=0`, no-tier) cases. The CLI verb is wired at `main.rs:2130-2180`.
 
 `covenant memory recent [--tier <T>] [-n|--limit <N>] [--stream] --json` and `covenant memory search <query> [--tier <T>] [-n|--limit <N>] [--min-relevance <R>] --json` both emit the same memory-read envelope, distinguished only by the `mode` discriminator. Envelope shape:
 
-- `kind`: literal string `"memory_read"`. Pinned at the value level by `main.rs:7937` (asserts `value["kind"].as_str() == Some("memory_read")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `mode` (string): exactly one of `"recent"` or `"search"` (lowercase, matching the CLI verb name — no other values are emitted). Consumers must route on `mode` to know which null pattern to expect across `query` and `min_relevance`. Pinned as a string by `main.rs:7938` — never an object or array.
-- `tier` (string or null): the requested `MemoryTier` as its lowercase wire slug — exactly one of `"working"`, `"episodic"`, or `"longterm"` (one word, per `MemoryTier`'s `#[serde(rename_all = "lowercase")]` at `covenant-types/src/lib.rs:23` and the slug map at `memory_tier_slug` in `main.rs:1729-1734`). The CLI parser accepts `longterm`, `long-term`, and `long_term` as input forms for `--tier`, but only the `longterm` slug is ever emitted. `null` when `--tier` was omitted (meaning the request applied to all tiers). Pinned as string-or-null by the schema test (`main.rs:7943-7946`) — never a structured object.
-- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10` for both verbs, per `main.rs:2087` and `main.rs:2497`). Pinned as u64 at the schema test (`main.rs:7939-7942`).
-- `query` (string or null): for `mode="search"`, the request query (whitespace-joined when the operator passed multiple positional tokens, per `main.rs:2532`). For `mode="recent"`, always `null` (the recent verb does not accept a query). Pinned as string-or-null by the schema test (`main.rs:7947-7950`).
-- `min_relevance` (number or null): for `mode="search"`, the float echoed from `--min-relevance` (validated to a finite `f32` in `[0.0, 1.0]` at `main.rs:2520-2524`), or `null` when the flag was omitted. For `mode="recent"`, always `null`. Pinned as f64-or-null by the schema test (`main.rs:7951-7954`) — never a string.
-- `records` (array of `MemoryRecord`): the matched records in the order returned by the daemon. The array is empty when no records match; the unsuffixed CLI prints `(no records)` for that case at `main.rs:1635`. Pinned as an array by `main.rs:7955-7958` — never null or a string.
+- `kind`: literal string `"memory_read"`. Pinned at the value level by `main.rs:7938` (asserts `value["kind"].as_str() == Some("memory_read")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `mode` (string): exactly one of `"recent"` or `"search"` (lowercase, matching the CLI verb name — no other values are emitted). Consumers must route on `mode` to know which null pattern to expect across `query` and `min_relevance`. Pinned as a string by `main.rs:7939` — never an object or array.
+- `tier` (string or null): the requested `MemoryTier` as its lowercase wire slug — exactly one of `"working"`, `"episodic"`, or `"longterm"` (one word, per `MemoryTier`'s `#[serde(rename_all = "lowercase")]` at `covenant-types/src/lib.rs:23` and the slug map at `memory_tier_slug` in `main.rs:1729-1734`). The CLI parser accepts `longterm`, `long-term`, and `long_term` as input forms for `--tier`, but only the `longterm` slug is ever emitted. `null` when `--tier` was omitted (meaning the request applied to all tiers). Pinned as string-or-null by the schema test (`main.rs:7944-7947`) — never a structured object.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10` for both verbs, per `main.rs:2087` and `main.rs:2497`). Pinned as u64 at the schema test (`main.rs:7940-7943`).
+- `query` (string or null): for `mode="search"`, the request query (whitespace-joined when the operator passed multiple positional tokens, per `main.rs:2532`). For `mode="recent"`, always `null` (the recent verb does not accept a query). Pinned as string-or-null by the schema test (`main.rs:7948-7951`).
+- `min_relevance` (number or null): for `mode="search"`, the float echoed from `--min-relevance` (validated to a finite `f32` in `[0.0, 1.0]` at `main.rs:2520-2524`), or `null` when the flag was omitted. For `mode="recent"`, always `null`. Pinned as f64-or-null by the schema test (`main.rs:7952-7955`) — never a string.
+- `records` (array of `MemoryRecord`): the matched records in the order returned by the daemon. The array is empty when no records match; the unsuffixed CLI prints `(no records)` for that case at `main.rs:1635`. Pinned as an array by `main.rs:7956-7959` — never null or a string.
 
 The inner `MemoryRecord` shape, defined at `agent-os/crates/covenant-types/src/lib.rs:236`:
 
@@ -429,19 +429,19 @@ The inner `MemoryRecord` shape, defined at `agent-os/crates/covenant-types/src/l
 - `created_at` (u64) — Unix-epoch milliseconds when the record was written.
 - `parent` (string or null) — parent record UUID for derived memories. Carries `#[serde(default)]` at `covenant-types/src/lib.rs:245-246` **without** `skip_serializing_if`, so the field is **always emitted** (as `null` when the record has no parent), not omitted. JSON consumers must read it with null-vs-value, not key-existence.
 
-Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:7913` (`memory_read_json_pins_top_level_schema`), exercised against both a `mode="search"` case (populated `query`, `min_relevance`, non-empty `records`) and a `mode="recent"` case (null `query`, null `min_relevance`, empty `records`).
+Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:7914` (`memory_read_json_pins_top_level_schema`), exercised against both a `mode="search"` case (populated `query`, `min_relevance`, non-empty `records`) and a `mode="recent"` case (null `query`, null `min_relevance`, empty `records`).
 
-The envelope source-of-truth lives at `memory_read_json` in `agent-os/crates/covenant/src/main.rs:5476`. Two unit tests at `main.rs:7870` (`memory_read_json_renders_stable_shape`) and `main.rs:7913` cover both modes. The CLI verbs are wired at `main.rs:2085-2129` (`covenant memory recent`) and `main.rs:2491-2557` (`covenant memory search`); without `--json`, each record prints as `[<created_at>] <tier>: <text>` at `main.rs:1639`. The optional `--stream` flag is accepted only by `covenant memory recent` (per `main.rs:2104`) and sets `Request::RecentMemory.prefer_stream = Some(true)` to enable the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal envelope shape is unchanged when the streaming path is not selected. `covenant memory search` has no `--stream` flag.
+The envelope source-of-truth lives at `memory_read_json` in `agent-os/crates/covenant/src/main.rs:5476`. Two unit tests at `main.rs:7871` (`memory_read_json_renders_stable_shape`) and `main.rs:7914` cover both modes. The CLI verbs are wired at `main.rs:2085-2129` (`covenant memory recent`) and `main.rs:2491-2557` (`covenant memory search`); without `--json`, each record prints as `[<created_at>] <tier>: <text>` at `main.rs:1639`. The optional `--stream` flag is accepted only by `covenant memory recent` (per `main.rs:2104`) and sets `Request::RecentMemory.prefer_stream = Some(true)` to enable the v2 streaming-response path documented under [docs/protocol-versioning.md](./protocol-versioning.md); the terminal envelope shape is unchanged when the streaming path is not selected. `covenant memory search` has no `--stream` flag.
 
 `covenant a2a status [-n|--limit <N>] [--min-lease-age-ms <N>] [--deadline-within-ms <N>] [--state queued|in_flight] --json` emits the current A2A queue snapshot — queued tasks, in-flight leases, and pending results — narrowed by the supplied filters. Envelope shape:
 
-- `kind`: literal string `"a2a_status"`. Pinned at the value level by `main.rs:8508` (asserts `value["kind"].as_str() == Some("a2a_status")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:4037`). Pinned as u64 by the schema test (`main.rs:8509-8512`).
-- `min_lease_age_ms` (u64 or null): the threshold echoed from `--min-lease-age-ms`, or `null` when the flag was omitted. Always emitted (as `null` when inactive) — never omitted from the envelope. Pinned as u64-or-null by the schema test (`main.rs:8513-8516`).
-- `deadline_within_ms` (u64 or null): the threshold echoed from `--deadline-within-ms`, or `null` when the flag was omitted. Same always-emitted-as-null contract as `min_lease_age_ms`. Pinned as u64-or-null by the schema test (`main.rs:8517-8520`).
-- `state_filter` (string or null): the `A2ATaskQueueState` slug echoed from `--state` — exactly `"queued"` or `"in_flight"` (snake_case, per `A2ATaskQueueState`'s `#[serde(rename_all = "snake_case")]` at `covenant-a2a/src/lib.rs:124-129`), or `null` when the flag was omitted. Pinned as string-or-null by the schema test (`main.rs:8521-8524`) — never an integer or array. Consumers must route on the lowercase wire form, **not** the Rust TitleCase names (`"Queued"`, `"InFlight"`).
-- `tasks` (array of `A2ATaskQueueEntry`): the matched queue entries in the order returned by the daemon. The array may be empty. Pinned as an array by `main.rs:8525` — never null or a string blob.
-- `results` (array of `A2ATaskResult`): pending results not yet acknowledged. The array may be empty; the unsuffixed CLI prints `(a2a queue empty)` at `main.rs:4102` when both `tasks` and `results` are empty. Pinned as an array by `main.rs:8526-8529` — never null or a string.
+- `kind`: literal string `"a2a_status"`. Pinned at the value level by `main.rs:8509` (asserts `value["kind"].as_str() == Some("a2a_status")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:4037`). Pinned as u64 by the schema test (`main.rs:8510-8513`).
+- `min_lease_age_ms` (u64 or null): the threshold echoed from `--min-lease-age-ms`, or `null` when the flag was omitted. Always emitted (as `null` when inactive) — never omitted from the envelope. Pinned as u64-or-null by the schema test (`main.rs:8514-8517`).
+- `deadline_within_ms` (u64 or null): the threshold echoed from `--deadline-within-ms`, or `null` when the flag was omitted. Same always-emitted-as-null contract as `min_lease_age_ms`. Pinned as u64-or-null by the schema test (`main.rs:8518-8521`).
+- `state_filter` (string or null): the `A2ATaskQueueState` slug echoed from `--state` — exactly `"queued"` or `"in_flight"` (snake_case, per `A2ATaskQueueState`'s `#[serde(rename_all = "snake_case")]` at `covenant-a2a/src/lib.rs:124-129`), or `null` when the flag was omitted. Pinned as string-or-null by the schema test (`main.rs:8522-8525`) — never an integer or array. Consumers must route on the lowercase wire form, **not** the Rust TitleCase names (`"Queued"`, `"InFlight"`).
+- `tasks` (array of `A2ATaskQueueEntry`): the matched queue entries in the order returned by the daemon. The array may be empty. Pinned as an array by `main.rs:8526` — never null or a string blob.
+- `results` (array of `A2ATaskResult`): pending results not yet acknowledged. The array may be empty; the unsuffixed CLI prints `(a2a queue empty)` at `main.rs:4102` when both `tasks` and `results` are empty. Pinned as an array by `main.rs:8527-8530` — never null or a string.
 
 The inner `A2ATaskQueueEntry` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:132`:
 
@@ -470,9 +470,9 @@ The inner `A2ATaskResult` shape, defined at `agent-os/crates/covenant-a2a/src/li
 - `content` (array of `Content`) — the same tagged-enum `Content` shape (`{type: "text", text: <string>}` or `{type: "json", value: <JSON>}`) already documented in the `tool_result` block above; empty for `error` results per `A2ATaskResult::error` at `covenant-a2a/src/lib.rs:406-413`.
 - `error_message` (string, omitted when null) — diagnostic message for `error` results; `skip_serializing_if = "Option::is_none"` per `covenant-a2a/src/lib.rs:392-393`. Absent on `ok` and `partial` results.
 
-Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:8484` (`a2a_status_json_pins_top_level_schema`), exercised against both a populated-filters case and an all-null-filters case.
+Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:8485` (`a2a_status_json_pins_top_level_schema`), exercised against both a populated-filters case and an all-null-filters case.
 
-The envelope source-of-truth lives at `a2a_status_json` in `agent-os/crates/covenant/src/main.rs:5607`. Three unit tests at `main.rs:8433` (`a2a_status_json_renders_stable_shape`), `main.rs:8475` (`a2a_status_json_omits_deadline_filter_when_inactive`, which pins the always-emitted-as-null contract on the filter fields), and `main.rs:8484` cover the shape. The CLI verb is wired at `main.rs:3359-3444`; without `--json`, the same response is rendered as JSONL with each task printed as `{"type": "task", "entry": <A2ATaskQueueEntry>}` and each result as `{"type": "result", "result": <A2ATaskResult>}` (per `main.rs:3427-3438`) — a different envelope shape than `--json`, so JSON consumers must use `--json` to get the kind-discriminated envelope.
+The envelope source-of-truth lives at `a2a_status_json` in `agent-os/crates/covenant/src/main.rs:5607`. Three unit tests at `main.rs:8434` (`a2a_status_json_renders_stable_shape`), `main.rs:8476` (`a2a_status_json_omits_deadline_filter_when_inactive`, which pins the always-emitted-as-null contract on the filter fields), and `main.rs:8485` cover the shape. The CLI verb is wired at `main.rs:3359-3444`; without `--json`, the same response is rendered as JSONL with each task printed as `{"type": "task", "entry": <A2ATaskQueueEntry>}` and each result as `{"type": "result", "result": <A2ATaskResult>}` (per `main.rs:3427-3438`) — a different envelope shape than `--json`, so JSON consumers must use `--json` to get the kind-discriminated envelope.
 
 `covenant a2a retry-stale [--enable] [--min-lease-age-ms <N>] [--max-attempts <N>] [--max-requeues <N>] [--scan-limit <N>] --json` emits a per-call report describing what the auto-retry scan considered, requeued, and skipped. Envelope shape:
 
@@ -539,8 +539,8 @@ The envelope source-of-truth lives at `a2a_compact_json` in `agent-os/crates/cov
 
 `covenant memory compact --reason <text> [--apply] [--detach-stale-parents] [--delete-working-before-ms <M> | --delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M> | --delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M> | --mark-longterm-stale-older-than-ms <D>] [--marked-at-ms <M>] --json` emits the outcome of a memory-store compaction pass. Envelope shape:
 
-- `kind`: literal string `"memory_compacted"` — past-tense outcome name, distinct from the verb name `compact`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token (`"memory_compact"`) or guessing a noun form (`"memory_compaction"`). Pinned at the value level by `main.rs:7705` (asserts `value["kind"].as_str() == Some("memory_compacted")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `outcome` (object): a structured `MemoryCompactionOutcome` (defined at `agent-os/crates/covenant-types/src/lib.rs:350`), never a string blob. The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:7706-7709` to be a JSON object.
+- `kind`: literal string `"memory_compacted"` — past-tense outcome name, distinct from the verb name `compact`; consumers routing on `kind` must match the literal exactly rather than reusing the verb token (`"memory_compact"`) or guessing a noun form (`"memory_compaction"`). Pinned at the value level by `main.rs:7706` (asserts `value["kind"].as_str() == Some("memory_compacted")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `outcome` (object): a structured `MemoryCompactionOutcome` (defined at `agent-os/crates/covenant-types/src/lib.rs:350`), never a string blob. The top-level object has exactly two keys (`kind` and `outcome`); the inner `outcome` is pinned by the schema test at `main.rs:7707-7710` to be a JSON object.
 
 **Dry-run by default, mutates only with `--apply`**: the CLI defaults to `MemoryRepairMode::DryRun` (per `main.rs:2952-2960`) and `--reason <text>` is mandatory regardless of mode (the CLI bails with `"missing --reason"` at `main.rs:2959` when omitted). Without `--apply`, the daemon evaluates the policy and reports what *would* change but does not mutate the store.
 
@@ -549,44 +549,44 @@ The inner `MemoryCompactionOutcome` shape:
 - `mode` (string) — `MemoryRepairMode` slug, exactly `"dry_run"` or `"apply"` (snake_case, per `MemoryRepairMode`'s `#[serde(rename_all = "snake_case")]` at `covenant-types/src/lib.rs:249-254`). Consumers must route on the lowercase wire form, **not** the Rust TitleCase names.
 - `would_change` (bool) — the policy identified at least one mutation that would land. Reliable in both modes — `true` whenever the policy matched records.
 - `changed` (bool) — the store was actually mutated by this call. In `mode: "dry_run"` this is **always `false`** even when `would_change` is `true`; only `mode: "apply"` can set it. JSON consumers branching on `changed` alone will silently treat dry-run planning runs as no-ops; route on the `(mode, would_change, changed)` triple instead.
-- `deleted` (array of strings) — UUIDs of records the policy deleted (in `apply` mode) or would delete (in `dry_run` mode). The empty-case is pinned by the stable-shape test at `main.rs:7676-7679` (asserts `value["outcome"]["deleted"].as_array().map(Vec::len) == Some(0)`).
+- `deleted` (array of strings) — UUIDs of records the policy deleted (in `apply` mode) or would delete (in `dry_run` mode). The empty-case is pinned by the stable-shape test at `main.rs:7677-7680` (asserts `value["outcome"]["deleted"].as_array().map(Vec::len) == Some(0)`).
 - `stale_marked` (array of strings) — UUIDs of long-term records the policy marked stale (or would mark, in dry-run mode).
-- `parents_detached` (array of strings) — UUIDs of records whose parent pointer the policy detached (or would detach, when `--detach-stale-parents` is supplied). The empty-case is pinned by the stable-shape test at `main.rs:7680-7685` (asserts `value["outcome"]["parents_detached"].as_array().map(Vec::len) == Some(0)`).
+- `parents_detached` (array of strings) — UUIDs of records whose parent pointer the policy detached (or would detach, when `--detach-stale-parents` is supplied). The empty-case is pinned by the stable-shape test at `main.rs:7681-7686` (asserts `value["outcome"]["parents_detached"].as_array().map(Vec::len) == Some(0)`).
 
-Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:7689` (`memory_compaction_json_pins_top_level_schema`), exercised against both a populated `apply` case and an empty `dry_run` case.
+Top-level keys are pinned to exactly these two by the test at `agent-os/crates/covenant/src/main.rs:7690` (`memory_compaction_json_pins_top_level_schema`), exercised against both a populated `apply` case and an empty `dry_run` case.
 
-The envelope source-of-truth lives at `memory_compaction_json` in `agent-os/crates/covenant/src/main.rs:5457`. Two unit tests at `main.rs:7661` (`memory_compaction_json_renders_stable_shape`) and `main.rs:7689` cover the shape. The CLI verb is wired at `main.rs:2181-2289` (shared with `covenant memory plan-compaction`; the `plan-compaction` arm forces dry-run and emits a different envelope documented below).
+The envelope source-of-truth lives at `memory_compaction_json` in `agent-os/crates/covenant/src/main.rs:5457`. Two unit tests at `main.rs:7662` (`memory_compaction_json_renders_stable_shape`) and `main.rs:7690` cover the shape. The CLI verb is wired at `main.rs:2181-2289` (shared with `covenant memory plan-compaction`; the `plan-compaction` arm forces dry-run and emits a different envelope documented below).
 
 `covenant memory plan-compaction --reason <text> [--detach-stale-parents] [--delete-working-before-ms <M> | --delete-working-older-than-ms <D>] [--delete-episodic-before-ms <M> | --delete-episodic-older-than-ms <D>] [--mark-longterm-stale-before-ms <M> | --mark-longterm-stale-older-than-ms <D>] [--marked-at-ms <M>] --json` emits a read-only compaction plan. The verb shares its argument parser with `covenant memory compact` but is forced into dry-run mode. Envelope shape:
 
-- `kind`: literal string `"memory_compaction_plan"` — distinct from `memory_compacted` so consumers can route on the planning vs mutating outcome without inspecting `outcome.mode`. Pinned at the value level by `main.rs:7774` (asserts `value["kind"].as_str() == Some("memory_compaction_plan")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `outcome` (object): the same `MemoryCompactionOutcome` shape documented in the `memory_compacted` block above. For this verb, `outcome.mode` is **always** `"dry_run"` and `outcome.changed` is **always** `false`; a non-`dry_run` value here indicates daemon/CLI drift and JSON consumers should treat it as a protocol violation. Pinned as a structured object by `main.rs:7775-7778` — never a string blob.
-- `expected_receipt_changes` (object): a forward-compatibility placeholder pinned by the schema test at `main.rs:7807` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`). The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic. Pinned as a structured object by `main.rs:7779-7782` — never a string blob.
+- `kind`: literal string `"memory_compaction_plan"` — distinct from `memory_compacted` so consumers can route on the planning vs mutating outcome without inspecting `outcome.mode`. Pinned at the value level by `main.rs:7775` (asserts `value["kind"].as_str() == Some("memory_compaction_plan")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `outcome` (object): the same `MemoryCompactionOutcome` shape documented in the `memory_compacted` block above. For this verb, `outcome.mode` is **always** `"dry_run"` and `outcome.changed` is **always** `false`; a non-`dry_run` value here indicates daemon/CLI drift and JSON consumers should treat it as a protocol violation. Pinned as a structured object by `main.rs:7776-7779` — never a string blob.
+- `expected_receipt_changes` (object): a forward-compatibility placeholder pinned by the schema test at `main.rs:7808` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`). The block has exactly three keys today and is currently a no-claim stub; consumers must validate the inner shape rather than dispatch directly to apply-mode logic. Pinned as a structured object by `main.rs:7780-7783` — never a string blob.
 
 **`--apply` is rejected** at the CLI level (`main.rs:2190-2192`: `bail!("memory plan-compaction is read-only and does not accept --apply")`) even though the underlying `Request::CompactMemory` request accepts both modes. `--reason <text>` remains mandatory, matching the `memory compact` verb.
 
 The inner `expected_receipt_changes` shape:
 
-- `mode` (string): literal `"none"` today. Pinned by the schema test at `main.rs:7826-7830` as the only currently-allowed value; consumers must treat any other value as a sign that receipt-aware compaction has shipped and the docs are stale. Pinned as a string by `main.rs:7822-7825` — never a structured object.
-- `records` (array): empty today (length pinned to `0` at `main.rs:7835-7841`). Will gain a real shape once receipt-aware compaction lands. Pinned as an array by `main.rs:7831-7834` — never null or a string. The renders-test sibling at `main.rs:7749-7754` independently pins the same empty-case `expected_receipt_changes.records` assertion (`as_array().map(Vec::len) == Some(0)`).
-- `reason` (string): a human-readable explanation of why the block is empty. Currently the literal `"dry-run compaction planning does not mutate memory or settlement receipts"` per `main.rs:4571`; consumers must not branch on the exact text — only on the field's existence and type. Pinned as a string by `main.rs:7842-7845` — never a structured object.
+- `mode` (string): literal `"none"` today. Pinned by the schema test at `main.rs:7827-7831` as the only currently-allowed value; consumers must treat any other value as a sign that receipt-aware compaction has shipped and the docs are stale. Pinned as a string by `main.rs:7823-7826` — never a structured object.
+- `records` (array): empty today (length pinned to `0` at `main.rs:7836-7842`). Will gain a real shape once receipt-aware compaction lands. Pinned as an array by `main.rs:7832-7835` — never null or a string. The renders-test sibling at `main.rs:7750-7755` independently pins the same empty-case `expected_receipt_changes.records` assertion (`as_array().map(Vec::len) == Some(0)`).
+- `reason` (string): a human-readable explanation of why the block is empty. Currently the literal `"dry-run compaction planning does not mutate memory or settlement receipts"` per `main.rs:4571`; consumers must not branch on the exact text — only on the field's existence and type. Pinned as a string by `main.rs:7843-7846` — never a structured object.
 
-Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:7758` (`memory_compaction_plan_json_pins_top_level_schema`), exercised against both a populated dry-run case and an empty dry-run case.
+Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:7759` (`memory_compaction_plan_json_pins_top_level_schema`), exercised against both a populated dry-run case and an empty dry-run case.
 
-The envelope source-of-truth lives at `memory_compaction_plan_json` in `agent-os/crates/covenant/src/main.rs:5464`. Three unit tests at `main.rs:7734` (`memory_compaction_plan_json_renders_stable_shape`), `main.rs:7758` (`memory_compaction_plan_json_pins_top_level_schema`), and `main.rs:7807` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`) cover both the outer envelope and the placeholder block. The CLI verb is wired at `main.rs:2181-2289` (shared parser with `covenant memory compact`, branched into the plan-only path at `main.rs:2182`); the `plan-compaction` arm sets `as_json` to `true` by default (`main.rs:2186`) so the unsuffixed CLI also emits the JSON envelope — there is no human-readable plan rendering.
+The envelope source-of-truth lives at `memory_compaction_plan_json` in `agent-os/crates/covenant/src/main.rs:5464`. Three unit tests at `main.rs:7735` (`memory_compaction_plan_json_renders_stable_shape`), `main.rs:7759` (`memory_compaction_plan_json_pins_top_level_schema`), and `main.rs:7808` (`memory_compaction_plan_json_pins_expected_receipt_changes_schema`) cover both the outer envelope and the placeholder block. The CLI verb is wired at `main.rs:2181-2289` (shared parser with `covenant memory compact`, branched into the plan-only path at `main.rs:2182`); the `plan-compaction` arm sets `as_json` to `true` by default (`main.rs:2186`) so the unsuffixed CLI also emits the JSON envelope — there is no human-readable plan rendering.
 
 `covenant ignore check <text> --json` emits the result of evaluating the configured ignore rules against operator-supplied text. Envelope shape:
 
-- `kind`: literal string `"ignore_report"`. Pinned at the value level by `main.rs:8016` (asserts `value["kind"].as_str() == Some("ignore_report")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `ignored` (boolean): `true` when at least one loaded rule matched the supplied text; `false` otherwise. Pinned as a JSON boolean by the schema test (`main.rs:8017-8020`) — never `0`/`1` or a string-truthy value.
-- `matched_pattern` (string or null): the matched rule pattern when `ignored` is `true`; **always `null`** when `ignored` is `false`. Pinned as string-or-null by the schema test (`main.rs:8021-8024`) — never an empty string for the unmatched case. JSON consumers must use `null` (not `""`) as the unmatched discriminator.
-- `rules_loaded` (u64): count of ignore rules the daemon evaluated. May legitimately be `0` when no rules are configured, in which case `ignored` is always `false` and `matched_pattern` is always `null`. Pinned as u64 by `main.rs:8025-8028` — never a string-of-integer.
+- `kind`: literal string `"ignore_report"`. Pinned at the value level by `main.rs:8017` (asserts `value["kind"].as_str() == Some("ignore_report")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
+- `ignored` (boolean): `true` when at least one loaded rule matched the supplied text; `false` otherwise. Pinned as a JSON boolean by the schema test (`main.rs:8018-8021`) — never `0`/`1` or a string-truthy value.
+- `matched_pattern` (string or null): the matched rule pattern when `ignored` is `true`; **always `null`** when `ignored` is `false`. Pinned as string-or-null by the schema test (`main.rs:8022-8025`) — never an empty string for the unmatched case. JSON consumers must use `null` (not `""`) as the unmatched discriminator.
+- `rules_loaded` (u64): count of ignore rules the daemon evaluated. May legitimately be `0` when no rules are configured, in which case `ignored` is always `false` and `matched_pattern` is always `null`. Pinned as u64 by `main.rs:8026-8029` — never a string-of-integer.
 
 **Exit-code coupling**: when `ignored` is `true`, the CLI exits `1` even in the `--json` path (per `main.rs:4707-4709`); the envelope is written to stdout *before* the exit. JSON consumers running this verb to gate downstream processing must read the envelope rather than relying solely on transport success — a `--json` invocation that exits `1` is the **expected** signal for a matched ignore rule, not an error.
 
-Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:8000` (`ignore_report_json_pins_top_level_schema`), exercised against both an `ignored=true` case with a non-null `matched_pattern` and an `ignored=false` case with a null `matched_pattern` and zero `rules_loaded`.
+Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:8001` (`ignore_report_json_pins_top_level_schema`), exercised against both an `ignored=true` case with a non-null `matched_pattern` and an `ignored=false` case with a null `matched_pattern` and zero `rules_loaded`.
 
-The envelope source-of-truth lives at `ignore_report_json` in `agent-os/crates/covenant/src/main.rs:5495`. Two unit tests at `main.rs:7988` (`ignore_report_json_renders_stable_shape`) and `main.rs:8000` cover the shape. The CLI verb is wired at `main.rs:4666-4714`; without `--json`, the matched case prints `ignored — matched rule: <pattern>` at `main.rs:4703` and the unmatched case prints `not ignored (<n> rule(s) loaded)` at `main.rs:4705`. Both paths share the exit-1-when-ignored convention.
+The envelope source-of-truth lives at `ignore_report_json` in `agent-os/crates/covenant/src/main.rs:5495`. Two unit tests at `main.rs:7989` (`ignore_report_json_renders_stable_shape`) and `main.rs:8001` cover the shape. The CLI verb is wired at `main.rs:4666-4714`; without `--json`, the matched case prints `ignored — matched rule: <pattern>` at `main.rs:4703` and the unmatched case prints `not ignored (<n> rule(s) loaded)` at `main.rs:4705`. Both paths share the exit-1-when-ignored convention.
 
 `covenant bootstrap --json` emits a summary of the capability-bootstrap pass that grants every action required by manifests under `$COVENANT_HOME/agents/*/agent.toml` (plus the implicit `memory.write`, which the daemon writes on every successful dispatch). Envelope shape:
 
@@ -664,36 +664,37 @@ The envelope source-of-truth lives at `memory_backfill_json` in `agent-os/crates
 
 `covenant skill add <dir> --url <u> --tag <t> --commit <c> --json` installs a Solana Agent Skill from a local directory: the daemon reads `<dir>/SKILL.md` + `references/**`, pins the content digest against the immutable `{url, tag, commit}` source coordinates, copies the tree into its own skill store, records a `SkillInstalled` audit row, and replies with the pinned manifest. Install is operator-only — a non-operator request records `SkillRefused` and returns an error *before* the daemon reads the caller-supplied path, so a caller can neither install nor make the daemon walk an arbitrary directory tree. Envelope shape:
 
-- `kind`: literal string `"skill"` (shared with `covenant skill show` — both reply with one pinned manifest). Pinned at the value level by `main.rs:7500` (`skill_json_renders_stable_shape`, asserts `value["kind"] == "skill"`).
-- `skill` (`SkillManifest` object): the pinned manifest, defined at `agent-os/crates/covenant-skills/src/lib.rs:37`:
+- `kind`: literal string `"skill"` (shared with `covenant skill show` — both reply with one pinned manifest). Pinned at the value level by `main.rs:7501` (`skill_json_renders_stable_shape`, asserts `value["kind"] == "skill"`).
+- `skill` (`SkillManifest` object): the pinned manifest, defined at `agent-os/crates/covenant-skills/src/lib.rs:38`:
   - `name` (string) — also the store key; constrained to a single safe path component (ASCII alphanumeric plus `.`, `_`, `-`, never `.`/`..`) so it can never escape the daemon's skill store.
   - `version` (string) — skill version parsed from the `SKILL.md` front matter.
   - `description` (string) — human-readable summary.
   - `digest` (string) — `sha256:<64-hex>` content digest over `SKILL.md` + `references/**`, recomputed and pinned at install.
-  - `source` (object) — immutable origin coordinates, defined at `covenant-skills/src/lib.rs:58`: `url` (string, the `https://github.com/<owner>/<repo>/tree/<tag>/<path>` listing URL), `tag` (string), and `commit` (string, the resolved SHA the audit chain anchors against so a re-tagged release cannot be silently swapped under a running deployment).
+  - `source` (object) — immutable origin coordinates, defined at `covenant-skills/src/lib.rs:67`: `url` (string, the `https://github.com/<owner>/<repo>/tree/<tag>/<path>` listing URL), `tag` (string), and `commit` (string, the resolved SHA the audit chain anchors against so a re-tagged release cannot be silently swapped under a running deployment).
+  - `references` (array of strings) — `references/...` relative paths of every file the skill ships under `references/**`, sorted and pinned at install. This is the bounded set a run may progressively disclose: a reference load is refused unless its path is in this list, so a file dropped into the tree after install is never disclosable.
   - `declared_capabilities` (array of strings) — the `chain.tx.{program}.{ix}` / `skill.use.{name}` actions the skill author declares; advisory only, the real grant + scope are checked against `covenant-permissions` at use-time, never trusted from the manifest alone.
   - `declared_programs` (array of strings) — base58 program ids the skill declares it touches.
   - `sends_tx` (bool) — whether the skill declares it submits a transaction.
 
-The envelope source-of-truth lives at `skill_json` in `agent-os/crates/covenant/src/main.rs:5417`; the shape-pinning test is at `main.rs:7500`. The CLI verbs are wired under the `skill` dispatch arm at `main.rs:4886-5077` (`add` at `main.rs:4892`, `show` at `main.rs:4978`); without `--json`, `add` prints `installed skill '<name>' v<version> (<digest>)` and `show` pretty-prints the manifest.
+The envelope source-of-truth lives at `skill_json` in `agent-os/crates/covenant/src/main.rs:5417`; the shape-pinning test is at `main.rs:7501`. The CLI verbs are wired under the `skill` dispatch arm at `main.rs:4886-5077` (`add` at `main.rs:4892`, `show` at `main.rs:4978`); without `--json`, `add` prints `installed skill '<name>' v<version> (<digest>)` and `show` pretty-prints the manifest.
 
 `covenant skill list --json` lists every installed skill. Envelope shape:
 
-- `kind`: literal string `"skill_list"`. Pinned at the value level by `main.rs:7512` (`skill_list_json_renders_stable_shape`, asserts `value["kind"] == "skill_list"`).
+- `kind`: literal string `"skill_list"`. Pinned at the value level by `main.rs:7513` (`skill_list_json_renders_stable_shape`, asserts `value["kind"] == "skill_list"`).
 - `skills` (array of `SkillManifest`): the installed manifests, sorted by `name`; an empty array (never null) when none are installed. Each element carries the `SkillManifest` shape documented above.
 
-The envelope source-of-truth lives at `skill_list_json` in `agent-os/crates/covenant/src/main.rs:5424`; the shape-pinning test is at `main.rs:7512`. The CLI verb is wired at `main.rs:4951`; without `--json`, the CLI prints one `<name>\t<version>\t<digest>` line per skill, or `(no skills installed)` for the empty case.
+The envelope source-of-truth lives at `skill_list_json` in `agent-os/crates/covenant/src/main.rs:5424`; the shape-pinning test is at `main.rs:7513`. The CLI verb is wired at `main.rs:4951`; without `--json`, the CLI prints one `<name>\t<version>\t<digest>` line per skill, or `(no skills installed)` for the empty case.
 
 `covenant skill verify <name> --json` re-verifies an installed skill by recomputing its on-disk content digest against the daemon's own stored copy and comparing it to the pinned one. A mismatch records a `SkillRefused` audit row and reports `digest_ok: false`; the CLI exits non-zero so a wrapper can gate on the verdict. Envelope shape:
 
-- `kind`: literal string `"skill_verify"` — the CLI read envelope, distinct from the IPC `Response::SkillVerified` wire variant (`kind: "skill_verified"`) it wraps. Pinned at the value level by `main.rs:7520` (`skill_verify_json_renders_stable_shape`, asserts `value["kind"] == "skill_verify"`).
+- `kind`: literal string `"skill_verify"` — the CLI read envelope, distinct from the IPC `Response::SkillVerified` wire variant (`kind: "skill_verified"`) it wraps. Pinned at the value level by `main.rs:7521` (`skill_verify_json_renders_stable_shape`, asserts `value["kind"] == "skill_verify"`).
 - `name` (string): the verified skill's name, echoed from the argument.
 - `digest_ok` (bool): the recompute-vs-pinned verdict. `true` when the on-disk tree still matches the pinned digest; `false` on mismatch (which also records `SkillRefused`). Pinned as a JSON boolean — never `0`/`1` or a string.
 - `digest` (string): the pinned `sha256:<64-hex>` content digest the recompute was checked against.
 - `declared_capabilities` (array of strings): the skill's declared capability surface, surfaced so an operator can review what the skill is authorized to do.
 - `declared_programs` (array of strings): the skill's declared program ids.
 
-The envelope source-of-truth lives at `skill_verify_json` in `agent-os/crates/covenant/src/main.rs:5431`; the shape-pinning test is at `main.rs:7520`. The CLI verb is wired at `main.rs:5006`; without `--json`, the CLI prints the digest verdict (`OK`/`MISMATCH`) with the pinned digest, then the declared capabilities and programs on separate lines.
+The envelope source-of-truth lives at `skill_verify_json` in `agent-os/crates/covenant/src/main.rs:5431`; the shape-pinning test is at `main.rs:7521`. The CLI verb is wired at `main.rs:5006`; without `--json`, the CLI prints the digest verdict (`OK`/`MISMATCH`) with the pinned digest, then the declared capabilities and programs on separate lines.
 
 ## Human Authority
 

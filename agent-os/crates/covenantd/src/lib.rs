@@ -2131,6 +2131,80 @@ impl Server {
         }
     }
 
+    /// Dispatch-time capability gate for *using* (injecting) an installed
+    /// skill. The governed skill runner calls this before injecting a
+    /// skill's instructions, so the audit chain proves the use was gated by
+    /// `skill.use.{name}` (caller today: tests; soon: the governed runner).
+    ///
+    /// The capability is checked before the skill store is touched: an
+    /// ungranted caller is refused without learning whether the skill is
+    /// installed and without making the daemon read the store — the same
+    /// gate-before-filesystem ordering as [`Self::skill_add`]. The action
+    /// string carries the skill name and `validate_scope` pins any
+    /// `skill.use.{name}` grant's scope to that same name at grant time, so a
+    /// matching valid capability is complete authorization — no separate
+    /// scope check is needed (unlike the a2a gates, whose scopes additionally
+    /// bound a task or peer).
+    ///
+    /// On grant the resolved [`SkillManifest`] is returned (the content the
+    /// caller is cleared to inject) and the granting `CapabilityCheck` row is
+    /// emitted by [`Self::check_capabilities_any_of`]. On deny an
+    /// `AuditKind::SkillRefused` row attributed to `peer` is recorded and
+    /// `Err(Response::Error { .. })` returned.
+    pub async fn skill_use_gate(
+        &self,
+        name: String,
+        peer: &AgentId,
+    ) -> Result<SkillManifest, Response> {
+        let Some(home) = self.home.clone() else {
+            return Err(Response::Error {
+                message: "skill use unavailable: server has no home directory configured".into(),
+            });
+        };
+        if !valid_skill_name(&name) {
+            return Err(Response::Error {
+                message: format!("invalid skill name '{name}'"),
+            });
+        }
+        let check = self
+            .check_capabilities_any_of(
+                format!("skill-use:{name}"),
+                vec![vec![format!("skill.use.{name}")]],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            // The refusal is must-persist: if it can't be written the caller
+            // gets the generic audit-failure response, so an attacker who
+            // fills the audit disk cannot suppress the SkillRefused probe row.
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: peer.clone(),
+                kind: AuditKind::SkillRefused {
+                    skill_name: name.clone(),
+                    reason: format!("missing skill.use.{name}"),
+                },
+            };
+            if let Err(e) = self.record_peer_event_required(peer, event).await {
+                return Err(audit_failure_response(e));
+            }
+            return Err(Response::Error {
+                message: format!(
+                    "skill use of '{name}' requires capability \"skill.use.{name}\". \
+                     Grant it with `covenant capabilities grant skill.use.{name}`."
+                ),
+            });
+        }
+        match read_skill_manifest(&home.join("skills").join(&name)) {
+            Ok(Some(manifest)) => Ok(manifest),
+            Ok(None) => Err(Response::Error {
+                message: format!("no skill installed named '{name}'"),
+            }),
+            Err(e) => Err(Response::Error { message: e }),
+        }
+    }
+
     async fn send_a2a_task(&self, task: covenant_a2a::A2ATask, peer: &AgentId) -> Response {
         if task.sender != *peer {
             let event = AuditEvent {
@@ -30743,6 +30817,119 @@ budget_credits_per_hour = {credits}
         }
         assert!(valid_skill_name(&"x".repeat(128)));
         assert!(!valid_skill_name(&"x".repeat(129)));
+    }
+
+    #[tokio::test]
+    async fn skill_use_gate_denies_ungranted_use_and_audits() {
+        // Failure modes: "ungranted skill use proceeds" + "deny path not
+        // audited". No capability is granted; the gate refuses on the
+        // capability check before it touches the store, so the caller never
+        // learns whether the skill is installed.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+
+        let result = s.skill_use_gate("covenant".to_string(), &peer).await;
+        let Err(Response::Error { message }) = result else {
+            panic!("ungranted skill use must be refused, got {result:?}");
+        };
+        assert!(
+            message.contains("requires capability") && message.contains("skill.use.covenant"),
+            "refusal must name the missing capability: {message}"
+        );
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillRefused { skill_name, reason }
+                    if skill_name == "covenant" && reason == "missing skill.use.covenant"
+            )),
+            "deny path must persist a SkillRefused row"
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_use_gate_allows_granted_use_and_returns_manifest() {
+        // Failure mode: "granted use blocked by a false negative". A valid
+        // unscoped skill.use.covenant grant must pass and yield the manifest.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+
+        // Install through the operator path so the manifest + digest are real.
+        let src = tempfile::tempdir().expect("src");
+        std::fs::write(
+            src.path().join("SKILL.md"),
+            "---\nname: covenant\ndescription: d\n---\n\nbody\n",
+        )
+        .unwrap();
+        let added = s
+            .op_respond(Request::SkillAdd {
+                dir: src.path().to_string_lossy().into_owned(),
+                url: String::new(),
+                tag: String::new(),
+                commit: String::new(),
+            })
+            .await;
+        assert!(
+            matches!(added, Response::Skill { .. }),
+            "install failed: {added:?}"
+        );
+
+        grant_scoped_action_to(&s, &peer, "skill.use.covenant", serde_json::json!({})).await;
+
+        let manifest = s
+            .skill_use_gate("covenant".to_string(), &peer)
+            .await
+            .expect("granted skill use must succeed");
+        assert_eq!(manifest.name, "covenant");
+
+        // The grant path emits a passing CapabilityCheck row scoped to the skill.
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityCheck { agent_id, required_actions, missing_actions, passed }
+                    if agent_id == "skill-use:covenant"
+                        && *passed
+                        && missing_actions.is_empty()
+                        && required_actions == &vec!["skill.use.covenant".to_string()]
+            )),
+            "grant path must emit a passing CapabilityCheck"
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_use_gate_granted_but_not_installed_reports_missing_skill() {
+        // Capability-first ordering: a granted caller clears the gate, then
+        // hits a plain "not installed" error — not a SkillRefused, since the
+        // refusal column is for ungranted use, not a missing store entry.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        grant_scoped_action_to(&s, &peer, "skill.use.covenant", serde_json::json!({})).await;
+
+        let result = s.skill_use_gate("covenant".to_string(), &peer).await;
+        let Err(Response::Error { message }) = result else {
+            panic!("granted use of an uninstalled skill must error, got {result:?}");
+        };
+        assert!(message.contains("no skill installed"), "got {message}");
+    }
+
+    #[tokio::test]
+    async fn skill_use_gate_rejects_invalid_name_up_front() {
+        // A traversal/separator name is rejected with a plain error, matching
+        // skill_show/skill_verify, before any capability check or store read.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+
+        let result = s.skill_use_gate("../etc".to_string(), &peer).await;
+        let Err(Response::Error { message }) = result else {
+            panic!("invalid skill name must error, got {result:?}");
+        };
+        assert!(message.contains("invalid skill name"), "got {message}");
     }
 
     #[test]

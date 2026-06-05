@@ -51,6 +51,7 @@ export function StakeClient() {
   const [config, setConfig] = useState<ConfigState | null>(null);
   const [rewardVaultLamports, setRewardVaultLamports] = useState<bigint | null>(null);
   const [lockedCvnt, setLockedCvnt] = useState<bigint | null>(null);
+  const [supplyRaw, setSupplyRaw] = useState<bigint | null>(null);
   const [price, setPrice] = useState<CvntPrice | null>(null);
   const [accounts, setAccounts] = useState<OwnedTokenAccount[] | null>(null);
   const [amount, setAmount] = useState("");
@@ -72,12 +73,17 @@ export function StakeClient() {
       fetchRewardVaultLamports(connection),
       fetchTokenAccountAmount(connection, lockedVault),
       fetchCvntSolPrice(),
-    ]).then(([c, rv, lv, p]) => {
+      connection
+        .getTokenSupply(cluster.cvntMint)
+        .then((s) => BigInt(s.value.amount))
+        .catch(() => null),
+    ]).then(([c, rv, lv, p, supply]) => {
       if (cancelled) return;
       setConfig(c);
       setRewardVaultLamports(rv);
       setLockedCvnt(lv ?? 0n);
       setPrice(p);
+      setSupplyRaw(supply);
     });
     return () => {
       cancelled = true;
@@ -302,8 +308,22 @@ export function StakeClient() {
             <PanelEyebrow>Protocol</PanelEyebrow>
             <div className="mt-6 grid grid-cols-1 gap-4">
               <StatRow
+                label="Amount staked"
+                value={
+                  lockedCvnt !== null
+                    ? `${formatCvnt(lockedCvnt, { maxFrac: 0 })} CVNT${
+                        supplyRaw && supplyRaw > 0n
+                          ? ` · ${(Number((lockedCvnt * 10_000n) / supplyRaw) / 100).toFixed(2)}% of supply`
+                          : ""
+                      }`
+                    : "—"
+                }
+                hint="Actual $CVNT principal locked across all open positions — the real token amount staked."
+              />
+              <StatRow
                 label="Total weight locked"
                 value={config ? `${formatCvnt(config.totalWeight, { maxFrac: 0 })} CVNT-weighted` : "—"}
+                hint="Reward-share basis, not a token count: each position's principal × its lock multiplier (0.5× / 1× / 1.5× / 2× for 7 / 30 / 90 / 180-day locks). Runs above the amount staked when longer locks dominate."
               />
               <StatRow
                 label="Lifetime SOL distributed"

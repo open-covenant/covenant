@@ -6607,6 +6607,7 @@ impl Server {
         let mut empty_capability_scope_rejected_reason_audit_refs = 0_u64;
         let mut empty_capability_check_agent_id_audit_refs = 0_u64;
         let mut empty_capability_check_required_actions_audit_refs = 0_u64;
+        let mut inconsistent_capability_check_passed_missing_audit_refs = 0_u64;
         let mut empty_intent_dispatched_matched_agent_audit_refs = 0_u64;
         for event in &audits {
             if event.timestamp_ms == 0 {
@@ -7669,7 +7670,8 @@ impl Server {
             if let AuditKind::CapabilityCheck {
                 agent_id,
                 required_actions,
-                ..
+                missing_actions,
+                passed,
             } = &event.kind
             {
                 if agent_id.is_empty() {
@@ -7694,6 +7696,21 @@ impl Server {
                             event.id
                         ),
                         repair: "review the audit JSONL row and the writer that produced it; the sole production CapabilityCheck write-site at check_capabilities_any_of (lib.rs:4074-4124) early-returns at lib.rs:4081-4087 without emitting an AuditEvent whenever alternatives_per_required is empty, so any row that reached the audit log iterated the lib.rs:4099-4111 for loop and pushed one entry per alternatives group; an empty required_actions detaches the row from the per-action attribution operators use to count which actions were missing in which CapabilityCheck rejection, erasing the load-bearing join key every CapabilityCheck consumer relies on to filter dispatch failures by action".into(),
+                    });
+                }
+                if *passed != missing_actions.is_empty() {
+                    inconsistent_capability_check_passed_missing_audit_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "audit_capability_check_passed_missing_mismatch".into(),
+                        id: Some(event.id.to_string()),
+                        message: format!(
+                            "audit event {} has kind = AuditKind::CapabilityCheck with passed = {} but missing_actions.is_empty() = {} (count = {}); the sole production CapabilityCheck write-site in covenantd is check_capabilities_any_of (lib.rs:4074-4124) which at lib.rs:4112 sets passed = missing.is_empty() before constructing the AuditEvent at lib.rs:4117-4122, so the two fields are bound by definition — passed must equal missing_actions.is_empty() in every reachable production write",
+                            event.id,
+                            passed,
+                            missing_actions.is_empty(),
+                            missing_actions.len()
+                        ),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production CapabilityCheck write-site at check_capabilities_any_of (covenantd/src/lib.rs:4074-4124) computes passed = missing.is_empty() at lib.rs:4112 immediately before emitting the AuditEvent at lib.rs:4117-4122, so a row where passed != missing_actions.is_empty() is out-of-band evidence of a JSONL edit that flipped one field without the other, a serde regression that defaulted missing_actions to Vec::new() at hydration regardless of source value, or a future write-site that drifted from the lib.rs:4112 binding (e.g. a hot-reload path that reset missing after the audit row was built), and detaches the audit row from the per-event pass/fail classifier that operator triage joins on when filtering CapabilityCheck rows by outcome — passed=true with non-empty missing_actions silently includes partial-cap holders in passed dashboards, while passed=false with empty missing_actions turns into spurious rejections that contradict the per-call cap-check trail".into(),
                     });
                 }
             }
@@ -8345,6 +8362,7 @@ impl Server {
             + empty_capability_scope_rejected_reason_audit_refs
             + empty_capability_check_agent_id_audit_refs
             + empty_capability_check_required_actions_audit_refs
+            + inconsistent_capability_check_passed_missing_audit_refs
             + empty_intent_dispatched_matched_agent_audit_refs;
         checks.push(VerifyCheck {
             name: "audit event integrity".into(),
@@ -8463,9 +8481,10 @@ impl Server {
                 && empty_capability_scope_rejected_reason_audit_refs == 0
                 && empty_capability_check_agent_id_audit_refs == 0
                 && empty_capability_check_required_actions_audit_refs == 0
+                && inconsistent_capability_check_passed_missing_audit_refs == 0
                 && empty_intent_dispatched_matched_agent_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {wrong_length_cap_granted_sig_audit_refs} wrong-length-signature-b58 CapabilityGranted audit event(s), {empty_cap_granted_subject_display_audit_refs} empty-subject-display CapabilityGranted audit event(s), {empty_cap_granted_granted_by_display_audit_refs} empty-granted-by-display CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {wrong_length_cap_revoke_rejected_sig_audit_refs} wrong-length-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {wrong_length_intent_dispatched_result_hash_audit_refs} wrong-length-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {wrong_length_hermes_tool_invoked_preview_hash_audit_refs} wrong-length-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {zero_budget_exhausted_requested_audit_refs} zero-requested BudgetExhausted audit event(s), {zero_budget_exhausted_refill_eta_ms_audit_refs} zero-refill-eta-ms BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {zero_budget_unseeded_requested_audit_refs} zero-requested BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {not_recognized_authentication_failed_transport_audit_refs} not-recognized-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {wrong_length_peer_revoked_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {wrong_length_peer_revoked_token_prefix_audit_refs} wrong-length-token-prefix PeerRevoked audit event(s), {empty_peer_revoked_peer_display_audit_refs} empty-peer-display PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {wrong_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotation_rejected_peer_display_audit_refs} empty-peer-display OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {wrong_length_operator_token_rotated_old_token_prefix_audit_refs} wrong-length-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {wrong_length_operator_token_rotated_new_token_prefix_audit_refs} wrong-length-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_peer_display_audit_refs} empty-peer-display OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {wrong_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peers_list_rejected_peer_display_audit_refs} empty-peer-display OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {wrong_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_display_audit_refs} empty-peer-display OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {wrong_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {wrong_length_peer_self_revoke_blocked_token_prefix_audit_refs} wrong-length-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_peer_display_audit_refs} empty-peer-display PeerSelfRevokeBlocked audit event(s), {empty_a2a_sender_mismatch_peer_display_audit_refs} empty-peer-display A2ASenderMismatch audit event(s), {empty_a2a_sender_mismatch_claimed_sender_display_audit_refs} empty-claimed-sender-display A2ASenderMismatch audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_action_audit_refs} not-recognized-action A2ARepairApplied audit event(s), {empty_a2a_repair_applied_reason_audit_refs} empty-reason A2ARepairApplied audit event(s), {nil_a2a_repair_applied_task_id_audit_refs} nil-task-id A2ARepairApplied audit event(s), {nil_a2a_repair_applied_lease_id_audit_refs} nil-lease-id A2ARepairApplied audit event(s), {zero_a2a_repair_applied_attempt_audit_refs} zero-attempt A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {missing_recv_prefix_a2a_recipient_rejected_action_audit_refs} missing-recv-prefix-action A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_sender_display_audit_refs} empty-sender-display A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_recipient_display_audit_refs} empty-recipient-display A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s), {empty_capability_grant_rejected_subject_display_audit_refs} empty-subject-display CapabilityGrantRejected audit event(s), {empty_intent_ignored_matched_pattern_audit_refs} empty-matched-pattern IntentIgnored audit event(s), {empty_budget_preempted_signal_sent_audit_refs} empty-signal-sent BudgetPreempted audit event(s), {not_recognized_budget_preempted_signal_sent_audit_refs} not-recognized-signal-sent BudgetPreempted audit event(s), {some_budget_preempted_exit_code_audit_refs} some-exit-code BudgetPreempted audit event(s), {empty_budget_preempted_reason_audit_refs} empty-reason BudgetPreempted audit event(s), {empty_budget_preempted_agent_display_audit_refs} empty-agent-display BudgetPreempted audit event(s), {empty_budget_preempt_failed_reason_audit_refs} empty-reason BudgetPreemptFailed audit event(s), {empty_budget_preempt_failed_agent_display_audit_refs} empty-agent-display BudgetPreemptFailed audit event(s), {zero_budget_preempt_failed_errno_audit_refs} zero-errno BudgetPreemptFailed audit event(s), {empty_budget_unseeded_agent_display_audit_refs} empty-agent-display BudgetUnseeded audit event(s), {empty_budget_exhausted_agent_display_audit_refs} empty-agent-display BudgetExhausted audit event(s), {empty_intent_dispatched_status_audit_refs} empty-status IntentDispatched audit event(s), {not_ok_intent_dispatched_status_audit_refs} not-ok-status IntentDispatched audit event(s), {empty_memory_repair_applied_action_audit_refs} empty-action MemoryRepairApplied audit event(s), {not_recognized_memory_repair_applied_action_audit_refs} not-recognized-action MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_mode_audit_refs} empty-mode MemoryCompactionApplied audit event(s), {not_recognized_memory_compaction_applied_mode_audit_refs} not-recognized-mode MemoryCompactionApplied audit event(s), {empty_memory_repair_applied_mode_audit_refs} empty-mode MemoryRepairApplied audit event(s), {not_recognized_memory_repair_applied_mode_audit_refs} not-recognized-mode MemoryRepairApplied audit event(s), {empty_memory_repair_applied_reason_audit_refs} empty-reason MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_reason_audit_refs} empty-reason MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_deleted_audit_refs} nil-deleted MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_stale_marked_audit_refs} nil-stale-marked MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_parents_detached_audit_refs} nil-parents-detached MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_deleted_audit_refs} unsorted-deleted MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_stale_marked_audit_refs} unsorted-stale-marked MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_parents_detached_audit_refs} unsorted-parents-detached MemoryCompactionApplied audit event(s), {empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} empty-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {not_recognized_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} not-recognized-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {zero_a2a_auto_retry_scheduler_scan_skipped_by_reason_value_audit_refs} zero-skipped-by-reason-value A2AAutoRetrySchedulerScan audit event(s), {empty_a2a_auto_retry_scheduler_scan_error_audit_refs} empty-error A2AAutoRetrySchedulerScan audit event(s), {empty_memory_record_backfill_applied_savepoint_name_audit_refs} empty-savepoint-name MemoryRecordBackfillApplied audit event(s), {not_recognized_memory_record_backfill_applied_savepoint_name_audit_refs} not-recognized-savepoint-name MemoryRecordBackfillApplied audit event(s), {empty_settlement_receipt_backfill_applied_rollback_path_audit_refs} empty-rollback-path SettlementReceiptBackfillApplied audit event(s), {not_recognized_settlement_receipt_backfill_applied_rollback_path_audit_refs} not-recognized-rollback-path SettlementReceiptBackfillApplied audit event(s), {empty_a2a_repair_applied_duplicate_risk_audit_refs} empty-duplicate-risk A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_duplicate_risk_audit_refs} not-recognized-duplicate-risk A2ARepairApplied audit event(s), {empty_capability_revoke_rejected_reason_audit_refs} empty-reason CapabilityRevokeRejected audit event(s), {empty_capability_scope_rejected_agent_id_audit_refs} empty-agent-id CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_action_audit_refs} empty-action CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_reason_audit_refs} empty-reason CapabilityScopeRejected audit event(s), {empty_capability_check_agent_id_audit_refs} empty-agent-id CapabilityCheck audit event(s), {empty_capability_check_required_actions_audit_refs} empty-required-actions CapabilityCheck audit event(s), {empty_intent_dispatched_matched_agent_audit_refs} empty-matched-agent IntentDispatched audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {wrong_length_cap_granted_sig_audit_refs} wrong-length-signature-b58 CapabilityGranted audit event(s), {empty_cap_granted_subject_display_audit_refs} empty-subject-display CapabilityGranted audit event(s), {empty_cap_granted_granted_by_display_audit_refs} empty-granted-by-display CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {wrong_length_cap_revoke_rejected_sig_audit_refs} wrong-length-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {wrong_length_intent_dispatched_result_hash_audit_refs} wrong-length-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {wrong_length_hermes_tool_invoked_preview_hash_audit_refs} wrong-length-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {zero_budget_exhausted_requested_audit_refs} zero-requested BudgetExhausted audit event(s), {zero_budget_exhausted_refill_eta_ms_audit_refs} zero-refill-eta-ms BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {zero_budget_unseeded_requested_audit_refs} zero-requested BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {not_recognized_authentication_failed_transport_audit_refs} not-recognized-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {wrong_length_peer_revoked_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {wrong_length_peer_revoked_token_prefix_audit_refs} wrong-length-token-prefix PeerRevoked audit event(s), {empty_peer_revoked_peer_display_audit_refs} empty-peer-display PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {wrong_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotation_rejected_peer_display_audit_refs} empty-peer-display OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {wrong_length_operator_token_rotated_old_token_prefix_audit_refs} wrong-length-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {wrong_length_operator_token_rotated_new_token_prefix_audit_refs} wrong-length-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_peer_display_audit_refs} empty-peer-display OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {wrong_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peers_list_rejected_peer_display_audit_refs} empty-peer-display OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {wrong_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_display_audit_refs} empty-peer-display OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {wrong_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {wrong_length_peer_self_revoke_blocked_token_prefix_audit_refs} wrong-length-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_peer_display_audit_refs} empty-peer-display PeerSelfRevokeBlocked audit event(s), {empty_a2a_sender_mismatch_peer_display_audit_refs} empty-peer-display A2ASenderMismatch audit event(s), {empty_a2a_sender_mismatch_claimed_sender_display_audit_refs} empty-claimed-sender-display A2ASenderMismatch audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_action_audit_refs} not-recognized-action A2ARepairApplied audit event(s), {empty_a2a_repair_applied_reason_audit_refs} empty-reason A2ARepairApplied audit event(s), {nil_a2a_repair_applied_task_id_audit_refs} nil-task-id A2ARepairApplied audit event(s), {nil_a2a_repair_applied_lease_id_audit_refs} nil-lease-id A2ARepairApplied audit event(s), {zero_a2a_repair_applied_attempt_audit_refs} zero-attempt A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {missing_recv_prefix_a2a_recipient_rejected_action_audit_refs} missing-recv-prefix-action A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_sender_display_audit_refs} empty-sender-display A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_recipient_display_audit_refs} empty-recipient-display A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s), {empty_capability_grant_rejected_subject_display_audit_refs} empty-subject-display CapabilityGrantRejected audit event(s), {empty_intent_ignored_matched_pattern_audit_refs} empty-matched-pattern IntentIgnored audit event(s), {empty_budget_preempted_signal_sent_audit_refs} empty-signal-sent BudgetPreempted audit event(s), {not_recognized_budget_preempted_signal_sent_audit_refs} not-recognized-signal-sent BudgetPreempted audit event(s), {some_budget_preempted_exit_code_audit_refs} some-exit-code BudgetPreempted audit event(s), {empty_budget_preempted_reason_audit_refs} empty-reason BudgetPreempted audit event(s), {empty_budget_preempted_agent_display_audit_refs} empty-agent-display BudgetPreempted audit event(s), {empty_budget_preempt_failed_reason_audit_refs} empty-reason BudgetPreemptFailed audit event(s), {empty_budget_preempt_failed_agent_display_audit_refs} empty-agent-display BudgetPreemptFailed audit event(s), {zero_budget_preempt_failed_errno_audit_refs} zero-errno BudgetPreemptFailed audit event(s), {empty_budget_unseeded_agent_display_audit_refs} empty-agent-display BudgetUnseeded audit event(s), {empty_budget_exhausted_agent_display_audit_refs} empty-agent-display BudgetExhausted audit event(s), {empty_intent_dispatched_status_audit_refs} empty-status IntentDispatched audit event(s), {not_ok_intent_dispatched_status_audit_refs} not-ok-status IntentDispatched audit event(s), {empty_memory_repair_applied_action_audit_refs} empty-action MemoryRepairApplied audit event(s), {not_recognized_memory_repair_applied_action_audit_refs} not-recognized-action MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_mode_audit_refs} empty-mode MemoryCompactionApplied audit event(s), {not_recognized_memory_compaction_applied_mode_audit_refs} not-recognized-mode MemoryCompactionApplied audit event(s), {empty_memory_repair_applied_mode_audit_refs} empty-mode MemoryRepairApplied audit event(s), {not_recognized_memory_repair_applied_mode_audit_refs} not-recognized-mode MemoryRepairApplied audit event(s), {empty_memory_repair_applied_reason_audit_refs} empty-reason MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_reason_audit_refs} empty-reason MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_deleted_audit_refs} nil-deleted MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_stale_marked_audit_refs} nil-stale-marked MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_parents_detached_audit_refs} nil-parents-detached MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_deleted_audit_refs} unsorted-deleted MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_stale_marked_audit_refs} unsorted-stale-marked MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_parents_detached_audit_refs} unsorted-parents-detached MemoryCompactionApplied audit event(s), {empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} empty-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {not_recognized_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} not-recognized-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {zero_a2a_auto_retry_scheduler_scan_skipped_by_reason_value_audit_refs} zero-skipped-by-reason-value A2AAutoRetrySchedulerScan audit event(s), {empty_a2a_auto_retry_scheduler_scan_error_audit_refs} empty-error A2AAutoRetrySchedulerScan audit event(s), {empty_memory_record_backfill_applied_savepoint_name_audit_refs} empty-savepoint-name MemoryRecordBackfillApplied audit event(s), {not_recognized_memory_record_backfill_applied_savepoint_name_audit_refs} not-recognized-savepoint-name MemoryRecordBackfillApplied audit event(s), {empty_settlement_receipt_backfill_applied_rollback_path_audit_refs} empty-rollback-path SettlementReceiptBackfillApplied audit event(s), {not_recognized_settlement_receipt_backfill_applied_rollback_path_audit_refs} not-recognized-rollback-path SettlementReceiptBackfillApplied audit event(s), {empty_a2a_repair_applied_duplicate_risk_audit_refs} empty-duplicate-risk A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_duplicate_risk_audit_refs} not-recognized-duplicate-risk A2ARepairApplied audit event(s), {empty_capability_revoke_rejected_reason_audit_refs} empty-reason CapabilityRevokeRejected audit event(s), {empty_capability_scope_rejected_agent_id_audit_refs} empty-agent-id CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_action_audit_refs} empty-action CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_reason_audit_refs} empty-reason CapabilityScopeRejected audit event(s), {empty_capability_check_agent_id_audit_refs} empty-agent-id CapabilityCheck audit event(s), {empty_capability_check_required_actions_audit_refs} empty-required-actions CapabilityCheck audit event(s), {inconsistent_capability_check_passed_missing_audit_refs} passed-missing-mismatch CapabilityCheck audit event(s), {empty_intent_dispatched_matched_agent_audit_refs} empty-matched-agent IntentDispatched audit event(s)"
             ),
         });
 
@@ -20290,6 +20309,117 @@ required = {caps:?}
                     integrity.message
                 );
                 assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_capability_check_passed_missing_mismatch_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let passed_true_id = Uuid::new_v4();
+        let passed_false_id = Uuid::new_v4();
+        // passed=true must imply missing_actions.is_empty(); this row violates that.
+        s.audit
+            .record(AuditEvent {
+                id: passed_true_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::CapabilityCheck {
+                    agent_id: "tool:test".into(),
+                    required_actions: vec!["memory.read".into()],
+                    missing_actions: vec!["memory.read".into()],
+                    passed: true,
+                },
+            })
+            .await
+            .unwrap();
+        // passed=false must imply non-empty missing_actions; this row violates that.
+        s.audit
+            .record(AuditEvent {
+                id: passed_false_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::CapabilityCheck {
+                    agent_id: "tool:test".into(),
+                    required_actions: vec!["memory.read".into()],
+                    missing_actions: vec![],
+                    passed: false,
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row_passed_true = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_capability_check_passed_missing_mismatch"
+                            && item.id.as_deref() == Some(&passed_true_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "expected audit_capability_check_passed_missing_mismatch for passed=true: {drift:?}"
+                        )
+                    });
+                assert!(
+                    row_passed_true
+                        .message
+                        .contains("AuditKind::CapabilityCheck"),
+                    "drift message should name the CapabilityCheck variant: {}",
+                    row_passed_true.message
+                );
+                assert!(
+                    row_passed_true.message.contains("passed = true"),
+                    "drift message should name the passed value: {}",
+                    row_passed_true.message
+                );
+                assert!(
+                    row_passed_true
+                        .repair
+                        .contains("check_capabilities_any_of")
+                        && row_passed_true.repair.contains("passed = missing.is_empty()"),
+                    "repair hint should name check_capabilities_any_of and the biconditional binding: {}",
+                    row_passed_true.repair
+                );
+                let row_passed_false = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "audit_capability_check_passed_missing_mismatch"
+                            && item.id.as_deref() == Some(&passed_false_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "expected audit_capability_check_passed_missing_mismatch for passed=false: {drift:?}"
+                        )
+                    });
+                assert!(
+                    row_passed_false.message.contains("passed = false"),
+                    "drift message should name the passed value: {}",
+                    row_passed_false.message
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("2 passed-missing-mismatch CapabilityCheck audit event"),
+                    "check message should count passed-missing-mismatch CapabilityCheck events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 2);
             }
             other => panic!("unexpected: {other:?}"),
         }

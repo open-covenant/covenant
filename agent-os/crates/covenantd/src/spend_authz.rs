@@ -216,7 +216,10 @@ pub async fn authorize_spend(
 
     Ok(match outcome {
         Ok(()) => SpendDecision::Approve { decision_id },
-        Err(reason) => SpendDecision::Deny { decision_id, reason },
+        Err(reason) => SpendDecision::Deny {
+            decision_id,
+            reason,
+        },
     })
 }
 

@@ -12,6 +12,13 @@
 
 #![deny(unsafe_code)]
 
+mod parser;
+
+pub use parser::{
+    parse_skill_md, parse_skill_md_path, skill_content_digest, SkillFrontmatter,
+    SkillFrontmatterMetadata, SkillMd, SkillParseError,
+};
+
 use serde::{Deserialize, Serialize};
 
 /// One installed Solana Agent Skill, as Covenant understands it.

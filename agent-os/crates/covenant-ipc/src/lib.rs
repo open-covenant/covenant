@@ -447,6 +447,28 @@ pub enum Request {
         per_call_cap: String,
         credits: u64,
     },
+    /// Pre-spend authorization request from an external agent wallet
+    /// (e.g. OrbWallet asking before it signs). Requires capability
+    /// `wallet.spend.authorize`; the daemon checks `amount` against
+    /// `per_call_cap`, the chain/asset against the request, and the
+    /// payer's budget, records the verdict in the audit chain, and returns
+    /// [`Response::SpendAuthorized`]. Unlike `PayX402` this moves no funds
+    /// and writes no settlement receipt — it is a decision, not a payment.
+    ///
+    /// `amount` and `per_call_cap` are atomic decimal strings (u128) to
+    /// avoid JSON's 53-bit integer limit. `credits` is the USD-pegged
+    /// budget the spend would consume. `destination` is the optional
+    /// pay-to address, recorded for audit.
+    AuthorizeSpend {
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        per_call_cap: String,
+        credits: u64,
+        #[serde(default)]
+        destination: Option<String>,
+    },
     /// Operator-driven repair of legacy settlement-receipt rows in the
     /// JSONL store. `dry_run` reports the would-change row count without
     /// writing; an apply rewrites the store atomically after a rollback
@@ -965,6 +987,16 @@ pub enum Response {
         receipt_id: Uuid,
         status: u16,
         body: String,
+    },
+    /// Verdict for [`Request::AuthorizeSpend`]. `approved` is the
+    /// decision; `decision_id` is the daemon-minted id (returned on both
+    /// approve and deny) the wallet can join a later settlement receipt
+    /// to; `reason` is `Some` only when `approved` is `false`.
+    SpendAuthorized {
+        approved: bool,
+        decision_id: Uuid,
+        #[serde(default)]
+        reason: Option<String>,
     },
     /// Snapshot of the SAP bridge config as the daemon resolved it at
     /// boot. `enabled = false` means the bridge is off (default) and
@@ -11351,6 +11383,70 @@ mod tests {
         assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(id)));
         let back: Response = serde_json::from_value(wire).unwrap();
         assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn request_authorize_spend_serde_pins_wire_shape() {
+        let event = Request::AuthorizeSpend {
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            per_call_cap: "100000".into(),
+            credits: 8,
+            destination: Some("0xPayee".into()),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("authorize_spend")));
+        assert_eq!(
+            obj.get("per_call_cap"),
+            Some(&serde_json::json!("100000")),
+            "per_call_cap must round-trip as a decimal string so u128 \
+             amounts above JSON's 53-bit integer ceiling survive the wire",
+        );
+        assert_eq!(obj.get("amount"), Some(&serde_json::json!("80000")));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "AuthorizeSpend must round-trip verbatim");
+
+        // destination is optional via #[serde(default)].
+        let no_dest = serde_json::json!({
+            "kind": "authorize_spend",
+            "provider": "orbserv",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "80000",
+            "per_call_cap": "100000",
+            "credits": 8,
+        });
+        let decoded: Request = serde_json::from_value(no_dest).expect("destination is optional");
+        assert!(matches!(decoded, Request::AuthorizeSpend { destination: None, .. }));
+    }
+
+    #[test]
+    fn response_spend_authorized_serde_pins_wire_shape() {
+        let id = Uuid::from_u128(0xdead_beef_0000_0001u128);
+        let resp = Response::SpendAuthorized {
+            approved: false,
+            decision_id: id,
+            reason: Some("amount 100001 exceeds the per-call cap 100000".into()),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("spend_authorized")));
+        assert_eq!(obj.get("approved"), Some(&serde_json::json!(false)));
+        assert_eq!(obj.get("decision_id"), Some(&serde_json::json!(id)));
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+
+        // reason is omitted on approve and decodes back to None.
+        let approve = serde_json::json!({
+            "kind": "spend_authorized",
+            "approved": true,
+            "decision_id": id,
+        });
+        let decoded: Response = serde_json::from_value(approve).expect("reason is optional");
+        assert!(matches!(decoded, Response::SpendAuthorized { reason: None, approved: true, .. }));
     }
 
     async fn frames_to_reader<I>(frames: I) -> std::io::Cursor<Vec<u8>>

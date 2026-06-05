@@ -431,6 +431,31 @@ pub enum AuditKind {
         amount: String,
         receipt_id: Uuid,
     },
+    /// The daemon decided a pre-spend authorization request from an
+    /// external agent wallet (e.g. OrbWallet asking before it signs).
+    /// Covenant is the spending policy here: the row records the verdict
+    /// and, on a deny, why — so the audit chain holds a verifiable record
+    /// of every spend that was permitted *and* every one that was
+    /// refused, independent of whether the wallet later settles. `amount`
+    /// is the atomic on-chain amount the wallet asked to spend; `credits`
+    /// is the USD-pegged budget the spend would consume; `network` and
+    /// `asset` identify the settlement rail; `destination` is the pay-to
+    /// address when the wallet supplied one. `approved` is the verdict and
+    /// `reason` is `Some` only when `approved` is `false`. `decision_id`
+    /// is the daemon-minted id returned to the wallet so a later
+    /// settlement receipt can join back to the authorization that allowed
+    /// it. No funds move on this row; it is a decision, not a settlement.
+    SpendAuthorizationDecided {
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        destination: Option<String>,
+        approved: bool,
+        reason: Option<String>,
+        decision_id: Uuid,
+    },
     /// Logged when the operator runs the settlement receipt backfill. A
     /// dry run records `row_count` from the plan with `dry_run = true`
     /// and no `rollback_path`; an apply records the rewritten

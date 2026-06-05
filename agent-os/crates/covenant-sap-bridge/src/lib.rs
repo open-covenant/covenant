@@ -42,9 +42,19 @@ pub enum BridgeError {
     /// a soft no-op, not a failure — it is the default state.
     #[error("synapse bridge is disabled")]
     Disabled,
-    /// Network or RPC layer failure.
+    /// Network or RPC layer failure with no meaningful upstream error
+    /// name (the worker reported a bare `Error`, or none at all).
     #[error("rpc: {0}")]
     Rpc(String),
+    /// The worker ran but the operation failed with a named upstream
+    /// error — an on-chain program error, a send/confirm failure
+    /// (`TransactionFailed`, `TransactionExpiredBlockheightExceededError`,
+    /// `SendTransactionError`), or a typed bridge error
+    /// (`BridgeSignerRequiredError`, `BridgeVerifierRequiredError`). The
+    /// `name` is preserved verbatim so reconciliation loops can branch on
+    /// failure class instead of string-matching a flattened message.
+    #[error("{name}: {message}")]
+    Upstream { name: String, message: String },
     /// The on-chain account exists but did not decode against the
     /// expected SAP schema. Indicates a program upgrade or a wrong
     /// program ID.

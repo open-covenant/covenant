@@ -36,6 +36,13 @@ export class BridgeSignerRequiredError extends Error {
   }
 }
 
+export class BridgeVerifierRequiredError extends Error {
+  constructor(op: string) {
+    super(`synapse bridge: ${op} requires a verifier keypair (set COVENANT_SAP_VERIFIER_KEYPAIR)`);
+    this.name = 'BridgeVerifierRequiredError';
+  }
+}
+
 // A loaded Solana keypair. A @solana/web3.js `Keypair` satisfies this
 // shape; we keep the local type loose so the public surface does not
 // import web3 eagerly.
@@ -133,9 +140,40 @@ export interface PublishedAuditRoot {
   signature: string;
 }
 
+// Cross-party attestation of a Covenant audit root. Unlike the
+// self-anchored ledger (the daemon writing to its own trail), this is
+// SAP's real attestation primitive: a separately-keyed verifier
+// (Witness Loop) signs that it vouches for the daemon's agent and the
+// supplied root. The program enforces attester != agent owner on-chain.
+export interface AgentAttestation {
+  // The agent PDA being attested — the daemon's registered SAP agent.
+  agentPda: string;
+  // 32-byte Merkle root as hex (with or without 0x). Goes on-chain as
+  // the attestation's metadata_hash.
+  rootHashHex: string;
+  // On-chain attestation_type label; <= 32 chars. Defaults to
+  // 'covenant.audit-root'.
+  attestationType?: string;
+  // Unix expiry. 0 (the default) means never-expires.
+  expiresAtUnix?: number;
+}
+
+export interface PublishedAttestation {
+  // The attestation PDA, derived from [sap_attest, agent, attester].
+  attestationPda: string;
+  // The verifier wallet that signed the attestation.
+  attester: string;
+  agentPda: string;
+  signature: string;
+}
+
 export interface SapBridgeOptions {
   config?: ResolvedSynapseConfig;
   signer?: SapKeypair;
+  // Separately-keyed verifier used for cross-party attestations
+  // (COVENANT_SAP_VERIFIER_KEYPAIR). Distinct from `signer` so the
+  // attester is never the agent owner.
+  verifier?: SapKeypair;
 }
 
 export interface BridgeStatus {
@@ -145,6 +183,7 @@ export interface BridgeStatus {
   rpcUrl: string;
   explorerUrl: string;
   hasSigner: boolean;
+  hasVerifier: boolean;
 }
 
 const AGENT_STATS_SEED = 'sap_stats';
@@ -159,6 +198,21 @@ const LEDGER_SEED = 'sap_ledger';
 // session seed so the same ledger PDA is reused across roots.
 const DEFAULT_AUDIT_LABEL = 'covenant.audit-root';
 const AUDIT_VAULT_LABEL = 'covenant.audit-vault';
+// Schema tag stamped into the provenance envelope so external readers
+// can version-gate how they decode it. Bumped when the envelope shape
+// changes.
+const AUDIT_ENVELOPE_SCHEMA = 'covenant.audit-root@1';
+// Attestation PDA seed, matching the deployed program: attestation =
+// [sap_attest, agent, attester]. The program rejects self-attestation
+// (attester == agent owner) on-chain, so the attester must be a
+// separately-keyed verifier.
+const ATTESTATION_SEED = 'sap_attest';
+// Default on-chain attestation_type label (<=32 chars, enforced below).
+const DEFAULT_ATTESTATION_TYPE = 'covenant.audit-root';
+// Cap on how many agents a single find-by-protocol call will resolve, so
+// a large mainnet protocol index can't blow the worker timeout. Override
+// per call via the payload's `limit`.
+const DEFAULT_PROTOCOL_QUERY_LIMIT = 50;
 
 interface LoadedSdk {
   sdk: typeof SapSdk;
@@ -210,23 +264,151 @@ async function loadSdk(): Promise<LoadedSdk> {
   }
 }
 
-// Sign and submit a VersionedTransaction. We do this directly against
-// the connection rather than via SapClient.sendTransaction: that helper
-// forwards `signers` into web3's `options` argument, which a
+// Transient RPC failures worth retrying with capped exponential
+// backoff. A submitted transaction is idempotent on resend (same
+// signature), so re-sending after a 429 / gateway blip / "node is
+// behind" race is safe.
+const SEND_MAX_ATTEMPTS = 6;
+const SEND_BASE_DELAY_MS = 400;
+// A recent blockhash is valid for ~150 slots; confirmation is bounded on
+// that window rather than the deprecated signature-only overload, which
+// can hang on mainnet congestion and then falsely report success after
+// the blockhash has already expired.
+const BLOCKHASH_VALIDITY_SLOTS = 150;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Heuristic classifier for retryable RPC failures. The public
+// mainnet-beta endpoint and most providers signal overload as HTTP
+// 429 / "rate limit", and transient gateway / socket errors as 5xx /
+// reset; a stale-node race shows up as "node is behind" / "blockhash
+// not found". On-chain program errors and malformed input are NOT
+// matched here, so they fail fast.
+function isTransientRpcError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes('429') ||
+    msg.includes('too many requests') ||
+    msg.includes('rate limit') ||
+    msg.includes('node is behind') ||
+    msg.includes('blockhash not found') ||
+    msg.includes('timed out') ||
+    msg.includes('timeout') ||
+    msg.includes('econnreset') ||
+    msg.includes('socket hang up') ||
+    msg.includes('fetch failed') ||
+    msg.includes(' 502') ||
+    msg.includes(' 503') ||
+    msg.includes(' 504')
+  );
+}
+
+async function withRpcRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientRpcError(err) || i === attempts - 1) throw err;
+      await sleep(SEND_BASE_DELAY_MS * 2 ** i);
+    }
+  }
+  throw lastErr;
+}
+
+// Sign, submit, and confirm a VersionedTransaction. We submit directly
+// against the connection rather than via SapClient.sendTransaction:
+// that helper forwards `signers` into web3's `options` argument, which a
 // VersionedTransaction send does not accept (it must be pre-signed),
 // surfacing as a bare "Invalid arguments".
-async function signAndSend(
+//
+// Mainnet-hardening over the previous fire-and-forget version: bounded
+// backoff on transient send failures, and blockheight-bounded
+// confirmation so a dropped or expired transaction surfaces as a clear
+// error (TransactionExpiredBlockheightExceededError / TransactionFailed)
+// instead of a false success.
+async function sendAndConfirm(
   client: InstanceType<typeof SapSdk.SapClient>,
   tx: InstanceType<typeof Web3.VersionedTransaction>,
   signers: InstanceType<typeof Web3.Keypair>[],
+  commitment: Web3.Commitment = 'confirmed',
 ): Promise<string> {
   tx.sign(signers);
-  const signature = await client.connection.sendRawTransaction(tx.serialize(), {
-    preflightCommitment: 'confirmed',
-    maxRetries: 5,
-  });
-  await client.connection.confirmTransaction(signature, 'confirmed');
+  const raw = tx.serialize();
+  const blockhash = tx.message.recentBlockhash;
+  if (!blockhash) {
+    throw new Error('synapse bridge: transaction is missing a recent blockhash');
+  }
+  const startHeight = await withRpcRetry(() => client.connection.getBlockHeight(commitment));
+  const lastValidBlockHeight = startHeight + BLOCKHASH_VALIDITY_SLOTS;
+
+  let signature = '';
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < SEND_MAX_ATTEMPTS; attempt++) {
+    try {
+      signature = await client.connection.sendRawTransaction(raw, {
+        preflightCommitment: commitment,
+        maxRetries: 5,
+      });
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientRpcError(err) || attempt === SEND_MAX_ATTEMPTS - 1) throw err;
+      await sleep(SEND_BASE_DELAY_MS * 2 ** attempt);
+    }
+  }
+  if (!signature) throw lastErr ?? new Error('synapse bridge: transaction send failed');
+
+  const result = await client.connection.confirmTransaction(
+    { signature, blockhash, lastValidBlockHeight },
+    commitment,
+  );
+  if (result.value.err) {
+    const failure = new Error(
+      `synapse bridge: transaction ${signature} failed on-chain: ${JSON.stringify(result.value.err)}`,
+    );
+    failure.name = 'TransactionFailed';
+    throw failure;
+  }
   return signature;
+}
+
+// An Anchor `init` constraint races when two writers both observe an
+// account as absent and both try to create it; the loser's transaction
+// fails with "already in use". Used to drive an idempotent retry on the
+// ledger-init path.
+function isInitCollision(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes('already in use') ||
+    msg.includes('already initialized') ||
+    msg.includes('account already exists')
+  );
+}
+
+// Bounded-concurrency map. Keeps the worker's RPC fan-out from issuing
+// hundreds of simultaneous getAccountInfo calls (which a public RPC
+// rate-limits) while still overlapping enough to stay under the daemon's
+// worker timeout.
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i] as T, i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 function hexToBytes32(hex: string): number[] {
@@ -310,10 +492,12 @@ function resolvePricing(manifest: AgentManifest, anchor: typeof Anchor): unknown
 export class SapBridge {
   readonly config: ResolvedSynapseConfig;
   private readonly signer?: SapKeypair;
+  private readonly verifier?: SapKeypair;
 
   constructor(options: SapBridgeOptions = {}) {
     this.config = options.config ?? resolveSynapseConfig();
     this.signer = options.signer;
+    this.verifier = options.verifier;
   }
 
   requireEnabled(): void {
@@ -329,6 +513,13 @@ export class SapBridge {
     return this.signer;
   }
 
+  private requireVerifier(op: string): SapKeypair {
+    if (!this.verifier) {
+      throw new BridgeVerifierRequiredError(op);
+    }
+    return this.verifier;
+  }
+
   // Snapshot of the resolved bridge config. Safe to expose over an
   // operator surface — never returns secrets and does not touch the
   // network.
@@ -340,6 +531,7 @@ export class SapBridge {
       rpcUrl: this.config.rpcUrl,
       explorerUrl: this.config.explorerUrl,
       hasSigner: this.signer !== undefined,
+      hasVerifier: this.verifier !== undefined,
     };
   }
 
@@ -382,7 +574,7 @@ export class SapBridge {
     });
 
     const tx = await client.buildTransaction([ix], walletPk);
-    const signature = await signAndSend(client, tx, [kp]);
+    const signature = await sendAndConfirm(client, tx, [kp]);
     return { agentPda: agent.toBase58(), signature };
   }
 
@@ -430,13 +622,18 @@ export class SapBridge {
     );
 
     const contentHash = hexToBytes32(attestation.rootHashHex);
-    // Provenance envelope — identifiers only, never contents.
+    // Provenance envelope — identifiers only, never contents. `anchoredAt`
+    // is server-authoritative (set here, not caller-supplied) so the
+    // on-chain record carries a timestamp an operator can't backdate;
+    // `recordedAt` preserves the caller's own claimed time alongside it.
     const data = Buffer.from(
       JSON.stringify({
+        schema: AUDIT_ENVELOPE_SCHEMA,
         target: attestation.releaseTarget ?? null,
         subject: attestation.releaseSubject ?? null,
         scope: attestation.releaseScope ?? null,
         recordedAt: attestation.recordedAt ?? null,
+        anchoredAt: Math.floor(Date.now() / 1000),
       }),
       'utf8',
     );
@@ -446,43 +643,127 @@ export class SapBridge {
     // ledger on first use only; the write_ledger call always runs.
     const methods = client.program.methods as unknown as LedgerProgramMethods;
     const exists = async (pk: InstanceType<typeof web3.PublicKey>): Promise<boolean> =>
-      (await client.connection.getAccountInfo(pk)) !== null;
+      (await withRpcRetry(() => client.connection.getAccountInfo(pk))) !== null;
 
-    const ixs: InstanceType<typeof Web3.TransactionInstruction>[] = [];
-    if (!(await exists(vault))) {
+    // Re-probe existence and assemble the instruction list. Run fresh on
+    // each attempt so an init-collision retry only re-emits the inits
+    // that are still genuinely missing.
+    const buildIxs = async (): Promise<InstanceType<typeof Web3.TransactionInstruction>[]> => {
+      const ixs: InstanceType<typeof Web3.TransactionInstruction>[] = [];
+      if (!(await exists(vault))) {
+        ixs.push(
+          await methods
+            .initVault(label32(AUDIT_VAULT_LABEL))
+            .accountsPartial({ wallet: walletPk, agent, vault, globalRegistry, systemProgram })
+            .instruction(),
+        );
+      }
+      if (!(await exists(session))) {
+        ixs.push(
+          await methods
+            .openSession(sessionHash)
+            .accountsPartial({ wallet: walletPk, agent, vault, session, systemProgram })
+            .instruction(),
+        );
+      }
+      if (!(await exists(ledger))) {
+        ixs.push(
+          await methods
+            .initLedger()
+            .accountsPartial({ wallet: walletPk, agent, vault, session, ledger, systemProgram })
+            .instruction(),
+        );
+      }
       ixs.push(
         await methods
-          .initVault(label32(AUDIT_VAULT_LABEL))
-          .accountsPartial({ wallet: walletPk, agent, vault, globalRegistry, systemProgram })
+          .writeLedger(data, contentHash)
+          .accountsPartial({ wallet: walletPk, session, vault, agent, ledger })
           .instruction(),
       );
+      return ixs;
+    };
+
+    let signature: string;
+    try {
+      const tx = await client.buildTransaction(await buildIxs(), walletPk);
+      signature = await sendAndConfirm(client, tx, [kp]);
+    } catch (err) {
+      // Another writer created the vault/session/ledger between our probe
+      // and our send (the init is a TOCTOU race). Re-probe and retry once
+      // with only the inits that are still missing; the write_ledger
+      // append is itself idempotent-safe to repeat.
+      if (!isInitCollision(err)) throw err;
+      const tx = await client.buildTransaction(await buildIxs(), walletPk);
+      signature = await sendAndConfirm(client, tx, [kp]);
     }
-    if (!(await exists(session))) {
-      ixs.push(
-        await methods
-          .openSession(sessionHash)
-          .accountsPartial({ wallet: walletPk, agent, vault, session, systemProgram })
-          .instruction(),
-      );
-    }
-    if (!(await exists(ledger))) {
-      ixs.push(
-        await methods
-          .initLedger()
-          .accountsPartial({ wallet: walletPk, agent, vault, session, ledger, systemProgram })
-          .instruction(),
-      );
-    }
-    ixs.push(
-      await methods
-        .writeLedger(data, contentHash)
-        .accountsPartial({ wallet: walletPk, session, vault, agent, ledger })
-        .instruction(),
+    return { ledgerPda: ledger.toBase58(), signature };
+  }
+
+  // Cross-party attestation of the daemon's agent + audit root via SAP's
+  // create_attestation primitive. Signed by a separately-keyed verifier
+  // (the Witness Loop), never the agent owner — the program enforces
+  // attester != owner on-chain, so this is a genuine third-party vouch
+  // rather than a self-anchored ledger write.
+  //
+  // The attestation PDA is unique per (agent, attester); to refresh the
+  // root/expiry for an existing pair we close the stale attestation
+  // first (a separate confirmed transaction so create's init constraint
+  // sees a clean slot), then create.
+  async attestAgent(att: AgentAttestation): Promise<PublishedAttestation> {
+    this.requireEnabled();
+    const verifier = this.requireVerifier('attestAgent');
+    const { sdk, web3, anchor } = await loadSdk();
+
+    const vkp = verifier as unknown as InstanceType<typeof web3.Keypair>;
+    const wallet = new anchor.Wallet(vkp);
+    const client = sdk.createSapClient(this.config.rpcUrl, wallet);
+    const attesterPk = new web3.PublicKey(verifier.publicKey.toBase58());
+    const programId = new web3.PublicKey(this.config.programId);
+    const agent = new web3.PublicKey(att.agentPda);
+    const [globalRegistry] = sdk.Pdas.getGlobalPDA();
+    const [attestationPda] = web3.PublicKey.findProgramAddressSync(
+      [Buffer.from(ATTESTATION_SEED), agent.toBuffer(), attesterPk.toBuffer()],
+      programId,
     );
 
-    const tx = await client.buildTransaction(ixs, walletPk);
-    const signature = await signAndSend(client, tx, [kp]);
-    return { ledgerPda: ledger.toBase58(), signature };
+    const metadataHash = hexToBytes32(att.rootHashHex);
+    const attestationType = att.attestationType ?? DEFAULT_ATTESTATION_TYPE;
+    if (attestationType.length === 0 || attestationType.length > 32) {
+      throw new Error('synapse bridge: attestationType must be 1..=32 characters');
+    }
+    const expiresAt = new anchor.BN(att.expiresAtUnix ?? 0);
+
+    const existing = await withRpcRetry(() => client.connection.getAccountInfo(attestationPda));
+    if (existing) {
+      const closeIx = await client.attestation.closeAttestation({
+        signer: vkp,
+        attester: attesterPk,
+        agent,
+        attestation: attestationPda,
+        globalRegistry,
+      });
+      const closeTx = await client.buildTransaction([closeIx], attesterPk);
+      await sendAndConfirm(client, closeTx, [vkp]);
+    }
+
+    const createIx = await client.attestation.createAttestation({
+      signer: vkp,
+      attester: attesterPk,
+      agent,
+      attestation: attestationPda,
+      globalRegistry,
+      attestationType,
+      metadataHash,
+      expiresAt,
+    });
+    const tx = await client.buildTransaction([createIx], attesterPk);
+    const signature = await sendAndConfirm(client, tx, [vkp]);
+    return {
+      attestationPda: attestationPda.toBase58(),
+      attester: attesterPk.toBase58(),
+      agentPda: att.agentPda,
+      signature,
+    };
   }
 
   // Update the daemon's on-chain agent account to reflect the local
@@ -521,7 +802,7 @@ export class SapBridge {
     });
 
     const tx = await client.buildTransaction([ix], walletPk);
-    const signature = await signAndSend(client, tx, [kp]);
+    const signature = await sendAndConfirm(client, tx, [kp]);
     return { agentPda: agent.toBase58(), signature };
   }
 
@@ -571,20 +852,27 @@ export class SapBridge {
   }
 
   // Resolve peers advertising a given protocol via SAP's protocol
-  // discovery index.
-  async findAgentsByProtocol(protocol: string): Promise<PeerRecord[]> {
+  // discovery index. Bounded: at most `limit` agents are resolved (a
+  // popular mainnet index can hold thousands), fetched with bounded
+  // concurrency so the fan-out stays under the worker timeout without
+  // hammering the RPC.
+  async findAgentsByProtocol(
+    protocol: string,
+    limit: number = DEFAULT_PROTOCOL_QUERY_LIMIT,
+  ): Promise<PeerRecord[]> {
     this.requireEnabled();
-    const { sdk, web3 } = await loadSdk();
+    const { sdk } = await loadSdk();
     const client = sdk.createSapClient(this.config.rpcUrl);
     const [indexPda] = sdk.Pdas.getProtocolIndexPDA(sdk.Pdas.hashString(protocol));
     const index = await client.fetchAccount<RawProtocolIndex>('protocolIndex', indexPda);
     if (!index) return [];
-    const out: PeerRecord[] = [];
-    for (const agentPk of index.agents) {
+    const capped = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DEFAULT_PROTOCOL_QUERY_LIMIT;
+    const agentPks = index.agents.slice(0, capped);
+    const resolved = await mapWithConcurrency(agentPks, 8, async (agentPk) => {
       const acct = await client.fetchAccount<RawAgentAccount>('agentAccount', agentPk);
-      if (acct) out.push(mapAgent(agentPk.toBase58(), acct));
-    }
-    return out;
+      return acct ? mapAgent(agentPk.toBase58(), acct) : null;
+    });
+    return resolved.filter((r): r is PeerRecord => r !== null);
   }
 }
 

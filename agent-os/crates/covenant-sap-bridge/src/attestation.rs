@@ -1,11 +1,20 @@
 //! Anchor audit roots into SAP.
 //!
-//! Only the 32-byte Merkle root and a small structured envelope go
-//! on-chain — never the underlying audit-log contents. The root is
-//! appended to a self-anchored SAP ledger (the daemon signs for its own
-//! agent): SAP rejects self-attestation by design, so the ledger module
-//! is the intended path for a single-party audit trail. The ledger PDA
-//! is the public, append-only record external parties follow.
+//! Two complementary on-chain paths:
+//!
+//! - [`SapBridge::publish_audit_root`] appends the root to a
+//!   self-anchored SAP ledger (the daemon signs for its own agent). The
+//!   ledger is append-only, so it is the right vehicle for the evolving
+//!   trail of successive roots, and its PDA is the public handle
+//!   external parties follow.
+//! - [`SapBridge::publish_attestation`] uses SAP's `create_attestation`
+//!   primitive, signed by a *separately-keyed* verifier (the Witness
+//!   Loop). The program enforces attester != agent owner on-chain, so
+//!   this is a genuine third-party vouch for the daemon's agent + a
+//!   given root — not a self-anchored write.
+//!
+//! In both paths only the 32-byte Merkle root and a small structured
+//! envelope go on-chain — never the underlying audit-log contents.
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +73,36 @@ pub struct PublishedAuditRoot {
     pub signature: String,
 }
 
+/// Cross-party attestation request: a separately-keyed verifier vouches
+/// for the daemon's agent and a given root via SAP's `create_attestation`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttestation {
+    /// The agent PDA being attested (the daemon's registered SAP agent).
+    pub agent_pda: String,
+    /// 32-byte Merkle root as lowercase hex; goes on-chain as the
+    /// attestation's `metadata_hash`.
+    pub root_hash_hex: String,
+    /// On-chain `attestation_type` label (<= 32 chars). The worker
+    /// defaults this to "covenant.audit-root" when omitted.
+    #[serde(default)]
+    pub attestation_type: Option<String>,
+    /// Unix expiry; `0` / `None` means never-expires.
+    #[serde(default)]
+    pub expires_at_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishedAttestation {
+    /// The attestation PDA, derived from [sap_attest, agent, attester].
+    pub attestation_pda: String,
+    /// The verifier wallet that signed the attestation.
+    pub attester: String,
+    pub agent_pda: String,
+    pub signature: String,
+}
+
 impl SapBridge {
     pub async fn publish_audit_root(
         &self,
@@ -72,6 +111,19 @@ impl SapBridge {
         self.require_enabled()?;
         validate_root_hash_hex(&attestation.root_hash_hex)?;
         worker::invoke(self.config(), "attest-root", attestation).await
+    }
+
+    /// Publish a cross-party attestation. Drives the worker's
+    /// `attest-agent` command, which signs with the verifier keypair
+    /// (`COVENANT_SAP_VERIFIER_KEYPAIR`). The root is pre-validated here
+    /// so a malformed digest fails before a subprocess round-trip.
+    pub async fn publish_attestation(
+        &self,
+        attestation: &AgentAttestation,
+    ) -> Result<PublishedAttestation> {
+        self.require_enabled()?;
+        validate_root_hash_hex(&attestation.root_hash_hex)?;
+        worker::invoke(self.config(), "attest-agent", attestation).await
     }
 }
 

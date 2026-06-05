@@ -81,15 +81,43 @@ async fn find_by_protocol_maps_peer_list() {
 }
 
 #[tokio::test]
-async fn error_envelope_becomes_rpc_error() {
+async fn error_envelope_with_named_error_becomes_upstream() {
+    // A meaningful upstream error name (a send/confirm failure, an
+    // on-chain program error, a typed bridge error) is preserved on
+    // BridgeError::Upstream so reconciliation can branch on failure class
+    // instead of string-matching a flattened message.
     let bridge = bridge_with_stub(r#"{"ok":false,"error":"boom","name":"SendError"}"#);
     let err = bridge
         .publish_agent(&demo_manifest())
         .await
         .expect_err("should fail");
     match err {
-        BridgeError::Rpc(msg) => assert_eq!(msg, "boom"),
-        other => panic!("expected Rpc, got {other:?}"),
+        BridgeError::Upstream { name, message } => {
+            assert_eq!(name, "SendError");
+            assert_eq!(message, "boom");
+        }
+        other => panic!("expected Upstream, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn error_envelope_with_generic_name_stays_rpc() {
+    // JS's default Error.name ("Error") and an empty/missing name carry
+    // no class signal, so they collapse to BridgeError::Rpc — preserving
+    // the original behavior for the common case.
+    for envelope in [
+        r#"{"ok":false,"error":"boom","name":"Error"}"#,
+        r#"{"ok":false,"error":"boom"}"#,
+    ] {
+        let bridge = bridge_with_stub(envelope);
+        let err = bridge
+            .publish_agent(&demo_manifest())
+            .await
+            .expect_err("should fail");
+        match err {
+            BridgeError::Rpc(msg) => assert_eq!(msg, "boom"),
+            other => panic!("expected Rpc for envelope {envelope}, got {other:?}"),
+        }
     }
 }
 

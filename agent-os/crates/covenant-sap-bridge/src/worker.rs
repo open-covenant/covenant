@@ -34,7 +34,6 @@ struct Envelope {
     #[serde(default)]
     error: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     name: Option<String>,
 }
 
@@ -117,10 +116,18 @@ where
     if env.ok {
         serde_json::from_value(env.data).map_err(|e| BridgeError::Decode(e.to_string()))
     } else {
-        Err(BridgeError::Rpc(
-            env.error
-                .unwrap_or_else(|| "worker reported an error".into()),
-        ))
+        let message = env
+            .error
+            .unwrap_or_else(|| "worker reported an error".into());
+        // Preserve a meaningful upstream error name so callers can branch
+        // on failure class. A bare "Error" (JS's default Error.name) or an
+        // empty name carries no signal, so those collapse to Rpc as before.
+        match env.name {
+            Some(name) if !name.is_empty() && name != "Error" => {
+                Err(BridgeError::Upstream { name, message })
+            }
+            _ => Err(BridgeError::Rpc(message)),
+        }
     }
 }
 

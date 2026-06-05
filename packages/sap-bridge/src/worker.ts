@@ -17,15 +17,30 @@
 //
 // Commands:
 //   status                          — resolved config snapshot (no network)
+//   stats                           — cumulative RPC usage counters (no network)
 //   publish-agent     <stdin: AgentManifest>
 //   update-agent      <stdin: AgentManifest>      — replaces all fields
-//   attest-root       <stdin: AuditRootAttestation>
+//   attest-root       <stdin: AuditRootAttestation>  — self-anchored ledger
+//   attest-agent      <stdin: AgentAttestation>      — cross-party (verifier)
 //   find-agent        <stdin: { pda }>            — discovery projection
 //   describe-agent    <stdin: { pda }>            — full agent projection
-//   find-by-protocol  <stdin: { protocol }>
+//   find-by-protocol  <stdin: { protocol, limit? }>
 
 import { SapBridge, resolveSynapseConfig, type SapKeypair } from './index.js';
 import { loadKeypairFromFile } from './keypair.js';
+import { readStats, recordCall } from './stats.js';
+
+// Commands that issue Solana RPC calls — recorded in the usage counters.
+// `status` and `stats` are pure-local and excluded.
+const NETWORK_COMMANDS = new Set([
+  'publish-agent',
+  'update-agent',
+  'attest-root',
+  'attest-agent',
+  'find-agent',
+  'describe-agent',
+  'find-by-protocol',
+]);
 
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return '';
@@ -52,6 +67,12 @@ async function loadSigner(): Promise<SapKeypair | undefined> {
   return loadKeypairFromFile(path);
 }
 
+async function loadVerifier(): Promise<SapKeypair | undefined> {
+  const path = process.env.COVENANT_SAP_VERIFIER_KEYPAIR;
+  if (!path) return undefined;
+  return loadKeypairFromFile(path);
+}
+
 function emit(data: unknown): void {
   process.stdout.write(JSON.stringify({ ok: true, data }) + '\n');
 }
@@ -63,55 +84,76 @@ function fail(err: unknown): never {
   process.exit(1);
 }
 
+// Dispatch a network-bearing command. Kept separate from main() so the
+// single call site there can wrap every RPC op in usage accounting.
+async function dispatchNetwork(bridge: SapBridge, command: string): Promise<unknown> {
+  switch (command) {
+    case 'publish-agent':
+      return bridge.publishAgent(await parsePayload());
+    case 'update-agent':
+      return bridge.updateAgent(await parsePayload());
+    case 'attest-root':
+      return bridge.publishAuditRoot(await parsePayload());
+    case 'attest-agent':
+      return bridge.attestAgent(await parsePayload());
+    case 'find-agent': {
+      const { pda } = await parsePayload<{ pda?: string }>();
+      if (!pda) throw new Error('find-agent: missing "pda" in payload');
+      return bridge.findAgentByPda(pda);
+    }
+    case 'describe-agent': {
+      const { pda } = await parsePayload<{ pda?: string }>();
+      if (!pda) throw new Error('describe-agent: missing "pda" in payload');
+      return bridge.describeAgent(pda);
+    }
+    case 'find-by-protocol': {
+      const { protocol, limit } = await parsePayload<{ protocol?: string; limit?: number }>();
+      if (!protocol) throw new Error('find-by-protocol: missing "protocol" in payload');
+      return bridge.findAgentsByProtocol(protocol, limit);
+    }
+    default:
+      throw new Error(
+        `unknown command '${command}'. Expected: status | stats | publish-agent | ` +
+          'update-agent | attest-root | attest-agent | find-agent | describe-agent | find-by-protocol',
+      );
+  }
+}
+
 async function main(): Promise<void> {
-  const command = process.argv[2];
+  const command = process.argv[2] ?? '';
   const config = resolveSynapseConfig(process.env);
 
-  // status never needs a signer or the network, so resolve it first.
+  // status / stats never touch the network or a signer; resolve first
+  // and skip usage accounting for them.
   if (command === 'status') {
     const bridge = new SapBridge({ config });
     emit(bridge.status());
     return;
   }
+  if (command === 'stats') {
+    emit(readStats());
+    return;
+  }
 
-  const bridge = new SapBridge({ config, signer: await loadSigner() });
+  const bridge = new SapBridge({
+    config,
+    signer: await loadSigner(),
+    verifier: await loadVerifier(),
+  });
 
-  switch (command) {
-    case 'publish-agent': {
-      emit(await bridge.publishAgent(await parsePayload()));
-      return;
-    }
-    case 'update-agent': {
-      emit(await bridge.updateAgent(await parsePayload()));
-      return;
-    }
-    case 'attest-root': {
-      emit(await bridge.publishAuditRoot(await parsePayload()));
-      return;
-    }
-    case 'find-agent': {
-      const { pda } = await parsePayload<{ pda?: string }>();
-      if (!pda) throw new Error('find-agent: missing "pda" in payload');
-      emit(await bridge.findAgentByPda(pda));
-      return;
-    }
-    case 'describe-agent': {
-      const { pda } = await parsePayload<{ pda?: string }>();
-      if (!pda) throw new Error('describe-agent: missing "pda" in payload');
-      emit(await bridge.describeAgent(pda));
-      return;
-    }
-    case 'find-by-protocol': {
-      const { protocol } = await parsePayload<{ protocol?: string }>();
-      if (!protocol) throw new Error('find-by-protocol: missing "protocol" in payload');
-      emit(await bridge.findAgentsByProtocol(protocol));
-      return;
-    }
-    default:
-      throw new Error(
-        `unknown command '${command ?? ''}'. Expected: status | publish-agent | ` +
-          'update-agent | attest-root | find-agent | describe-agent | find-by-protocol',
-      );
+  // Record usage only for genuine RPC commands. An unknown command falls
+  // through to dispatchNetwork's throw without being miscounted.
+  if (!NETWORK_COMMANDS.has(command)) {
+    emit(await dispatchNetwork(bridge, command));
+    return;
+  }
+  try {
+    const data = await dispatchNetwork(bridge, command);
+    recordCall(true);
+    emit(data);
+  } catch (err) {
+    recordCall(false);
+    throw err;
   }
 }
 

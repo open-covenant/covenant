@@ -39,13 +39,14 @@ const BUNDLED_HEADER_PATH = fileURLToPath(
   new URL('../assets/stake-banner.png', import.meta.url),
 );
 // Periodic locked/staked stats summary. Hours between posts (0 disables it),
-// and an optional animated header: `bundled` ships the committed GIF, else a
-// file_id / URL. Unset header → text-only summary.
+// and an optional header video: `bundled` ships the committed MP4 (sent via
+// sendVideo so it plays once, not on a loop), else a file_id / URL. Unset
+// header → text-only summary.
 const SUMMARY_INTERVAL_MS =
   Number(process.env.STAKE_ANNOUNCE_SUMMARY_HOURS ?? '0') * 3_600_000;
 const SUMMARY_HEADER = process.env.STAKE_ANNOUNCE_SUMMARY_HEADER?.trim() || undefined;
 const BUNDLED_SUMMARY_PATH = fileURLToPath(
-  new URL('../assets/summary-banner.gif', import.meta.url),
+  new URL('../assets/summary-banner.mp4', import.meta.url),
 );
 const WATCHER_POLL_MS = Number(process.env.STAKE_WATCHER_POLL_MS ?? '15000');
 const WATCHER_STATE_DIR = process.env.STAKE_WATCHER_STATE_DIR;
@@ -225,11 +226,12 @@ function maybeStartAnnouncer(bot: Bot): void {
     },
     sendSummary: async (html) => {
       if (SUMMARY_HEADER) {
-        const animation =
+        const video =
           SUMMARY_HEADER === 'bundled'
             ? new InputFile(BUNDLED_SUMMARY_PATH)
             : SUMMARY_HEADER;
-        await bot.api.sendAnimation(chatId, animation, {
+        // sendVideo (not sendAnimation) so it plays once instead of looping.
+        await bot.api.sendVideo(chatId, video, {
           caption: html,
           parse_mode: 'HTML',
         });

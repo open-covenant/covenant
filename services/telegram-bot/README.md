@@ -111,7 +111,7 @@ is bot-controlled (numbers + our own URLs) and still HTML-escaped.
 | `STAKE_ANNOUNCE_EMOJI_ID` | no | — | Telegram custom_emoji_id (from a set this bot owns) used as the bar instead of 🔥 |
 | `STAKE_ANNOUNCE_HEADER_PHOTO` | no | — | Header image on each post. `bundled` = committed banner; else a file_id / image URL. Unset = text-only. Set → the "NEW STAKE" title is dropped (the banner carries it) |
 | `STAKE_ANNOUNCE_SUMMARY_HOURS` | no | `0` | Post a locked/staked stats summary every N hours (0 disables it). Persisted clock survives redeploys |
-| `STAKE_ANNOUNCE_SUMMARY_HEADER` | no | — | Animated summary header. `bundled` = committed GIF (via `sendAnimation`); else file_id / URL; unset = text-only |
+| `STAKE_ANNOUNCE_SUMMARY_HEADER` | no | — | Summary header video. `bundled` = committed MP4 (via `sendVideo`, plays once not looped); else file_id / URL; unset = text-only |
 
 ## Endpoints
 

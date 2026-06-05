@@ -6126,6 +6126,7 @@ impl Server {
         let mut zeroed_payer_receipt_refs = 0_u64;
         let mut nil_memory_record_id_receipt_refs = 0_u64;
         let mut empty_chain_receipt_refs = 0_u64;
+        let mut not_recognized_chain_receipt_refs = 0_u64;
         let mut empty_batch_id_receipt_refs = 0_u64;
         let mut wrong_length_batch_id_receipt_refs = 0_u64;
         let mut empty_merkle_root_receipt_refs = 0_u64;
@@ -6280,6 +6281,17 @@ impl Server {
                         ),
                         repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose chain field is the hardcoded literal \"solana\" set at flush_receipts in covenantd lib.rs:5060, so Some(\"\") is out-of-band evidence of a serde regression that defaulted Option<String> to Some(String::new()) at hydration, an import tool that wrote a placeholder confirmation, or a JSONL edit that anonymized the chain attribution while leaving the bundle 4-of-4 set (which would otherwise bypass the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count)".into(),
                     });
+                } else if chain != "solana" {
+                    not_recognized_chain_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_chain_not_recognized".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has chain = Some({chain:?}); the sole production annotate_receipt call site in covenantd builds ChainConfirmation with chain: \"solana\".to_string() at lib.rs:5116, and covenant_settlement::annotate_receipt copies the field unchanged, so no reachable production arm sets receipt.chain to anything other than \"solana\"",
+                            receipt.id
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose chain field is the hardcoded literal \"solana\" at flush_receipts in covenantd lib.rs:5116, so a Some-value other than \"solana\" is out-of-band evidence of a JSONL edit that re-attributed the receipt to a different chain, an import tool that synthesized confirmations under a different chain label, or a future multi-chain integration regression that bypassed the covenantd flush path without extending this drift kind to the new recognized set, while leaving the bundle 4-of-4 set (bypassing the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count) and the receipt_chain_empty guard that only fires when the string is exactly zero-length".into(),
+                    });
                 }
             }
             if let Some(batch_id) = receipt.batch_id.as_deref() {
@@ -6374,6 +6386,7 @@ impl Server {
             + zeroed_payer_receipt_refs
             + nil_memory_record_id_receipt_refs
             + empty_chain_receipt_refs
+            + not_recognized_chain_receipt_refs
             + empty_batch_id_receipt_refs
             + wrong_length_batch_id_receipt_refs
             + empty_merkle_root_receipt_refs
@@ -6393,6 +6406,7 @@ impl Server {
                 && zeroed_payer_receipt_refs == 0
                 && nil_memory_record_id_receipt_refs == 0
                 && empty_chain_receipt_refs == 0
+                && not_recognized_chain_receipt_refs == 0
                 && empty_batch_id_receipt_refs == 0
                 && wrong_length_batch_id_receipt_refs == 0
                 && empty_merkle_root_receipt_refs == 0
@@ -6400,7 +6414,7 @@ impl Server {
                 && empty_tx_sig_receipt_refs == 0
                 && empty_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
             ),
         });
 
@@ -12566,6 +12580,78 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 empty-batch-id receipt"),
                     "check message should count empty-batch-id receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_chain_not_recognized_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("ethereum".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("b".repeat(64)),
+                merkle_root: Some("m".repeat(64)),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_chain_not_recognized"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_chain_not_recognized: {drift:?}"));
+                assert!(
+                    row.message.contains("\"ethereum\""),
+                    "drift message should name the not-recognized value: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("annotate_receipt")
+                        && row.repair.contains("\"solana\"")
+                        && row.repair.contains("receipt_chain_empty"),
+                    "repair hint should name annotate_receipt, the recognized \"solana\" literal, and the empty-arm bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| item.kind != "receipt_chain_empty"),
+                    "not-recognized arm must not double-count as the empty arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 not-recognized-chain receipt"),
+                    "check message should count not-recognized-chain receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

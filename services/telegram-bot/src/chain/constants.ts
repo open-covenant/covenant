@@ -19,6 +19,15 @@ export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
 );
 
+/** Streamflow timelock/vesting program — CVNT team/liquidity vesting locks
+ * tokens in per-stream escrows here, which count toward "locked" supply. */
+export const STREAMFLOW_PROGRAM_ID = new PublicKey(
+  "strmRqUCoQUgGUan5YhzUZa6KqdzwX5L6FpUxfmKg5m",
+);
+/** Streamflow `Contract` account byte offsets: mint and escrow-token pubkey. */
+export const STREAMFLOW_MINT_OFFSET = 177;
+export const STREAMFLOW_ESCROW_OFFSET = 209;
+
 /** Token-2022 program — the mainnet `$CVNT` mint is a Token-2022 mint. */
 export const TOKEN_2022_PROGRAM_ID = new PublicKey(
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",

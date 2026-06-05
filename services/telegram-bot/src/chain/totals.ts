@@ -11,6 +11,9 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   BUYLOCK_AUTHORITY_SEED,
   STAKE_PROGRAM_ID,
+  STREAMFLOW_ESCROW_OFFSET,
+  STREAMFLOW_MINT_OFFSET,
+  STREAMFLOW_PROGRAM_ID,
   VAULT_AUTHORITY_SEED,
 } from "./constants.js";
 
@@ -96,8 +99,45 @@ async function vaultBalance(
   }
 }
 
+/**
+ * CVNT held in Streamflow vesting escrows (team / liquidity / investor locks)
+ * — counts toward "locked" supply. Each CVNT stream's escrow balance is the
+ * remaining (deposited − withdrawn) amount still held by the contract.
+ * Degrades to 0 on any RPC/decode failure so the summary still posts.
+ */
+export async function fetchStreamflowLocked(
+  connection: Connection,
+  mint: PublicKey,
+): Promise<bigint> {
+  try {
+    const streams = await connection.getProgramAccounts(STREAMFLOW_PROGRAM_ID, {
+      filters: [
+        { memcmp: { offset: STREAMFLOW_MINT_OFFSET, bytes: mint.toBase58() } },
+      ],
+      dataSlice: { offset: STREAMFLOW_ESCROW_OFFSET, length: 32 },
+    });
+    if (streams.length === 0) return 0n;
+    const escrows = streams.map((s) => new PublicKey(s.account.data));
+    let total = 0n;
+    for (let i = 0; i < escrows.length; i += 100) {
+      const infos = await connection.getMultipleAccountsInfo(
+        escrows.slice(i, i + 100),
+      );
+      for (const info of infos) {
+        // SPL / Token-2022 token account: amount is a u64 at offset 64.
+        if (info && info.data.length >= 72) {
+          total += info.data.readBigUInt64LE(64);
+        }
+      }
+    }
+    return total;
+  } catch {
+    return 0n;
+  }
+}
+
 export interface StakeSummary {
-  /** BuyLock vault — buyback CVNT, permanently locked. Base units. */
+  /** Locked supply: BuyLock vault + Streamflow vesting escrows. Base units. */
   lockedRaw: bigint;
   /** Active staked principal. Base units. */
   stakedRaw: bigint;
@@ -112,12 +152,14 @@ export async function fetchStakeSummary(
   mint: PublicKey,
   tokenProgramId: PublicKey,
 ): Promise<StakeSummary> {
-  const [supply, stakedRaw, lockedRaw] = await Promise.all([
+  const [supply, stakedRaw, buylockRaw, streamflowRaw] = await Promise.all([
     connection.getTokenSupply(mint),
     vaultBalance(connection, lockedVaultAta(mint, tokenProgramId)),
     vaultBalance(connection, buylockVaultAta(mint, tokenProgramId)),
+    fetchStreamflowLocked(connection, mint),
   ]);
   const supplyRaw = BigInt(supply.value.amount);
+  const lockedRaw = buylockRaw + streamflowRaw;
   const combinedPct =
     supplyRaw > 0n
       ? Number(((stakedRaw + lockedRaw) * 1_000_000n) / supplyRaw) / 10_000

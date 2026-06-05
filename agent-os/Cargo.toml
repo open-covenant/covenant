@@ -21,6 +21,7 @@ members = [
     "crates/covenant-hyre",
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
+    "crates/covenant-skills",
     "crates/covenantd",
     "crates/covenant",
     "crates/covenant-tui",

@@ -1,0 +1,13 @@
+[package]
+name = "covenant-skills"
+version = "0.1.0"
+description = "Skill manifest model for Covenant — names, version, digest, declared on-chain surface, and pinned tree/<tag>/<path> source coordinates for the SKILL.md installed by `npx skills add` and friends."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

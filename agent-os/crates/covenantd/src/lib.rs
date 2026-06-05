@@ -10,6 +10,7 @@
 
 pub mod http;
 pub mod hyre;
+pub mod metaplex;
 pub mod sse;
 pub mod stream_dispatch;
 pub mod stream_tracker;
@@ -1060,6 +1061,10 @@ pub struct Server {
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
     hyre: Option<Arc<hyre::HyreState>>,
+    /// Opt-in Metaplex profile: config + a DAS read client. None when
+    /// the operator has not enabled Metaplex; in that state no
+    /// `metaplex.*` tool is advertised or callable.
+    metaplex: Option<Arc<metaplex::MetaplexState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1111,6 +1116,7 @@ impl Server {
             home: None,
             x402_dispatch: None,
             hyre: None,
+            metaplex: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1193,6 +1199,17 @@ impl Server {
     /// "not configured" error.
     pub fn with_hyre(mut self, state: hyre::HyreState) -> Self {
         self.hyre = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable the Metaplex profile. Advertises the `metaplex.das.*` read
+    /// tools whenever a DAS endpoint is configured, and the
+    /// `metaplex.attest.*` / `metaplex.identity.*` write tools whenever
+    /// the signer sidecar and an RPC are configured. Reads never touch a
+    /// key; writes are delegated to the `covenant-metaplex-signer`
+    /// sidecar, which holds the minting key out of the daemon.
+    pub fn with_metaplex(mut self, state: metaplex::MetaplexState) -> Self {
+        self.metaplex = Some(Arc::new(state));
         self
     }
 
@@ -3699,6 +3716,9 @@ impl Server {
         if let Some(state) = &self.hyre {
             tools.extend(covenant_hyre::hyre_specs(&state.catalog, &state.config));
         }
+        if let Some(state) = &self.metaplex {
+            tools.extend(covenant_metaplex::metaplex_specs(&state.config));
+        }
         Response::ToolList { tools }
     }
 
@@ -3764,6 +3784,9 @@ impl Server {
         if name.starts_with("hyre.") {
             return self.hyre_tool_call(name, arguments, peer).await;
         }
+        if name.starts_with("metaplex.") {
+            return self.metaplex_tool_call(name, arguments).await;
+        }
 
         match self.tools.call(&name, arguments).await {
             Ok(r) => Response::ToolResult {
@@ -3812,6 +3835,43 @@ impl Server {
         else {
             return Response::Error {
                 message: format!("unknown hyre tool: {name}"),
+            };
+        };
+        match tool.call(arguments).await {
+            Ok(r) => Response::ToolResult {
+                content: r.content,
+                is_error: r.is_error,
+            },
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Execute a Metaplex tool on the caller's behalf. The
+    /// `tool.call.<name>` capability and scope are already enforced by
+    /// [`Self::call_tool`]. Reads run a DAS query; writes are delegated
+    /// to the `covenant-metaplex-signer` sidecar. The minting key never
+    /// enters the daemon's address space.
+    async fn metaplex_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+    ) -> Response {
+        let Some(state) = self.metaplex.clone() else {
+            return Response::Error {
+                message: "metaplex profile is not enabled on this daemon.".into(),
+            };
+        };
+        let signer = state.signer();
+        let Some(tool) =
+            covenant_metaplex::metaplex_tool(&state.config, &name, state.das.clone(), signer)
+        else {
+            return Response::Error {
+                message: format!(
+                    "unknown or disabled metaplex tool: {name} (reads need \
+                     COVENANT_METAPLEX_DAS_URL; writes need the signer sidecar + RPC)"
+                ),
             };
         };
         match tool.call(arguments).await {

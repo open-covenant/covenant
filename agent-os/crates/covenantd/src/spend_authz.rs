@@ -14,8 +14,11 @@
 //! per-call cap, the chain/asset match, and the budget, and writes one
 //! [`AuditKind::SpendAuthorizationDecided`] row per decision.
 //!
-//! Fail-closed: any budget-subsystem error denies the spend rather than
-//! letting it through, and every deny is audited with its reason.
+//! Budget is an optional ceiling. When the payer has a configured budget
+//! bucket it is enforced, and a real budget-subsystem failure denies
+//! (fail-closed). A payer with no bucket has no cumulative ceiling, so the
+//! per-call cap and the capability are the active gates. Every deny is
+//! audited with its reason.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -144,9 +147,15 @@ async fn evaluate(
     match budget.would_exceed(payer, req.credits).await {
         Ok(false) => Ok(()),
         Ok(true) => Err("spend would exceed the payer's budget".into()),
-        Err(BudgetError::NoCapacity(_)) => {
-            Err("payer has no budget capacity registered".into())
-        }
+        // No bucket configured means no cumulative ceiling applies to this
+        // payer: the per-call cap and the capability are the active gates,
+        // and a budget is an opt-in tightening (seeded for registered
+        // agents from their manifest). This is the one place spend
+        // authorization diverges from the funds-moving x402 path, which
+        // refuses on no-capacity because it is about to spend real money;
+        // here Covenant only advises a wallet that holds its own keys.
+        Err(BudgetError::NoCapacity(_)) => Ok(()),
+        // A real budget-subsystem failure still denies, fail-closed.
         Err(e) => Err(format!("budget check failed: {e}")),
     }
 }
@@ -371,7 +380,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn denies_fail_closed_when_payer_has_no_capacity() {
+    async fn approves_when_no_budget_bucket_configured() {
+        // No bucket means no cumulative ceiling; the per-call cap and the
+        // capability still gate. (x402 refuses here because it moves
+        // funds; spend authorization only advises a key-holding wallet.)
         let audit = InMemoryAuditLog::new();
         let budget = InMemoryLedger::new();
         let issuer = agent(9);
@@ -381,9 +393,9 @@ mod tests {
         let decision = authorize_spend(&ctx, &enabled(), &payer, &scope(), &request())
             .await
             .expect("decide");
-        assert!(!decision.approved());
+        assert!(decision.approved(), "no budget bucket must not block");
         let events = audit.recent(10).await.unwrap();
-        assert_eq!(events.len(), 1, "even a no-capacity deny is recorded");
+        assert_eq!(events.len(), 1, "the approve is still recorded");
     }
 
     #[tokio::test]

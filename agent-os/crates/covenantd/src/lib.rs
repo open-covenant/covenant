@@ -279,10 +279,16 @@ mod sap_attest_config_tests {
     #[test]
     fn parses_truthy_enabled_and_interval_override() {
         for v in ["1", "true", "yes", " 1 "] {
-            assert!(sap_attest_config_from_values(Some(v), None).enabled, "v={v:?}");
+            assert!(
+                sap_attest_config_from_values(Some(v), None).enabled,
+                "v={v:?}"
+            );
         }
         for v in ["0", "false", "no", ""] {
-            assert!(!sap_attest_config_from_values(Some(v), None).enabled, "v={v:?}");
+            assert!(
+                !sap_attest_config_from_values(Some(v), None).enabled,
+                "v={v:?}"
+            );
         }
         assert_eq!(
             sap_attest_config_from_values(Some("1"), Some("120")).interval,

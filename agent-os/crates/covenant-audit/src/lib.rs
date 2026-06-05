@@ -483,6 +483,93 @@ pub enum AuditKind {
         savepoint_name: Option<String>,
         dry_run: bool,
     },
+    /// Logged when an operator installs a Solana Agent Skill into the
+    /// daemon. Pins the install-time content `digest_hex` (SHA-256 over
+    /// the normalized `SKILL.md` + `references/**` bytes) and the
+    /// `source_url`/`source_tag`/`source_commit` origin coordinates so
+    /// a post-approval URL or content swap at the upstream repo is
+    /// detected at load-time (re-compute the digest, mismatch refuses
+    /// the run) and surfaced in the operator's `/audit/recent`. The
+    /// audit chain becomes the durable provenance record that
+    /// instruction set the agent acted under for every later
+    /// [`AuditKind::SkillContextInjected`] / [`AuditKind::SkillInvoked`]
+    /// row tagged with the same `name`.
+    SkillInstalled {
+        name: String,
+        version: String,
+        digest_hex: String,
+        source_url: String,
+        source_tag: String,
+        source_commit: String,
+    },
+    /// Logged when the runtime injects a skill's `SKILL.md` body (and
+    /// any progressively-disclosed `references/**`) into an agent's
+    /// system context. `skill_digest_hex` re-anchors the row to the
+    /// install-time [`AuditKind::SkillInstalled`] so a verifier can
+    /// recompute *which* instructions the agent ran under for this
+    /// intent; `references` is the load-on-demand list actually
+    /// injected (not the full declared set). Verifier and agent
+    /// contexts stay strictly separate — only the agent context is
+    /// recorded here.
+    SkillContextInjected {
+        skill_name: String,
+        skill_digest_hex: String,
+        references: Vec<String>,
+    },
+    /// Logged when an agent run invokes a previously-injected skill.
+    /// Joins to the originating [`AuditKind::IntentDispatched`] row via
+    /// `intent_id` and to the install record via `skill_name`, so the
+    /// audit chain alone proves the agent ran under the same content
+    /// that was capability-gated at dispatch.
+    SkillInvoked { skill_name: String, intent_id: Uuid },
+    /// Logged when the daemon's tx broker builds a Solana transaction
+    /// *proposal* for a skill run, before any signing. `program` is the
+    /// target program-id (base58), `instruction` is the Anchor/IDL
+    /// instruction name (`"transfer"`, `"initialize"`, …), and
+    /// `accounts_hash_hex` is the SHA-256 over the serialized account
+    /// metas — raw account lists never enter the chain. `simulated_ok`
+    /// records the devnet simulate result the broker observed; an
+    /// out-of-envelope proposal is rejected here, never signed.
+    SkillTxProposed {
+        skill_name: String,
+        program: String,
+        instruction: String,
+        accounts_hash_hex: String,
+        simulated_ok: bool,
+    },
+    /// Logged when the daemon signs a skill-proposed transaction. W009
+    /// "never sign without approval" is enforced upstream of this row:
+    /// the broker rejects out-of-envelope proposals at
+    /// [`AuditKind::SkillTxProposed`]/[`AuditKind::SkillRefused`] and
+    /// only in-envelope proposals reach the signer. `signature_b58` is
+    /// the ed25519 signature bytes encoded as 87..=88 base58 chars,
+    /// matching the [`AuditKind::CapabilityGranted::signature_b58`]
+    /// convention so external verifiers parse skill-tx and capability
+    /// signatures with one decoder.
+    SkillTxSigned {
+        skill_name: String,
+        signature_b58: String,
+    },
+    /// Logged when the daemon refuses to use, inject, or sign for a
+    /// skill — ungranted `skill.use.{name}`, missing `chain.tx.*` cap
+    /// on a proposed instruction, simulate failure, or an out-of-envelope
+    /// approval-policy result. Distinct from
+    /// [`AuditKind::CapabilityScopeRejected`] so operator triage can
+    /// filter skill-driven refusals as a single column and so
+    /// non-capability refusals (simulate failure, approval-policy deny)
+    /// still surface under a skill-specific kind.
+    SkillRefused { skill_name: String, reason: String },
+    /// Logged when the daemon observes data sourced from outside the
+    /// agent's trust boundary during a skill run — on-chain account
+    /// reads, HTTP responses, fetched MCP tool output — and tags it for
+    /// W011 "on-chain data is untrusted" enforcement. `source` is the
+    /// short origin string (e.g. `"rpc:account_data:<pubkey>"`,
+    /// `"http:GET:<host>"`) and `digest_hex` is the SHA-256 of the
+    /// observed bytes; raw payloads never enter the chain. The
+    /// Verifier-Refuter consumes these rows: a skill run whose signed
+    /// actions causally followed an `UntrustedInputObserved` payload
+    /// containing prompt-like text is refuted.
+    UntrustedInputObserved { source: String, digest_hex: String },
 }
 
 #[async_trait]
@@ -4032,6 +4119,112 @@ mod tests {
             },
             "hermes_file_written",
             &["bytes", "intent_id", "path", "run_id"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_skill_installed_serde_pins_six_field_variant() {
+        pin_audit_variant(
+            AuditKind::SkillInstalled {
+                name: "covenant".into(),
+                version: "0.1.0".into(),
+                digest_hex: "deadbeef".into(),
+                source_url: "https://github.com/open-covenant/covenant-skill/tree/v0.1.0/skill"
+                    .into(),
+                source_tag: "v0.1.0".into(),
+                source_commit: "0".repeat(40),
+            },
+            "skill_installed",
+            &[
+                "digest_hex",
+                "name",
+                "source_commit",
+                "source_tag",
+                "source_url",
+                "version",
+            ],
+        );
+    }
+
+    #[test]
+    fn audit_kind_skill_context_injected_serde_pins_three_field_variant() {
+        pin_audit_variant(
+            AuditKind::SkillContextInjected {
+                skill_name: "covenant".into(),
+                skill_digest_hex: "deadbeef".into(),
+                references: vec!["identity-capabilities.md".into(), "audit-witness.md".into()],
+            },
+            "skill_context_injected",
+            &["references", "skill_digest_hex", "skill_name"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_skill_invoked_serde_pins_two_field_variant() {
+        pin_audit_variant(
+            AuditKind::SkillInvoked {
+                skill_name: "covenant".into(),
+                intent_id: Uuid::nil(),
+            },
+            "skill_invoked",
+            &["intent_id", "skill_name"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_skill_tx_proposed_serde_pins_five_field_variant() {
+        pin_audit_variant(
+            AuditKind::SkillTxProposed {
+                skill_name: "covenant".into(),
+                program: "11111111111111111111111111111111".into(),
+                instruction: "transfer".into(),
+                accounts_hash_hex: "deadbeef".into(),
+                simulated_ok: true,
+            },
+            "skill_tx_proposed",
+            &[
+                "accounts_hash_hex",
+                "instruction",
+                "program",
+                "simulated_ok",
+                "skill_name",
+            ],
+        );
+    }
+
+    #[test]
+    fn audit_kind_skill_tx_signed_serde_pins_two_field_variant() {
+        pin_audit_variant(
+            AuditKind::SkillTxSigned {
+                skill_name: "covenant".into(),
+                signature_b58: "z".repeat(88),
+            },
+            "skill_tx_signed",
+            &["signature_b58", "skill_name"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_skill_refused_serde_pins_two_field_variant() {
+        pin_audit_variant(
+            AuditKind::SkillRefused {
+                skill_name: "covenant".into(),
+                reason: "missing skill.use.covenant".into(),
+            },
+            "skill_refused",
+            &["reason", "skill_name"],
+        );
+    }
+
+    #[test]
+    fn audit_kind_untrusted_input_observed_serde_pins_two_field_variant() {
+        pin_audit_variant(
+            AuditKind::UntrustedInputObserved {
+                source: "rpc:account_data:11111111111111111111111111111111".into(),
+                digest_hex: "deadbeef".into(),
+            },
+            "untrusted_input_observed",
+            &["digest_hex", "source"],
         );
     }
 

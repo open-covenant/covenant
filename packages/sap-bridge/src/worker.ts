@@ -127,7 +127,15 @@ async function main(): Promise<void> {
   // and skip usage accounting for them.
   if (command === 'status') {
     const bridge = new SapBridge({ config });
-    emit(bridge.status());
+    // Report signer/verifier presence from env without loading the
+    // keypair files (mirrors the daemon's sap_status): status must never
+    // fail or do I/O just to print config, but should still tell an
+    // operator whether the keys are wired before they attempt a publish.
+    emit({
+      ...bridge.status(),
+      hasSigner: Boolean(process.env.COVENANT_SAP_KEYPAIR?.trim()),
+      hasVerifier: Boolean(process.env.COVENANT_SAP_VERIFIER_KEYPAIR?.trim()),
+    });
     return;
   }
   if (command === 'stats') {

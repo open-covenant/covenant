@@ -2,6 +2,10 @@
 //!
 //! Two independent loops:
 //!
+//! - **Harvest** (start of each sweep): collect accrued PumpSwap coin-creator
+//!   fees from the on-chain fee vault into the creator wallet and unwrap the
+//!   wSOL to native SOL, so the split below covers 100% of fees automatically
+//!   instead of only whatever has been manually claimed.
 //! - **Sweep** (default 1h): read SOL balance of the creator wallet, compute
 //!   a configurable split (default 25/25/30/20 stakers/buylock/treasury/subsidy),
 //!   and route each leg. Stakers fold into the staking program via
@@ -65,6 +69,21 @@ pub const DEFAULT_JUPITER_SLIPPAGE_BPS: u16 = 200;
 /// Below this lamport amount, defer the buylock leg to the next sweep —
 /// dust swaps lose more to fees + slippage than they buy back.
 pub const DEFAULT_MIN_BUYLOCK_LAMPORTS: u64 = 50_000_000;
+
+/// PumpSwap (pump AMM) program — graduated $CVNT trades pay the coin-creator
+/// fee into a per-creator vault owned by this program.
+pub const PUMPSWAP_PROGRAM_ID: &str = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
+
+/// Wrapped-SOL mint. The $CVNT pool's quote mint, so creator fees accrue as
+/// wSOL in the vault and must be unwrapped to native SOL after collecting.
+pub const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
+
+/// Legacy SPL Token program — wSOL is a legacy-SPL mint (NOT Token-2022).
+pub const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+
+/// Skip the harvest when the creator-fee vault holds less than this, so we
+/// don't burn a tx fee collecting dust.
+pub const HARVEST_MIN_LAMPORTS: u64 = 1_000_000;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct KeeperConfig {
@@ -285,7 +304,96 @@ impl Keeper {
         }
     }
 
+    /// Collect accrued PumpSwap coin-creator fees into the creator wallet.
+    ///
+    /// Graduated $CVNT trades pay the coin-creator fee (as wSOL) into a vault
+    /// ATA owned by a PumpSwap PDA. `collect_coin_creator_fee` is permissionless
+    /// and moves that wSOL into the creator's own wSOL ATA; we create that ATA
+    /// idempotently and close it in the same tx to unwrap to native SOL. The
+    /// rent for the temp ATA round-trips, so the creator wallet nets exactly the
+    /// harvested fees. Runs before the split so 100% of fees are distributed.
+    async fn harvest_creator_fees(&self) -> Result<()> {
+        let pumpswap = Pubkey::from_str(PUMPSWAP_PROGRAM_ID)?;
+        let wsol = Pubkey::from_str(WSOL_MINT)?;
+        let spl_token = Pubkey::from_str(SPL_TOKEN_PROGRAM_ID)?;
+        let ata_program = Pubkey::from_str(ASSOCIATED_TOKEN_PROGRAM_ID_STR)?;
+        let coin_creator = self.creator.pubkey();
+
+        let (vault_authority, _) =
+            Pubkey::find_program_address(&[b"creator_vault".as_ref(), coin_creator.as_ref()], &pumpswap);
+        let vault_ata = derive_ata(&vault_authority, &wsol, &spl_token);
+        let (event_authority, _) =
+            Pubkey::find_program_address(&[b"__event_authority"], &pumpswap);
+        let creator_wsol_ata = derive_ata(&coin_creator, &wsol, &spl_token);
+
+        // Skip dust so we don't pay a tx fee to collect ~nothing. A missing
+        // vault ATA (no fees ever) reads as zero.
+        let pending = match self.rpc.get_token_account_balance(&vault_ata).await {
+            Ok(bal) => bal.amount.parse::<u64>().unwrap_or(0),
+            Err(_) => 0,
+        };
+        if pending < HARVEST_MIN_LAMPORTS {
+            info!(pending, "harvest skipped — creator-fee vault below min");
+            return Ok(());
+        }
+
+        // 1) idempotently create the creator's wSOL ATA (collect destination).
+        let create_ata_ix = Instruction {
+            program_id: ata_program,
+            accounts: vec![
+                AccountMeta::new(coin_creator, true),
+                AccountMeta::new(creator_wsol_ata, false),
+                AccountMeta::new_readonly(coin_creator, false),
+                AccountMeta::new_readonly(wsol, false),
+                AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+                AccountMeta::new_readonly(spl_token, false),
+            ],
+            data: vec![1u8], // CreateIdempotent
+        };
+
+        // 2) collect_coin_creator_fee → wSOL into the creator's wSOL ATA.
+        let collect_ix = Instruction {
+            program_id: pumpswap,
+            accounts: vec![
+                AccountMeta::new_readonly(wsol, false),
+                AccountMeta::new_readonly(spl_token, false),
+                AccountMeta::new_readonly(coin_creator, false),
+                AccountMeta::new_readonly(vault_authority, false),
+                AccountMeta::new(vault_ata, false),
+                AccountMeta::new(creator_wsol_ata, false),
+                AccountMeta::new_readonly(event_authority, false),
+                AccountMeta::new_readonly(pumpswap, false),
+            ],
+            data: anchor_discriminator("collect_coin_creator_fee").to_vec(),
+        };
+
+        // 3) close the wSOL ATA → unwrap (rent + harvested wSOL) to native SOL.
+        let close_ix = Instruction {
+            program_id: spl_token,
+            accounts: vec![
+                AccountMeta::new(creator_wsol_ata, false),
+                AccountMeta::new(coin_creator, false),
+                AccountMeta::new_readonly(coin_creator, true),
+            ],
+            data: vec![9u8], // SPL Token CloseAccount
+        };
+
+        let sig = self
+            .send_ixs(&[create_ata_ix, collect_ix, close_ix])
+            .await
+            .context("harvest creator fees")?;
+        info!(sig = %sig, pending, "harvested PumpSwap creator fees → creator wallet");
+        Ok(())
+    }
+
     pub async fn sweep_once(&self) -> Result<()> {
+        // Pull accrued PumpSwap creator fees into the creator wallet first so
+        // the split below covers 100% of fees. A failure here must not abort the
+        // cycle — the sweep should still run on whatever is already on hand.
+        if let Err(e) = self.harvest_creator_fees().await {
+            warn!(error = ?e, "creator-fee harvest failed; sweeping on-hand balance");
+        }
+
         let balance = self
             .rpc
             .get_balance(&self.creator.pubkey())
@@ -653,6 +761,35 @@ mod tests {
             min_buylock_lamports: 50_000_000,
             dry_run: false,
         }
+    }
+
+    #[test]
+    fn collect_discriminator_matches_idl() {
+        // PumpSwap's on-chain IDL lists this exact discriminator for
+        // collect_coin_creator_fee. Guard against an accidental rename.
+        assert_eq!(
+            anchor_discriminator("collect_coin_creator_fee"),
+            [160, 57, 89, 42, 181, 139, 43, 66]
+        );
+    }
+
+    #[test]
+    fn harvest_derives_the_live_creator_fee_vault() {
+        // Regression guard: the vault-ATA derivation must reproduce the live
+        // $CVNT coin-creator fee vault (5i3V4w…) for creator 2JXuvX… on
+        // PumpSwap, or the harvest would collect from the wrong account.
+        let pumpswap = Pubkey::from_str(PUMPSWAP_PROGRAM_ID).unwrap();
+        let wsol = Pubkey::from_str(WSOL_MINT).unwrap();
+        let spl_token = Pubkey::from_str(SPL_TOKEN_PROGRAM_ID).unwrap();
+        let coin_creator =
+            Pubkey::from_str("2JXuvXb6Q5YREk9KmhtgNmseq2aKtYnu5zLRi2i5Vaeb").unwrap();
+        let (vault_authority, _) =
+            Pubkey::find_program_address(&[b"creator_vault".as_ref(), coin_creator.as_ref()], &pumpswap);
+        let vault_ata = derive_ata(&vault_authority, &wsol, &spl_token);
+        assert_eq!(
+            vault_ata.to_string(),
+            "5i3V4w2Xwzr2spoCCwPECn8pGVB1NLLadKu6gV4jpoXD"
+        );
     }
 
     #[test]

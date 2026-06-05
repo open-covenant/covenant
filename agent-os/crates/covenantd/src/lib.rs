@@ -6127,6 +6127,7 @@ impl Server {
         let mut nil_memory_record_id_receipt_refs = 0_u64;
         let mut empty_chain_receipt_refs = 0_u64;
         let mut empty_batch_id_receipt_refs = 0_u64;
+        let mut wrong_length_batch_id_receipt_refs = 0_u64;
         let mut empty_merkle_root_receipt_refs = 0_u64;
         let mut wrong_length_merkle_root_receipt_refs = 0_u64;
         let mut empty_tx_sig_receipt_refs = 0_u64;
@@ -6293,6 +6294,18 @@ impl Server {
                         ),
                         repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose batch_id field is sourced from build_receipt_batch in covenant-settlement, which sets batch_id = hex32(Sha256::digest(format!(\"covenant-receipts:{merkle_root}\"))) — a deterministic 64-character hex string — so Some(\"\") is out-of-band evidence of a serde regression that defaulted Option<String> to Some(String::new()) at hydration, an import tool that wrote a placeholder confirmation, or a JSONL edit that anonymized the batch attribution while leaving the bundle 4-of-4 set (bypassing the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count)".into(),
                     });
+                } else if batch_id.chars().count() != 64 {
+                    wrong_length_batch_id_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_batch_id_wrong_length".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has batch_id = Some({batch_id:?}) (len = {}); production receipt confirmation derives batch_id from hex32(Sha256::digest(format!(\"covenant-receipts:{{merkle_root}}\")).into()) at build_receipt_batch in covenant-settlement (covenant-settlement/src/lib.rs:106), where hex32 (covenant-settlement/src/lib.rs:359) converts the 32-byte SHA-256 digest into a fixed 64-character lowercase hex string, so any length other than 64 cannot come from a reachable production write",
+                            receipt.id,
+                            batch_id.chars().count()
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose batch_id field is sourced from build_receipt_batch in covenant-settlement, which sets batch_id = hex32(Sha256::digest(format!(\"covenant-receipts:{merkle_root}\")).into()) where hex32 fmt-writes two hex chars per byte over the 32-byte SHA-256 digest output for an invariant 64-char lowercase hex string, so a non-64-length Some-value is out-of-band evidence of a truncated or padded JSONL edit, an import tool that wrote a placeholder confirmation under a different hash size, or a serde regression that re-encoded the string under a different alphabet, while leaving the bundle 4-of-4 set (bypassing the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count) and the receipt_batch_id_empty guard that only fires when the string is exactly zero-length".into(),
+                    });
                 }
             }
             if let Some(merkle_root) = receipt.merkle_root.as_deref() {
@@ -6362,6 +6375,7 @@ impl Server {
             + nil_memory_record_id_receipt_refs
             + empty_chain_receipt_refs
             + empty_batch_id_receipt_refs
+            + wrong_length_batch_id_receipt_refs
             + empty_merkle_root_receipt_refs
             + wrong_length_merkle_root_receipt_refs
             + empty_tx_sig_receipt_refs
@@ -6380,12 +6394,13 @@ impl Server {
                 && nil_memory_record_id_receipt_refs == 0
                 && empty_chain_receipt_refs == 0
                 && empty_batch_id_receipt_refs == 0
+                && wrong_length_batch_id_receipt_refs == 0
                 && empty_merkle_root_receipt_refs == 0
                 && wrong_length_merkle_root_receipt_refs == 0
                 && empty_tx_sig_receipt_refs == 0
                 && empty_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s)"
             ),
         });
 
@@ -12551,6 +12566,82 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 empty-batch-id receipt"),
                     "check message should count empty-batch-id receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_batch_id_wrong_length_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("deadbeef".into()),
+                merkle_root: Some("m".repeat(64)),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_batch_id_wrong_length"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_batch_id_wrong_length: {drift:?}"));
+                assert!(
+                    row.message.contains("\"deadbeef\"") && row.message.contains("len = 8"),
+                    "drift message should name the wrong-length value and its length: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("build_receipt_batch")
+                        && row.repair.contains("64-char")
+                        && row.repair.contains("receipt_batch_id_empty"),
+                    "repair hint should name build_receipt_batch, the 64-char invariant, and the empty-arm bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift
+                        .iter()
+                        .all(|item| item.kind != "receipt_batch_id_empty"),
+                    "wrong-length arm must not double-count as the empty arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 wrong-length-batch-id receipt"),
+                    "check message should count wrong-length-batch-id receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

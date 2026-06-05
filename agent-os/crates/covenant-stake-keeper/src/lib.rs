@@ -379,7 +379,7 @@ impl Keeper {
         };
 
         let sig = self
-            .send_ixs(&[create_ata_ix, collect_ix, close_ix])
+            .send_ixs_confirmed(&[create_ata_ix, collect_ix, close_ix])
             .await
             .context("harvest creator fees")?;
         info!(sig = %sig, pending, "harvested PumpSwap creator fees → creator wallet");
@@ -650,6 +650,30 @@ impl Keeper {
             )
             .await
             .map_err(|e| anyhow::anyhow!("send transaction: {e:?}"))?;
+        Ok(sig.to_string())
+    }
+
+    /// Send and BLOCK until confirmed. The harvest must use this: the plain
+    /// `send_ixs` returns at submission, so a same-cycle `get_balance` would
+    /// still read the pre-harvest balance and skip the sweep, stranding the
+    /// just-collected fees for a full cycle.
+    async fn send_ixs_confirmed(&self, ixs: &[Instruction]) -> Result<String> {
+        let blockhash = self
+            .rpc
+            .get_latest_blockhash()
+            .await
+            .context("get latest blockhash")?;
+        let tx = Transaction::new_signed_with_payer(
+            ixs,
+            Some(&self.creator.pubkey()),
+            &[self.creator.as_ref()],
+            blockhash,
+        );
+        let sig = self
+            .rpc
+            .send_and_confirm_transaction(&tx)
+            .await
+            .map_err(|e| anyhow::anyhow!("send+confirm transaction: {e:?}"))?;
         Ok(sig.to_string())
     }
 }

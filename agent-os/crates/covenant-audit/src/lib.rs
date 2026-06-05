@@ -456,6 +456,25 @@ pub enum AuditKind {
         reason: Option<String>,
         decision_id: Uuid,
     },
+    /// An external agent wallet reported that a previously authorized spend
+    /// settled on-chain, and the daemon recorded the matching receipt and
+    /// budget debit. `decision_id` joins this row to the
+    /// [`AuditKind::SpendAuthorizationDecided`] approval that allowed the
+    /// spend; `receipt_id` joins it to the settlement receipt and the budget
+    /// debit. `amount` is the atomic amount actually settled; `tx_sig` is
+    /// the on-chain signature or hash when the wallet supplied one. This row
+    /// records a payment the wallet made with its own keys; Covenant moved
+    /// no funds.
+    SpendSettled {
+        decision_id: Uuid,
+        receipt_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        tx_sig: Option<String>,
+    },
     /// Logged when the operator runs the settlement receipt backfill. A
     /// dry run records `row_count` from the plan with `dry_run = true`
     /// and no `rollback_path`; an apply records the rewritten

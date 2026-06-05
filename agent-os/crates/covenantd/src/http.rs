@@ -167,6 +167,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/sap/stats", get(sap_stats))
         .route("/x402/pay", post(pay_x402_route))
         .route("/spend/authorize", post(authorize_spend_route))
+        .route("/spend/settle", post(settle_spend_route))
         .route(
             "/settlement/receipts/backfill",
             post(settlement_backfill_receipts),
@@ -1359,6 +1360,44 @@ async fn authorize_spend_route(
                     per_call_cap: b.per_call_cap,
                     credits: b.credits,
                     destination: b.destination,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// HTTP body shape for `POST /spend/settle`. Mirrors the
+/// [`Request::SettleSpend`] fields. `decision_id` is the id from the
+/// matching `/spend/authorize` response; `amount` is a decimal string.
+#[derive(Deserialize)]
+struct SettleSpendBody {
+    decision_id: uuid::Uuid,
+    provider: String,
+    network: String,
+    asset: String,
+    amount: String,
+    credits: u64,
+    #[serde(default)]
+    tx_sig: Option<String>,
+}
+
+async fn settle_spend_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<SettleSpendBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::SettleSpend {
+                    decision_id: b.decision_id,
+                    provider: b.provider,
+                    network: b.network,
+                    asset: b.asset,
+                    amount: b.amount,
+                    credits: b.credits,
+                    tx_sig: b.tx_sig,
                 },
                 &peer,
             )

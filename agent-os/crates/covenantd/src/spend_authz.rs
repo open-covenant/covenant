@@ -24,7 +24,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use covenant_audit::{AuditEvent, AuditKind, AuditLog};
 use covenant_budget::{BudgetError, BudgetLedger};
-use covenant_types::AgentId;
+use covenant_settlement::Settlement;
+use covenant_types::{AgentId, ResourceKind, SettlementReceipt};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -102,6 +103,10 @@ pub struct AuthzContext<'a> {
 pub enum SpendAuthzError {
     #[error("spend-authorization surface is disabled")]
     Disabled,
+    #[error("budget: {0}")]
+    Budget(String),
+    #[error("settlement: {0}")]
+    Settlement(String),
     #[error("audit: {0}")]
     Audit(String),
 }
@@ -221,6 +226,120 @@ pub async fn authorize_spend(
             reason,
         },
     })
+}
+
+/// Settlement facts an external wallet reports after it has paid, so the
+/// daemon can record the receipt that closes the loop opened by
+/// [`authorize_spend`].
+pub struct SettleFacts {
+    /// The `decision_id` the daemon returned from the authorization this
+    /// payment acted on. Joins the settlement row back to the approval.
+    pub decision_id: Uuid,
+    pub provider: String,
+    pub network: String,
+    pub asset: String,
+    /// Atomic amount actually settled, as a decimal string.
+    pub amount: String,
+    /// USD-pegged budget credits this spend consumed.
+    pub credits: u64,
+    /// On-chain transaction signature or hash, when the wallet has it.
+    pub tx_sig: Option<String>,
+}
+
+/// Subsystem handles borrowed for the duration of one settlement record.
+pub struct SettleContext<'a> {
+    pub settlement: &'a dyn Settlement,
+    pub audit: &'a dyn AuditLog,
+    pub budget: &'a dyn BudgetLedger,
+    pub issuer: &'a AgentId,
+}
+
+/// Records the settlement of a previously authorized spend: a budget debit
+/// (when the payer has a bucket), a [`SettlementReceipt`], and one
+/// [`AuditKind::SpendSettled`] row, all sharing the receipt id and carrying
+/// the originating `decision_id`. Returns the receipt id.
+///
+/// The payment has already happened on-chain by the time this is called, so
+/// the budget debit is best-effort against an unconfigured payer: no bucket
+/// means no cumulative ledger to debit, matching [`authorize_spend`]'s
+/// treatment of an unconfigured budget. A real budget- or
+/// settlement-subsystem failure is surfaced — the operator has an
+/// accounting gap to reconcile — rather than silently dropped. Order is
+/// debit, then receipt, then audit, so the logs never carry a half-recorded
+/// settlement.
+///
+/// The `decision_id` is recorded for correlation; this path does not yet
+/// verify it names a prior *approved* authorization. The caller is
+/// authenticated and capability-gated, so this is an accounting join, not
+/// an enforcement gate; binding settlement to a stored approval is a
+/// planned tightening.
+pub async fn record_spend_settlement(
+    ctx: &SettleContext<'_>,
+    config: &SpendAuthzConfig,
+    payer: &AgentId,
+    facts: &SettleFacts,
+) -> Result<Uuid, SpendAuthzError> {
+    if !config.enabled {
+        return Err(SpendAuthzError::Disabled);
+    }
+
+    let receipt_id = Uuid::new_v4();
+    let now = epoch_ms();
+
+    match ctx.budget.try_debit(payer, facts.credits, receipt_id).await {
+        Ok(()) => {}
+        // No bucket configured: nothing to debit, consistent with the
+        // optional-ceiling model the authorize path uses.
+        Err(BudgetError::NoCapacity(_)) => {}
+        Err(e) => return Err(SpendAuthzError::Budget(e.to_string())),
+    }
+
+    ctx.settlement
+        .record(SettlementReceipt {
+            id: receipt_id,
+            payer: payer.clone(),
+            resource: ResourceKind::Tool,
+            memory_record_id: None,
+            credits_consumed: facts.credits,
+            settled_at: now,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: facts.tx_sig.clone(),
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        })
+        .await
+        .map_err(|e| SpendAuthzError::Settlement(e.to_string()))?;
+
+    ctx.audit
+        .record(AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: now,
+            issuer: ctx.issuer.clone(),
+            kind: AuditKind::SpendSettled {
+                decision_id: facts.decision_id,
+                receipt_id,
+                provider: facts.provider.clone(),
+                network: facts.network.clone(),
+                asset: facts.asset.clone(),
+                amount: facts.amount.clone(),
+                credits: facts.credits,
+                tx_sig: facts.tx_sig.clone(),
+            },
+        })
+        .await
+        .map_err(|e| SpendAuthzError::Audit(e.to_string()))?;
+
+    debug!(
+        provider = facts.provider,
+        %receipt_id,
+        decision_id = %facts.decision_id,
+        "recorded spend settlement"
+    );
+    Ok(receipt_id)
 }
 
 #[cfg(test)]
@@ -419,6 +538,113 @@ mod tests {
         .expect_err("disabled");
         assert!(matches!(err, SpendAuthzError::Disabled));
         // Disabled surface records nothing.
+        assert!(audit.recent(10).await.unwrap().is_empty());
+    }
+
+    fn settle_facts() -> SettleFacts {
+        SettleFacts {
+            decision_id: Uuid::from_u128(0x0abc),
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            credits: 8,
+            tx_sig: Some("0xsig".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_records_receipt_audit_and_debits_when_budgeted() {
+        let settlement = covenant_settlement::InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(1);
+        budget.set_capacity(&payer, 1000).await.unwrap();
+
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let facts = settle_facts();
+        let receipt_id = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect("settle");
+
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].id, receipt_id);
+        assert_eq!(receipts[0].credits_consumed, 8);
+        assert_eq!(receipts[0].tx_sig.as_deref(), Some("0xsig"));
+
+        let events = audit.recent(10).await.unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            AuditKind::SpendSettled {
+                decision_id,
+                receipt_id: rid,
+                tx_sig,
+                credits,
+                ..
+            } => {
+                assert_eq!(*rid, receipt_id);
+                assert_eq!(*decision_id, facts.decision_id);
+                assert_eq!(tx_sig.as_deref(), Some("0xsig"));
+                assert_eq!(*credits, 8);
+            }
+            other => panic!("unexpected audit kind: {other:?}"),
+        }
+        // 1000 capacity - 8 debited = 992 remaining.
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+    }
+
+    #[tokio::test]
+    async fn settlement_records_without_debit_when_no_bucket() {
+        let settlement = covenant_settlement::InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(2); // never given capacity
+
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let receipt_id = record_spend_settlement(&ctx, &enabled(), &payer, &settle_facts())
+            .await
+            .expect("settle");
+        assert_eq!(
+            settlement.recent(10).await.unwrap().len(),
+            1,
+            "receipt is recorded even with no budget bucket"
+        );
+        assert_eq!(audit.recent(10).await.unwrap().len(), 1);
+        assert!(!receipt_id.is_nil());
+    }
+
+    #[tokio::test]
+    async fn settlement_refuses_when_disabled() {
+        let settlement = covenant_settlement::InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(3);
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let err =
+            record_spend_settlement(&ctx, &SpendAuthzConfig::default(), &payer, &settle_facts())
+                .await
+                .expect_err("disabled");
+        assert!(matches!(err, SpendAuthzError::Disabled));
+        assert!(settlement.recent(10).await.unwrap().is_empty());
         assert!(audit.recent(10).await.unwrap().is_empty());
     }
 }

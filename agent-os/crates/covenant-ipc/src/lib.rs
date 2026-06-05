@@ -469,6 +469,25 @@ pub enum Request {
         #[serde(default)]
         destination: Option<String>,
     },
+    /// Settlement report from an external agent wallet after it paid for a
+    /// previously authorized spend. Requires capability
+    /// `wallet.spend.settle`; the daemon records a budget debit (when the
+    /// payer has a bucket), a settlement receipt, and a
+    /// [`Response::SpendSettled`] returning the receipt id. `decision_id` is
+    /// the id from the [`Request::AuthorizeSpend`] this payment acted on, so
+    /// the settlement joins back to its authorization. `amount` and
+    /// `credits` are the atomic amount and USD-pegged budget actually
+    /// settled; `tx_sig` is the on-chain signature when the wallet has it.
+    SettleSpend {
+        decision_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        #[serde(default)]
+        tx_sig: Option<String>,
+    },
     /// Operator-driven repair of legacy settlement-receipt rows in the
     /// JSONL store. `dry_run` reports the would-change row count without
     /// writing; an apply rewrites the store atomically after a rollback
@@ -997,6 +1016,13 @@ pub enum Response {
         decision_id: Uuid,
         #[serde(default)]
         reason: Option<String>,
+    },
+    /// Result of [`Request::SettleSpend`]. `receipt_id` joins the budget
+    /// debit, settlement receipt, and `spend_settled` audit row the daemon
+    /// recorded; `decision_id` echoes the authorization this settled.
+    SpendSettled {
+        receipt_id: Uuid,
+        decision_id: Uuid,
     },
     /// Snapshot of the SAP bridge config as the daemon resolved it at
     /// boot. `enabled = false` means the bridge is off (default) and
@@ -11463,6 +11489,63 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn request_settle_spend_serde_pins_wire_shape() {
+        let decision_id = Uuid::from_u128(0xdead_beef_0000_0002u128);
+        let event = Request::SettleSpend {
+            decision_id,
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            credits: 8,
+            tx_sig: Some("0xabc123".into()),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("settle_spend")));
+        assert_eq!(
+            obj.get("decision_id"),
+            Some(&serde_json::json!(decision_id))
+        );
+        assert_eq!(obj.get("amount"), Some(&serde_json::json!("80000")));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "SettleSpend must round-trip verbatim");
+
+        // tx_sig is optional via #[serde(default)].
+        let no_sig = serde_json::json!({
+            "kind": "settle_spend",
+            "decision_id": decision_id,
+            "provider": "orbserv",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "80000",
+            "credits": 8,
+        });
+        let decoded: Request = serde_json::from_value(no_sig).expect("tx_sig is optional");
+        assert!(matches!(decoded, Request::SettleSpend { tx_sig: None, .. }));
+    }
+
+    #[test]
+    fn response_spend_settled_serde_pins_wire_shape() {
+        let receipt_id = Uuid::from_u128(0xdead_beef_0000_0003u128);
+        let decision_id = Uuid::from_u128(0xdead_beef_0000_0002u128);
+        let resp = Response::SpendSettled {
+            receipt_id,
+            decision_id,
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("spend_settled")));
+        assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(receipt_id)));
+        assert_eq!(
+            obj.get("decision_id"),
+            Some(&serde_json::json!(decision_id))
+        );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
     }
 
     async fn frames_to_reader<I>(frames: I) -> std::io::Cursor<Vec<u8>>

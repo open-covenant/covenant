@@ -1848,6 +1848,27 @@ impl Server {
                 )
                 .await
             }
+            Request::SettleSpend {
+                decision_id,
+                provider,
+                network,
+                asset,
+                amount,
+                credits,
+                tx_sig,
+            } => {
+                self.settle_spend(
+                    decision_id,
+                    provider,
+                    network,
+                    asset,
+                    amount,
+                    credits,
+                    tx_sig,
+                    peer,
+                )
+                .await
+            }
             Request::BackfillSettlementReceipts {
                 dry_run,
                 scope_pubkey,
@@ -5403,6 +5424,76 @@ impl Server {
             }
             Err(e) => Response::Error {
                 message: format!("spend authorization failed: {e}"),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn settle_spend(
+        &self,
+        decision_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        tx_sig: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "spend:settle".into(),
+                vec!["wallet.spend.settle".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "spend settlement requires capability \
+                          \"wallet.spend.settle\". Grant it with \
+                          `covenant capabilities grant wallet.spend.settle`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.spend_authz.clone() else {
+            return Response::Error {
+                message: "spend authorization is not configured on this daemon. \
+                          Wire it via Server::with_spend_authz and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "spend authorization is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let facts = spend_authz::SettleFacts {
+            decision_id,
+            provider,
+            network,
+            asset,
+            amount,
+            credits,
+            tx_sig,
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = spend_authz::SettleContext {
+            settlement: self.settlement.as_ref(),
+            audit: self.audit.as_ref(),
+            budget: self.budget.as_ref(),
+            issuer: &issuer,
+        };
+
+        match spend_authz::record_spend_settlement(&context, config.as_ref(), peer, &facts).await {
+            Ok(receipt_id) => Response::SpendSettled {
+                receipt_id,
+                decision_id,
+            },
+            Err(e) => Response::Error {
+                message: format!("spend settlement failed: {e}"),
             },
         }
     }
@@ -36265,6 +36356,73 @@ budget_credits_per_hour = {credits}
             }
             other => panic!("expected SpendAuthorized, got: {other:?}"),
         }
+    }
+
+    fn settle_spend_req() -> Request {
+        Request::SettleSpend {
+            decision_id: uuid::Uuid::from_u128(0x0abc),
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            credits: 8,
+            tx_sig: Some("0xsig".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn settle_spend_rejects_when_capability_missing() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        match s.op_respond(settle_spend_req()).await {
+            Response::Error { message } => assert!(
+                message.contains("wallet.spend.settle"),
+                "error must name the missing capability: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settle_spend_rejects_when_not_configured() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "wallet.spend.settle").await;
+        match s.op_respond(settle_spend_req()).await {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settle_spend_records_receipt_and_audits() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit.clone(), budget)
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_action(&s, "wallet.spend.settle").await;
+
+        let expected_decision = uuid::Uuid::from_u128(0x0abc);
+        match s.op_respond(settle_spend_req()).await {
+            Response::SpendSettled {
+                receipt_id,
+                decision_id,
+            } => {
+                assert!(!receipt_id.is_nil());
+                assert_eq!(decision_id, expected_decision);
+            }
+            other => panic!("expected SpendSettled, got: {other:?}"),
+        }
+        // A spend_settled row landed in the audit chain joined by the receipt.
+        let events = audit.recent(16).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.kind, covenant_audit::AuditKind::SpendSettled { .. })),
+            "spend_settled audit row must be recorded"
+        );
     }
 
     #[tokio::test]

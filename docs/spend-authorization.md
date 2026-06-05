@@ -122,22 +122,71 @@ fail-closed.
    it costs.
 3. On `approved: true`, sign and submit. On `approved: false`, abort and
    surface `reason`.
-4. Keep `decision_id` with the transaction so the payment can later be
-   correlated to its authorization.
+4. Keep `decision_id` with the transaction.
+5. Once the payment lands on-chain, `POST /spend/settle` with that
+   `decision_id` and the settled facts (see below). This is optional but
+   it is what closes the loop: it records the receipt and joins the
+   payment back to its authorization in the audit chain.
 
 Set the wallet's own spending policy to mirror these bounds as a hard
 floor. The daemon is the authority; the wallet policy is a backstop so a
 spend can never exceed the bound even if a call skips the pre-flight.
+
+## Settling a spend
+
+After the wallet pays, report it so the daemon records the receipt and the
+budget debit and links them back to the authorization. This moves no funds;
+the wallet already paid with its own keys.
+
+```
+POST /spend/settle
+Authorization: Bearer <operator-or-peer-token>
+```
+
+Requires the capability `wallet.spend.settle` (grant it the same way as
+`wallet.spend.authorize`).
+
+```json
+{
+  "decision_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "provider": "orbserv",
+  "network": "eip155:8453",
+  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "amount": "80000",
+  "credits": 8,
+  "tx_sig": "0x..."
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `decision_id` | uuid | The id from the `/spend/authorize` response this payment acted on. |
+| `amount` | string | Atomic amount actually settled, decimal string. |
+| `credits` | number | USD-pegged budget the spend consumed; debited from the payer's bucket when one is configured. |
+| `tx_sig` | string, optional | On-chain transaction signature or hash, recorded on the receipt. |
+
+Response:
+
+```json
+{ "kind": "spend_settled", "receipt_id": "821be8f3-cfa2-438a-aeae-90dac60c5352", "decision_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479" }
+```
+
+`receipt_id` joins the budget debit, the settlement receipt, and the
+`spend_settled` audit row. The `decision_id` is recorded for correlation;
+this path does not yet verify it names a prior approved authorization, so
+treat the join as accounting, not enforcement.
 
 ## Audit
 
 Every decision writes one `spend_authorization_decided` row to the audit
 chain, on both approve and deny, carrying `provider`, `network`, `asset`,
 `amount`, `credits`, `destination`, `approved`, `reason`, and
-`decision_id`. The chain is a verifiable record of what each wallet was and
-was not allowed to spend, whether or not it later settled. Read it with
-`covenant audit recent` or `GET /audit/recent`, and verify chain integrity
-with `GET /audit/verify`.
+`decision_id`. A settlement adds one `spend_settled` row carrying the same
+`decision_id` plus the `receipt_id` and `tx_sig`, so the authorization and
+the payment that acted on it read back as a linked pair. The chain is a
+verifiable record of what each wallet was and was not allowed to spend, and
+of what it then settled. Read it with `covenant audit recent` or
+`GET /audit/recent`, and verify chain integrity with `GET /audit/verify`.
 
 ## Example
 

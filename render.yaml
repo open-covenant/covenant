@@ -39,6 +39,21 @@ services:
         value: "0.0.0.0"
       - key: COVENANT_SAP_RPC_URL
         sync: false  # OOBE/Synapse SAP RPC URL incl. api_key; set in dashboard
+      # Synapse RPC usage counters. The bridge worker writes this file on
+      # every RPC-bearing op; the daemon's GET /sap/stats reads it and the
+      # web /sap page renders uptime / calls / success-rate from it. Lives
+      # on the mounted disk so counters survive restarts.
+      - key: COVENANT_SAP_STATS_PATH
+        value: /data/sap-rpc-stats.json
+      # Mainnet enablement is operator-driven via the dashboard, not this
+      # blueprint, so a render.yaml push can never flip the public demo to
+      # mainnet by accident. To go live on a dedicated daemon set:
+      #   COVENANT_SOLANA_CLUSTER=mainnet
+      #   COVENANT_SAP_ENABLED=1
+      #   COVENANT_SAP_KEYPAIR=/data/keys/sap-signer-mainnet.json   (funded)
+      #   COVENANT_SAP_VERIFIER_KEYPAIR=/data/keys/sap-verifier-mainnet.json
+      #   COVENANT_SAP_RPC_URL=<keyed mainnet RPC>
+      # See deploy/sap-mainnet.env.example for the full set + runbook.
       - key: ANTHROPIC_API_KEY
         sync: false  # coding gateway + demo agent model key; set value in dashboard
       - key: OPENAI_API_KEY

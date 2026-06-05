@@ -1,6 +1,7 @@
 import { solscanAddressUrl } from "@/lib/explorer";
 import { resolveSynapseStatus, synapseExplorerHref } from "@/lib/synapse";
 import { PageHeader } from "../components/PageHeader";
+import { SapStatsCard } from "./SapStatsCard";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,8 @@ export default function SynapsePage() {
           </span>
         </article>
       </section>
+
+      <SapStatsCard />
 
       <section className="panel">
         <div className="panel-head">

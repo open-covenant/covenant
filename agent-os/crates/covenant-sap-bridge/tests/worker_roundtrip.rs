@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use covenant_sap_bridge::attestation::AuditRootAttestation;
+use covenant_sap_bridge::attestation::{AgentAttestation, AuditRootAttestation};
 use covenant_sap_bridge::config::{Cluster, Config, DEFAULT_WORKER_TIMEOUT};
 use covenant_sap_bridge::identity::AgentManifest;
 use covenant_sap_bridge::{BridgeError, SapBridge};
@@ -60,6 +60,52 @@ async fn attest_root_maps_success_envelope() {
     let published = bridge.publish_audit_root(&att).await.expect("attest");
     assert_eq!(published.ledger_pda, "Ledg999");
     assert_eq!(published.signature, "sigZ");
+}
+
+#[tokio::test]
+async fn attest_agent_maps_success_envelope() {
+    let bridge = bridge_with_stub(
+        r#"{"ok":true,"data":{"attestationPda":"Att777","attester":"Ver555","agentPda":"Agent111","signature":"sigA"}}"#,
+    );
+    let att = AgentAttestation {
+        agent_pda: "Agent111".into(),
+        root_hash_hex: "11".repeat(32),
+        attestation_type: None,
+        expires_at_unix: None,
+    };
+    let published = bridge.publish_attestation(&att).await.expect("attest-agent");
+    assert_eq!(published.attestation_pda, "Att777");
+    assert_eq!(published.attester, "Ver555");
+    assert_eq!(published.agent_pda, "Agent111");
+    assert_eq!(published.signature, "sigA");
+}
+
+#[tokio::test]
+async fn attest_agent_rejects_short_hash_before_spawning_worker() {
+    // Mirrors the attest-root pre-validation: a malformed root must fail
+    // as Invalid before any subprocess spawn (worker_command points at a
+    // binary that does not exist, so a spawn would surface Worker).
+    let config = Config {
+        enabled: true,
+        cluster: Cluster::Devnet,
+        program_id: "SAPpUhsWLJG1FfkGRcXagEDMrMsWGjbky7AyhGpFETZ".into(),
+        rpc_url: "https://api.devnet.solana.com".into(),
+        explorer_url: "https://explorer.oobeprotocol.ai".into(),
+        worker_command: vec!["definitely-not-a-real-binary-xyz".into()],
+        worker_timeout: DEFAULT_WORKER_TIMEOUT,
+    };
+    let bridge = SapBridge::new(config).expect("bridge");
+    let att = AgentAttestation {
+        agent_pda: "Agent111".into(),
+        root_hash_hex: "deadbeef".into(), // 8 chars, not 64
+        attestation_type: None,
+        expires_at_unix: None,
+    };
+    let err = bridge.publish_attestation(&att).await.expect_err("must reject");
+    assert!(
+        matches!(err, BridgeError::Invalid(_)),
+        "short hash must surface as Invalid before any spawn: {err:?}"
+    );
 }
 
 #[tokio::test]

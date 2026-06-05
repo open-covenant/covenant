@@ -164,6 +164,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/chain/status", get(chain_status))
         .route("/chain/flush-receipts", post(chain_flush_receipts))
         .route("/chain/receipt-batches", get(chain_receipt_batches))
+        .route("/sap/stats", get(sap_stats))
         .route("/x402/pay", post(pay_x402_route))
         .route(
             "/settlement/receipts/backfill",
@@ -274,6 +275,76 @@ async fn version() -> impl IntoResponse {
     Json(Response::ProtocolInfo {
         info: protocol_info(),
     })
+}
+
+/// Cumulative Synapse-bridge RPC usage counters for the operator `/sap`
+/// console. The TS bridge worker writes a tiny JSON file on every
+/// RPC-bearing op (publish / attest / discovery); this route reads that
+/// same file — resolved from the identical env layering the worker uses
+/// (`COVENANT_SAP_STATS_PATH` > `COVENANT_HOME` > `~/.covenant`) — and
+/// derives success-rate + uptime. Returns zeros when nothing has been
+/// recorded yet (file absent), never an error: a missing counter file is
+/// the normal pre-first-call state.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct RawSapStats {
+    calls: u64,
+    successes: u64,
+    failures: u64,
+    first_seen_unix: u64,
+    last_call_unix: u64,
+}
+
+fn sap_stats_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("COVENANT_SAP_STATS_PATH") {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            return std::path::PathBuf::from(trimmed);
+        }
+    }
+    let home = std::env::var("COVENANT_HOME")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| {
+            let h = std::env::var("HOME").unwrap_or_default();
+            format!("{h}/.covenant")
+        });
+    std::path::PathBuf::from(home).join("sap-rpc-stats.json")
+}
+
+fn read_sap_stats() -> RawSapStats {
+    match std::fs::read_to_string(sap_stats_path()) {
+        Ok(body) => serde_json::from_str(&body).unwrap_or_default(),
+        Err(_) => RawSapStats::default(),
+    }
+}
+
+async fn sap_stats() -> impl IntoResponse {
+    let s = read_sap_stats();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let success_rate = if s.calls > 0 {
+        s.successes as f64 / s.calls as f64
+    } else {
+        0.0
+    };
+    let uptime_seconds = if s.first_seen_unix > 0 {
+        now.saturating_sub(s.first_seen_unix)
+    } else {
+        0
+    };
+    Json(serde_json::json!({
+        "calls": s.calls,
+        "successes": s.successes,
+        "failures": s.failures,
+        "successRate": success_rate,
+        "firstSeenUnix": s.first_seen_unix,
+        "lastCallUnix": s.last_call_unix,
+        "uptimeSeconds": uptime_seconds,
+    }))
 }
 
 #[derive(Deserialize)]

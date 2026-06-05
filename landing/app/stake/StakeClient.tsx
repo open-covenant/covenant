@@ -18,6 +18,7 @@ import {
 } from "../../lib/stake/txBuilder";
 import {
   fetchConfig,
+  fetchOwnerPositions,
   fetchOwnerTokenAccountsForMint,
   fetchRewardVaultLamports,
   fetchTokenAccountAmount,
@@ -53,6 +54,7 @@ export function StakeClient() {
   const [lockedCvnt, setLockedCvnt] = useState<bigint | null>(null);
   const [price, setPrice] = useState<CvntPrice | null>(null);
   const [accounts, setAccounts] = useState<OwnedTokenAccount[] | null>(null);
+  const [hasPositions, setHasPositions] = useState(false);
   const [amount, setAmount] = useState("");
   const [tierBps, setTierBps] = useState(TIER_30D_BPS);
   const [tx, setTx] = useState<TxState>({ phase: "idle" });
@@ -106,6 +108,24 @@ export function StakeClient() {
       cancelled = true;
     };
   }, [connection, publicKey, cluster.cvntMint, cluster.tokenProgramId, tx]);
+
+  useEffect(() => {
+    if (!publicKey) {
+      setHasPositions(false);
+      return;
+    }
+    let cancelled = false;
+    fetchOwnerPositions(connection, publicKey)
+      .then((p) => {
+        if (!cancelled) setHasPositions(p.length > 0);
+      })
+      .catch(() => {
+        if (!cancelled) setHasPositions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, publicKey, tx]);
 
   const parsedAmount = useMemo(() => parseCvntInput(amount), [amount]);
   const minLockAmount = config?.minLockAmount ?? 0n;
@@ -345,7 +365,14 @@ export function StakeClient() {
               <Link href="/treasury" className="transition-colors hover:text-neutral-300">
                 Protocol treasury →
               </Link>
-              <Link href="/positions" className="transition-colors hover:text-neutral-300">
+              <Link
+                href="/positions"
+                className={
+                  hasPositions
+                    ? "rounded-sm bg-neutral-50 px-4 py-2 text-neutral-950 transition-colors hover:bg-white"
+                    : "transition-colors hover:text-neutral-300"
+                }
+              >
                 Your positions →
               </Link>
             </div>

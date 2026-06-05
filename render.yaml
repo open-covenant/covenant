@@ -86,15 +86,17 @@ services:
         value: http://covenant-sandbox-daemon:8421
       # Synapse Agent Protocol bridge — read-only on the web side. The
       # daemon does not hold a signer here, so the page renders the
-      # resolved status + the published agent's explorer links.
+      # resolved status + the live mainnet agent's explorer links. The
+      # page makes no RPC calls itself, so the public mainnet endpoint is
+      # sufficient (no keyed URL / secret needed for display).
       - key: COVENANT_SAP_ENABLED
         value: "1"
       - key: COVENANT_SOLANA_CLUSTER
-        value: devnet
+        value: mainnet
       - key: COVENANT_SAP_AGENT_PDA
-        value: B86uVNTwuKS9cjtbLJR8NNp8WGmcYzPgvVCFx8BE8cpy
+        value: 7wjQnASUEMgvnHv6UuNBkai1jsEU2kbbxn4D4b2HewYH
       - key: COVENANT_SAP_RPC_URL
-        sync: false  # OOBE/Synapse SAP RPC URL incl. api_key; set in dashboard
+        value: https://api.mainnet-beta.solana.com
       - fromGroup: covenant-sandbox-shared
 
   # NOTE: the public landing (opencovenant.org) is served by the standalone

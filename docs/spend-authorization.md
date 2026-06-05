@@ -20,6 +20,16 @@ Off by default. The operator opts in at boot:
 - Grant the calling identity the capability:
   `covenant capabilities grant wallet.spend.authorize`.
 
+The grant is the same operation over HTTP, which is what an integration
+running against the gateway will use:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8421/capabilities/grant \
+  -H "Authorization: Bearer $COVENANT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"wallet.spend.authorize"}'
+```
+
 With the flag unset the endpoint returns a "not configured" error; with it
 set but the capability missing it returns an error naming the missing
 capability. Neither state ever approves a spend.
@@ -33,7 +43,9 @@ Content-Type: application/json
 ```
 
 Every gateway route except `/health` and `/version` requires the bearer
-token; spend authorization is no exception.
+token; spend authorization is no exception. The gateway listens on
+`127.0.0.1:8421` by default; set `COVENANT_HTTP_PORT` to change it. The
+token is minted at `$COVENANT_HOME/peers/operator.token` on first start.
 
 ### Request
 
@@ -84,21 +96,22 @@ come back as `{ "error": "<message>" }`.
 
 ## Decision rules
 
-A spend is approved only if all four hold. Otherwise it is denied with the
-first failing reason. The check is fail-closed: any budget-subsystem error
-denies rather than letting the spend through.
+A spend is approved only if these hold. Otherwise it is denied with the
+first failing reason.
 
 1. The caller holds `wallet.spend.authorize`.
 2. `amount` parses as a decimal u128 and is `<= per_call_cap`.
-3. `network` and `asset` match the request's own policy fields.
-4. The payer's budget would not be exceeded by `credits` (this reads the
-   budget; it does not debit).
+3. The payer's budget would not be exceeded by `credits`. A payer with no
+   configured budget bucket has no cumulative ceiling, so this check
+   applies only once a budget is set; the per-call cap and the capability
+   always apply. The check reads the budget and never debits.
 
-The per-call cap is supplied by the authenticated caller. Binding the
-allowed chains, assets, and ceilings into the granted capability itself,
-instead of trusting the request, is the planned next step. Today the
-calling identity is trusted to pass the bound, the same model the x402
-path uses.
+The `network` and `asset` are recorded on the audit row. Binding the
+allowed chains, assets, and per-call cap into the granted capability per
+subject, instead of taking them from the request, is the planned next
+step. Today the authenticated caller supplies the per-call bound, the same
+model the x402 path uses. A real budget-subsystem failure denies,
+fail-closed.
 
 ## Integration flow (wallet side)
 
@@ -129,7 +142,7 @@ with `GET /audit/verify`.
 ## Example
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8787/spend/authorize \
+curl -sS -X POST http://127.0.0.1:8421/spend/authorize \
   -H "Authorization: Bearer $COVENANT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

@@ -1324,6 +1324,73 @@ impl Server {
         }
     }
 
+    /// Anchor a Covenant audit root through the SAP bridge. Mirrors
+    /// [`Self::sap_publish_agent`]: a missing bridge or any bridge error
+    /// flattens onto `Response::Error`. The daemon stamps `recorded_at`
+    /// itself so the on-chain timestamp is server-authoritative.
+    pub(crate) async fn sap_publish_audit_root(
+        &self,
+        root_hash_hex: String,
+        release_target: String,
+        release_subject: String,
+        release_scope: String,
+    ) -> Response {
+        let Some(bridge) = self.sap_bridge.as_ref() else {
+            return Response::Error {
+                message: "sap bridge is not wired into this daemon".into(),
+            };
+        };
+        let attestation = covenant_sap_bridge::attestation::AuditRootAttestation {
+            root_hash_hex,
+            release_target,
+            release_subject,
+            release_scope,
+            recorded_at: epoch_ms() / 1000,
+        };
+        match bridge.publish_audit_root(&attestation).await {
+            Ok(published) => Response::SapPublishedAuditRoot {
+                ledger_pda: published.ledger_pda,
+                signature: published.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("sap publish_audit_root: {e}"),
+            },
+        }
+    }
+
+    /// Publish a cross-party attestation through the SAP bridge (signed by
+    /// the separately-keyed verifier). Mirrors [`Self::sap_publish_agent`].
+    pub(crate) async fn sap_publish_attestation(
+        &self,
+        agent_pda: String,
+        root_hash_hex: String,
+        attestation_type: Option<String>,
+        expires_at_unix: Option<u64>,
+    ) -> Response {
+        let Some(bridge) = self.sap_bridge.as_ref() else {
+            return Response::Error {
+                message: "sap bridge is not wired into this daemon".into(),
+            };
+        };
+        let attestation = covenant_sap_bridge::attestation::AgentAttestation {
+            agent_pda,
+            root_hash_hex,
+            attestation_type,
+            expires_at_unix,
+        };
+        match bridge.publish_attestation(&attestation).await {
+            Ok(published) => Response::SapPublishedAttestation {
+                attestation_pda: published.attestation_pda,
+                attester: published.attester,
+                agent_pda: published.agent_pda,
+                signature: published.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("sap publish_attestation: {e}"),
+            },
+        }
+    }
+
     /// Walk the router's registered agents and seed each one's budget
     /// bucket from its manifest's `Settlement.budget_credits_per_hour`.
     /// Cards with `budget_credits_per_hour == 0` are skipped — the spec's
@@ -1989,6 +2056,34 @@ impl Server {
             Request::SapStatus => self.sap_status(),
             Request::SapPublishAgent { manifest_json } => {
                 self.sap_publish_agent(manifest_json).await
+            }
+            Request::SapPublishAuditRoot {
+                root_hash_hex,
+                release_target,
+                release_subject,
+                release_scope,
+            } => {
+                self.sap_publish_audit_root(
+                    root_hash_hex,
+                    release_target,
+                    release_subject,
+                    release_scope,
+                )
+                .await
+            }
+            Request::SapPublishAttestation {
+                agent_pda,
+                root_hash_hex,
+                attestation_type,
+                expires_at_unix,
+            } => {
+                self.sap_publish_attestation(
+                    agent_pda,
+                    root_hash_hex,
+                    attestation_type,
+                    expires_at_unix,
+                )
+                .await
             }
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,

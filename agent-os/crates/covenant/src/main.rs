@@ -2162,6 +2162,12 @@ fn print_usage() {
     eprintln!(
         "  covenant sap publish --manifest <file> [--json]  publish the daemon's agent through the SAP bridge"
     );
+    eprintln!(
+        "  covenant sap attest-root --root <hex> [--target/--subject/--scope] [--json]  anchor an audit root to the SAP ledger"
+    );
+    eprintln!(
+        "  covenant sap attest-agent --agent-pda <pda> --root <hex> [--type --expires] [--json]  cross-party attestation via the verifier"
+    );
 }
 
 struct MemoryReadJsonArgs {
@@ -4864,6 +4870,166 @@ async fn main() -> Result<()> {
                                 });
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
+                                println!("agent_pda: {agent_pda}");
+                                println!("signature: {signature}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "attest-root" => {
+                    let mut root_hash_hex: Option<String> = None;
+                    let mut release_target = "covenant".to_string();
+                    let mut release_subject = "witness-loop".to_string();
+                    let mut release_scope = "audit".to_string();
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--root" => {
+                                i += 1;
+                                root_hash_hex = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--root needs a 64-char hex value")
+                                })?);
+                            }
+                            "--target" => {
+                                i += 1;
+                                release_target = args
+                                    .get(i)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("--target needs a value"))?;
+                            }
+                            "--subject" => {
+                                i += 1;
+                                release_subject = args
+                                    .get(i)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("--subject needs a value"))?;
+                            }
+                            "--scope" => {
+                                i += 1;
+                                release_scope = args
+                                    .get(i)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("--scope needs a value"))?;
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let root_hash_hex = root_hash_hex.ok_or_else(|| {
+                        anyhow::anyhow!("covenant sap attest-root requires --root <64-char hex>")
+                    })?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SapPublishAuditRoot {
+                            root_hash_hex,
+                            release_target,
+                            release_subject,
+                            release_scope,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SapPublishedAuditRoot {
+                            ledger_pda,
+                            signature,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "sap_published_audit_root",
+                                    "ledger_pda": ledger_pda,
+                                    "signature": signature,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("ledger_pda: {ledger_pda}");
+                                println!("signature: {signature}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "attest-agent" => {
+                    let mut agent_pda: Option<String> = None;
+                    let mut root_hash_hex: Option<String> = None;
+                    let mut attestation_type: Option<String> = None;
+                    let mut expires_at_unix: Option<u64> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--agent-pda" => {
+                                i += 1;
+                                agent_pda = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--agent-pda needs a value")
+                                })?);
+                            }
+                            "--root" => {
+                                i += 1;
+                                root_hash_hex = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--root needs a 64-char hex value")
+                                })?);
+                            }
+                            "--type" => {
+                                i += 1;
+                                attestation_type = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--type needs a value")
+                                })?);
+                            }
+                            "--expires" => {
+                                i += 1;
+                                let v = args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--expires needs a unix timestamp")
+                                })?;
+                                expires_at_unix = Some(
+                                    v.parse::<u64>()
+                                        .with_context(|| format!("parse --expires '{v}'"))?,
+                                );
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let agent_pda = agent_pda.ok_or_else(|| {
+                        anyhow::anyhow!("covenant sap attest-agent requires --agent-pda <pda>")
+                    })?;
+                    let root_hash_hex = root_hash_hex.ok_or_else(|| {
+                        anyhow::anyhow!("covenant sap attest-agent requires --root <64-char hex>")
+                    })?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SapPublishAttestation {
+                            agent_pda,
+                            root_hash_hex,
+                            attestation_type,
+                            expires_at_unix,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SapPublishedAttestation {
+                            attestation_pda,
+                            attester,
+                            agent_pda,
+                            signature,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "sap_published_attestation",
+                                    "attestation_pda": attestation_pda,
+                                    "attester": attester,
+                                    "agent_pda": agent_pda,
+                                    "signature": signature,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("attestation_pda: {attestation_pda}");
+                                println!("attester: {attester}");
                                 println!("agent_pda: {agent_pda}");
                                 println!("signature: {signature}");
                             }

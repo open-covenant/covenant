@@ -95,6 +95,7 @@ enum ScopeNamespace {
     Identity,
     Chain,
     Settlement,
+    Skill,
 }
 
 impl ScopeNamespace {
@@ -119,6 +120,8 @@ impl ScopeNamespace {
             Some(Self::Chain)
         } else if action.starts_with("settlement.") {
             Some(Self::Settlement)
+        } else if action.starts_with("skill.") {
+            Some(Self::Skill)
         } else {
             None
         }
@@ -155,6 +158,7 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         ScopeNamespace::Peers | ScopeNamespace::Identity => validate_peer_scope(action, obj),
         ScopeNamespace::Chain => validate_chain_scope(action, obj),
         ScopeNamespace::Settlement => validate_settlement_scope(action, obj),
+        ScopeNamespace::Skill => validate_skill_scope(action, obj),
     }
 }
 
@@ -547,6 +551,29 @@ pub fn memory_backfill_scope_allows(
     Ok(scope_allows_apply(obj, apply) && scope_allows_before_ms(obj, before_ms))
 }
 
+pub fn skill_use_scope_allows(
+    action: &str,
+    scope: &Value,
+    skill_name: &str,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != format!("skill.use.{skill_name}") {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if let Some(name) = obj.get("name").and_then(Value::as_str) {
+        if name != skill_name {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub fn memory_compaction_scope_allows(
     action: &str,
     scope: &Value,
@@ -832,6 +859,22 @@ fn validate_settlement_scope(
 ) -> Result<(), PermissionError> {
     optional_bool(action, obj, "apply")?;
     optional_non_negative_integer_or_null(action, obj, "before_ms")?;
+    Ok(())
+}
+
+fn validate_skill_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_non_empty_string_or_null(action, obj, "name")?;
+    if let (Some(expected), Some(name)) = (
+        action.strip_prefix("skill.use."),
+        obj.get("name").and_then(Value::as_str),
+    ) {
+        if name != expected {
+            return Err(invalid_scope(
+                action,
+                format!("name must match action suffix {expected:?}"),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1537,6 +1580,7 @@ pub fn friendly_action_title(action: &str) -> Option<&'static str> {
         "capabilities.purge" => Some("purge revoked permissions"),
         "peers.purge" => Some("purge revoked peers"),
         "a2a.compact" => Some("compact the agent-to-agent log"),
+        "skill.use" => Some("use an installed skill"),
         _ => None,
     }
 }
@@ -1673,6 +1717,13 @@ mod tests {
                 Some(ScopeNamespace::Settlement)
             ),
             "settlement.* prefix must route to ScopeNamespace::Settlement — a dropped arm sends settlement.backfill.* through the unknown-action fallthrough, where validate_scope no-ops and a junk scope is accepted at grant time on a destructive mutation gate",
+        );
+        assert!(
+            matches!(
+                ScopeNamespace::from_action("skill.use.covenant"),
+                Some(ScopeNamespace::Skill)
+            ),
+            "skill.* prefix must route to ScopeNamespace::Skill — a dropped arm sends skill.use.* through the unknown-action fallthrough so a non-matching name scope passes validate_scope's no-op path and any installed skill grant satisfies any skill.use.* check",
         );
 
         // Unknown-action fallthrough: an action without any documented
@@ -6119,6 +6170,119 @@ mod tests {
         assert!(
             source.downcast_ref::<serde_json::Error>().is_some(),
             "PermissionError::Serde source() must downcast_ref to serde_json::Error so daemon-side capability-document diagnostics can call serde_json::Error::line/column/classify for malformed-capability identification; a refactor that wrapped the inner in a project-local newtype (e.g., PermissionSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies capability-document parse faults (concrete-source-type downcast regression class)"
+        );
+    }
+
+    #[test]
+    fn skill_use_scope_allows_unscoped_grants() {
+        assert!(
+            skill_use_scope_allows("skill.use.covenant", &serde_json::json!({}), "covenant",)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn skill_use_scope_allows_matching_name() {
+        let scope = serde_json::json!({ "version": 1, "name": "covenant" });
+        assert!(skill_use_scope_allows("skill.use.covenant", &scope, "covenant").unwrap());
+    }
+
+    #[test]
+    fn skill_use_scope_rejects_action_or_name_mismatch() {
+        // Action suffix names a different skill than the dispatch target.
+        assert!(
+            !skill_use_scope_allows("skill.use.other", &serde_json::json!({}), "covenant",)
+                .unwrap()
+        );
+        // Scope.name and dispatch target agree but action suffix disagrees —
+        // validate_scope catches the mismatch at grant time, not here.
+        assert!(matches!(
+            skill_use_scope_allows(
+                "skill.use.other",
+                &serde_json::json!({ "version": 1, "name": "covenant" }),
+                "covenant",
+            ),
+            Err(PermissionError::InvalidScope(_))
+        ));
+    }
+
+    #[test]
+    fn validate_skill_scope_rejects_wrong_typed_or_mismatched_name() {
+        assert_invalid_scope(
+            "skill.use.covenant",
+            serde_json::json!({ "version": 1, "name": 42 }),
+        );
+        assert_invalid_scope(
+            "skill.use.covenant",
+            serde_json::json!({ "version": 1, "name": "" }),
+        );
+        assert_invalid_scope(
+            "skill.use.covenant",
+            serde_json::json!({ "version": 1, "name": "other" }),
+        );
+    }
+
+    #[test]
+    fn skill_use_capability_signs_verifies_and_expires() {
+        let signer = LocalIdentity::generate("grantor");
+        let agent = AgentId::new("agent", [11u8; 32]);
+        let cap = Capability {
+            subject: agent,
+            action: "skill.use.covenant".into(),
+            scope: serde_json::json!({ "version": 1, "name": "covenant" }),
+            granted_by: signer.agent_id(),
+            expires_at: Some(1_700_000_000_000),
+        };
+        let signed = sign(cap, signer.signing_key());
+        verify(&signed).expect("valid signature");
+        verify_with_clock(&signed, 1_699_999_999_999).expect("not yet expired");
+        let err = verify_with_clock(&signed, 1_700_000_000_001).unwrap_err();
+        assert!(matches!(err, PermissionError::Expired(1_700_000_000_000)));
+        let mut tampered = signed.clone();
+        tampered.capability.scope = serde_json::json!({ "version": 1, "name": "other" });
+        let err = verify(&tampered).unwrap_err();
+        assert!(matches!(err, PermissionError::BadSignature));
+    }
+
+    #[tokio::test]
+    async fn skill_use_grant_revokes_through_capability_store() {
+        let signer = LocalIdentity::generate("grantor");
+        let agent = AgentId::new("agent", [22u8; 32]);
+        let cap = Capability {
+            subject: agent.clone(),
+            action: "skill.use.covenant".into(),
+            scope: serde_json::json!({ "version": 1, "name": "covenant" }),
+            granted_by: signer.agent_id(),
+            expires_at: None,
+        };
+        let signed = sign(cap, signer.signing_key());
+        let store = InMemoryCapabilityStore::new();
+        store.record(signed.clone()).await.expect("record grant");
+        let live = store
+            .list_for_subject(agent.pubkey)
+            .await
+            .expect("list for subject");
+        assert!(
+            live.iter().any(|g| g.signature == signed.signature),
+            "freshly recorded skill.use grant must be live for its subject",
+        );
+        assert!(!store
+            .is_revoked(signed.signature)
+            .await
+            .expect("is_revoked"));
+        let revoked = store.revoke(signed.signature).await.expect("revoke grant");
+        assert!(revoked, "revoke of a live grant must return true");
+        assert!(store
+            .is_revoked(signed.signature)
+            .await
+            .expect("is_revoked"));
+    }
+
+    #[test]
+    fn skill_use_carries_friendly_title() {
+        assert_eq!(
+            friendly_action_title("skill.use"),
+            Some("use an installed skill")
         );
     }
 }

@@ -1,17 +1,16 @@
 # Spend Authorization
 
 The daemon can act as the spending policy for an external agent wallet. A
-wallet that holds its own keys (for example an OrbWallet) asks the daemon
-to approve a spend **before it signs**; the daemon checks the caller's
+wallet that holds its own keys (an OrbWallet, for example) asks the daemon
+to approve a spend before it signs. The daemon checks the caller's
 capability, a per-call cap, and the payer's budget, records the verdict in
-the audit chain, and answers approve or deny. No funds move on this path
-and no settlement receipt is written — it is a decision, not a payment.
-Settlement accounting (the budget debit and receipt after a payment
-actually lands) is the separate outbound path documented alongside the
-x402 surface.
+the audit chain, and answers approve or deny. No funds move and no
+settlement receipt is written. It is a decision, not a payment. Settlement
+accounting, the budget debit and receipt after a payment lands, is the
+separate outbound path documented with the x402 surface.
 
-This is a daemon capability, not a wallet-specific one: any wallet that
-can make an authenticated HTTP call before it signs can use it.
+This is a daemon capability, not a wallet-specific one. Any wallet that can
+make an authenticated HTTP call before it signs can use it.
 
 ## Enable it
 
@@ -69,7 +68,7 @@ token; spend authorization is no exception.
 On a deny:
 
 ```json
-{ "kind": "spend_authorized", "approved": false, "decision_id": "…", "reason": "amount 100001 exceeds the per-call cap 100000" }
+{ "kind": "spend_authorized", "approved": false, "decision_id": "9b1c0a7e-2f3d-4c5a-8e6f-0a1b2c3d4e5f", "reason": "amount 100001 exceeds the per-call cap 100000" }
 ```
 
 | Field | Type | Meaning |
@@ -81,13 +80,13 @@ On a deny:
 A policy deny is a `spend_authorized` response with `approved: false`, not
 an HTTP error. Reserve error handling for transport and configuration
 problems (missing capability, surface not enabled, malformed body), which
-come back as `{ "error": "…" }`.
+come back as `{ "error": "<message>" }`.
 
 ## Decision rules
 
-A spend is approved only if all hold; otherwise it is denied with the
-first failing reason. The check is **fail-closed**: any budget-subsystem
-error denies rather than letting the spend through.
+A spend is approved only if all four hold. Otherwise it is denied with the
+first failing reason. The check is fail-closed: any budget-subsystem error
+denies rather than letting the spend through.
 
 1. The caller holds `wallet.spend.authorize`.
 2. `amount` parses as a decimal u128 and is `<= per_call_cap`.
@@ -95,11 +94,11 @@ error denies rather than letting the spend through.
 4. The payer's budget would not be exceeded by `credits` (this reads the
    budget; it does not debit).
 
-The per-call cap is supplied by the authenticated caller. Per-subject
-scoped caps — binding allowed chains, assets, and ceilings into the
-granted capability itself rather than trusting the request — are the
-planned next step; today the calling identity is trusted to pass the
-bound, the same model the x402 path uses.
+The per-call cap is supplied by the authenticated caller. Binding the
+allowed chains, assets, and ceilings into the granted capability itself,
+instead of trusting the request, is the planned next step. Today the
+calling identity is trusted to pass the bound, the same model the x402
+path uses.
 
 ## Integration flow (wallet side)
 
@@ -120,12 +119,12 @@ spend can never exceed the bound even if a call skips the pre-flight.
 ## Audit
 
 Every decision writes one `spend_authorization_decided` row to the audit
-chain — on approve and on deny — carrying `provider`, `network`, `asset`,
+chain, on both approve and deny, carrying `provider`, `network`, `asset`,
 `amount`, `credits`, `destination`, `approved`, `reason`, and
-`decision_id`. The chain is therefore a complete, verifiable record of
-what each wallet was and was not permitted to spend, independent of
-whether the wallet later settled. Read it with `covenant audit recent` or
-`GET /audit/recent`, and verify chain integrity with `GET /audit/verify`.
+`decision_id`. The chain is a verifiable record of what each wallet was and
+was not allowed to spend, whether or not it later settled. Read it with
+`covenant audit recent` or `GET /audit/recent`, and verify chain integrity
+with `GET /audit/verify`.
 
 ## Example
 

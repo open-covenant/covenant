@@ -61,6 +61,117 @@ impl ChatMessage {
     }
 }
 
+// ---------- Agent context + skill injection ----------
+
+/// A skill's content as it enters an agent's system context: the pinned
+/// identity (`name` + install-time `digest`) plus the `SKILL.md` body and the
+/// `references/**` actually disclosed for this run. The daemon builds one from
+/// a verified skill before handing it to [`AgentContext::inject_skill`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillContext {
+    pub name: String,
+    pub digest: String,
+    pub body: String,
+    pub references: Vec<SkillReference>,
+}
+
+/// One progressively-disclosed `references/**` file injected alongside a skill
+/// body. `name` is the reference's relative path — what the audit row records;
+/// `body` is the text appended to the agent's system context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillReference {
+    pub name: String,
+    pub body: String,
+}
+
+/// Provenance of one skill injection — the shape the daemon maps 1:1 onto an
+/// `AuditKind::SkillContextInjected` row. `references` lists the names actually
+/// injected (load-on-demand, not the full declared set) so a verifier can
+/// recompute which instructions the agent ran under. Bodies stay in the agent
+/// context; only the names and content digest reach the audit chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillContextInjected {
+    pub skill_name: String,
+    pub skill_digest_hex: String,
+    pub references: Vec<String>,
+}
+
+/// The agent's outbound message buffer. Skill instructions are injected here —
+/// and only here. Its sibling [`VerifierContext`] has no injection path, so a
+/// skill's prose ("approve this transfer") can never reach the check meant to
+/// judge the agent's actions. The split is a compile-time property, not a
+/// convention: the W009/W011 trust boundary holds because the two contexts are
+/// different types, not because callers are careful.
+#[derive(Debug, Clone, Default)]
+pub struct AgentContext {
+    messages: Vec<ChatMessage>,
+}
+
+impl AgentContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seed the context with a base system prompt and any conversation so far.
+    /// Skills are injected on top without disturbing it.
+    pub fn from_messages(messages: Vec<ChatMessage>) -> Self {
+        Self { messages }
+    }
+
+    /// Append `skill`'s body and disclosed references as system messages and
+    /// return the injection record. The append is strictly additive: existing
+    /// messages keep their position, so a base system prompt seeded before the
+    /// skill still precedes it. Inject before adding the user turn.
+    pub fn inject_skill(&mut self, skill: &SkillContext) -> SkillContextInjected {
+        self.messages.push(ChatMessage::system(skill.body.clone()));
+        for reference in &skill.references {
+            self.messages
+                .push(ChatMessage::system(reference.body.clone()));
+        }
+        SkillContextInjected {
+            skill_name: skill.name.clone(),
+            skill_digest_hex: skill.digest.clone(),
+            references: skill.references.iter().map(|r| r.name.clone()).collect(),
+        }
+    }
+
+    pub fn messages(&self) -> &[ChatMessage] {
+        &self.messages
+    }
+
+    pub fn into_messages(self) -> Vec<ChatMessage> {
+        self.messages
+    }
+}
+
+/// The verifier's message buffer. By construction it has no skill-injection
+/// path: the Verifier-Refuter judges what the agent did from audit-derived
+/// facts, never from the agent's persuadable skill instructions. Keeping it a
+/// distinct type from [`AgentContext`] is what makes "the verifier never sees
+/// skill prose" a property the compiler enforces rather than a review note.
+#[derive(Debug, Clone, Default)]
+pub struct VerifierContext {
+    messages: Vec<ChatMessage>,
+}
+
+impl VerifierContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_messages(messages: Vec<ChatMessage>) -> Self {
+        Self { messages }
+    }
+
+    pub fn messages(&self) -> &[ChatMessage] {
+        &self.messages
+    }
+
+    pub fn into_messages(self) -> Vec<ChatMessage> {
+        self.messages
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
     #[error("http: {0}")]
@@ -727,6 +838,162 @@ async fn ollama_reachable(endpoint: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn skill_with_refs() -> SkillContext {
+        SkillContext {
+            name: "covenant".to_string(),
+            digest: "sha256:deadbeef".to_string(),
+            body: "# covenant\n\nnever sign without approval".to_string(),
+            references: vec![
+                SkillReference {
+                    name: "references/signing.md".to_string(),
+                    body: "signing policy body".to_string(),
+                },
+                SkillReference {
+                    name: "references/accounts.md".to_string(),
+                    body: "account model body".to_string(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn inject_skill_appends_body_and_references_as_system_messages() {
+        let skill = skill_with_refs();
+        let mut agent = AgentContext::new();
+        let record = agent.inject_skill(&skill);
+
+        // Body + each reference land as their own system message, in order.
+        let injected: Vec<&str> = agent
+            .messages()
+            .iter()
+            .map(|m| {
+                assert_eq!(m.role, Role::System, "skill content injects as system");
+                m.content.as_str()
+            })
+            .collect();
+        assert_eq!(
+            injected,
+            vec![
+                "# covenant\n\nnever sign without approval",
+                "signing policy body",
+                "account model body",
+            ],
+        );
+
+        // The record is the audit shape, carrying identity + digest verbatim.
+        assert_eq!(record.skill_name, "covenant");
+        assert_eq!(record.skill_digest_hex, "sha256:deadbeef");
+    }
+
+    #[test]
+    fn inject_skill_record_lists_reference_names_not_bodies() {
+        // Failure mode: an audit row that drops the refs it injected. The
+        // record must carry every disclosed reference name (load-on-demand
+        // order), never the bodies and never a truncated set.
+        let mut agent = AgentContext::new();
+        let record = agent.inject_skill(&skill_with_refs());
+        assert_eq!(
+            record.references,
+            vec!["references/signing.md", "references/accounts.md"],
+            "record must list injected reference names in disclosure order",
+        );
+    }
+
+    #[test]
+    fn inject_skill_with_no_references_yields_present_empty_list() {
+        // An empty `references` is still a present, empty Vec — not absent.
+        // The daemon maps this straight onto AuditKind::SkillContextInjected,
+        // whose `references` field is non-optional; a None/missing here would
+        // surface as a malformed audit row.
+        let skill = SkillContext {
+            name: "minimal".to_string(),
+            digest: "sha256:abc".to_string(),
+            body: "body".to_string(),
+            references: Vec::new(),
+        };
+        let mut agent = AgentContext::new();
+        let record = agent.inject_skill(&skill);
+        assert!(record.references.is_empty());
+        assert_eq!(agent.messages().len(), 1, "only the body injects");
+    }
+
+    #[test]
+    fn inject_skill_preserves_existing_context_order() {
+        // Failure mode: injection that reorders or clobbers the base context.
+        // A seeded system prompt + user turn must keep their positions, with
+        // the skill strictly appended after them.
+        let base = vec![
+            ChatMessage::system("you are a covenant agent"),
+            ChatMessage::user("send 1 SOL"),
+        ];
+        let mut agent = AgentContext::from_messages(base);
+        agent.inject_skill(&skill_with_refs());
+
+        let msgs = agent.messages();
+        assert_eq!(msgs[0].role, Role::System);
+        assert_eq!(msgs[0].content, "you are a covenant agent");
+        assert_eq!(msgs[1].role, Role::User);
+        assert_eq!(msgs[1].content, "send 1 SOL");
+        assert_eq!(
+            msgs.len(),
+            5,
+            "two base messages plus body and two references",
+        );
+        assert_eq!(msgs[2].content, "# covenant\n\nnever sign without approval");
+    }
+
+    #[test]
+    fn agent_injection_leaves_a_sibling_verifier_context_clean() {
+        // Failure mode: skill prose leaking into the verifier. Both contexts
+        // seed from the same base facts; injecting into the agent must not put
+        // any skill content into the verifier — which by type has no injection
+        // path at all (this run-time check pins the data separation the
+        // compile-time one implies).
+        let facts = vec![ChatMessage::system("verify the agent's signed actions")];
+        let verifier = VerifierContext::from_messages(facts.clone());
+        let mut agent = AgentContext::from_messages(facts);
+
+        let skill = skill_with_refs();
+        agent.inject_skill(&skill);
+
+        assert!(
+            verifier
+                .messages()
+                .iter()
+                .all(|m| !m.content.contains("never sign without approval")
+                    && !m.content.contains("signing policy body")),
+            "verifier context must never carry agent skill prose",
+        );
+        assert_eq!(verifier.messages().len(), 1, "verifier buffer is untouched");
+        assert!(
+            agent
+                .messages()
+                .iter()
+                .any(|m| m.content.contains("never sign without approval")),
+            "the agent context, by contrast, did receive the skill body",
+        );
+    }
+
+    #[test]
+    fn injecting_two_skills_accumulates_messages_and_returns_independent_records() {
+        let mut agent = AgentContext::new();
+        let first = agent.inject_skill(&skill_with_refs());
+        let second = agent.inject_skill(&SkillContext {
+            name: "spl-token".to_string(),
+            digest: "sha256:feed".to_string(),
+            body: "spl body".to_string(),
+            references: Vec::new(),
+        });
+        assert_eq!(first.skill_name, "covenant");
+        assert_eq!(second.skill_name, "spl-token");
+        assert_eq!(second.references, Vec::<String>::new());
+        assert_eq!(
+            agent.messages().len(),
+            4,
+            "first skill body+2 refs, then second skill body",
+        );
+    }
 
     #[test]
     fn role_serde_and_chat_message_constructors_pin_wire_contract() {

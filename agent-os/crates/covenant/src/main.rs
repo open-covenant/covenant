@@ -88,6 +88,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::net::UnixStream;
 
+mod env;
+use env::no_dna_active;
+
 fn covenant_home() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("COVENANT_HOME") {
         return Ok(PathBuf::from(p));
@@ -582,7 +585,7 @@ fn parse_register_agent_cli_args(args: &[String]) -> Result<RegisterAgentCliArgs
     let mut metadata_hash: Option<[u8; 32]> = None;
     let mut capability_hash: Option<[u8; 32]> = None;
     let mut confirm_timeout_ms: u64 = 60_000;
-    let mut as_json = false;
+    let mut as_json = no_dna_active();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -746,7 +749,7 @@ fn parse_stake_cli_args(args: &[String]) -> Result<StakeCliArgs> {
     let mut amount: Option<u64> = None;
     let mut lock_until: Option<u64> = None;
     let mut confirm_timeout_ms: u64 = 60_000;
-    let mut as_json = false;
+    let mut as_json = no_dna_active();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1075,7 +1078,7 @@ fn parse_buy_credits_cli_args(args: &[String]) -> Result<BuyCreditsCliArgs> {
     let mut covnt_mint: Option<Pubkey> = None;
     let mut amount_covnt: Option<u64> = None;
     let mut confirm_timeout_ms: u64 = 60_000;
-    let mut as_json = false;
+    let mut as_json = no_dna_active();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -2549,7 +2552,7 @@ async fn main() -> Result<()> {
 
     match args[0].as_str() {
         "bootstrap" => {
-            let mut as_json = false;
+            let mut as_json = no_dna_active();
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
@@ -2653,7 +2656,7 @@ async fn main() -> Result<()> {
             }
         }
         "ping" => {
-            let mut as_json = false;
+            let mut as_json = no_dna_active();
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
@@ -2685,7 +2688,7 @@ async fn main() -> Result<()> {
             // `covenant intent search --json command help` keeps the
             // literal text `search --json command help` instead of
             // silently dropping the `--json` in the middle.
-            let mut as_json = false;
+            let mut as_json = no_dna_active();
             let mut prefer_stream = false;
             let mut text_parts: Vec<String> = Vec::new();
             let mut consuming_flags = true;
@@ -2760,7 +2763,7 @@ async fn main() -> Result<()> {
                 "recent" => {
                     let mut tier: Option<MemoryTier> = None;
                     let mut limit: usize = 10;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut prefer_stream = false;
                     let mut i = 2;
                     while i < args.len() {
@@ -2805,7 +2808,7 @@ async fn main() -> Result<()> {
                 "purge" => {
                     let mut tier: Option<MemoryTier> = None;
                     let mut before_ms: Option<u64> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -2858,7 +2861,7 @@ async fn main() -> Result<()> {
                     let mut policy = MemoryCompactionPolicy::default();
                     let mut reason = None;
                     let mut apply = false;
-                    let mut as_json = plan_only;
+                    let mut as_json = plan_only || no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -2964,7 +2967,7 @@ async fn main() -> Result<()> {
                 }
                 "plan-receipt-backfill" => {
                     let mut limit: usize = 100;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3034,7 +3037,7 @@ async fn main() -> Result<()> {
                 }
                 "backfill-receipt-correlation" => {
                     let mut dry_run = false;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut scope_pubkey = None;
                     let mut i = 2;
                     while i < args.len() {
@@ -3171,7 +3174,7 @@ async fn main() -> Result<()> {
                     let mut tier: Option<MemoryTier> = None;
                     let mut limit: usize = 10;
                     let mut min_relevance: Option<f32> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut query_parts: Vec<String> = Vec::new();
                     let mut i = 2;
                     while i < args.len() {
@@ -3245,7 +3248,7 @@ async fn main() -> Result<()> {
             match args[1].as_str() {
                 "recent" => {
                     let mut limit: usize = 10;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3309,7 +3312,7 @@ async fn main() -> Result<()> {
                     let action = args[2].clone();
                     let mut scope: Option<serde_json::Value> = None;
                     let mut expires_at: Option<u64> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 3;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3412,7 +3415,7 @@ async fn main() -> Result<()> {
                         std::process::exit(2);
                     }
                     let signature_b58 = args[2].clone();
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 3;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3453,7 +3456,7 @@ async fn main() -> Result<()> {
                 }
                 "purge" => {
                     let mut before_ms: Option<u64> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3513,7 +3516,7 @@ async fn main() -> Result<()> {
                 std::process::exit(2);
             }
             let mut limit: usize = 10;
-            let mut as_json = false;
+            let mut as_json = no_dna_active();
             let mut since_ms: Option<u64> = None;
             let mut i = 2;
             while i < args.len() {
@@ -3568,7 +3571,7 @@ async fn main() -> Result<()> {
             }
             match args[1].as_str() {
                 "status" => {
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     for arg in &args[2..] {
                         match arg.as_str() {
                             "--json" => as_json = true,
@@ -3612,7 +3615,7 @@ async fn main() -> Result<()> {
                 }
                 "flush-receipts" => {
                     let mut limit = 10;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3658,7 +3661,7 @@ async fn main() -> Result<()> {
                 }
                 "receipt-batches" => {
                     let mut limit = 10;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3718,7 +3721,7 @@ async fn main() -> Result<()> {
         }
         "verify" => {
             let mut window: usize = 100;
-            let mut as_json = false;
+            let mut as_json = no_dna_active();
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
@@ -3781,7 +3784,7 @@ async fn main() -> Result<()> {
             }
             match args[1].as_str() {
                 "list" => {
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3814,7 +3817,7 @@ async fn main() -> Result<()> {
                     }
                     let name = args[2].clone();
                     let mut arguments = serde_json::Value::Null;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 3;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3880,7 +3883,7 @@ async fn main() -> Result<()> {
                 "recent" => {
                     let mut limit: usize = 50;
                     let mut since_ms: Option<u64> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut prefer_stream = false;
                     let mut i = 2;
                     while i < args.len() {
@@ -3949,7 +3952,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 "verify" => {
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -3973,7 +3976,7 @@ async fn main() -> Result<()> {
                 }
                 "purge" => {
                     let mut before_ms: Option<u64> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -4034,7 +4037,7 @@ async fn main() -> Result<()> {
                     let mut min_lease_age_ms: Option<u64> = None;
                     let mut deadline_within_ms: Option<u64> = None;
                     let mut state_filter: Option<A2ATaskQueueState> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -4206,7 +4209,7 @@ async fn main() -> Result<()> {
                 }
                 "retry-stale" => {
                     let mut policy = A2AAutoRetryPolicy::default();
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -4262,7 +4265,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 "compact" => {
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -4299,7 +4302,7 @@ async fn main() -> Result<()> {
             match args[1].as_str() {
                 "purge" => {
                     let mut before_ms: Option<u64> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -4345,7 +4348,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 "rotate" => {
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -4385,7 +4388,7 @@ async fn main() -> Result<()> {
                     let mut prefix: Option<String> = None;
                     let mut live_only = false;
                     let mut revoked_only = false;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -4448,7 +4451,7 @@ async fn main() -> Result<()> {
                     let force = args.iter().any(|a| a == "--force");
                     let mut match_limit: Option<usize> = None;
                     let mut token_prefix: Option<String> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
@@ -4555,7 +4558,7 @@ async fn main() -> Result<()> {
             }
             let mut explicit_id: Option<String> = None;
             let mut want_latest = false;
-            let mut as_json = false;
+            let mut as_json = no_dna_active();
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
@@ -4664,7 +4667,7 @@ async fn main() -> Result<()> {
                 eprintln!("covenant ignore: expected `check <text>`");
                 std::process::exit(2);
             }
-            let mut as_json = false;
+            let mut as_json = no_dna_active();
             let mut text_parts = Vec::new();
             for arg in args.iter().skip(2) {
                 if arg == "--json" {
@@ -4716,7 +4719,7 @@ async fn main() -> Result<()> {
             match args[1].as_str() {
                 "backfill-receipts" => {
                     let mut dry_run = false;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut scope_pubkey = None;
                     let mut i = 2;
                     while i < args.len() {
@@ -4783,7 +4786,7 @@ async fn main() -> Result<()> {
             }
             match args[1].as_str() {
                 "status" => {
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     for arg in &args[2..] {
                         match arg.as_str() {
                             "--json" => as_json = true,
@@ -4826,7 +4829,7 @@ async fn main() -> Result<()> {
                 }
                 "publish" => {
                     let mut manifest_path: Option<String> = None;
-                    let mut as_json = false;
+                    let mut as_json = no_dna_active();
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {

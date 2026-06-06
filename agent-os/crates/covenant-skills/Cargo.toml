@@ -7,6 +7,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Reference implementation for the optional SKILL.md provenance block
+# (`capabilities:` / `onchain:` / `provenance:`). Off by default — the install
+# and capability-enforcement paths never depend on it.
+skill-provenance = []
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

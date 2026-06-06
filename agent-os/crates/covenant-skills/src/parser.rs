@@ -59,27 +59,36 @@ pub enum SkillParseError {
 }
 
 pub fn parse_skill_md(content: &str) -> Result<SkillMd, SkillParseError> {
+    let (frontmatter_yaml, body) = split_frontmatter(content)?;
+    let frontmatter: SkillFrontmatter = serde_yaml::from_str(&frontmatter_yaml)?;
+    Ok(SkillMd { frontmatter, body })
+}
+
+/// Split a `SKILL.md` into its raw frontmatter YAML and body, enforcing the
+/// `---`-delimited frontmatter contract. Shared by [`parse_skill_md`] and the
+/// optional provenance parser so both read the exact same frontmatter bytes
+/// rather than re-implementing the delimiter scan.
+pub(crate) fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseError> {
     let normalized = content.replace("\r\n", "\n");
     let mut lines = normalized.split_inclusive('\n');
     let first = lines.next().ok_or(SkillParseError::MissingOpenDelimiter)?;
     if first.trim_end() != "---" {
         return Err(SkillParseError::MissingOpenDelimiter);
     }
-    let mut frontmatter_buf = String::new();
+    let mut frontmatter = String::new();
     let mut closed = false;
     for line in lines.by_ref() {
         if line.trim_end() == "---" {
             closed = true;
             break;
         }
-        frontmatter_buf.push_str(line);
+        frontmatter.push_str(line);
     }
     if !closed {
         return Err(SkillParseError::MissingCloseDelimiter);
     }
-    let frontmatter: SkillFrontmatter = serde_yaml::from_str(&frontmatter_buf)?;
     let body: String = lines.collect();
-    Ok(SkillMd { frontmatter, body })
+    Ok((frontmatter, body))
 }
 
 pub fn parse_skill_md_path(path: &Path) -> Result<SkillMd, SkillParseError> {

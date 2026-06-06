@@ -14,9 +14,18 @@
 
 mod parser;
 
+#[cfg(feature = "skill-provenance")]
+mod provenance;
+
 pub use parser::{
     parse_skill_md, parse_skill_md_path, reference_paths, skill_content_digest, SkillFrontmatter,
     SkillFrontmatterMetadata, SkillMd, SkillParseError,
+};
+
+#[cfg(feature = "skill-provenance")]
+pub use provenance::{
+    parse_skill_provenance, OnchainSurface, ProvenanceAttestation, ProvenanceFinding,
+    SkillProvenance, SurfaceFinding,
 };
 
 use serde::{Deserialize, Serialize};

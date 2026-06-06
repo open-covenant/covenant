@@ -33,6 +33,7 @@ backlog/
 # Per-clone session-lock written by scripts/handover.sh and verified by
 # hooks/pre-commit to enforce one-autonomous-session-per-checkout.
 .covenant-session-id
+.covenant-skills-loop.lock
 
 # Engineering-loop bookkeeping. Kept on local disk so the autonomous loop
 # can read/write across sessions, never tracked publicly.

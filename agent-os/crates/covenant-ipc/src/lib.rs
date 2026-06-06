@@ -770,6 +770,24 @@ pub enum Request {
     SkillVerify {
         name: String,
     },
+    /// Run an intent under the governance of an installed skill. The daemon
+    /// gates `skill.use.{name}` against the caller's signed capabilities,
+    /// re-verifies the skill's on-disk content digest against the
+    /// install-time pin, injects the `SKILL.md` body into the agent context
+    /// driving the run, and records `SkillContextInjected` then
+    /// `SkillInvoked` around the dispatch so the audit chain alone proves
+    /// which instructions the agent ran under and that the use was
+    /// capability-gated. Missing the capability records `SkillRefused` and
+    /// returns [`Response::Error`]; a content-digest mismatch refuses the
+    /// run rather than execute under swapped instructions. Otherwise the
+    /// run resolves to the same [`Response::IntentResult`] as a plain
+    /// [`Request::SubmitIntent`] — governed skill runs dispatch
+    /// synchronously, so the gate and audit chain settle before the
+    /// terminal reply rather than behind an async `running` placeholder.
+    SkillUse {
+        name: String,
+        text: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -11478,6 +11496,30 @@ mod tests {
         );
         let back: Request = serde_json::from_value(wire).unwrap();
         assert_eq!(back, event);
+    }
+
+    #[test]
+    fn request_skill_use_serde_pins_wire_shape() {
+        // The governed-run verb carries the skill name to gate
+        // (`skill.use.{name}`) plus the intent text the agent runs under.
+        // A slug or field rename detaches the daemon's skill-governance arm
+        // from the operator's request — the run would route to the catch-all
+        // error branch or dispatch ungoverned, so both are pinned.
+        let event = Request::SkillUse {
+            name: "covenant".into(),
+            text: "summarise the audit log".into(),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "kind": "skill_use",
+                "name": "covenant",
+                "text": "summarise the audit log",
+            }),
+        );
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "SkillUse must round-trip verbatim");
     }
 
     #[test]

@@ -26,7 +26,7 @@ use covenant_ipc::{
     read_frame, write_frame, ChainStatus, IpcError, ReceiptBatchSummary, Request, Response,
     StreamEnvelope,
 };
-use covenant_llm::Embedder;
+use covenant_llm::{AgentContext, Embedder, SkillContext};
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{memory_receipt_backfill_correlations, IgnoreSet, MemoryStore};
 use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
@@ -57,7 +57,9 @@ use covenant_settlement::{
     build_receipt_batch, intent_dispatch_credits, memory_write_credits, ChainConfirmation,
     Settlement,
 };
-use covenant_skills::{install_skill, SkillIntegrityError, SkillManifest, SkillSource};
+use covenant_skills::{
+    install_skill, parse_skill_md_path, SkillIntegrityError, SkillManifest, SkillSource,
+};
 use covenant_types::{
     AgentId, BudgetPauseCheckpoint, BudgetPauseReason, Capability, Intent, MemoryCompactionRequest,
     MemoryRecord, MemoryRepairCommand, MemoryRepairMode, MemoryTier, Priority, ResourceKind,
@@ -1773,7 +1775,10 @@ impl Server {
             Request::SubmitIntent {
                 text,
                 prefer_stream: _,
-            } => self.dispatch_intent(Uuid::new_v4(), text, peer, true).await,
+            } => {
+                self.dispatch_intent(Uuid::new_v4(), text, None, peer, true)
+                    .await
+            }
             Request::RecentMemory {
                 tier,
                 limit,
@@ -1919,6 +1924,10 @@ impl Server {
             Request::SkillList => self.skill_list(peer).await,
             Request::SkillShow { name } => self.skill_show(name, peer).await,
             Request::SkillVerify { name } => self.skill_verify(name, peer).await,
+            Request::SkillUse { name, text } => {
+                self.dispatch_intent(Uuid::new_v4(), text, Some(name), peer, true)
+                    .await
+            }
         }
     }
 
@@ -3872,10 +3881,16 @@ impl Server {
         &self,
         intent_id: Uuid,
         text: String,
+        skill: Option<String>,
         peer: &AgentId,
         allow_async: bool,
     ) -> Response {
-        if allow_async {
+        // A skill-governed run dispatches synchronously even for a Hermes
+        // agent: the `skill.use.{name}` gate and the
+        // SkillContextInjected -> SkillInvoked audit chain must settle before
+        // the terminal reply, never behind an async `running` placeholder the
+        // caller would read as success while the gate is still pending.
+        if allow_async && skill.is_none() {
             let hermes_agent = self
                 .router
                 .route(&text)
@@ -3889,7 +3904,7 @@ impl Server {
                 let me = self.clone();
                 let peer = peer.clone();
                 tokio::spawn(async move {
-                    let resp = me.dispatch_intent_run(intent_id, text, &peer).await;
+                    let resp = me.dispatch_intent_run(intent_id, text, None, &peer).await;
                     if let Ok(mut store) = me.intent_outcomes.lock() {
                         store.complete(intent_id, &resp);
                     }
@@ -3903,10 +3918,16 @@ impl Server {
                 };
             }
         }
-        self.dispatch_intent_run(intent_id, text, peer).await
+        self.dispatch_intent_run(intent_id, text, skill, peer).await
     }
 
-    async fn dispatch_intent_run(&self, intent_id: Uuid, text: String, peer: &AgentId) -> Response {
+    async fn dispatch_intent_run(
+        &self,
+        intent_id: Uuid,
+        text: String,
+        skill: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
         // Pre-allocated so the budget debit's `paired_receipt` and the
         // settlement receipt's `id` agree — joining the budget log to
         // the receipt log on this UUID matches 1:1 instead of producing
@@ -3941,6 +3962,106 @@ impl Server {
                 settlement: None,
             };
         }
+
+        // Skill governance. Gate `skill.use.{name}`, re-verify the pinned
+        // content digest against the install-time `SkillInstalled` row, and
+        // inject the `SKILL.md` body into the agent context that drives this
+        // run. The `SkillContextInjected` row records which instructions (by
+        // digest) the run executes under; the later `SkillInvoked` row joins
+        // it to this intent. A missing capability is refused by
+        // `skill_use_gate` with a persisted `SkillRefused` row before any
+        // work, so an ungoverned run is unreachable past this point.
+        let skill_run = match skill {
+            Some(name) => {
+                let Some(home) = self.home.clone() else {
+                    return Response::Error {
+                        message: "skill use unavailable: server has no home directory configured"
+                            .into(),
+                    };
+                };
+                let manifest = match self.skill_use_gate(name.clone(), peer).await {
+                    Ok(manifest) => manifest,
+                    Err(response) => return response,
+                };
+                // Key the store path on the gated `name`, not `manifest.name`:
+                // the gate read the manifest from `skills/{name}`, and
+                // `manifest.json` is not covered by the content digest, so the
+                // executed skill stays bound to the directory the capability
+                // was checked against (`name` is already validated by
+                // `skill_use_gate`).
+                let store = home.join("skills").join(&name);
+                if let Err(e) = manifest.verify_against_disk(&store) {
+                    // A post-install content swap is the threat the digest pin
+                    // exists to defeat. Record the refusal on the chain
+                    // (must-persist, like the gate's) so the operator sees the
+                    // mismatch an attacker hoped to slip past, then refuse the
+                    // run rather than execute under swapped instructions.
+                    let event = AuditEvent {
+                        id: Uuid::new_v4(),
+                        timestamp_ms: epoch_ms(),
+                        issuer: peer.clone(),
+                        kind: AuditKind::SkillRefused {
+                            skill_name: name.clone(),
+                            reason: format!("content digest mismatch: {e}"),
+                        },
+                    };
+                    if let Err(audit_err) = self.record_peer_event_required(peer, event).await {
+                        return audit_failure_response(audit_err);
+                    }
+                    return Response::Error {
+                        message: format!("skill '{name}' refused: {e}"),
+                    };
+                }
+                let body = match parse_skill_md_path(&store.join("SKILL.md")) {
+                    Ok(parsed) => parsed.body,
+                    Err(e) => {
+                        return Response::Error {
+                            message: format!("skill '{name}' body unreadable: {e}"),
+                        };
+                    }
+                };
+                let digest_hex = manifest
+                    .digest
+                    .strip_prefix("sha256:")
+                    .unwrap_or(&manifest.digest)
+                    .to_string();
+                let context = SkillContext {
+                    name: name.clone(),
+                    digest: digest_hex,
+                    body,
+                };
+                let mut agent_ctx = AgentContext::new();
+                let injected = agent_ctx.inject_skill(&context);
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: issuer.clone(),
+                    kind: AuditKind::SkillContextInjected {
+                        skill_name: injected.skill_name,
+                        skill_digest_hex: injected.skill_digest_hex,
+                        references: injected.references,
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                // Fold the injected system context into the run input so the
+                // agent genuinely executes under the skill — the SkillInvoked
+                // row is not hollow. The recorded intent_text below stays the
+                // operator's original ask; only the run input carries the
+                // skill preamble.
+                let preamble = agent_ctx
+                    .into_messages()
+                    .into_iter()
+                    .map(|m| m.content)
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                Some((name, preamble))
+            }
+            None => None,
+        };
+        let run_text = match &skill_run {
+            Some((_, preamble)) => format!("{preamble}\n\n{text}"),
+            None => text.clone(),
+        };
 
         let matched = self.router.route(&text);
         let card = matched
@@ -4128,7 +4249,7 @@ impl Server {
             }
             let intent = Intent {
                 id: intent_id,
-                text: text.clone(),
+                text: run_text.clone(),
                 issuer: issuer.clone(),
                 issued_at,
                 priority: Priority::Normal,
@@ -4157,7 +4278,7 @@ impl Server {
             }
         } else {
             (
-                format!("phase 0 echo (no agent matched): {text}"),
+                format!("phase 0 echo (no agent matched): {run_text}"),
                 Vec::new(),
                 Vec::new(),
             )
@@ -4235,6 +4356,24 @@ impl Server {
                 kind: runtime_trace_to_audit_kind(intent_id, trace),
             };
             self.record_peer_event(peer, row).await;
+        }
+
+        // Close the governed-run chain: SkillInvoked joins to the
+        // IntentDispatched row above via intent_id and to the install record
+        // via skill_name, so the audit log alone proves the agent ran under
+        // the same content that was capability-gated and digest-verified at
+        // the top of this dispatch.
+        if let Some((skill_name, _)) = skill_run {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: issuer.clone(),
+                kind: AuditKind::SkillInvoked {
+                    skill_name,
+                    intent_id,
+                },
+            };
+            self.record_peer_event(peer, event).await;
         }
 
         Response::IntentResult {
@@ -4321,7 +4460,7 @@ impl Server {
                         }
                     }
                 }
-                self.dispatch_intent(Uuid::new_v4(), t, peer, false).await
+                self.dispatch_intent(Uuid::new_v4(), t, None, peer, false).await
             }
             None => Response::Error {
                 message: format!(
@@ -5091,7 +5230,7 @@ impl Server {
     where
         W: tokio::io::AsyncWriteExt + Unpin,
     {
-        let response = self.dispatch_intent(Uuid::new_v4(), text, peer, true).await;
+        let response = self.dispatch_intent(Uuid::new_v4(), text, None, peer, true).await;
         let (result, summary) = match response {
             Response::IntentResult {
                 intent_id,
@@ -5161,7 +5300,7 @@ impl Server {
         peer: &AgentId,
         connection_id: Uuid,
     ) -> Result<Vec<StreamEnvelope>, Response> {
-        let response = self.dispatch_intent(Uuid::new_v4(), text, peer, true).await;
+        let response = self.dispatch_intent(Uuid::new_v4(), text, None, peer, true).await;
         let (result, summary) = match response {
             Response::IntentResult {
                 intent_id,

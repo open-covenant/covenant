@@ -526,10 +526,11 @@ pub enum AuditKind {
     /// *proposal* for a skill run, before any signing. `program` is the
     /// target program-id (base58), `instruction` is the Anchor/IDL
     /// instruction name (`"transfer"`, `"initialize"`, …), and
-    /// `accounts_hash_hex` is the SHA-256 over the serialized account
-    /// metas — raw account lists never enter the chain. `simulated_ok`
-    /// records the devnet simulate result the broker observed; an
-    /// out-of-envelope proposal is rejected here, never signed.
+    /// `accounts_hash_hex` is the SHA-256 over the JSON-canonicalized
+    /// account metas — raw account lists never enter the chain.
+    /// `simulated_ok` is the broker's structural pre-sign check; a live
+    /// devnet `simulateTransaction` is the production upgrade and rides the
+    /// same field. An out-of-envelope proposal is rejected here, never signed.
     SkillTxProposed {
         skill_name: String,
         program: String,

@@ -336,6 +336,15 @@ pub fn chain_scope_allows(
         && scope_allows_optional_string(obj, "batch_id", request.batch_id))
 }
 
+/// Canonical capability action for proposing a Solana instruction through a
+/// skill: `chain.tx.{program}.{instruction}`. The grant side and the daemon's
+/// tx broker both build the action here so the two interpolated segments never
+/// drift. It is an ordinary `chain.*` action — [`validate_scope`] accepts it
+/// and [`chain_scope_allows`] gates it (e.g. by `cluster`) like any other.
+pub fn chain_tx_action(program: &str, instruction: &str) -> String {
+    format!("chain.tx.{program}.{instruction}")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryCompactionScopeRequest {
     pub apply: bool,
@@ -1981,6 +1990,54 @@ mod tests {
         assert_invalid_scope(
             "chain.flush",
             serde_json::json!({ "version": 1, "resource": "unknown" }),
+        );
+    }
+
+    #[test]
+    fn chain_tx_action_builds_canonical_form_and_gates_like_chain_namespace() {
+        // The two interpolated segments (program, instruction) are the drift
+        // risk: the grant side and the daemon broker must format the action
+        // identically or a granted capability silently never matches the
+        // checked one. Pin the exact form, and that it behaves as an ordinary
+        // chain.* capability for validation and cluster-scoped gating.
+        let program = "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y";
+        let action = chain_tx_action(program, "register_agent");
+        assert_eq!(action, format!("chain.tx.{program}.register_agent"));
+
+        validate_scope(&action, &serde_json::json!({}))
+            .expect("empty chain.tx scope must validate");
+        validate_scope(
+            &action,
+            &serde_json::json!({ "version": 1, "cluster": "devnet" }),
+        )
+        .expect("version-1 cluster-restricted chain.tx scope must validate");
+
+        let scope = serde_json::json!({ "version": 1, "cluster": "devnet" });
+        assert!(
+            chain_scope_allows(
+                &action,
+                &scope,
+                &action,
+                ChainScopeRequest {
+                    cluster: Some("devnet"),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+            "a devnet-scoped chain.tx grant must allow a devnet request",
+        );
+        assert!(
+            !chain_scope_allows(
+                &action,
+                &scope,
+                &action,
+                ChainScopeRequest {
+                    cluster: Some("mainnet-beta"),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+            "a devnet-scoped chain.tx grant must reject a mainnet-beta request",
         );
     }
 

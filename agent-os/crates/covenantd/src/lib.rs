@@ -916,6 +916,131 @@ pub struct Server {
     intent_outcomes: Arc<std::sync::Mutex<OutcomeStore>>,
 }
 
+/// Outcome of [`Server::broker_skill_tx`] for a proposal that cleared the
+/// capability and devnet-cluster gates. Mirrors the persisted
+/// [`AuditKind::SkillTxProposed`] row (minus `skill_name`, which the caller
+/// supplied). `simulated_ok` is the pre-sign simulation verdict; whether to
+/// sign is the approval policy's call, not the broker's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillTxProposal {
+    pub program: String,
+    pub instruction: String,
+    pub accounts_hash_hex: String,
+    pub simulated_ok: bool,
+}
+
+/// Upper bound on accounts in a brokered instruction. A real Solana
+/// instruction stays well under this; the cap is a denial-of-service floor
+/// on canonicalisation work for a hostile proposal, not a protocol limit.
+const MAX_SKILL_TX_ACCOUNTS: usize = 64;
+
+#[derive(Debug)]
+struct ParsedSkillTxProposal {
+    cluster: String,
+    program: String,
+    instruction: String,
+    accounts_canonical: String,
+    has_signer: bool,
+}
+
+/// Parse the single-instruction Solana bundle
+/// [`covenant_mcp::native::SolanaProposeTxTool`] emits into the fields the
+/// broker gates and audits. Returns a human-readable error on any shape
+/// violation so the caller can surface it as `Response::Error`.
+fn parse_skill_tx_proposal(proposal: &serde_json::Value) -> Result<ParsedSkillTxProposal, String> {
+    let obj = proposal
+        .as_object()
+        .ok_or_else(|| "proposal must be a JSON object".to_string())?;
+    if obj.get("chain").and_then(|v| v.as_str()) != Some("solana") {
+        return Err("proposal.chain must be \"solana\"".into());
+    }
+    let cluster = obj
+        .get("cluster")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "proposal.cluster must be a string".to_string())?
+        .to_string();
+    let instructions = obj
+        .get("instructions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "proposal.instructions must be an array".to_string())?;
+    if instructions.len() != 1 {
+        return Err(format!(
+            "proposal.instructions must hold exactly one instruction, got {}",
+            instructions.len()
+        ));
+    }
+    let ix = instructions[0]
+        .as_object()
+        .ok_or_else(|| "proposal.instructions[0] must be an object".to_string())?;
+    let program = ix
+        .get("programId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "instructions[0].programId must be a non-empty string".to_string())?
+        .to_string();
+    let instruction = ix
+        .get("instruction")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "instructions[0].instruction must be a non-empty string".to_string())?
+        .to_string();
+    let accounts = ix
+        .get("accounts")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "instructions[0].accounts must be an array".to_string())?;
+    if accounts.is_empty() {
+        return Err("instructions[0].accounts must not be empty".into());
+    }
+    // A single Solana instruction references far fewer accounts than this; the
+    // cap just stops a hostile proposal from forcing unbounded canonicalisation
+    // work before the cheap cluster and capability gates run.
+    if accounts.len() > MAX_SKILL_TX_ACCOUNTS {
+        return Err(format!(
+            "instructions[0].accounts holds {} entries, exceeding the {MAX_SKILL_TX_ACCOUNTS}-account limit",
+            accounts.len()
+        ));
+    }
+    let mut canonical_accounts = Vec::with_capacity(accounts.len());
+    let mut has_signer = false;
+    for (i, entry) in accounts.iter().enumerate() {
+        let meta = entry
+            .as_object()
+            .ok_or_else(|| format!("accounts[{i}] must be an object"))?;
+        let name = meta
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("accounts[{i}].name must be a string"))?;
+        let address = meta
+            .get("address")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("accounts[{i}].address must be a string"))?;
+        let signer = meta
+            .get("signer")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| format!("accounts[{i}].signer must be a boolean"))?;
+        let writable = meta
+            .get("writable")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| format!("accounts[{i}].writable must be a boolean"))?;
+        has_signer |= signer;
+        // Positional, order-preserving canonicalisation: the audit hash binds
+        // the exact account set AND ordering the proposal carried (Solana
+        // account order is semantically significant). JSON-encoding the fields
+        // keeps the pre-image unambiguous — a tab or newline inside an account
+        // name can't forge a field/row boundary the way a delimiter-joined
+        // string could, so two distinct account sets can't collide to one hash.
+        canonical_accounts.push(serde_json::json!([name, address, signer, writable]));
+    }
+    let accounts_canonical = serde_json::Value::Array(canonical_accounts).to_string();
+    Ok(ParsedSkillTxProposal {
+        cluster,
+        program,
+        instruction,
+        accounts_canonical,
+        has_signer,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 impl Server {
     pub fn new(
@@ -2211,6 +2336,166 @@ impl Server {
                 message: format!("no skill installed named '{name}'"),
             }),
             Err(e) => Err(Response::Error { message: e }),
+        }
+    }
+
+    /// Skill tx broker: gate an unsigned Solana proposal (the bundle
+    /// [`covenant_mcp::native::SolanaProposeTxTool`] emits) before it can reach
+    /// a signer. Enforces, in order: the skill is installed; the proposal
+    /// targets a devnet cluster (never mainnet); and the caller holds the
+    /// `chain.tx.{program}.{instruction}` capability. Only then does it run a
+    /// pre-sign simulation and persist an [`AuditKind::SkillTxProposed`] row
+    /// binding skill, program, instruction, the account-set hash, and the
+    /// simulation verdict. A blocked proposal records an
+    /// [`AuditKind::SkillRefused`] row attributed to `peer` and returns
+    /// `Err`. Nothing is signed here — that is the approval+signing pipeline,
+    /// which consumes this proposal.
+    ///
+    /// The simulation is a structural pre-flight (the daemon deliberately
+    /// keeps the Solana signer dep tree out of its build); a live devnet
+    /// `simulateTransaction` is the production upgrade and rides the same
+    /// `simulated_ok` field. Manifest-level `declared_programs` / `sends_tx`
+    /// enforcement is deferred until those fields are populated from
+    /// frontmatter — authorization binds to the capability today.
+    ///
+    /// The proposal row binds the program, instruction, and exact account set
+    /// (hash). It does not separately hash the instruction's `data` arguments:
+    /// those are committed when the transaction is signed, since the ed25519
+    /// signature in [`AuditKind::SkillTxSigned`] covers the whole serialized
+    /// message — the durable provenance for `data` lives on the signed row.
+    pub async fn broker_skill_tx(
+        &self,
+        skill_name: String,
+        proposal: serde_json::Value,
+        peer: &AgentId,
+    ) -> Result<SkillTxProposal, Response> {
+        let Some(home) = self.home.clone() else {
+            return Err(Response::Error {
+                message: "skill tx broker unavailable: server has no home directory configured"
+                    .into(),
+            });
+        };
+        if !valid_skill_name(&skill_name) {
+            return Err(Response::Error {
+                message: format!("invalid skill name '{skill_name}'"),
+            });
+        }
+        // Bind to an installed skill; brokering a tx for an unknown skill has
+        // no governable subject.
+        match read_skill_manifest(&home.join("skills").join(&skill_name)) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(Response::Error {
+                    message: format!("no skill installed named '{skill_name}'"),
+                })
+            }
+            Err(e) => return Err(Response::Error { message: e }),
+        }
+
+        let parsed = match parse_skill_tx_proposal(&proposal) {
+            Ok(p) => p,
+            Err(message) => return Err(Response::Error { message }),
+        };
+
+        // Devnet-only, enforced BEFORE the capability check or any simulation:
+        // a mainnet proposal can never reach a signer or an RPC. Allowlist
+        // (not blocklist) so an unknown cluster label fails closed.
+        if !matches!(parsed.cluster.as_str(), "devnet" | "localnet") {
+            return Err(self
+                .refuse_skill_tx(
+                    &skill_name,
+                    peer,
+                    format!("non-devnet cluster '{}' refused", parsed.cluster),
+                )
+                .await);
+        }
+
+        // Gate on chain.tx.{program}.{instruction}, honouring the capability's
+        // scope the same way every other chain.* gate does: an operator can
+        // pin a grant to a cluster, and chain_scopes enforces it. The hardcoded
+        // devnet allowlist above is the outer floor; a scope can only narrow it.
+        let action = covenant_permissions::chain_tx_action(&parsed.program, &parsed.instruction);
+        let authorized = match self
+            .chain_scopes(
+                &action,
+                peer,
+                ChainScopeRequest {
+                    cluster: Some(&parsed.cluster),
+                    ..ChainScopeRequest::default()
+                },
+            )
+            .await
+        {
+            Ok(scopes) => !scopes.is_empty(),
+            Err(reason) => {
+                return Err(self
+                    .refuse_skill_tx(
+                        &skill_name,
+                        peer,
+                        format!("invalid capability scope for {action}: {reason}"),
+                    )
+                    .await)
+            }
+        };
+        if !authorized {
+            return Err(self
+                .refuse_skill_tx(
+                    &skill_name,
+                    peer,
+                    format!("missing or out-of-scope {action}"),
+                )
+                .await);
+        }
+
+        let accounts_hash_hex = hash_hex(parsed.accounts_canonical.as_bytes());
+        // Structural pre-flight: a transaction with no signer can never
+        // execute, so it cannot simulate cleanly. The verdict is recorded, not
+        // gated on — the signing policy decides what to do with a false.
+        let simulated_ok = parsed.has_signer;
+
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::SkillTxProposed {
+                skill_name: skill_name.clone(),
+                program: parsed.program.clone(),
+                instruction: parsed.instruction.clone(),
+                accounts_hash_hex: accounts_hash_hex.clone(),
+                simulated_ok,
+            },
+        };
+        if let Err(e) = self.record_peer_event_required(peer, event).await {
+            return Err(audit_failure_response(e));
+        }
+
+        Ok(SkillTxProposal {
+            program: parsed.program,
+            instruction: parsed.instruction,
+            accounts_hash_hex,
+            simulated_ok,
+        })
+    }
+
+    /// Persist a must-write [`AuditKind::SkillRefused`] row for a blocked
+    /// proposal and return the error response. Shared by the broker's deny
+    /// arms so a refusal can never be silently dropped (an attacker filling
+    /// the audit disk gets the generic audit-failure response instead).
+    async fn refuse_skill_tx(&self, skill_name: &str, peer: &AgentId, reason: String) -> Response {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::SkillRefused {
+                skill_name: skill_name.to_string(),
+                reason: reason.clone(),
+            },
+        };
+        if let Err(e) = self.record_peer_event_required(peer, event).await {
+            return audit_failure_response(e);
+        }
+        Response::Error {
+            message: format!("skill tx broker refused '{skill_name}': {reason}"),
         }
     }
 
@@ -4460,7 +4745,8 @@ impl Server {
                         }
                     }
                 }
-                self.dispatch_intent(Uuid::new_v4(), t, None, peer, false).await
+                self.dispatch_intent(Uuid::new_v4(), t, None, peer, false)
+                    .await
             }
             None => Response::Error {
                 message: format!(
@@ -5230,7 +5516,9 @@ impl Server {
     where
         W: tokio::io::AsyncWriteExt + Unpin,
     {
-        let response = self.dispatch_intent(Uuid::new_v4(), text, None, peer, true).await;
+        let response = self
+            .dispatch_intent(Uuid::new_v4(), text, None, peer, true)
+            .await;
         let (result, summary) = match response {
             Response::IntentResult {
                 intent_id,
@@ -5300,7 +5588,9 @@ impl Server {
         peer: &AgentId,
         connection_id: Uuid,
     ) -> Result<Vec<StreamEnvelope>, Response> {
-        let response = self.dispatch_intent(Uuid::new_v4(), text, None, peer, true).await;
+        let response = self
+            .dispatch_intent(Uuid::new_v4(), text, None, peer, true)
+            .await;
         let (result, summary) = match response {
             Response::IntentResult {
                 intent_id,
@@ -10346,6 +10636,7 @@ fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
             | AuditKind::BudgetPreempted { .. }
             | AuditKind::BudgetPreemptFailed { .. }
             | AuditKind::SkillInstalled { .. }
+            | AuditKind::SkillTxProposed { .. }
             | AuditKind::SkillRefused { .. }
     )
 }
@@ -30909,6 +31200,13 @@ budget_credits_per_hour = {credits}
                 source_tag: "v0".into(),
                 source_commit: "0".repeat(40),
             },
+            AuditKind::SkillTxProposed {
+                skill_name: "covenant".into(),
+                program: "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into(),
+                instruction: "register_agent".into(),
+                accounts_hash_hex: "0".repeat(64),
+                simulated_ok: true,
+            },
             AuditKind::SkillRefused {
                 skill_name: "covenant".into(),
                 reason: "content digest mismatch".into(),
@@ -31069,6 +31367,381 @@ budget_credits_per_hour = {credits}
             panic!("invalid skill name must error, got {result:?}");
         };
         assert!(message.contains("invalid skill name"), "got {message}");
+    }
+
+    const BROKER_TEST_PROGRAM: &str = "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y";
+
+    async fn install_broker_test_skill(s: &Server, name: &str) {
+        let src = tempfile::tempdir().expect("src");
+        std::fs::write(
+            src.path().join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: d\n---\n\nbody\n"),
+        )
+        .unwrap();
+        let added = s
+            .op_respond(Request::SkillAdd {
+                dir: src.path().to_string_lossy().into_owned(),
+                url: String::new(),
+                tag: String::new(),
+                commit: String::new(),
+            })
+            .await;
+        assert!(
+            matches!(added, Response::Skill { .. }),
+            "install: {added:?}"
+        );
+    }
+
+    fn broker_proposal(cluster: &str, instruction: &str, with_signer: bool) -> serde_json::Value {
+        serde_json::json!({
+            "chain": "solana",
+            "cluster": cluster,
+            "rpcUrl": "https://api.devnet.solana.com",
+            "instructions": [{
+                "programId": BROKER_TEST_PROGRAM,
+                "instruction": instruction,
+                "accounts": [
+                    { "name": "config", "address": "11111111111111111111111111111111", "signer": false, "writable": false },
+                    { "name": "operator", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "signer": with_signer, "writable": true }
+                ],
+                "data": { "agent_key": "01" }
+            }]
+        })
+    }
+
+    #[tokio::test]
+    async fn broker_skill_tx_rejects_disallowed_program_ix_pre_sign() {
+        // Failure mode: "disallowed program/ix not rejected pre-sign". The
+        // skill is installed but no chain.tx capability is granted, so the
+        // proposal must be refused before any SkillTxProposed row exists.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+
+        let result = s
+            .broker_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                &peer,
+            )
+            .await;
+        let Err(Response::Error { message }) = result else {
+            panic!("ungranted chain.tx must be refused, got {result:?}");
+        };
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        assert!(
+            message.contains(&action),
+            "refusal must name the cap: {message}"
+        );
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillRefused { skill_name, reason }
+                    if skill_name == "covenant" && reason.contains(&action)
+            )),
+            "deny path must persist a SkillRefused row",
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::SkillTxProposed { .. })),
+            "a refused proposal must NOT emit SkillTxProposed",
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_skill_tx_allows_granted_and_emits_proposed_with_sim() {
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+
+        let proposed = s
+            .broker_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                &peer,
+            )
+            .await
+            .expect("granted devnet proposal must be brokered");
+        assert_eq!(proposed.program, BROKER_TEST_PROGRAM);
+        assert_eq!(proposed.instruction, "register_agent");
+        assert_eq!(
+            proposed.accounts_hash_hex.len(),
+            64,
+            "accounts hash must be 64-char sha256 hex",
+        );
+        assert!(
+            proposed.simulated_ok,
+            "a proposal with a signer must simulate ok"
+        );
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillTxProposed { skill_name, program, instruction, accounts_hash_hex, simulated_ok }
+                    if skill_name == "covenant"
+                        && program == BROKER_TEST_PROGRAM
+                        && instruction == "register_agent"
+                        && accounts_hash_hex == &proposed.accounts_hash_hex
+                        && *simulated_ok
+            )),
+            "broker must persist a SkillTxProposed row carrying the sim verdict",
+        );
+
+        // The accounts hash binds the exact account set: a different account
+        // ordering/content yields a different hash.
+        let other = s
+            .broker_skill_tx(
+                "covenant".to_string(),
+                {
+                    let mut p = broker_proposal("devnet", "register_agent", true);
+                    p["instructions"][0]["accounts"][0]["address"] =
+                        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".into();
+                    p
+                },
+                &peer,
+            )
+            .await
+            .expect("second proposal");
+        assert_ne!(
+            other.accounts_hash_hex, proposed.accounts_hash_hex,
+            "changing an account address must change the accounts hash",
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_skill_tx_refuses_non_devnet_cluster() {
+        // Failure mode: "sim run against mainnet". Even WITH the capability
+        // granted, a non-devnet cluster is refused before the capability check
+        // and before any simulation — the allowlist fails closed on mainnet.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+
+        for cluster in ["mainnet-beta", "mainnet", "testnet"] {
+            let result = s
+                .broker_skill_tx(
+                    "covenant".to_string(),
+                    broker_proposal(cluster, "register_agent", true),
+                    &peer,
+                )
+                .await;
+            assert!(
+                matches!(&result, Err(Response::Error { message }) if message.contains("non-devnet cluster")),
+                "cluster {cluster} must be refused, got {result:?}",
+            );
+        }
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillRefused { reason, .. } if reason.contains("non-devnet cluster 'mainnet-beta'")
+            )),
+            "mainnet refusal must persist a SkillRefused row",
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::SkillTxProposed { .. })),
+            "a non-devnet proposal must NOT emit SkillTxProposed",
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_skill_tx_records_failed_simulation_verdict() {
+        // Failure mode: "sim result not attached to audit row". A devnet
+        // proposal with no signer account is still PROPOSED (the gate is the
+        // capability, not the sim), but the SkillTxProposed row must carry
+        // simulated_ok=false so the signing policy can act on it.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+
+        let proposed = s
+            .broker_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", false),
+                &peer,
+            )
+            .await
+            .expect("a signer-less proposal is still brokered, just sim-flagged");
+        assert!(
+            !proposed.simulated_ok,
+            "a proposal with no signer must carry simulated_ok=false",
+        );
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillTxProposed { simulated_ok, .. } if !simulated_ok
+            )),
+            "the false sim verdict must be persisted in the audit row",
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_skill_tx_rejects_malformed_proposal_without_panicking() {
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+
+        for bad in [
+            serde_json::json!({ "chain": "ethereum", "cluster": "devnet", "instructions": [] }),
+            serde_json::json!({ "chain": "solana", "cluster": "devnet", "instructions": [] }),
+            serde_json::json!({ "chain": "solana", "cluster": "devnet" }),
+            serde_json::Value::Null,
+        ] {
+            let result = s
+                .broker_skill_tx("covenant".to_string(), bad.clone(), &peer)
+                .await;
+            assert!(
+                matches!(result, Err(Response::Error { .. })),
+                "malformed proposal {bad:?} must error cleanly, got {result:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn broker_skill_tx_requires_installed_skill() {
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+
+        let result = s
+            .broker_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                &peer,
+            )
+            .await;
+        assert!(
+            matches!(&result, Err(Response::Error { message }) if message.contains("no skill installed")),
+            "brokering for an uninstalled skill must error, got {result:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_skill_tx_honors_capability_cluster_scope() {
+        // Finding-3 regression: a cap pinned to a different cluster must not
+        // authorize the proposal even though the cluster clears the devnet
+        // allowlist — the broker enforces the capability scope, not just the
+        // action string.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(
+            &s,
+            &peer,
+            &action,
+            serde_json::json!({ "version": 1, "cluster": "localnet" }),
+        )
+        .await;
+
+        let result = s
+            .broker_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                &peer,
+            )
+            .await;
+        assert!(
+            matches!(&result, Err(Response::Error { message }) if message.contains("out-of-scope")),
+            "a localnet-scoped cap must not authorize a devnet proposal, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn parse_skill_tx_proposal_rejects_oversized_account_list() {
+        // DoS floor: a proposal can't force unbounded canonicalisation work.
+        let accounts: Vec<serde_json::Value> = (0..=MAX_SKILL_TX_ACCOUNTS)
+            .map(|i| {
+                serde_json::json!({
+                    "name": format!("a{i}"),
+                    "address": "11111111111111111111111111111111",
+                    "signer": false,
+                    "writable": false
+                })
+            })
+            .collect();
+        let proposal = serde_json::json!({
+            "chain": "solana",
+            "cluster": "devnet",
+            "instructions": [{
+                "programId": BROKER_TEST_PROGRAM,
+                "instruction": "register_agent",
+                "accounts": accounts,
+                "data": {}
+            }]
+        });
+        let err = parse_skill_tx_proposal(&proposal).expect_err("over-cap list must be rejected");
+        assert!(err.contains("limit"), "got {err}");
+    }
+
+    #[test]
+    fn parse_skill_tx_proposal_canonicalization_resists_delimiter_injection() {
+        // Under a tab/newline-delimited canonicalisation these two DISTINCT
+        // account sets collide to one hash: a single account whose address
+        // embeds the delimiters serializes to the same bytes as two plain
+        // accounts. JSON-encoding each field keeps them distinct, so the audit
+        // hash can't be forged to make a malicious account set look benign.
+        let injected = serde_json::json!({
+            "chain": "solana", "cluster": "devnet",
+            "instructions": [{
+                "programId": BROKER_TEST_PROGRAM,
+                "instruction": "register_agent",
+                "accounts": [
+                    { "name": "n1", "address": "a1\tfalse\tfalse\nn2\ta2", "signer": false, "writable": false }
+                ],
+                "data": {}
+            }]
+        });
+        let plain = serde_json::json!({
+            "chain": "solana", "cluster": "devnet",
+            "instructions": [{
+                "programId": BROKER_TEST_PROGRAM,
+                "instruction": "register_agent",
+                "accounts": [
+                    { "name": "n1", "address": "a1", "signer": false, "writable": false },
+                    { "name": "n2", "address": "a2", "signer": false, "writable": false }
+                ],
+                "data": {}
+            }]
+        });
+        let h_injected = hash_hex(
+            parse_skill_tx_proposal(&injected)
+                .unwrap()
+                .accounts_canonical
+                .as_bytes(),
+        );
+        let h_plain = hash_hex(
+            parse_skill_tx_proposal(&plain)
+                .unwrap()
+                .accounts_canonical
+                .as_bytes(),
+        );
+        assert_ne!(
+            h_injected, h_plain,
+            "a delimiter-injected account set must not collide with a distinct set",
+        );
     }
 
     #[test]

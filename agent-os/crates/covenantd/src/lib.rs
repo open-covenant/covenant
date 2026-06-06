@@ -6845,6 +6845,7 @@ impl Server {
         let mut empty_peer_revoked_peer_pubkey_b58_audit_refs = 0_u64;
         let mut wrong_length_peer_revoked_peer_pubkey_b58_audit_refs = 0_u64;
         let mut not_base58_peer_revoked_peer_pubkey_b58_audit_refs = 0_u64;
+        let mut wrong_byte_length_peer_revoked_peer_pubkey_b58_audit_refs = 0_u64;
         let mut empty_peer_revoked_token_prefix_audit_refs = 0_u64;
         let mut wrong_length_peer_revoked_token_prefix_audit_refs = 0_u64;
         let mut not_base58_peer_revoked_token_prefix_audit_refs = 0_u64;
@@ -6852,6 +6853,8 @@ impl Server {
         let mut empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut wrong_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut not_base58_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs = 0_u64;
+        let mut wrong_byte_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs =
+            0_u64;
         let mut issuer_equals_rejected_peer_operator_token_rotation_rejected_audit_refs = 0_u64;
         let mut empty_operator_token_rotation_rejected_peer_display_audit_refs = 0_u64;
         let mut empty_operator_token_rotated_old_token_prefix_audit_refs = 0_u64;
@@ -6865,16 +6868,19 @@ impl Server {
         let mut empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut wrong_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut not_base58_operator_peers_list_rejected_peer_pubkey_b58_audit_refs = 0_u64;
+        let mut wrong_byte_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut issuer_equals_rejected_peer_operator_peers_list_rejected_audit_refs = 0_u64;
         let mut empty_operator_peers_list_rejected_peer_display_audit_refs = 0_u64;
         let mut empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut wrong_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut not_base58_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs = 0_u64;
+        let mut wrong_byte_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs = 0_u64;
         let mut issuer_equals_rejected_peer_operator_peer_revoke_rejected_audit_refs = 0_u64;
         let mut empty_operator_peer_revoke_rejected_peer_display_audit_refs = 0_u64;
         let mut empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs = 0_u64;
         let mut wrong_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs = 0_u64;
         let mut not_base58_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs = 0_u64;
+        let mut wrong_byte_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs = 0_u64;
         let mut empty_peer_self_revoke_blocked_token_prefix_audit_refs = 0_u64;
         let mut wrong_length_peer_self_revoke_blocked_token_prefix_audit_refs = 0_u64;
         let mut not_base58_peer_self_revoke_blocked_token_prefix_audit_refs = 0_u64;
@@ -7700,6 +7706,22 @@ impl Server {
                         repair: "review the audit JSONL row and the writer that produced it; the sole production PeerRevoked audit write sources peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() at the RevokeOutcome::Revoked branch (covenantd/src/lib.rs:3452), whose output is by construction restricted to the Bitcoin base58 alphabet, so a peer_pubkey_b58 that fails bs58::decode is out-of-band evidence of a JSONL edit that re-encoded the pubkey under a different alphabet — base64 of a 32-byte pubkey is 44 chars, which sits inside the 32..=44 length bound the wrong_length arm checks and therefore bypasses it, yet uses '+', '/', and '=' which are not base58 — or a serde regression that hydrated the field from a non-bs58 source, detaching the revocation row from the unforgeable peer-identity lookup while leaving the value non-empty (bypassing the empty arm) and the character count inside 32..=44 (bypassing the wrong_length arm); this fires independently of both the peer_pubkey_b58_empty and peer_pubkey_b58_wrong_length arms".into(),
                     });
                 }
+                if let Ok(decoded) = bs58::decode(peer_pubkey_b58.as_bytes()).into_vec() {
+                    if !decoded.is_empty() && decoded.len() != 32 {
+                        wrong_byte_length_peer_revoked_peer_pubkey_b58_audit_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "audit_peer_revoked_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                                .into(),
+                            id: Some(event.id.to_string()),
+                            message: format!(
+                                "audit event {} has kind = AuditKind::PeerRevoked with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to {} byte(s), not the 32 bytes of an ed25519 verifying key; production PeerRevoked audit writes always source peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3452), so every production value decodes to exactly 32 bytes",
+                                event.id,
+                                decoded.len()
+                            ),
+                            repair: "review the audit JSONL row and the writer that produced it; the sole production PeerRevoked audit write sources peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3452), so every production value decodes to exactly 32 bytes — a peer_pubkey_b58 that decodes to any other byte count is out-of-band evidence of a JSONL edit that re-encoded a non-pubkey byte string under the bs58 alphabet or a serde regression that hydrated the field from a non-pubkey source; this is strictly stronger than the length and charset arms because a bs58 string can be non-empty (bypassing the empty arm), sit inside the 32..=44 char bound (bypassing the wrong_length arm), and round-trip through bs58::decode (bypassing the not_base58 arm) while still decoding to the wrong number of bytes — e.g. a 31-byte value bs58-encodes to 43 chars (inside 32..=44) yet decodes to 31 bytes, detaching the revocation row from the unforgeable 32-byte peer-identity lookup; this fires independently of the peer_pubkey_b58_empty, peer_pubkey_b58_wrong_length, and peer_pubkey_b58_not_base58 arms".into(),
+                        });
+                    }
+                }
             }
             if let AuditKind::PeerRevoked { token_prefix, .. } = &event.kind {
                 if token_prefix.is_empty() {
@@ -7793,6 +7815,22 @@ impl Server {
                         ),
                         repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorTokenRotationRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() at the rotate_operator_token non-operator reject branch (covenantd/src/lib.rs:3020), whose output is by construction restricted to the Bitcoin base58 alphabet, so a peer_pubkey_b58 that fails bs58::decode is out-of-band evidence of a JSONL edit that re-encoded the pubkey under a different alphabet — base64 of a 32-byte pubkey is 44 chars, which sits inside the 32..=44 length bound the wrong_length arm checks and therefore bypasses it, yet uses '+', '/', and '=' which are not base58 — or a serde regression that hydrated the field from a non-bs58 source, detaching the rejected-probe row from the unforgeable rejected-peer identifier operators triage rotation-gate probes by while leaving the value non-empty (bypassing the empty arm) and the character count inside 32..=44 (bypassing the wrong_length arm); this fires independently of both the peer_pubkey_b58_empty and peer_pubkey_b58_wrong_length arms".into(),
                     });
+                }
+                if let Ok(decoded) = bs58::decode(peer_pubkey_b58.as_bytes()).into_vec() {
+                    if !decoded.is_empty() && decoded.len() != 32 {
+                        wrong_byte_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "audit_operator_token_rotation_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                                .into(),
+                            id: Some(event.id.to_string()),
+                            message: format!(
+                                "audit event {} has kind = AuditKind::OperatorTokenRotationRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to {} byte(s), not the 32 bytes of an ed25519 verifying key; production OperatorTokenRotationRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3020), so every production value decodes to exactly 32 bytes",
+                                event.id,
+                                decoded.len()
+                            ),
+                            repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorTokenRotationRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3020), so every production value decodes to exactly 32 bytes — a peer_pubkey_b58 that decodes to any other byte count is out-of-band evidence of a JSONL edit that re-encoded a non-pubkey byte string under the bs58 alphabet or a serde regression that hydrated the field from a non-pubkey source; this is strictly stronger than the length and charset arms because a bs58 string can be non-empty (bypassing the empty arm), sit inside the 32..=44 char bound (bypassing the wrong_length arm), and round-trip through bs58::decode (bypassing the not_base58 arm) while still decoding to the wrong number of bytes — e.g. a 31-byte value bs58-encodes to 43 chars (inside 32..=44) yet decodes to 31 bytes, detaching the rejected-probe row from the unforgeable 32-byte rejected-peer identifier; this fires independently of the peer_pubkey_b58_empty, peer_pubkey_b58_wrong_length, and peer_pubkey_b58_not_base58 arms".into(),
+                        });
+                    }
                 }
                 if bs58::encode(event.issuer.pubkey).into_string() == *peer_pubkey_b58 {
                     issuer_equals_rejected_peer_operator_token_rotation_rejected_audit_refs += 1;
@@ -7975,6 +8013,22 @@ impl Server {
                         repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorPeersListRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() at the list_peers non-operator reject branch (covenantd/src/lib.rs:3185), whose output is by construction restricted to the Bitcoin base58 alphabet, so a peer_pubkey_b58 that fails bs58::decode is out-of-band evidence of a JSONL edit that re-encoded the pubkey under a different alphabet — base64 of a 32-byte pubkey is 44 chars, which sits inside the 32..=44 length bound the wrong_length arm checks and therefore bypasses it, yet uses '+', '/', and '=' which are not base58 — or a serde regression that hydrated the field from a non-bs58 source, detaching the rejected-enumeration-probe row from the unforgeable rejected-peer identifier operators triage peers-list-gate probes by while leaving the value non-empty (bypassing the empty arm) and the character count inside 32..=44 (bypassing the wrong_length arm); this fires independently of both the peer_pubkey_b58_empty and peer_pubkey_b58_wrong_length arms".into(),
                     });
                 }
+                if let Ok(decoded) = bs58::decode(peer_pubkey_b58.as_bytes()).into_vec() {
+                    if !decoded.is_empty() && decoded.len() != 32 {
+                        wrong_byte_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "audit_operator_peers_list_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                                .into(),
+                            id: Some(event.id.to_string()),
+                            message: format!(
+                                "audit event {} has kind = AuditKind::OperatorPeersListRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to {} byte(s), not the 32 bytes of an ed25519 verifying key; production OperatorPeersListRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3185), so every production value decodes to exactly 32 bytes",
+                                event.id,
+                                decoded.len()
+                            ),
+                            repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorPeersListRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3185), so every production value decodes to exactly 32 bytes — a peer_pubkey_b58 that decodes to any other byte count is out-of-band evidence of a JSONL edit that re-encoded a non-pubkey byte string under the bs58 alphabet or a serde regression that hydrated the field from a non-pubkey source; this is strictly stronger than the length and charset arms because a bs58 string can be non-empty (bypassing the empty arm), sit inside the 32..=44 char bound (bypassing the wrong_length arm), and round-trip through bs58::decode (bypassing the not_base58 arm) while still decoding to the wrong number of bytes — e.g. a 31-byte value bs58-encodes to 43 chars (inside 32..=44) yet decodes to 31 bytes, detaching the rejected-enumeration-probe row from the unforgeable 32-byte rejected-peer identifier; this fires independently of the peer_pubkey_b58_empty, peer_pubkey_b58_wrong_length, and peer_pubkey_b58_not_base58 arms".into(),
+                        });
+                    }
+                }
                 if bs58::encode(event.issuer.pubkey).into_string() == *peer_pubkey_b58 {
                     issuer_equals_rejected_peer_operator_peers_list_rejected_audit_refs += 1;
                     drift.push(VerifyDrift {
@@ -8044,6 +8098,22 @@ impl Server {
                         repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorPeerRevokeRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() at the revoke_peer non-operator reject branch (covenantd/src/lib.rs:3329), whose output is by construction restricted to the Bitcoin base58 alphabet, so a peer_pubkey_b58 that fails bs58::decode is out-of-band evidence of a JSONL edit that re-encoded the pubkey under a different alphabet — base64 of a 32-byte pubkey is 44 chars, which sits inside the 32..=44 length bound the wrong_length arm checks and therefore bypasses it, yet uses '+', '/', and '=' which are not base58 — or a serde regression that hydrated the field from a non-bs58 source, detaching the rejected-revoke-probe row from the unforgeable rejected-peer identifier operators triage peer-revoke-gate probes by while leaving the value non-empty (bypassing the empty arm) and the character count inside 32..=44 (bypassing the wrong_length arm); this fires independently of both the peer_pubkey_b58_empty and peer_pubkey_b58_wrong_length arms".into(),
                     });
                 }
+                if let Ok(decoded) = bs58::decode(peer_pubkey_b58.as_bytes()).into_vec() {
+                    if !decoded.is_empty() && decoded.len() != 32 {
+                        wrong_byte_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "audit_operator_peer_revoke_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                                .into(),
+                            id: Some(event.id.to_string()),
+                            message: format!(
+                                "audit event {} has kind = AuditKind::OperatorPeerRevokeRejected with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to {} byte(s), not the 32 bytes of an ed25519 verifying key; production OperatorPeerRevokeRejected audit writes always source peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3329), so every production value decodes to exactly 32 bytes",
+                                event.id,
+                                decoded.len()
+                            ),
+                            repair: "review the audit JSONL row and the writer that produced it; the sole production OperatorPeerRevokeRejected audit write sources peer_pubkey_b58 from bs58::encode(peer.pubkey).into_string() on the rejected peer's 32-byte ed25519 verifying key (covenantd/src/lib.rs:3329), so every production value decodes to exactly 32 bytes — a peer_pubkey_b58 that decodes to any other byte count is out-of-band evidence of a JSONL edit that re-encoded a non-pubkey byte string under the bs58 alphabet or a serde regression that hydrated the field from a non-pubkey source; this is strictly stronger than the length and charset arms because a bs58 string can be non-empty (bypassing the empty arm), sit inside the 32..=44 char bound (bypassing the wrong_length arm), and round-trip through bs58::decode (bypassing the not_base58 arm) while still decoding to the wrong number of bytes — e.g. a 31-byte value bs58-encodes to 43 chars (inside 32..=44) yet decodes to 31 bytes, detaching the rejected-revoke-probe row from the unforgeable 32-byte rejected-peer identifier; this fires independently of the peer_pubkey_b58_empty, peer_pubkey_b58_wrong_length, and peer_pubkey_b58_not_base58 arms".into(),
+                        });
+                    }
+                }
                 if bs58::encode(event.issuer.pubkey).into_string() == *peer_pubkey_b58 {
                     issuer_equals_rejected_peer_operator_peer_revoke_rejected_audit_refs += 1;
                     drift.push(VerifyDrift {
@@ -8111,6 +8181,22 @@ impl Server {
                         ),
                         repair: "review the audit JSONL row and the writer that produced it; the sole production PeerSelfRevokeBlocked audit write sources peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() at the self-revoke-blocked branch in revoke_peer (covenantd/src/lib.rs:3415), whose output is by construction restricted to the Bitcoin base58 alphabet, so a peer_pubkey_b58 that fails bs58::decode is out-of-band evidence of a JSONL edit that re-encoded the pubkey under a different alphabet — base64 of a 32-byte pubkey is 44 chars, which sits inside the 32..=44 length bound the wrong_length arm checks and therefore bypasses it, yet uses '+', '/', and '=' which are not base58 — or a serde regression that hydrated the field from a non-bs58 source, detaching the blocked-self-revoke row from the unforgeable operator-identity anchor the operator-self-fat-finger audit trail relies on while leaving the value non-empty (bypassing the empty arm) and the character count inside 32..=44 (bypassing the wrong_length arm); this fires independently of both the peer_pubkey_b58_empty and peer_pubkey_b58_wrong_length arms".into(),
                     });
+                }
+                if let Ok(decoded) = bs58::decode(peer_pubkey_b58.as_bytes()).into_vec() {
+                    if !decoded.is_empty() && decoded.len() != 32 {
+                        wrong_byte_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "audit_peer_self_revoke_blocked_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                                .into(),
+                            id: Some(event.id.to_string()),
+                            message: format!(
+                                "audit event {} has kind = AuditKind::PeerSelfRevokeBlocked with peer_pubkey_b58 = {peer_pubkey_b58:?} that bs58-decodes to {} byte(s), not the 32 bytes of an ed25519 verifying key; production PeerSelfRevokeBlocked audit writes always source peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3415), so every production value decodes to exactly 32 bytes",
+                                event.id,
+                                decoded.len()
+                            ),
+                            repair: "review the audit JSONL row and the writer that produced it; the sole production PeerSelfRevokeBlocked audit write sources peer_pubkey_b58 from bs58::encode(summary.agent_id.pubkey).into_string() on a 32-byte ed25519 verifying key (covenantd/src/lib.rs:3415), so every production value decodes to exactly 32 bytes — a peer_pubkey_b58 that decodes to any other byte count is out-of-band evidence of a JSONL edit that re-encoded a non-pubkey byte string under the bs58 alphabet or a serde regression that hydrated the field from a non-pubkey source; this is strictly stronger than the length and charset arms because a bs58 string can be non-empty (bypassing the empty arm), sit inside the 32..=44 char bound (bypassing the wrong_length arm), and round-trip through bs58::decode (bypassing the not_base58 arm) while still decoding to the wrong number of bytes — e.g. a 31-byte value bs58-encodes to 43 chars (inside 32..=44) yet decodes to 31 bytes, detaching the blocked-self-revoke row from the unforgeable 32-byte operator-identity anchor; this fires independently of the peer_pubkey_b58_empty, peer_pubkey_b58_wrong_length, and peer_pubkey_b58_not_base58 arms".into(),
+                        });
+                    }
                 }
             }
             if let AuditKind::PeerSelfRevokeBlocked { token_prefix, .. } = &event.kind {
@@ -9496,6 +9582,7 @@ impl Server {
             + empty_peer_revoked_peer_pubkey_b58_audit_refs
             + wrong_length_peer_revoked_peer_pubkey_b58_audit_refs
             + not_base58_peer_revoked_peer_pubkey_b58_audit_refs
+            + wrong_byte_length_peer_revoked_peer_pubkey_b58_audit_refs
             + empty_peer_revoked_token_prefix_audit_refs
             + wrong_length_peer_revoked_token_prefix_audit_refs
             + not_base58_peer_revoked_token_prefix_audit_refs
@@ -9503,6 +9590,7 @@ impl Server {
             + empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs
             + wrong_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs
             + not_base58_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs
+            + wrong_byte_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs
             + issuer_equals_rejected_peer_operator_token_rotation_rejected_audit_refs
             + empty_operator_token_rotation_rejected_peer_display_audit_refs
             + empty_operator_token_rotated_old_token_prefix_audit_refs
@@ -9516,16 +9604,19 @@ impl Server {
             + empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs
             + wrong_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs
             + not_base58_operator_peers_list_rejected_peer_pubkey_b58_audit_refs
+            + wrong_byte_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs
             + issuer_equals_rejected_peer_operator_peers_list_rejected_audit_refs
             + empty_operator_peers_list_rejected_peer_display_audit_refs
             + empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs
             + wrong_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs
             + not_base58_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs
+            + wrong_byte_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs
             + issuer_equals_rejected_peer_operator_peer_revoke_rejected_audit_refs
             + empty_operator_peer_revoke_rejected_peer_display_audit_refs
             + empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs
             + wrong_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs
             + not_base58_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs
+            + wrong_byte_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs
             + empty_peer_self_revoke_blocked_token_prefix_audit_refs
             + wrong_length_peer_self_revoke_blocked_token_prefix_audit_refs
             + not_base58_peer_self_revoke_blocked_token_prefix_audit_refs
@@ -9674,6 +9765,7 @@ impl Server {
                 && empty_peer_revoked_peer_pubkey_b58_audit_refs == 0
                 && wrong_length_peer_revoked_peer_pubkey_b58_audit_refs == 0
                 && not_base58_peer_revoked_peer_pubkey_b58_audit_refs == 0
+                && wrong_byte_length_peer_revoked_peer_pubkey_b58_audit_refs == 0
                 && empty_peer_revoked_token_prefix_audit_refs == 0
                 && wrong_length_peer_revoked_token_prefix_audit_refs == 0
                 && not_base58_peer_revoked_token_prefix_audit_refs == 0
@@ -9681,6 +9773,8 @@ impl Server {
                 && empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs == 0
                 && wrong_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs == 0
                 && not_base58_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs == 0
+                && wrong_byte_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs
+                    == 0
                 && issuer_equals_rejected_peer_operator_token_rotation_rejected_audit_refs == 0
                 && empty_operator_token_rotation_rejected_peer_display_audit_refs == 0
                 && empty_operator_token_rotated_old_token_prefix_audit_refs == 0
@@ -9694,16 +9788,19 @@ impl Server {
                 && empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs == 0
                 && wrong_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs == 0
                 && not_base58_operator_peers_list_rejected_peer_pubkey_b58_audit_refs == 0
+                && wrong_byte_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs == 0
                 && issuer_equals_rejected_peer_operator_peers_list_rejected_audit_refs == 0
                 && empty_operator_peers_list_rejected_peer_display_audit_refs == 0
                 && empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs == 0
                 && wrong_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs == 0
                 && not_base58_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs == 0
+                && wrong_byte_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs == 0
                 && issuer_equals_rejected_peer_operator_peer_revoke_rejected_audit_refs == 0
                 && empty_operator_peer_revoke_rejected_peer_display_audit_refs == 0
                 && empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs == 0
                 && wrong_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs == 0
                 && not_base58_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs == 0
+                && wrong_byte_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs == 0
                 && empty_peer_self_revoke_blocked_token_prefix_audit_refs == 0
                 && wrong_length_peer_self_revoke_blocked_token_prefix_audit_refs == 0
                 && not_base58_peer_self_revoke_blocked_token_prefix_audit_refs == 0
@@ -9806,7 +9903,7 @@ impl Server {
                 && missing_not_subset_of_required_capability_check_audit_refs == 0
                 && empty_intent_dispatched_matched_agent_audit_refs == 0,
             message: format!(
-                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {wrong_length_cap_granted_sig_audit_refs} wrong-length-signature-b58 CapabilityGranted audit event(s), {not_base58_cap_granted_sig_audit_refs} not-base58-charset-signature-b58 CapabilityGranted audit event(s), {wrong_byte_length_cap_granted_sig_audit_refs} wrong-byte-length-signature-b58 CapabilityGranted audit event(s), {empty_cap_granted_subject_display_audit_refs} empty-subject-display CapabilityGranted audit event(s), {empty_cap_granted_granted_by_display_audit_refs} empty-granted-by-display CapabilityGranted audit event(s), {subject_display_not_issuer_display_cap_granted_audit_refs} subject-display-not-issuer-display CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {wrong_length_cap_revoke_rejected_sig_audit_refs} wrong-length-signature-b58 CapabilityRevokeRejected audit event(s), {not_base58_cap_revoke_rejected_sig_audit_refs} not-base58-charset-signature-b58 CapabilityRevokeRejected audit event(s), {wrong_byte_length_cap_revoke_rejected_sig_audit_refs} wrong-byte-length-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {wrong_length_intent_dispatched_result_hash_audit_refs} wrong-length-result-hash-hex IntentDispatched audit event(s), {not_lowercase_hex_intent_dispatched_result_hash_audit_refs} not-lowercase-hex-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {wrong_length_hermes_tool_invoked_preview_hash_audit_refs} wrong-length-preview-hash-hex HermesToolInvoked audit event(s), {not_lowercase_hex_hermes_tool_invoked_preview_hash_audit_refs} not-lowercase-hex-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {zero_budget_exhausted_requested_audit_refs} zero-requested BudgetExhausted audit event(s), {zero_budget_exhausted_refill_eta_ms_audit_refs} zero-refill-eta-ms BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {zero_budget_unseeded_requested_audit_refs} zero-requested BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {not_recognized_authentication_failed_transport_audit_refs} not-recognized-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {wrong_length_peer_revoked_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 PeerRevoked audit event(s), {not_base58_peer_revoked_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {wrong_length_peer_revoked_token_prefix_audit_refs} wrong-length-token-prefix PeerRevoked audit event(s), {not_base58_peer_revoked_token_prefix_audit_refs} not-base58-charset-token-prefix PeerRevoked audit event(s), {empty_peer_revoked_peer_display_audit_refs} empty-peer-display PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {wrong_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {not_base58_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotation_rejected_peer_display_audit_refs} empty-peer-display OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {wrong_length_operator_token_rotated_old_token_prefix_audit_refs} wrong-length-old-token-prefix OperatorTokenRotated audit event(s), {not_base58_operator_token_rotated_old_token_prefix_audit_refs} not-base58-charset-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {wrong_length_operator_token_rotated_new_token_prefix_audit_refs} wrong-length-new-token-prefix OperatorTokenRotated audit event(s), {not_base58_operator_token_rotated_new_token_prefix_audit_refs} not-base58-charset-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_peer_display_audit_refs} empty-peer-display OperatorTokenRotated audit event(s), {peer_display_not_issuer_display_operator_token_rotated_audit_refs} peer-display-not-issuer-display OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {wrong_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {not_base58_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peers_list_rejected_peer_display_audit_refs} empty-peer-display OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {wrong_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {not_base58_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_display_audit_refs} empty-peer-display OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {wrong_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {not_base58_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {wrong_length_peer_self_revoke_blocked_token_prefix_audit_refs} wrong-length-token-prefix PeerSelfRevokeBlocked audit event(s), {not_base58_peer_self_revoke_blocked_token_prefix_audit_refs} not-base58-charset-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_peer_display_audit_refs} empty-peer-display PeerSelfRevokeBlocked audit event(s), {empty_a2a_sender_mismatch_peer_display_audit_refs} empty-peer-display A2ASenderMismatch audit event(s), {empty_a2a_sender_mismatch_claimed_sender_display_audit_refs} empty-claimed-sender-display A2ASenderMismatch audit event(s), {peer_display_not_issuer_display_a2a_sender_mismatch_audit_refs} peer-display-not-issuer-display A2ASenderMismatch audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_action_audit_refs} not-recognized-action A2ARepairApplied audit event(s), {empty_a2a_repair_applied_reason_audit_refs} empty-reason A2ARepairApplied audit event(s), {nil_a2a_repair_applied_task_id_audit_refs} nil-task-id A2ARepairApplied audit event(s), {nil_a2a_repair_applied_lease_id_audit_refs} nil-lease-id A2ARepairApplied audit event(s), {zero_a2a_repair_applied_attempt_audit_refs} zero-attempt A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {missing_recv_prefix_a2a_recipient_rejected_action_audit_refs} missing-recv-prefix-action A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_sender_display_audit_refs} empty-sender-display A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_recipient_display_audit_refs} empty-recipient-display A2ARecipientRejected audit event(s), {action_suffix_not_sender_display_a2a_recipient_rejected_audit_refs} action-suffix-not-sender-display A2ARecipientRejected audit event(s), {sender_display_not_issuer_display_a2a_recipient_rejected_audit_refs} sender-display-not-issuer-display A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s), {empty_capability_grant_rejected_subject_display_audit_refs} empty-subject-display CapabilityGrantRejected audit event(s), {subject_display_not_issuer_display_capability_grant_rejected_audit_refs} subject-display-not-issuer-display CapabilityGrantRejected audit event(s), {empty_intent_ignored_matched_pattern_audit_refs} empty-matched-pattern IntentIgnored audit event(s), {untrimmed_intent_ignored_matched_pattern_audit_refs} untrimmed-matched-pattern IntentIgnored audit event(s), {empty_budget_preempted_signal_sent_audit_refs} empty-signal-sent BudgetPreempted audit event(s), {not_recognized_budget_preempted_signal_sent_audit_refs} not-recognized-signal-sent BudgetPreempted audit event(s), {some_budget_preempted_exit_code_audit_refs} some-exit-code BudgetPreempted audit event(s), {empty_budget_preempted_reason_audit_refs} empty-reason BudgetPreempted audit event(s), {not_recognized_budget_preempted_reason_audit_refs} not-recognized-reason BudgetPreempted audit event(s), {empty_budget_preempted_agent_display_audit_refs} empty-agent-display BudgetPreempted audit event(s), {empty_budget_preempt_failed_reason_audit_refs} empty-reason BudgetPreemptFailed audit event(s), {not_recognized_budget_preempt_failed_reason_audit_refs} not-recognized-reason BudgetPreemptFailed audit event(s), {empty_budget_preempt_failed_agent_display_audit_refs} empty-agent-display BudgetPreemptFailed audit event(s), {zero_budget_preempt_failed_errno_audit_refs} zero-errno BudgetPreemptFailed audit event(s), {empty_budget_unseeded_agent_display_audit_refs} empty-agent-display BudgetUnseeded audit event(s), {empty_budget_exhausted_agent_display_audit_refs} empty-agent-display BudgetExhausted audit event(s), {empty_budget_exhausted_intent_text_audit_refs} empty-intent-text BudgetExhausted audit event(s), {empty_intent_dispatched_status_audit_refs} empty-status IntentDispatched audit event(s), {not_ok_intent_dispatched_status_audit_refs} not-ok-status IntentDispatched audit event(s), {empty_memory_repair_applied_action_audit_refs} empty-action MemoryRepairApplied audit event(s), {not_recognized_memory_repair_applied_action_audit_refs} not-recognized-action MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_mode_audit_refs} empty-mode MemoryCompactionApplied audit event(s), {not_recognized_memory_compaction_applied_mode_audit_refs} not-recognized-mode MemoryCompactionApplied audit event(s), {empty_memory_repair_applied_mode_audit_refs} empty-mode MemoryRepairApplied audit event(s), {not_recognized_memory_repair_applied_mode_audit_refs} not-recognized-mode MemoryRepairApplied audit event(s), {empty_memory_repair_applied_reason_audit_refs} empty-reason MemoryRepairApplied audit event(s), {dry_run_changed_memory_repair_applied_audit_refs} dry-run-changed-true MemoryRepairApplied audit event(s), {dry_run_changed_memory_compaction_applied_audit_refs} dry-run-changed-true MemoryCompactionApplied audit event(s), {empty_memory_compaction_applied_reason_audit_refs} empty-reason MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_deleted_audit_refs} nil-deleted MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_stale_marked_audit_refs} nil-stale-marked MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_parents_detached_audit_refs} nil-parents-detached MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_deleted_audit_refs} unsorted-deleted MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_stale_marked_audit_refs} unsorted-stale-marked MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_parents_detached_audit_refs} unsorted-parents-detached MemoryCompactionApplied audit event(s), {empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} empty-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {not_recognized_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} not-recognized-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {zero_a2a_auto_retry_scheduler_scan_skipped_by_reason_value_audit_refs} zero-skipped-by-reason-value A2AAutoRetrySchedulerScan audit event(s), {empty_a2a_auto_retry_scheduler_scan_error_audit_refs} empty-error A2AAutoRetrySchedulerScan audit event(s), {empty_memory_record_backfill_applied_savepoint_name_audit_refs} empty-savepoint-name MemoryRecordBackfillApplied audit event(s), {not_recognized_memory_record_backfill_applied_savepoint_name_audit_refs} not-recognized-savepoint-name MemoryRecordBackfillApplied audit event(s), {empty_settlement_receipt_backfill_applied_rollback_path_audit_refs} empty-rollback-path SettlementReceiptBackfillApplied audit event(s), {not_recognized_settlement_receipt_backfill_applied_rollback_path_audit_refs} not-recognized-rollback-path SettlementReceiptBackfillApplied audit event(s), {empty_a2a_repair_applied_duplicate_risk_audit_refs} empty-duplicate-risk A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_duplicate_risk_audit_refs} not-recognized-duplicate-risk A2ARepairApplied audit event(s), {empty_capability_revoke_rejected_reason_audit_refs} empty-reason CapabilityRevokeRejected audit event(s), {empty_capability_scope_rejected_agent_id_audit_refs} empty-agent-id CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_action_audit_refs} empty-action CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_reason_audit_refs} empty-reason CapabilityScopeRejected audit event(s), {empty_capability_check_agent_id_audit_refs} empty-agent-id CapabilityCheck audit event(s), {empty_capability_check_required_actions_audit_refs} empty-required-actions CapabilityCheck audit event(s), {empty_element_capability_check_required_actions_audit_refs} empty-element-required-actions CapabilityCheck audit event(s), {inconsistent_capability_check_passed_missing_audit_refs} passed-missing-mismatch CapabilityCheck audit event(s), {empty_intent_dispatched_matched_agent_audit_refs} empty-matched-agent IntentDispatched audit event(s), {tokens_remaining_ge_requested_budget_exhausted_audit_refs} tokens-remaining-ge-requested BudgetExhausted audit event(s), {changed_true_vecs_all_empty_memory_compaction_applied_audit_refs} changed-true-vecs-all-empty MemoryCompactionApplied audit event(s), {apply_changed_false_vecs_nonempty_memory_compaction_applied_audit_refs} apply-changed-false-vecs-nonempty MemoryCompactionApplied audit event(s), {deleted_overlaps_kept_outcome_memory_compaction_applied_audit_refs} deleted-overlaps-kept-outcome MemoryCompactionApplied audit event(s), {vec_contains_duplicate_memory_compaction_applied_audit_refs} vec-contains-duplicate MemoryCompactionApplied audit event(s), {skipped_sum_mismatch_a2a_auto_retry_scheduler_scan_audit_refs} skipped-sum-mismatch A2AAutoRetrySchedulerScan audit event(s), {dry_run_rollback_path_some_settlement_receipt_backfill_applied_audit_refs} dry-run-rollback-path-some SettlementReceiptBackfillApplied audit event(s), {force_error_duplicate_risk_some_a2a_repair_applied_audit_refs} force-error-duplicate-risk-some A2ARepairApplied audit event(s), {error_some_counters_nonzero_a2a_auto_retry_scheduler_scan_audit_refs} error-some-counters-nonzero A2AAutoRetrySchedulerScan audit event(s), {considered_not_sum_requeued_skipped_a2a_auto_retry_scheduler_scan_audit_refs} considered-not-sum-requeued-skipped A2AAutoRetrySchedulerScan audit event(s), {enabled_false_requeued_nonzero_a2a_auto_retry_scheduler_scan_audit_refs} enabled-false-requeued-nonzero A2AAutoRetrySchedulerScan audit event(s), {enabled_false_skipped_reason_not_disabled_a2a_auto_retry_scheduler_scan_audit_refs} enabled-false-skipped-reason-not-disabled A2AAutoRetrySchedulerScan audit event(s), {requeued_exceeds_max_requeues_a2a_auto_retry_scheduler_scan_audit_refs} requeued-exceeds-max-requeues A2AAutoRetrySchedulerScan audit event(s), {considered_exceeds_scan_limit_a2a_auto_retry_scheduler_scan_audit_refs} considered-exceeds-scan-limit A2AAutoRetrySchedulerScan audit event(s), {auto_requeue_duplicate_risk_not_idempotent_a2a_repair_applied_audit_refs} auto-requeue-duplicate-risk-not-idempotent A2ARepairApplied audit event(s), {auto_requeue_lease_id_none_a2a_repair_applied_audit_refs} auto-requeue-lease-id-none A2ARepairApplied audit event(s), {requeue_duplicate_risk_none_a2a_repair_applied_audit_refs} requeue-duplicate-risk-none A2ARepairApplied audit event(s), {row_count_zero_rollback_path_some_settlement_receipt_backfill_applied_audit_refs} row-count-zero-rollback-path-some SettlementReceiptBackfillApplied audit event(s), {missing_not_subset_of_required_capability_check_audit_refs} missing-not-subset-of-required CapabilityCheck audit event(s), {none_memory_record_backfill_applied_savepoint_name_audit_refs} none-savepoint-name MemoryRecordBackfillApplied audit event(s), {not_recognized_a2a_result_rejected_reason_audit_refs} not-recognized-reason A2AResultRejected audit event(s), {not_canonical_a2a_repair_applied_auto_requeue_reason_audit_refs} auto-requeue-reason-not-canonical A2ARepairApplied audit event(s), {row_count_nonzero_rollback_path_none_settlement_receipt_backfill_applied_audit_refs} row-count-nonzero-rollback-path-none SettlementReceiptBackfillApplied audit event(s), {issuer_equals_rejected_peer_operator_token_rotation_rejected_audit_refs} issuer-equals-rejected-peer OperatorTokenRotationRejected audit event(s), {issuer_equals_rejected_peer_operator_peers_list_rejected_audit_refs} issuer-equals-rejected-peer OperatorPeersListRejected audit event(s), {issuer_equals_rejected_peer_operator_peer_revoke_rejected_audit_refs} issuer-equals-rejected-peer OperatorPeerRevokeRejected audit event(s), {not_decimal_u128_external_payment_settled_amount_audit_refs} not-decimal-u128-amount ExternalPaymentSettled audit event(s), {not_agent_suffixed_budget_exhausted_agent_display_audit_refs} not-@agent-suffixed-agent-display BudgetExhausted audit event(s), {not_agent_suffixed_budget_unseeded_agent_display_audit_refs} not-@agent-suffixed-agent-display BudgetUnseeded audit event(s), {not_manifest_id_charset_budget_preempted_agent_display_audit_refs} not-manifest-id-charset-agent-display BudgetPreempted audit event(s), {not_manifest_id_charset_budget_preempt_failed_agent_display_audit_refs} not-manifest-id-charset-agent-display BudgetPreemptFailed audit event(s), {not_manifest_id_charset_intent_dispatched_matched_agent_audit_refs} not-manifest-id-charset-matched-agent IntentDispatched audit event(s)"
+                "{zero_timestamp_audit_refs} zero-timestamp audit event(s), {nil_id_audit_refs} nil-id audit event(s), {zeroed_issuer_audit_refs} zeroed-issuer-pubkey audit event(s), {empty_cap_granted_sig_audit_refs} empty-signature-b58 CapabilityGranted audit event(s), {wrong_length_cap_granted_sig_audit_refs} wrong-length-signature-b58 CapabilityGranted audit event(s), {not_base58_cap_granted_sig_audit_refs} not-base58-charset-signature-b58 CapabilityGranted audit event(s), {wrong_byte_length_cap_granted_sig_audit_refs} wrong-byte-length-signature-b58 CapabilityGranted audit event(s), {empty_cap_granted_subject_display_audit_refs} empty-subject-display CapabilityGranted audit event(s), {empty_cap_granted_granted_by_display_audit_refs} empty-granted-by-display CapabilityGranted audit event(s), {subject_display_not_issuer_display_cap_granted_audit_refs} subject-display-not-issuer-display CapabilityGranted audit event(s), {empty_cap_revoke_rejected_sig_audit_refs} empty-signature-b58 CapabilityRevokeRejected audit event(s), {wrong_length_cap_revoke_rejected_sig_audit_refs} wrong-length-signature-b58 CapabilityRevokeRejected audit event(s), {not_base58_cap_revoke_rejected_sig_audit_refs} not-base58-charset-signature-b58 CapabilityRevokeRejected audit event(s), {wrong_byte_length_cap_revoke_rejected_sig_audit_refs} wrong-byte-length-signature-b58 CapabilityRevokeRejected audit event(s), {empty_intent_dispatched_result_hash_audit_refs} empty-result-hash-hex IntentDispatched audit event(s), {wrong_length_intent_dispatched_result_hash_audit_refs} wrong-length-result-hash-hex IntentDispatched audit event(s), {not_lowercase_hex_intent_dispatched_result_hash_audit_refs} not-lowercase-hex-result-hash-hex IntentDispatched audit event(s), {empty_hermes_tool_invoked_preview_hash_audit_refs} empty-preview-hash-hex HermesToolInvoked audit event(s), {wrong_length_hermes_tool_invoked_preview_hash_audit_refs} wrong-length-preview-hash-hex HermesToolInvoked audit event(s), {not_lowercase_hex_hermes_tool_invoked_preview_hash_audit_refs} not-lowercase-hex-preview-hash-hex HermesToolInvoked audit event(s), {nil_intent_dispatched_intent_id_audit_refs} nil-intent-id IntentDispatched audit event(s), {nil_hermes_tool_invoked_intent_id_audit_refs} nil-intent-id HermesToolInvoked audit event(s), {nil_hermes_tool_completed_intent_id_audit_refs} nil-intent-id HermesToolCompleted audit event(s), {nil_hermes_approval_requested_intent_id_audit_refs} nil-intent-id HermesApprovalRequested audit event(s), {nil_hermes_approval_resolved_intent_id_audit_refs} nil-intent-id HermesApprovalResolved audit event(s), {nil_hermes_file_written_intent_id_audit_refs} nil-intent-id HermesFileWritten audit event(s), {nil_intent_ignored_intent_id_audit_refs} nil-intent-id IntentIgnored audit event(s), {nil_budget_exhausted_intent_id_audit_refs} nil-intent-id BudgetExhausted audit event(s), {zero_budget_exhausted_requested_audit_refs} zero-requested BudgetExhausted audit event(s), {zero_budget_exhausted_refill_eta_ms_audit_refs} zero-refill-eta-ms BudgetExhausted audit event(s), {nil_budget_preempted_intent_id_audit_refs} nil-intent-id BudgetPreempted audit event(s), {nil_budget_preempt_failed_intent_id_audit_refs} nil-intent-id BudgetPreemptFailed audit event(s), {nil_budget_unseeded_intent_id_audit_refs} nil-intent-id BudgetUnseeded audit event(s), {zero_budget_unseeded_requested_audit_refs} zero-requested BudgetUnseeded audit event(s), {nil_memory_repair_applied_memory_id_audit_refs} nil-memory-id MemoryRepairApplied audit event(s), {nil_external_payment_settled_receipt_id_audit_refs} nil-receipt-id ExternalPaymentSettled audit event(s), {empty_authentication_failed_transport_audit_refs} empty-transport AuthenticationFailed audit event(s), {not_recognized_authentication_failed_transport_audit_refs} not-recognized-transport AuthenticationFailed audit event(s), {empty_peer_revoked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerRevoked audit event(s), {wrong_length_peer_revoked_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 PeerRevoked audit event(s), {not_base58_peer_revoked_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 PeerRevoked audit event(s), {wrong_byte_length_peer_revoked_peer_pubkey_b58_audit_refs} wrong-byte-length-peer-pubkey-b58 PeerRevoked audit event(s), {empty_peer_revoked_token_prefix_audit_refs} empty-token-prefix PeerRevoked audit event(s), {wrong_length_peer_revoked_token_prefix_audit_refs} wrong-length-token-prefix PeerRevoked audit event(s), {not_base58_peer_revoked_token_prefix_audit_refs} not-base58-charset-token-prefix PeerRevoked audit event(s), {empty_peer_revoked_peer_display_audit_refs} empty-peer-display PeerRevoked audit event(s), {empty_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {wrong_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {not_base58_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {wrong_byte_length_operator_token_rotation_rejected_peer_pubkey_b58_audit_refs} wrong-byte-length-peer-pubkey-b58 OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotation_rejected_peer_display_audit_refs} empty-peer-display OperatorTokenRotationRejected audit event(s), {empty_operator_token_rotated_old_token_prefix_audit_refs} empty-old-token-prefix OperatorTokenRotated audit event(s), {wrong_length_operator_token_rotated_old_token_prefix_audit_refs} wrong-length-old-token-prefix OperatorTokenRotated audit event(s), {not_base58_operator_token_rotated_old_token_prefix_audit_refs} not-base58-charset-old-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_new_token_prefix_audit_refs} empty-new-token-prefix OperatorTokenRotated audit event(s), {wrong_length_operator_token_rotated_new_token_prefix_audit_refs} wrong-length-new-token-prefix OperatorTokenRotated audit event(s), {not_base58_operator_token_rotated_new_token_prefix_audit_refs} not-base58-charset-new-token-prefix OperatorTokenRotated audit event(s), {empty_operator_token_rotated_peer_display_audit_refs} empty-peer-display OperatorTokenRotated audit event(s), {peer_display_not_issuer_display_operator_token_rotated_audit_refs} peer-display-not-issuer-display OperatorTokenRotated audit event(s), {empty_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {wrong_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {not_base58_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {wrong_byte_length_operator_peers_list_rejected_peer_pubkey_b58_audit_refs} wrong-byte-length-peer-pubkey-b58 OperatorPeersListRejected audit event(s), {empty_operator_peers_list_rejected_peer_display_audit_refs} empty-peer-display OperatorPeersListRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {wrong_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {not_base58_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {wrong_byte_length_operator_peer_revoke_rejected_peer_pubkey_b58_audit_refs} wrong-byte-length-peer-pubkey-b58 OperatorPeerRevokeRejected audit event(s), {empty_operator_peer_revoke_rejected_peer_display_audit_refs} empty-peer-display OperatorPeerRevokeRejected audit event(s), {empty_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} empty-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {wrong_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} wrong-length-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {not_base58_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} not-base58-charset-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {wrong_byte_length_peer_self_revoke_blocked_peer_pubkey_b58_audit_refs} wrong-byte-length-peer-pubkey-b58 PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_token_prefix_audit_refs} empty-token-prefix PeerSelfRevokeBlocked audit event(s), {wrong_length_peer_self_revoke_blocked_token_prefix_audit_refs} wrong-length-token-prefix PeerSelfRevokeBlocked audit event(s), {not_base58_peer_self_revoke_blocked_token_prefix_audit_refs} not-base58-charset-token-prefix PeerSelfRevokeBlocked audit event(s), {empty_peer_self_revoke_blocked_peer_display_audit_refs} empty-peer-display PeerSelfRevokeBlocked audit event(s), {empty_a2a_sender_mismatch_peer_display_audit_refs} empty-peer-display A2ASenderMismatch audit event(s), {empty_a2a_sender_mismatch_claimed_sender_display_audit_refs} empty-claimed-sender-display A2ASenderMismatch audit event(s), {peer_display_not_issuer_display_a2a_sender_mismatch_audit_refs} peer-display-not-issuer-display A2ASenderMismatch audit event(s), {empty_a2a_result_rejected_reason_audit_refs} empty-reason A2AResultRejected audit event(s), {empty_a2a_repair_applied_action_audit_refs} empty-action A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_action_audit_refs} not-recognized-action A2ARepairApplied audit event(s), {empty_a2a_repair_applied_reason_audit_refs} empty-reason A2ARepairApplied audit event(s), {nil_a2a_repair_applied_task_id_audit_refs} nil-task-id A2ARepairApplied audit event(s), {nil_a2a_repair_applied_lease_id_audit_refs} nil-lease-id A2ARepairApplied audit event(s), {zero_a2a_repair_applied_attempt_audit_refs} zero-attempt A2ARepairApplied audit event(s), {empty_a2a_recipient_rejected_action_audit_refs} empty-action A2ARecipientRejected audit event(s), {missing_recv_prefix_a2a_recipient_rejected_action_audit_refs} missing-recv-prefix-action A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_sender_display_audit_refs} empty-sender-display A2ARecipientRejected audit event(s), {empty_a2a_recipient_rejected_recipient_display_audit_refs} empty-recipient-display A2ARecipientRejected audit event(s), {action_suffix_not_sender_display_a2a_recipient_rejected_audit_refs} action-suffix-not-sender-display A2ARecipientRejected audit event(s), {sender_display_not_issuer_display_a2a_recipient_rejected_audit_refs} sender-display-not-issuer-display A2ARecipientRejected audit event(s), {empty_authentication_failed_reason_audit_refs} empty-reason AuthenticationFailed audit event(s), {empty_capability_grant_rejected_reason_audit_refs} empty-reason CapabilityGrantRejected audit event(s), {empty_capability_grant_rejected_subject_display_audit_refs} empty-subject-display CapabilityGrantRejected audit event(s), {subject_display_not_issuer_display_capability_grant_rejected_audit_refs} subject-display-not-issuer-display CapabilityGrantRejected audit event(s), {empty_intent_ignored_matched_pattern_audit_refs} empty-matched-pattern IntentIgnored audit event(s), {untrimmed_intent_ignored_matched_pattern_audit_refs} untrimmed-matched-pattern IntentIgnored audit event(s), {empty_budget_preempted_signal_sent_audit_refs} empty-signal-sent BudgetPreempted audit event(s), {not_recognized_budget_preempted_signal_sent_audit_refs} not-recognized-signal-sent BudgetPreempted audit event(s), {some_budget_preempted_exit_code_audit_refs} some-exit-code BudgetPreempted audit event(s), {empty_budget_preempted_reason_audit_refs} empty-reason BudgetPreempted audit event(s), {not_recognized_budget_preempted_reason_audit_refs} not-recognized-reason BudgetPreempted audit event(s), {empty_budget_preempted_agent_display_audit_refs} empty-agent-display BudgetPreempted audit event(s), {empty_budget_preempt_failed_reason_audit_refs} empty-reason BudgetPreemptFailed audit event(s), {not_recognized_budget_preempt_failed_reason_audit_refs} not-recognized-reason BudgetPreemptFailed audit event(s), {empty_budget_preempt_failed_agent_display_audit_refs} empty-agent-display BudgetPreemptFailed audit event(s), {zero_budget_preempt_failed_errno_audit_refs} zero-errno BudgetPreemptFailed audit event(s), {empty_budget_unseeded_agent_display_audit_refs} empty-agent-display BudgetUnseeded audit event(s), {empty_budget_exhausted_agent_display_audit_refs} empty-agent-display BudgetExhausted audit event(s), {empty_budget_exhausted_intent_text_audit_refs} empty-intent-text BudgetExhausted audit event(s), {empty_intent_dispatched_status_audit_refs} empty-status IntentDispatched audit event(s), {not_ok_intent_dispatched_status_audit_refs} not-ok-status IntentDispatched audit event(s), {empty_memory_repair_applied_action_audit_refs} empty-action MemoryRepairApplied audit event(s), {not_recognized_memory_repair_applied_action_audit_refs} not-recognized-action MemoryRepairApplied audit event(s), {empty_memory_compaction_applied_mode_audit_refs} empty-mode MemoryCompactionApplied audit event(s), {not_recognized_memory_compaction_applied_mode_audit_refs} not-recognized-mode MemoryCompactionApplied audit event(s), {empty_memory_repair_applied_mode_audit_refs} empty-mode MemoryRepairApplied audit event(s), {not_recognized_memory_repair_applied_mode_audit_refs} not-recognized-mode MemoryRepairApplied audit event(s), {empty_memory_repair_applied_reason_audit_refs} empty-reason MemoryRepairApplied audit event(s), {dry_run_changed_memory_repair_applied_audit_refs} dry-run-changed-true MemoryRepairApplied audit event(s), {dry_run_changed_memory_compaction_applied_audit_refs} dry-run-changed-true MemoryCompactionApplied audit event(s), {empty_memory_compaction_applied_reason_audit_refs} empty-reason MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_deleted_audit_refs} nil-deleted MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_stale_marked_audit_refs} nil-stale-marked MemoryCompactionApplied audit event(s), {nil_memory_compaction_applied_parents_detached_audit_refs} nil-parents-detached MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_deleted_audit_refs} unsorted-deleted MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_stale_marked_audit_refs} unsorted-stale-marked MemoryCompactionApplied audit event(s), {unsorted_memory_compaction_applied_parents_detached_audit_refs} unsorted-parents-detached MemoryCompactionApplied audit event(s), {empty_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} empty-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {not_recognized_a2a_auto_retry_scheduler_scan_skipped_by_reason_key_audit_refs} not-recognized-skipped-by-reason-key A2AAutoRetrySchedulerScan audit event(s), {zero_a2a_auto_retry_scheduler_scan_skipped_by_reason_value_audit_refs} zero-skipped-by-reason-value A2AAutoRetrySchedulerScan audit event(s), {empty_a2a_auto_retry_scheduler_scan_error_audit_refs} empty-error A2AAutoRetrySchedulerScan audit event(s), {empty_memory_record_backfill_applied_savepoint_name_audit_refs} empty-savepoint-name MemoryRecordBackfillApplied audit event(s), {not_recognized_memory_record_backfill_applied_savepoint_name_audit_refs} not-recognized-savepoint-name MemoryRecordBackfillApplied audit event(s), {empty_settlement_receipt_backfill_applied_rollback_path_audit_refs} empty-rollback-path SettlementReceiptBackfillApplied audit event(s), {not_recognized_settlement_receipt_backfill_applied_rollback_path_audit_refs} not-recognized-rollback-path SettlementReceiptBackfillApplied audit event(s), {empty_a2a_repair_applied_duplicate_risk_audit_refs} empty-duplicate-risk A2ARepairApplied audit event(s), {not_recognized_a2a_repair_applied_duplicate_risk_audit_refs} not-recognized-duplicate-risk A2ARepairApplied audit event(s), {empty_capability_revoke_rejected_reason_audit_refs} empty-reason CapabilityRevokeRejected audit event(s), {empty_capability_scope_rejected_agent_id_audit_refs} empty-agent-id CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_action_audit_refs} empty-action CapabilityScopeRejected audit event(s), {empty_capability_scope_rejected_reason_audit_refs} empty-reason CapabilityScopeRejected audit event(s), {empty_capability_check_agent_id_audit_refs} empty-agent-id CapabilityCheck audit event(s), {empty_capability_check_required_actions_audit_refs} empty-required-actions CapabilityCheck audit event(s), {empty_element_capability_check_required_actions_audit_refs} empty-element-required-actions CapabilityCheck audit event(s), {inconsistent_capability_check_passed_missing_audit_refs} passed-missing-mismatch CapabilityCheck audit event(s), {empty_intent_dispatched_matched_agent_audit_refs} empty-matched-agent IntentDispatched audit event(s), {tokens_remaining_ge_requested_budget_exhausted_audit_refs} tokens-remaining-ge-requested BudgetExhausted audit event(s), {changed_true_vecs_all_empty_memory_compaction_applied_audit_refs} changed-true-vecs-all-empty MemoryCompactionApplied audit event(s), {apply_changed_false_vecs_nonempty_memory_compaction_applied_audit_refs} apply-changed-false-vecs-nonempty MemoryCompactionApplied audit event(s), {deleted_overlaps_kept_outcome_memory_compaction_applied_audit_refs} deleted-overlaps-kept-outcome MemoryCompactionApplied audit event(s), {vec_contains_duplicate_memory_compaction_applied_audit_refs} vec-contains-duplicate MemoryCompactionApplied audit event(s), {skipped_sum_mismatch_a2a_auto_retry_scheduler_scan_audit_refs} skipped-sum-mismatch A2AAutoRetrySchedulerScan audit event(s), {dry_run_rollback_path_some_settlement_receipt_backfill_applied_audit_refs} dry-run-rollback-path-some SettlementReceiptBackfillApplied audit event(s), {force_error_duplicate_risk_some_a2a_repair_applied_audit_refs} force-error-duplicate-risk-some A2ARepairApplied audit event(s), {error_some_counters_nonzero_a2a_auto_retry_scheduler_scan_audit_refs} error-some-counters-nonzero A2AAutoRetrySchedulerScan audit event(s), {considered_not_sum_requeued_skipped_a2a_auto_retry_scheduler_scan_audit_refs} considered-not-sum-requeued-skipped A2AAutoRetrySchedulerScan audit event(s), {enabled_false_requeued_nonzero_a2a_auto_retry_scheduler_scan_audit_refs} enabled-false-requeued-nonzero A2AAutoRetrySchedulerScan audit event(s), {enabled_false_skipped_reason_not_disabled_a2a_auto_retry_scheduler_scan_audit_refs} enabled-false-skipped-reason-not-disabled A2AAutoRetrySchedulerScan audit event(s), {requeued_exceeds_max_requeues_a2a_auto_retry_scheduler_scan_audit_refs} requeued-exceeds-max-requeues A2AAutoRetrySchedulerScan audit event(s), {considered_exceeds_scan_limit_a2a_auto_retry_scheduler_scan_audit_refs} considered-exceeds-scan-limit A2AAutoRetrySchedulerScan audit event(s), {auto_requeue_duplicate_risk_not_idempotent_a2a_repair_applied_audit_refs} auto-requeue-duplicate-risk-not-idempotent A2ARepairApplied audit event(s), {auto_requeue_lease_id_none_a2a_repair_applied_audit_refs} auto-requeue-lease-id-none A2ARepairApplied audit event(s), {requeue_duplicate_risk_none_a2a_repair_applied_audit_refs} requeue-duplicate-risk-none A2ARepairApplied audit event(s), {row_count_zero_rollback_path_some_settlement_receipt_backfill_applied_audit_refs} row-count-zero-rollback-path-some SettlementReceiptBackfillApplied audit event(s), {missing_not_subset_of_required_capability_check_audit_refs} missing-not-subset-of-required CapabilityCheck audit event(s), {none_memory_record_backfill_applied_savepoint_name_audit_refs} none-savepoint-name MemoryRecordBackfillApplied audit event(s), {not_recognized_a2a_result_rejected_reason_audit_refs} not-recognized-reason A2AResultRejected audit event(s), {not_canonical_a2a_repair_applied_auto_requeue_reason_audit_refs} auto-requeue-reason-not-canonical A2ARepairApplied audit event(s), {row_count_nonzero_rollback_path_none_settlement_receipt_backfill_applied_audit_refs} row-count-nonzero-rollback-path-none SettlementReceiptBackfillApplied audit event(s), {issuer_equals_rejected_peer_operator_token_rotation_rejected_audit_refs} issuer-equals-rejected-peer OperatorTokenRotationRejected audit event(s), {issuer_equals_rejected_peer_operator_peers_list_rejected_audit_refs} issuer-equals-rejected-peer OperatorPeersListRejected audit event(s), {issuer_equals_rejected_peer_operator_peer_revoke_rejected_audit_refs} issuer-equals-rejected-peer OperatorPeerRevokeRejected audit event(s), {not_decimal_u128_external_payment_settled_amount_audit_refs} not-decimal-u128-amount ExternalPaymentSettled audit event(s), {not_agent_suffixed_budget_exhausted_agent_display_audit_refs} not-@agent-suffixed-agent-display BudgetExhausted audit event(s), {not_agent_suffixed_budget_unseeded_agent_display_audit_refs} not-@agent-suffixed-agent-display BudgetUnseeded audit event(s), {not_manifest_id_charset_budget_preempted_agent_display_audit_refs} not-manifest-id-charset-agent-display BudgetPreempted audit event(s), {not_manifest_id_charset_budget_preempt_failed_agent_display_audit_refs} not-manifest-id-charset-agent-display BudgetPreemptFailed audit event(s), {not_manifest_id_charset_intent_dispatched_matched_agent_audit_refs} not-manifest-id-charset-matched-agent IntentDispatched audit event(s)"
             ),
         });
 
@@ -28621,6 +28718,462 @@ required = {caps:?}
                         "1 not-base58-charset-peer-pubkey-b58 PeerSelfRevokeBlocked audit event"
                     ),
                     "check message should count not-base58-charset-peer-pubkey-b58 PeerSelfRevokeBlocked events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_peer_revoked_peer_pubkey_b58_decodes_to_wrong_byte_length_drift()
+    {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        // 43 chars (inside the 32..=44 wrong-length bound) and valid base58, but
+        // decodes to 31 bytes — not the 32 of an ed25519 verifying key — so only
+        // the decoded-byte-length arm fires.
+        let pubkey_b58 = bs58::encode([0xFFu8; 31]).into_string();
+        assert!(
+            (32..=44).contains(&pubkey_b58.chars().count()),
+            "fixture pubkey must sit inside the 32..=44 length bound"
+        );
+        let decoded = bs58::decode(pubkey_b58.as_bytes()).into_vec().unwrap();
+        assert_ne!(
+            decoded.len(),
+            32,
+            "fixture pubkey must decode to a non-32 byte length"
+        );
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::PeerRevoked {
+                    peer_display: "guest@local".into(),
+                    peer_pubkey_b58: pubkey_b58,
+                    token_prefix: "abcdef".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind
+                            == "audit_peer_revoked_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_peer_revoked_peer_pubkey_b58_decodes_to_wrong_byte_length: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::PeerRevoked")
+                        && row.message.contains("not the 32 bytes"),
+                    "drift message should name the PeerRevoked variant and the 32-byte invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("decodes to exactly 32 bytes")
+                        && row.repair.contains("32..=44"),
+                    "repair hint should name the 32-byte invariant and the length/charset bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "audit_peer_revoked_peer_pubkey_b58_empty"
+                            && item.kind != "audit_peer_revoked_peer_pubkey_b58_wrong_length"
+                            && item.kind != "audit_peer_revoked_peer_pubkey_b58_not_base58"
+                    }),
+                    "decoded-byte-length arm must not double-count as the empty, wrong-length, or charset arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 wrong-byte-length-peer-pubkey-b58 PeerRevoked audit event"),
+                    "check message should count wrong-byte-length-peer-pubkey-b58 PeerRevoked events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_operator_token_rotation_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length_drift(
+    ) {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        let pubkey_b58 = bs58::encode([0xFFu8; 31]).into_string();
+        assert!(
+            (32..=44).contains(&pubkey_b58.chars().count()),
+            "fixture pubkey must sit inside the 32..=44 length bound"
+        );
+        assert_ne!(
+            bs58::decode(pubkey_b58.as_bytes())
+                .into_vec()
+                .unwrap()
+                .len(),
+            32,
+            "fixture pubkey must decode to a non-32 byte length"
+        );
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::OperatorTokenRotationRejected {
+                    peer_display: "guest@local".into(),
+                    peer_pubkey_b58: pubkey_b58,
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind
+                            == "audit_operator_token_rotation_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_operator_token_rotation_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::OperatorTokenRotationRejected")
+                        && row.message.contains("not the 32 bytes"),
+                    "drift message should name the OperatorTokenRotationRejected variant and the 32-byte invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("decodes to exactly 32 bytes")
+                        && row.repair.contains("32..=44"),
+                    "repair hint should name the 32-byte invariant and the length/charset bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "audit_operator_token_rotation_rejected_peer_pubkey_b58_empty"
+                            && item.kind
+                                != "audit_operator_token_rotation_rejected_peer_pubkey_b58_wrong_length"
+                            && item.kind
+                                != "audit_operator_token_rotation_rejected_peer_pubkey_b58_not_base58"
+                    }),
+                    "decoded-byte-length arm must not double-count as the empty, wrong-length, or charset arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains(
+                        "1 wrong-byte-length-peer-pubkey-b58 OperatorTokenRotationRejected audit event"
+                    ),
+                    "check message should count wrong-byte-length-peer-pubkey-b58 OperatorTokenRotationRejected events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_operator_peers_list_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length_drift(
+    ) {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        let pubkey_b58 = bs58::encode([0xFFu8; 31]).into_string();
+        assert!(
+            (32..=44).contains(&pubkey_b58.chars().count()),
+            "fixture pubkey must sit inside the 32..=44 length bound"
+        );
+        assert_ne!(
+            bs58::decode(pubkey_b58.as_bytes())
+                .into_vec()
+                .unwrap()
+                .len(),
+            32,
+            "fixture pubkey must decode to a non-32 byte length"
+        );
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::OperatorPeersListRejected {
+                    peer_display: "guest@local".into(),
+                    peer_pubkey_b58: pubkey_b58,
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind
+                            == "audit_operator_peers_list_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_operator_peers_list_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::OperatorPeersListRejected")
+                        && row.message.contains("not the 32 bytes"),
+                    "drift message should name the OperatorPeersListRejected variant and the 32-byte invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("decodes to exactly 32 bytes")
+                        && row.repair.contains("32..=44"),
+                    "repair hint should name the 32-byte invariant and the length/charset bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "audit_operator_peers_list_rejected_peer_pubkey_b58_empty"
+                            && item.kind
+                                != "audit_operator_peers_list_rejected_peer_pubkey_b58_wrong_length"
+                            && item.kind
+                                != "audit_operator_peers_list_rejected_peer_pubkey_b58_not_base58"
+                    }),
+                    "decoded-byte-length arm must not double-count as the empty, wrong-length, or charset arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains(
+                        "1 wrong-byte-length-peer-pubkey-b58 OperatorPeersListRejected audit event"
+                    ),
+                    "check message should count wrong-byte-length-peer-pubkey-b58 OperatorPeersListRejected events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_operator_peer_revoke_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length_drift(
+    ) {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        let pubkey_b58 = bs58::encode([0xFFu8; 31]).into_string();
+        assert!(
+            (32..=44).contains(&pubkey_b58.chars().count()),
+            "fixture pubkey must sit inside the 32..=44 length bound"
+        );
+        assert_ne!(
+            bs58::decode(pubkey_b58.as_bytes())
+                .into_vec()
+                .unwrap()
+                .len(),
+            32,
+            "fixture pubkey must decode to a non-32 byte length"
+        );
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::OperatorPeerRevokeRejected {
+                    peer_display: "guest@local".into(),
+                    peer_pubkey_b58: pubkey_b58,
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind
+                            == "audit_operator_peer_revoke_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_operator_peer_revoke_rejected_peer_pubkey_b58_decodes_to_wrong_byte_length: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::OperatorPeerRevokeRejected")
+                        && row.message.contains("not the 32 bytes"),
+                    "drift message should name the OperatorPeerRevokeRejected variant and the 32-byte invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("decodes to exactly 32 bytes")
+                        && row.repair.contains("32..=44"),
+                    "repair hint should name the 32-byte invariant and the length/charset bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "audit_operator_peer_revoke_rejected_peer_pubkey_b58_empty"
+                            && item.kind
+                                != "audit_operator_peer_revoke_rejected_peer_pubkey_b58_wrong_length"
+                            && item.kind
+                                != "audit_operator_peer_revoke_rejected_peer_pubkey_b58_not_base58"
+                    }),
+                    "decoded-byte-length arm must not double-count as the empty, wrong-length, or charset arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains(
+                        "1 wrong-byte-length-peer-pubkey-b58 OperatorPeerRevokeRejected audit event"
+                    ),
+                    "check message should count wrong-byte-length-peer-pubkey-b58 OperatorPeerRevokeRejected events: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_audit_peer_self_revoke_blocked_peer_pubkey_b58_decodes_to_wrong_byte_length_drift(
+    ) {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let event_id = Uuid::new_v4();
+        let pubkey_b58 = bs58::encode([0xFFu8; 31]).into_string();
+        assert!(
+            (32..=44).contains(&pubkey_b58.chars().count()),
+            "fixture pubkey must sit inside the 32..=44 length bound"
+        );
+        assert_ne!(
+            bs58::decode(pubkey_b58.as_bytes())
+                .into_vec()
+                .unwrap()
+                .len(),
+            32,
+            "fixture pubkey must decode to a non-32 byte length"
+        );
+        s.audit
+            .record(AuditEvent {
+                id: event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::PeerSelfRevokeBlocked {
+                    peer_display: "guest@local".into(),
+                    peer_pubkey_b58: pubkey_b58,
+                    token_prefix: "abcdef".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind
+                            == "audit_peer_self_revoke_blocked_peer_pubkey_b58_decodes_to_wrong_byte_length"
+                            && item.id.as_deref() == Some(&event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected audit_peer_self_revoke_blocked_peer_pubkey_b58_decodes_to_wrong_byte_length: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("AuditKind::PeerSelfRevokeBlocked")
+                        && row.message.contains("not the 32 bytes"),
+                    "drift message should name the PeerSelfRevokeBlocked variant and the 32-byte invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("decodes to exactly 32 bytes")
+                        && row.repair.contains("32..=44"),
+                    "repair hint should name the 32-byte invariant and the length/charset bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "audit_peer_self_revoke_blocked_peer_pubkey_b58_empty"
+                            && item.kind
+                                != "audit_peer_self_revoke_blocked_peer_pubkey_b58_wrong_length"
+                            && item.kind
+                                != "audit_peer_self_revoke_blocked_peer_pubkey_b58_not_base58"
+                    }),
+                    "decoded-byte-length arm must not double-count as the empty, wrong-length, or charset arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "audit event integrity")
+                    .unwrap_or_else(|| panic!("expected audit event integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains(
+                        "1 wrong-byte-length-peer-pubkey-b58 PeerSelfRevokeBlocked audit event"
+                    ),
+                    "check message should count wrong-byte-length-peer-pubkey-b58 PeerSelfRevokeBlocked events: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

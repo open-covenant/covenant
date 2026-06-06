@@ -30,6 +30,47 @@ type Witness = {
   badge?: { text: string; tone: "yellow" | "red" } | null;
 };
 
+// A skill-driven run anchored to this commit: which skill ran (content digest),
+// the capabilities it exercised, and the on-chain tx it signed. Null for an
+// ordinary code commit — the four witnesses below still apply, this panel does
+// not. Sourced from landing/public/witness/skill/<full-sha>.json, which the daemon's
+// witness pipeline writes per skill run; absent today, so the panel is dormant.
+type SkillRunTx = { sig: string; cluster: "devnet" | "mainnet"; slot: number | null };
+type SkillRun = {
+  skill: { name: string; digest: string };
+  capabilities: string[];
+  tx: SkillRunTx | null;
+};
+
+function checkSkillRun(repoRoot: string, sha: string): SkillRun | null {
+  const manifest = join(repoRoot, "landing", "public", "witness", "skill", `${sha}.json`);
+  if (!existsSync(manifest)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
+    const skill = (raw.skill ?? {}) as Record<string, unknown>;
+    const name = typeof skill.name === "string" ? skill.name : "";
+    const digest = typeof skill.digest === "string" ? skill.digest : "";
+    // The skill identity (name + content digest) is the core of the view; a
+    // manifest missing it can't describe a run, so degrade to "no skill run".
+    if (!name || !digest) return null;
+    const capabilities = Array.isArray(raw.capabilities)
+      ? raw.capabilities.filter((c): c is string => typeof c === "string")
+      : [];
+    const txRaw = (raw.tx ?? null) as Record<string, unknown> | null;
+    const tx: SkillRunTx | null =
+      txRaw && typeof txRaw.sig === "string" && txRaw.sig
+        ? {
+            sig: txRaw.sig,
+            cluster: txRaw.cluster === "mainnet" ? "mainnet" : "devnet",
+            slot: typeof txRaw.slot === "number" ? txRaw.slot : null,
+          }
+        : null;
+    return { skill: { name, digest }, capabilities, tx };
+  } catch {
+    return null;
+  }
+}
+
 const COVENANT_AUTHOR_EMAIL = "covenant@users.noreply.github.com";
 
 // Witness-loop cutover SHA — first commit produced under the gitsign pipeline.
@@ -269,6 +310,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
         { key: "solana_anchor", label: "Solana settlement anchor", state: "gray", detail: "Predates witness loop." },
         { key: "verifier_sig", label: "Verifier-Refuter signature", state: "gray", detail: "Predates witness loop." },
       ] satisfies Witness[],
+      skillRun: null,
       fifth: {
         label: "Code Quality (Not Witnessed)",
         detail:
@@ -297,6 +339,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
       predatesWitnessLoop: false,
     },
     witnesses,
+    skillRun: checkSkillRun(repoRoot, fullSha),
     fifth: {
       label: "Code Quality (Not Witnessed)",
       detail:

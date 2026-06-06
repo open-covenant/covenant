@@ -43,9 +43,17 @@ type CommitMeta = {
   predatesWitnessLoop: boolean;
 };
 
+type SkillRunTx = { sig: string; cluster: "devnet" | "mainnet"; slot: number | null };
+type SkillRun = {
+  skill: { name: string; digest: string };
+  capabilities: string[];
+  tx: SkillRunTx | null;
+};
+
 type VerifyPayload = {
   commit: CommitMeta;
   witnesses: Witness[];
+  skillRun: SkillRun | null;
   fifth: {
     label: string;
     detail: string;
@@ -132,6 +140,80 @@ function WitnessCard({ w }: { w: Witness }) {
   );
 }
 
+function SkillRunPanel({ run }: { run: SkillRun }) {
+  const solscan = run.tx
+    ? `https://solscan.io/tx/${run.tx.sig}${run.tx.cluster === "devnet" ? "?cluster=devnet" : ""}`
+    : null;
+  return (
+    <div className="mb-6 border border-neutral-800 bg-neutral-950/60 p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+          Skill run
+        </h2>
+        <span className="font-mono text-[13px] text-white">{run.skill.name}</span>
+      </div>
+
+      <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">Skill digest</dt>
+          <dd className="mt-1.5 break-all font-mono text-[12px] text-emerald-300">
+            {run.skill.digest}
+          </dd>
+        </div>
+
+        <div className="sm:col-span-2">
+          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">
+            Capabilities exercised
+          </dt>
+          <dd className="mt-1.5">
+            {run.capabilities.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {run.capabilities.map((c) => (
+                  <span
+                    key={c}
+                    className="border border-neutral-800 bg-neutral-900/60 px-2 py-0.5 font-mono text-[11px] text-neutral-300"
+                  >
+                    {c}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="text-[12px] text-neutral-600">none recorded</span>
+            )}
+          </dd>
+        </div>
+
+        <div className="sm:col-span-2">
+          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">
+            On-chain transaction
+          </dt>
+          <dd className="mt-1.5 text-[12px]">
+            {solscan && run.tx ? (
+              <a
+                href={solscan}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-neutral-300 underline-offset-4 hover:text-neutral-100 hover:underline"
+              >
+                {run.tx.sig.slice(0, 16)}… ({run.tx.cluster})
+              </a>
+            ) : (
+              <span className="text-neutral-600">
+                pending — no on-chain transaction anchored for this run
+              </span>
+            )}
+          </dd>
+        </div>
+      </dl>
+
+      <p className="mt-4 text-[12px] font-light leading-relaxed text-neutral-500">
+        When the anchors below land, the same witnesses that attest the commit also bind this
+        skill&apos;s content digest and signed actions — not a separate trust path.
+      </p>
+    </div>
+  );
+}
+
 export default async function VerifyPage({ params }: { params: Promise<{ sha: string }> }) {
   const { sha } = await params;
   if (!/^[0-9a-f]{7,40}$/i.test(sha)) notFound();
@@ -144,7 +226,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
   }
   if (!payload) notFound();
 
-  const { commit, witnesses, fifth } = payload;
+  const { commit, witnesses, skillRun, fifth } = payload;
   const author = redactAuthor(commit.authorDisplay, commit.authorEmail);
 
   return (
@@ -178,6 +260,8 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
             </pre>
           )}
         </div>
+
+        {skillRun && <SkillRunPanel run={skillRun} />}
 
         <div className="grid gap-4 sm:grid-cols-2">
           {witnesses.map((w) => (

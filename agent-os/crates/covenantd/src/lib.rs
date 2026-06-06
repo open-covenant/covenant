@@ -6435,9 +6435,11 @@ impl Server {
         let mut empty_batch_id_receipt_refs = 0_u64;
         let mut wrong_length_batch_id_receipt_refs = 0_u64;
         let mut all_zeros_batch_id_receipt_refs = 0_u64;
+        let mut not_lowercase_hex_batch_id_receipt_refs = 0_u64;
         let mut empty_merkle_root_receipt_refs = 0_u64;
         let mut wrong_length_merkle_root_receipt_refs = 0_u64;
         let mut all_zeros_merkle_root_receipt_refs = 0_u64;
+        let mut not_lowercase_hex_merkle_root_receipt_refs = 0_u64;
         let mut empty_tx_sig_receipt_refs = 0_u64;
         let mut wrong_length_tx_sig_receipt_refs = 0_u64;
         let mut empty_onchain_sig_receipt_refs = 0_u64;
@@ -6639,6 +6641,21 @@ impl Server {
                         repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose batch_id field is sourced from build_receipt_batch in covenant-settlement, which sets batch_id = hex32(Sha256::digest(format!(\"covenant-receipts:{merkle_root}\")).into()) over the 32-byte SHA-256 digest, which is never all-zero for any input, so an all-zero batch_id is out-of-band evidence of a serde/default regression at hydration, an import or replay tool that copied the audit chain's genesis previous-hash sentinel (ZERO_CHAIN_HASH = 64 zeros, covenant-audit/src/lib.rs:509) into the batch attribution field, or a JSONL edit that zeroed the batch_id to detach the receipt from its on-chain batch commitment while keeping a 64-char hex shape that bypasses the receipt_batch_id_empty arm (the 64-zero string is non-empty) and the receipt_batch_id_wrong_length arm (it is exactly 64 chars), while leaving the bundle 4-of-4 set so it also bypasses the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count".into(),
                     });
                 }
+                if batch_id
+                    .chars()
+                    .any(|c| !c.is_ascii_digit() && !('a'..='f').contains(&c))
+                {
+                    not_lowercase_hex_batch_id_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_batch_id_not_lowercase_hex".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has batch_id = Some({batch_id:?}) that contains a character outside the lowercase hex alphabet 0-9a-f; production receipt confirmation derives batch_id from hex32(Sha256::digest(format!(\"covenant-receipts:{{merkle_root}}\")).into()) at build_receipt_batch in covenant-settlement (covenant-settlement/src/lib.rs:106), where hex32 (covenant-settlement/src/lib.rs:359) fmt-writes two lowercase hex chars per byte ({{byte:02x}}) over the 32-byte SHA-256 digest, so every production batch_id is drawn only from 0-9a-f — a value with an uppercase or non-hex character is out-of-band evidence the field was rewritten (an uppercase-hex re-encoding stays 64 chars and bypasses the wrong_length arm, yet violates the documented lowercase contract)",
+                            receipt.id
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose batch_id field is sourced from build_receipt_batch in covenant-settlement, which sets batch_id = hex32(Sha256::digest(format!(\"covenant-receipts:{merkle_root}\")).into()) where hex32 (covenant-settlement/src/lib.rs:359) fmt-writes {byte:02x} (lowercase) per byte over the 32-byte SHA-256 digest for an invariant 64-char lowercase-hex string, so a batch_id containing any character outside 0-9a-f is out-of-band evidence of a JSONL edit that re-encoded the digest under a different alphabet (uppercase hex stays 64 chars and bypasses the receipt_batch_id_wrong_length arm) or a serde regression that hydrated the field from a non-hex32 source, detaching the receipt from the on-chain batch commitment an operator joins on by batch_id, while leaving the bundle 4-of-4 set (bypassing the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count); this fires independently of the receipt_batch_id_empty and receipt_batch_id_all_zeros arms (the empty string yields chars().any()==false and the 64-zero sentinel is all-lowercase-hex)".into(),
+                    });
+                }
             }
             if let Some(merkle_root) = receipt.merkle_root.as_deref() {
                 if merkle_root.is_empty() {
@@ -6674,6 +6691,21 @@ impl Server {
                             receipt.id
                         ),
                         repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose merkle_root field is sourced from build_receipt_batch in covenant-settlement, which sets merkle_root = hex32(level[0]) — the SHA-256 root of the receipt-hash merkle tree — over the 32-byte digest, which is never all-zero for any input, so an all-zero merkle_root is out-of-band evidence of a serde/default regression at hydration, an import or replay tool that copied the audit chain's genesis previous-hash sentinel (ZERO_CHAIN_HASH = 64 zeros, covenant-audit/src/lib.rs:509) into the cryptographic anchor binding the receipt to its on-chain batch commitment, or a JSONL edit that zeroed the merkle_root while keeping a 64-char hex shape that bypasses the receipt_merkle_root_empty arm (the 64-zero string is non-empty) and the receipt_merkle_root_wrong_length arm (it is exactly 64 chars), while leaving the bundle 4-of-4 set so it also bypasses the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count".into(),
+                    });
+                }
+                if merkle_root
+                    .chars()
+                    .any(|c| !c.is_ascii_digit() && !('a'..='f').contains(&c))
+                {
+                    not_lowercase_hex_merkle_root_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_merkle_root_not_lowercase_hex".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has merkle_root = Some({merkle_root:?}) that contains a character outside the lowercase hex alphabet 0-9a-f; production receipt confirmation derives merkle_root from hex32(level[0]) at build_receipt_batch in covenant-settlement (covenant-settlement/src/lib.rs:105), where level[0] is the SHA-256 root of the receipt-hash merkle tree and hex32 (covenant-settlement/src/lib.rs:359) fmt-writes two lowercase hex chars per byte ({{byte:02x}}) over the 32-byte digest, so every production merkle_root is drawn only from 0-9a-f — a value with an uppercase or non-hex character is out-of-band evidence the field was rewritten (an uppercase-hex re-encoding stays 64 chars and bypasses the wrong_length arm, yet violates the documented lowercase contract)",
+                            receipt.id
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose merkle_root field is sourced from build_receipt_batch in covenant-settlement, which sets merkle_root = hex32(level[0]) — the SHA-256 root of the receipt-hash merkle tree — where hex32 (covenant-settlement/src/lib.rs:359) fmt-writes {byte:02x} (lowercase) per byte over the 32-byte digest for an invariant 64-char lowercase-hex string, so a merkle_root containing any character outside 0-9a-f is out-of-band evidence of a JSONL edit that re-encoded the digest under a different alphabet (uppercase hex stays 64 chars and bypasses the receipt_merkle_root_wrong_length arm) or a serde regression that hydrated the field from a non-hex32 source, breaking the cryptographic anchor binding the receipt to its on-chain batch commitment, while leaving the bundle 4-of-4 set (bypassing the receipt_chain_partial guard that only fires on a 1-3-of-4 Some-count); this fires independently of the receipt_merkle_root_empty and receipt_merkle_root_all_zeros arms (the empty string yields chars().any()==false and the 64-zero sentinel is all-lowercase-hex)".into(),
                     });
                 }
             }
@@ -6745,9 +6777,11 @@ impl Server {
             + empty_batch_id_receipt_refs
             + wrong_length_batch_id_receipt_refs
             + all_zeros_batch_id_receipt_refs
+            + not_lowercase_hex_batch_id_receipt_refs
             + empty_merkle_root_receipt_refs
             + wrong_length_merkle_root_receipt_refs
             + all_zeros_merkle_root_receipt_refs
+            + not_lowercase_hex_merkle_root_receipt_refs
             + empty_tx_sig_receipt_refs
             + wrong_length_tx_sig_receipt_refs
             + empty_onchain_sig_receipt_refs
@@ -6769,15 +6803,17 @@ impl Server {
                 && empty_batch_id_receipt_refs == 0
                 && wrong_length_batch_id_receipt_refs == 0
                 && all_zeros_batch_id_receipt_refs == 0
+                && not_lowercase_hex_batch_id_receipt_refs == 0
                 && empty_merkle_root_receipt_refs == 0
                 && wrong_length_merkle_root_receipt_refs == 0
                 && all_zeros_merkle_root_receipt_refs == 0
+                && not_lowercase_hex_merkle_root_receipt_refs == 0
                 && empty_tx_sig_receipt_refs == 0
                 && wrong_length_tx_sig_receipt_refs == 0
                 && empty_onchain_sig_receipt_refs == 0
                 && wrong_length_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s)"
             ),
         });
 
@@ -14457,7 +14493,7 @@ required = {caps:?}
                 chain: Some(String::new()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("b".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -14532,7 +14568,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some(String::new()),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -14607,7 +14643,7 @@ required = {caps:?}
                 chain: Some("ethereum".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("b".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -14679,7 +14715,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("deadbeef".into()),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -14755,7 +14791,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("0".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -14808,6 +14844,89 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 all-zeros-batch-id receipt"),
                     "check message should count all-zeros-batch-id receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_batch_id_not_lowercase_hex_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("A".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_batch_id_not_lowercase_hex"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected receipt_batch_id_not_lowercase_hex: {drift:?}")
+                    });
+                assert!(
+                    row.message
+                        .contains("outside the lowercase hex alphabet 0-9a-f"),
+                    "drift message should name the lowercase hex alphabet: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("build_receipt_batch")
+                        && row.repair.contains("receipt_batch_id_wrong_length")
+                        && row.repair.contains("receipt_batch_id_all_zeros"),
+                    "repair hint should name build_receipt_batch and the wrong-length and all-zeros arms it fires independently of: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&receipt_id.to_string())
+                            || (item.kind != "receipt_batch_id_empty"
+                                && item.kind != "receipt_batch_id_wrong_length"
+                                && item.kind != "receipt_batch_id_all_zeros"
+                                && item.kind != "receipt_chain_partial")
+                    }),
+                    "not-lowercase-hex arm must be value-exclusive with the empty, wrong-length, all-zeros, and chain-partial arms for a 64-char value: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 not-lowercase-hex-batch-id receipt"),
+                    "check message should count not-lowercase-hex-batch-id receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);
@@ -15049,6 +15168,89 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn verify_reports_receipt_merkle_root_not_lowercase_hex_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("b".repeat(64)),
+                merkle_root: Some("A".repeat(64)),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_merkle_root_not_lowercase_hex"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected receipt_merkle_root_not_lowercase_hex: {drift:?}")
+                    });
+                assert!(
+                    row.message
+                        .contains("outside the lowercase hex alphabet 0-9a-f"),
+                    "drift message should name the lowercase hex alphabet: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("hex32(level[0])")
+                        && row.repair.contains("receipt_merkle_root_wrong_length")
+                        && row.repair.contains("receipt_merkle_root_all_zeros"),
+                    "repair hint should name hex32(level[0]) and the wrong-length and all-zeros arms it fires independently of: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&receipt_id.to_string())
+                            || (item.kind != "receipt_merkle_root_empty"
+                                && item.kind != "receipt_merkle_root_wrong_length"
+                                && item.kind != "receipt_merkle_root_all_zeros"
+                                && item.kind != "receipt_chain_partial")
+                    }),
+                    "not-lowercase-hex arm must be value-exclusive with the empty, wrong-length, all-zeros, and chain-partial arms for a 64-char value: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 not-lowercase-hex-merkle-root receipt"),
+                    "check message should count not-lowercase-hex-merkle-root receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn verify_reports_receipt_tx_sig_empty_drift() {
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();
@@ -15064,7 +15266,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("b".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: Some(String::new()),
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -15139,7 +15341,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("b".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: Some("deadbeef".into()),
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -15211,7 +15413,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("b".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -15293,7 +15495,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("b".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
                 slot: None,
                 confirmed_at: Some(2_000),
@@ -15437,7 +15639,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("b".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: Some("t".repeat(88)),
                 slot: Some(42),
                 confirmed_at: Some(0),
@@ -15510,7 +15712,7 @@ required = {caps:?}
                 chain: Some("solana".into()),
                 cluster: Some("devnet".into()),
                 batch_id: Some("b".repeat(64)),
-                merkle_root: Some("m".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
                 tx_sig: Some("t".repeat(88)),
                 slot: Some(0),
                 confirmed_at: Some(42),

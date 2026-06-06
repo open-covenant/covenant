@@ -996,6 +996,85 @@ pub fn hash_hex(bytes: &[u8]) -> String {
     sha256_hex(bytes)
 }
 
+/// One W011 ("on-chain data is untrusted") refutation: a signed skill
+/// action that causally followed untrusted external input within the same
+/// run. Carries enough to surface an operator-facing drift row without
+/// re-scanning the chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UntrustedInfluence {
+    /// `AuditEvent::id` of the refuted [`AuditKind::SkillTxSigned`] row.
+    pub signed_event_id: Uuid,
+    pub skill_name: String,
+    pub signature_b58: String,
+    /// `source` of the most recent [`AuditKind::UntrustedInputObserved`]
+    /// the signature followed in the same run.
+    pub untrusted_source: String,
+    pub untrusted_digest_hex: String,
+}
+
+/// W011 Verifier-Refuter. Refute every signed skill action
+/// ([`AuditKind::SkillTxSigned`]) that causally followed an
+/// [`AuditKind::UntrustedInputObserved`] by the same issuer within the same
+/// run: the signature committed an on-chain action after the run ingested
+/// data from outside the agent's trust boundary, which W011 forbids
+/// trusting as instructions.
+///
+/// `events` MUST be in chain order (oldest first) — exactly what
+/// [`AuditLog::recent`] returns. A run boundary is an
+/// [`AuditKind::SkillContextInjected`] row (the first event of a governed
+/// run); untrusted reads observed since the most recent boundary, per
+/// issuer, are the causal antecedents of a later signature in that run. A
+/// new boundary clears the prior run's reads, so a signature in a clean run
+/// is never refuted because of an earlier run's untrusted input.
+///
+/// Not refuted: a signature with no preceding untrusted read in its run, an
+/// untrusted read with no later signature, and a signature whose only
+/// untrusted antecedent belongs to a different issuer. This keeps a clean
+/// run off the refutation list.
+pub fn refute_untrusted_influence(events: &[AuditEvent]) -> Vec<UntrustedInfluence> {
+    use std::collections::HashMap;
+
+    // Per-issuer untrusted reads observed since that issuer's current run
+    // boundary. Keyed by pubkey so one agent's untrusted read never refutes
+    // another agent's signature.
+    let mut pending: HashMap<[u8; 32], Vec<(String, String)>> = HashMap::new();
+    let mut refutations = Vec::new();
+
+    for event in events {
+        match &event.kind {
+            AuditKind::SkillContextInjected { .. } => {
+                pending.remove(&event.issuer.pubkey);
+            }
+            AuditKind::UntrustedInputObserved { source, digest_hex } => {
+                pending
+                    .entry(event.issuer.pubkey)
+                    .or_default()
+                    .push((source.clone(), digest_hex.clone()));
+            }
+            AuditKind::SkillTxSigned {
+                skill_name,
+                signature_b58,
+            } => {
+                if let Some((source, digest_hex)) = pending
+                    .get(&event.issuer.pubkey)
+                    .and_then(|reads| reads.last())
+                {
+                    refutations.push(UntrustedInfluence {
+                        signed_event_id: event.id,
+                        skill_name: skill_name.clone(),
+                        signature_b58: signature_b58.clone(),
+                        untrusted_source: source.clone(),
+                        untrusted_digest_hex: digest_hex.clone(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    refutations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,6 +1086,166 @@ mod tests {
             issuer: AgentId::new("user@local", [0u8; 32]),
             kind,
         }
+    }
+
+    fn issuer_event(pubkey: [u8; 32], kind: AuditKind) -> AuditEvent {
+        AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: 0,
+            issuer: AgentId::new("agent", pubkey),
+            kind,
+        }
+    }
+
+    fn ctx_injected() -> AuditKind {
+        AuditKind::SkillContextInjected {
+            skill_name: "covenant".into(),
+            skill_digest_hex: "deadbeef".into(),
+            references: vec![],
+        }
+    }
+
+    fn untrusted(source: &str) -> AuditKind {
+        AuditKind::UntrustedInputObserved {
+            source: source.into(),
+            digest_hex: hash_hex(source.as_bytes()),
+        }
+    }
+
+    fn signed() -> AuditKind {
+        AuditKind::SkillTxSigned {
+            skill_name: "covenant".into(),
+            signature_b58: "sig".into(),
+        }
+    }
+
+    #[test]
+    fn refute_flags_signature_that_followed_untrusted_read() {
+        // The W011 fixture: a run reads injected on-chain data, then signs.
+        // The signature causally followed the untrusted read in the same
+        // run, so the run is refuted.
+        // dummy() issues under pubkey [0u8; 32]; the signature shares it so
+        // the read and the sign belong to the same issuer.
+        let sign = issuer_event([0u8; 32], signed());
+        let sign_id = sign.id;
+        let events = vec![
+            dummy(ctx_injected()),
+            dummy(untrusted("rpc:account_data:Vote111")),
+            sign,
+        ];
+        let refutations = refute_untrusted_influence(&events);
+        assert_eq!(
+            refutations.len(),
+            1,
+            "the signed run must be refuted: {refutations:?}"
+        );
+        let r = &refutations[0];
+        assert_eq!(r.signed_event_id, sign_id);
+        assert_eq!(r.skill_name, "covenant");
+        assert_eq!(r.signature_b58, "sig");
+        assert_eq!(r.untrusted_source, "rpc:account_data:Vote111");
+        assert_eq!(
+            r.untrusted_digest_hex,
+            hash_hex(b"rpc:account_data:Vote111")
+        );
+    }
+
+    #[test]
+    fn refute_ignores_signature_without_preceding_untrusted_read() {
+        // A clean run: it signs without ever ingesting untrusted input.
+        // Refuting it would be the "clean run falsely refuted" failure.
+        let events = vec![dummy(ctx_injected()), dummy(signed())];
+        assert!(
+            refute_untrusted_influence(&events).is_empty(),
+            "a signature with no preceding untrusted read must not be refuted",
+        );
+    }
+
+    #[test]
+    fn refute_ignores_untrusted_read_without_signature() {
+        // Observing untrusted data is not itself a violation — only a
+        // signature that follows it is. A run that reads and never signs
+        // must stay clean.
+        let events = vec![
+            dummy(ctx_injected()),
+            dummy(untrusted("http:GET:evil.test")),
+        ];
+        assert!(
+            refute_untrusted_influence(&events).is_empty(),
+            "an untrusted read with no later signature must not be refuted",
+        );
+    }
+
+    #[test]
+    fn refute_clears_untrusted_reads_at_run_boundary() {
+        // Run A reads untrusted data but never signs. Run B (a fresh
+        // SkillContextInjected boundary) signs cleanly. Run B's signature
+        // must NOT inherit run A's untrusted read — otherwise every later
+        // clean run by the same agent would be falsely refuted.
+        let events = vec![
+            dummy(ctx_injected()),
+            dummy(untrusted("rpc:account_data:A")),
+            dummy(ctx_injected()),
+            dummy(signed()),
+        ];
+        assert!(
+            refute_untrusted_influence(&events).is_empty(),
+            "a new run boundary must clear the prior run's untrusted reads",
+        );
+    }
+
+    #[test]
+    fn refute_isolates_untrusted_reads_per_issuer() {
+        // Agent A reads untrusted data; agent B signs. B's signature did
+        // not follow A's read, so only A's own later signature is refuted.
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+        let b_sign = issuer_event(b, signed());
+        let a_sign = issuer_event(a, signed());
+        let a_sign_id = a_sign.id;
+        let events = vec![
+            issuer_event(a, ctx_injected()),
+            issuer_event(b, ctx_injected()),
+            issuer_event(a, untrusted("rpc:account_data:A")),
+            b_sign,
+            a_sign,
+        ];
+        let refutations = refute_untrusted_influence(&events);
+        assert_eq!(
+            refutations.len(),
+            1,
+            "only the issuer that observed untrusted input is refuted: {refutations:?}",
+        );
+        assert_eq!(refutations[0].signed_event_id, a_sign_id);
+    }
+
+    #[test]
+    fn refute_flags_every_signature_after_one_untrusted_read() {
+        // Two signatures after a single untrusted read: both committed
+        // on-chain after the run ingested untrusted data, so both are
+        // refuted (a signature does not "consume" the untrusted context).
+        let events = vec![
+            dummy(ctx_injected()),
+            dummy(untrusted("rpc:account_data:A")),
+            dummy(signed()),
+            dummy(signed()),
+        ];
+        assert_eq!(refute_untrusted_influence(&events).len(), 2);
+    }
+
+    #[test]
+    fn refute_cites_the_most_recent_untrusted_read() {
+        // When several untrusted reads precede a signature, the refutation
+        // cites the closest causal antecedent (the most recent read).
+        let events = vec![
+            dummy(ctx_injected()),
+            dummy(untrusted("rpc:account_data:first")),
+            dummy(untrusted("http:GET:second")),
+            dummy(signed()),
+        ];
+        let refutations = refute_untrusted_influence(&events);
+        assert_eq!(refutations.len(), 1);
+        assert_eq!(refutations[0].untrusted_source, "http:GET:second");
     }
 
     fn intent_kind(status: &str) -> AuditKind {

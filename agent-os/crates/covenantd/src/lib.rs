@@ -9827,6 +9827,33 @@ impl Server {
             ),
         });
 
+        // Check 9: W011 ("on-chain data is untrusted"). Refute every signed
+        // skill action that causally followed an UntrustedInputObserved row
+        // in the same run — the signature committed an on-chain action after
+        // the run ingested data from outside the agent's trust boundary.
+        // audits is in chain order (oldest first), which the refuter requires.
+        let untrusted_influence = covenant_audit::refute_untrusted_influence(&audits);
+        let untrusted_influence_refs = untrusted_influence.len() as u64;
+        for influence in &untrusted_influence {
+            drift.push(VerifyDrift {
+                kind: "untrusted_input_influenced_signature".into(),
+                id: Some(influence.signed_event_id.to_string()),
+                message: format!(
+                    "skill '{}' signed a transaction after observing untrusted input from {} (W011); the signature causally followed data outside the agent's trust boundary",
+                    influence.skill_name, influence.untrusted_source
+                ),
+                repair: "treat the run as untrusted: do not rely on its on-chain action; re-run under explicit approval with the untrusted source removed from the agent's instruction path, or revoke the chain.tx capability until the source is trusted".into(),
+            });
+        }
+        orphans_total += untrusted_influence_refs;
+        checks.push(VerifyCheck {
+            name: "untrusted input influence".into(),
+            passed: untrusted_influence_refs == 0,
+            message: format!(
+                "{untrusted_influence_refs} signature(s) refuted as causally following untrusted input"
+            ),
+        });
+
         Response::VerifyReport {
             window,
             checks,
@@ -25687,6 +25714,135 @@ required = {caps:?}
                     .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
                 assert!(!receipt_check.passed);
                 assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_refutes_signature_that_followed_untrusted_input() {
+        // W011: a skill run that observes untrusted input and then signs an
+        // on-chain action is refuted. verify_recent surfaces it as a
+        // VerifyDrift row via covenant_audit::refute_untrusted_influence.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::SkillContextInjected {
+                    skill_name: "covenant".into(),
+                    skill_digest_hex: "deadbeef".into(),
+                    references: vec![],
+                },
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::UntrustedInputObserved {
+                    source: "rpc:account_data:Vote111".into(),
+                    digest_hex: hash_hex(b"untrusted-bytes"),
+                },
+            })
+            .await
+            .unwrap();
+        let sign_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: sign_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::SkillTxSigned {
+                    skill_name: "covenant".into(),
+                    signature_b58: "5".repeat(88),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport { drift, checks, .. } => {
+                let refuted: Vec<_> = drift
+                    .iter()
+                    .filter(|d| {
+                        d.kind == "untrusted_input_influenced_signature"
+                            && d.id.as_deref() == Some(&sign_id.to_string())
+                    })
+                    .collect();
+                assert_eq!(
+                    refuted.len(),
+                    1,
+                    "the signed-after-untrusted run must be refuted: {drift:?}"
+                );
+                assert!(refuted[0].message.contains("W011"));
+                assert!(refuted[0].message.contains("rpc:account_data:Vote111"));
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "untrusted input influence")
+                    .expect("untrusted input influence check present");
+                assert!(
+                    !check.passed,
+                    "the check must fail when a refutation exists",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_does_not_refute_signature_without_untrusted_input() {
+        // A clean run signs without ever observing untrusted input, so it
+        // must not appear in the refutation drift — the "clean run falsely
+        // refuted" failure mode.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::SkillContextInjected {
+                    skill_name: "covenant".into(),
+                    skill_digest_hex: "deadbeef".into(),
+                    references: vec![],
+                },
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::SkillTxSigned {
+                    skill_name: "covenant".into(),
+                    signature_b58: "5".repeat(88),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport { drift, checks, .. } => {
+                assert!(
+                    drift
+                        .iter()
+                        .all(|d| d.kind != "untrusted_input_influenced_signature"),
+                    "a clean run must not be refuted: {drift:?}"
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "untrusted input influence")
+                    .expect("untrusted input influence check present");
+                assert!(check.passed, "the check must pass for a clean run");
             }
             other => panic!("unexpected: {other:?}"),
         }

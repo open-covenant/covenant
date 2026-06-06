@@ -8781,10 +8781,10 @@ impl Server {
                     kind: "audit_memory_record_backfill_applied_savepoint_name_none".into(),
                     id: Some(event.id.to_string()),
                     message: format!(
-                        "audit event {} has kind = AuditKind::MemoryRecordBackfillApplied with savepoint_name = None; the sole production write-site in covenantd at memory_record_backfill_apply (lib.rs:9518-9531) emits savepoint_name = Some(outcome.savepoint_name.clone()), wrapping the String returned by covenant-memory's SqliteStore::backfill_receipt_correlation, which sets outcome.savepoint_name = MEMORY_BACKFILL_SAVEPOINT_NAME.into() (the const \"backfill_receipt_correlation\") on every reachable production arm — both the dry_run branch (covenant-memory/src/lib.rs:1042-1046) and the apply-success branch (covenant-memory/src/lib.rs:1079-1083); savepoint_name is therefore by construction always Some(_) on every reachable production write",
+                        "audit event {} has kind = AuditKind::MemoryRecordBackfillApplied with savepoint_name = None; the sole production write-site in covenantd at backfill_memory_records (lib.rs:10124-10137) emits savepoint_name = Some(outcome.savepoint_name.clone()), wrapping the String returned by covenant-memory's SqliteStore::backfill_receipt_correlation, which sets outcome.savepoint_name = MEMORY_BACKFILL_SAVEPOINT_NAME.into() (the const \"backfill_receipt_correlation\") on every reachable production arm — both the dry_run branch (covenant-memory/src/lib.rs:1042-1046) and the apply-success branch (covenant-memory/src/lib.rs:1079-1083); savepoint_name is therefore by construction always Some(_) on every reachable production write",
                         event.id
                     ),
-                    repair: "review the audit JSONL row and the writer that produced it; the sole production MemoryRecordBackfillApplied write-site at covenantd memory_record_backfill_apply (lib.rs:9518-9531) folds outcome.savepoint_name as Some(outcome.savepoint_name.clone()) from covenant-memory's SqliteStore::backfill_receipt_correlation, which sets outcome.savepoint_name = MEMORY_BACKFILL_SAVEPOINT_NAME.into() (the const \"backfill_receipt_correlation\" at covenant-memory/src/lib.rs:76) on every reachable production arm — the dry_run branch returns it at covenant-memory/src/lib.rs:1042-1046 and the apply-success branch returns it at covenant-memory/src/lib.rs:1079-1083 — so a row carrying savepoint_name = None is out-of-band evidence of a JSONL edit that stripped the field, a serde regression that defaulted savepoint_name = None at hydration regardless of source value, or a future write-site that drifted from the always-Some pairing (e.g. a hot-reload path that bypassed the Some(...) wrap at lib.rs:9526), and detaches the audit row from the SAVEPOINT discriminator the operator joins on to confirm the named BEGIN IMMEDIATE + SAVEPOINT \"backfill_receipt_correlation\" + per-row UPDATE + RELEASE SAVEPOINT + COMMIT wrapper around the receipt-correlation backfill batch, breaking dashboards that distinguish the committed receipt-correlation backfill from any other transactional mutation".into(),
+                    repair: "review the audit JSONL row and the writer that produced it; the sole production MemoryRecordBackfillApplied write-site at covenantd backfill_memory_records (lib.rs:10124-10137) folds outcome.savepoint_name as Some(outcome.savepoint_name.clone()) from covenant-memory's SqliteStore::backfill_receipt_correlation, which sets outcome.savepoint_name = MEMORY_BACKFILL_SAVEPOINT_NAME.into() (the const \"backfill_receipt_correlation\" at covenant-memory/src/lib.rs:76) on every reachable production arm — the dry_run branch returns it at covenant-memory/src/lib.rs:1042-1046 and the apply-success branch returns it at covenant-memory/src/lib.rs:1079-1083 — so a row carrying savepoint_name = None is out-of-band evidence of a JSONL edit that stripped the field, a serde regression that defaulted savepoint_name = None at hydration regardless of source value, or a future write-site that drifted from the always-Some pairing (e.g. a hot-reload path that bypassed the Some(...) wrap at lib.rs:10132), and detaches the audit row from the SAVEPOINT discriminator the operator joins on to confirm the named BEGIN IMMEDIATE + SAVEPOINT \"backfill_receipt_correlation\" + per-row UPDATE + RELEASE SAVEPOINT + COMMIT wrapper around the receipt-correlation backfill batch, breaking dashboards that distinguish the committed receipt-correlation backfill from any other transactional mutation".into(),
                 });
             }
             if let AuditKind::MemoryRecordBackfillApplied {
@@ -8798,10 +8798,10 @@ impl Server {
                         kind: "audit_memory_record_backfill_applied_savepoint_name_empty".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::MemoryRecordBackfillApplied with savepoint_name = Some(\"\"); the sole production write-site in covenantd at memory_record_backfill_apply clones outcome.savepoint_name, which covenant-memory's SqliteStore::backfill_receipt_correlation always sets to MEMORY_BACKFILL_SAVEPOINT_NAME.into() — the hardcoded \"backfill_receipt_correlation\" const; the dry-run / no-op apply path keeps savepoint_name = None, so an empty Some indicates serde tamper or a regression that drops the SAVEPOINT name",
+                            "audit event {} has kind = AuditKind::MemoryRecordBackfillApplied with savepoint_name = Some(\"\"); the sole production write-site in covenantd at backfill_memory_records clones outcome.savepoint_name, which covenant-memory's SqliteStore::backfill_receipt_correlation always sets to MEMORY_BACKFILL_SAVEPOINT_NAME.into() — the hardcoded \"backfill_receipt_correlation\" const — on every reachable production arm, both the dry_run branch and the apply-success branch, and the covenantd write-site wraps it Some(_) unconditionally, so an empty Some indicates serde tamper or a regression that drops the SAVEPOINT name",
                             event.id
                         ),
-                        repair: "review the audit JSONL row and the writer that produced it; the sole production MemoryRecordBackfillApplied write-site folds outcome.savepoint_name from covenant-memory's SqliteStore::backfill_receipt_correlation, which sets savepoint_name to MEMORY_BACKFILL_SAVEPOINT_NAME.into() (the const \"backfill_receipt_correlation\") on every apply path that committed at least one row, with the dry-run / no-op apply path using None, so an empty Some erases the SAVEPOINT name an operator joins on to confirm the named BEGIN IMMEDIATE + SAVEPOINT + per-row UPDATE + RELEASE SAVEPOINT + COMMIT wrapper around the receipt-correlation backfill batch, detaching the row from the durable-transaction discriminator that distinguishes a committed batch from a no-op or dry-run".into(),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production MemoryRecordBackfillApplied write-site folds outcome.savepoint_name from covenant-memory's SqliteStore::backfill_receipt_correlation, which sets savepoint_name to MEMORY_BACKFILL_SAVEPOINT_NAME.into() (the const \"backfill_receipt_correlation\") on every reachable production arm — both the dry_run branch and the apply-success branch — so an empty Some erases the SAVEPOINT name an operator joins on to confirm the named BEGIN IMMEDIATE + SAVEPOINT + per-row UPDATE + RELEASE SAVEPOINT + COMMIT wrapper around the receipt-correlation backfill batch, detaching the row from the durable-transaction discriminator that distinguishes a committed batch from a no-op or dry-run".into(),
                     });
                 } else if savepoint_name != "backfill_receipt_correlation" {
                     not_recognized_memory_record_backfill_applied_savepoint_name_audit_refs += 1;
@@ -8809,10 +8809,10 @@ impl Server {
                         kind: "audit_memory_record_backfill_applied_savepoint_name_some_not_recognized".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::MemoryRecordBackfillApplied with savepoint_name = Some({savepoint_name:?}); production MemoryRecordBackfillApplied audit writes always source savepoint_name from MEMORY_BACKFILL_SAVEPOINT_NAME.into() at the sole apply write-site in covenant-memory's SqliteStore::backfill_receipt_correlation (covenant-memory/src/lib.rs:1044 and 1081), where MEMORY_BACKFILL_SAVEPOINT_NAME (covenant-memory/src/lib.rs:76) is the hardcoded const &'static str \"backfill_receipt_correlation\"; the dry-run / no-op apply path keeps savepoint_name = None; no reachable production arm produces any Some value outside the one-element closed set {{\"backfill_receipt_correlation\"}}",
+                            "audit event {} has kind = AuditKind::MemoryRecordBackfillApplied with savepoint_name = Some({savepoint_name:?}); production MemoryRecordBackfillApplied audit writes always source savepoint_name from MEMORY_BACKFILL_SAVEPOINT_NAME.into() at the sole apply write-site in covenant-memory's SqliteStore::backfill_receipt_correlation (covenant-memory/src/lib.rs:1044 and 1081), where MEMORY_BACKFILL_SAVEPOINT_NAME (covenant-memory/src/lib.rs:76) is the hardcoded const &'static str \"backfill_receipt_correlation\" returned on both the dry_run branch (covenant-memory/src/lib.rs:1044) and the apply-success branch (covenant-memory/src/lib.rs:1081) and wrapped Some unconditionally by the covenantd write-site; no reachable production arm produces any Some value outside the one-element closed set {{\"backfill_receipt_correlation\"}}",
                             event.id
                         ),
-                        repair: "review the audit JSONL row and the writer that produced it; every production MemoryRecordBackfillApplied apply write folds outcome.savepoint_name = MEMORY_BACKFILL_SAVEPOINT_NAME.into() from covenant-memory's SqliteStore::backfill_receipt_correlation (covenant-memory/src/lib.rs:1044 and 1081), where MEMORY_BACKFILL_SAVEPOINT_NAME (covenant-memory/src/lib.rs:76) is the hardcoded const &'static str \"backfill_receipt_correlation\" embedded in the SAVEPOINT/RELEASE/ROLLBACK SAVEPOINT/COMMIT execute_batch! macros, with the dry-run / no-op apply path keeping savepoint_name = None, so any non-recognized non-empty Some value detaches the row from the named BEGIN IMMEDIATE + SAVEPOINT \"backfill_receipt_correlation\" + per-row UPDATE + RELEASE SAVEPOINT + COMMIT discriminator the operator joins on to confirm the receipt-correlation backfill batch landed under the documented savepoint slug, breaking dashboards that distinguish the committed receipt-correlation backfill from any other wrapped mutation".into(),
+                        repair: "review the audit JSONL row and the writer that produced it; every production MemoryRecordBackfillApplied apply write folds outcome.savepoint_name = MEMORY_BACKFILL_SAVEPOINT_NAME.into() from covenant-memory's SqliteStore::backfill_receipt_correlation (covenant-memory/src/lib.rs:1044 and 1081), where MEMORY_BACKFILL_SAVEPOINT_NAME (covenant-memory/src/lib.rs:76) is the hardcoded const &'static str \"backfill_receipt_correlation\" embedded in the SAVEPOINT/RELEASE/ROLLBACK SAVEPOINT/COMMIT execute_batch! macros and returned as savepoint_name on both the dry_run branch (covenant-memory/src/lib.rs:1044) and the apply-success branch (covenant-memory/src/lib.rs:1081), wrapped Some unconditionally by the covenantd write-site, so any non-recognized non-empty Some value detaches the row from the named BEGIN IMMEDIATE + SAVEPOINT \"backfill_receipt_correlation\" + per-row UPDATE + RELEASE SAVEPOINT + COMMIT discriminator the operator joins on to confirm the receipt-correlation backfill batch landed under the documented savepoint slug, breaking dashboards that distinguish the committed receipt-correlation backfill from any other wrapped mutation".into(),
                     });
                 }
             }
@@ -12358,6 +12358,55 @@ required = {caps:?}
                     savepoint_name.as_deref(),
                     Some(response_savepoint.as_str()),
                     "audit row must reference the same SAVEPOINT name the operator received",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_dry_run_emits_audit_row_with_savepoint_name() {
+        let s = server_with(vec![], "");
+        seed_legacy_memory_and_receipt(&s).await;
+        s.op_respond(Request::GrantCapability {
+            action: "memory.backfill.dry_run".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        s.op_respond(Request::BackfillMemoryRecords {
+            dry_run: true,
+            scope_pubkey: None,
+        })
+        .await;
+
+        let feed = s
+            .op_respond(Request::RecentAudit {
+                limit: 20,
+                since_ms: None,
+                prefer_stream: None,
+            })
+            .await;
+        let events = match feed {
+            Response::AuditEvents { events } => events,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let row = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::MemoryRecordBackfillApplied { .. }))
+            .expect("dry-run backfill audit row on operator feed");
+        match &row.kind {
+            AuditKind::MemoryRecordBackfillApplied {
+                savepoint_name,
+                dry_run,
+                ..
+            } => {
+                assert!(*dry_run, "a dry-run request must emit a dry_run = true row");
+                assert_eq!(
+                    savepoint_name.as_deref(),
+                    Some(MEMORY_BACKFILL_SAVEPOINT_NAME),
+                    "dry-run audit row carries the stable savepoint slug, never None",
                 );
             }
             other => panic!("unexpected: {other:?}"),
@@ -21747,7 +21796,7 @@ required = {caps:?}
                     row.message
                 );
                 assert!(
-                    row.repair.contains("memory_record_backfill_apply")
+                    row.repair.contains("backfill_memory_records")
                         && row.repair.contains("Some(outcome.savepoint_name.clone())")
                         && row.repair.contains("MEMORY_BACKFILL_SAVEPOINT_NAME"),
                     "repair hint should name the writer, the Some(...) wrap, and the savepoint const: {}",

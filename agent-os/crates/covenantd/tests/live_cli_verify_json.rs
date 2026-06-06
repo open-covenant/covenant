@@ -15708,7 +15708,7 @@ async fn live_cli_verify_json_reports_audit_memory_record_backfill_applied_savep
     );
     assert!(
         row["repair"].as_str().is_some_and(|repair| repair
-            .contains("memory_record_backfill_apply")
+            .contains("backfill_memory_records")
             && repair.contains("Some(outcome.savepoint_name.clone())")
             && repair.contains("MEMORY_BACKFILL_SAVEPOINT_NAME")),
         "none-savepoint-name MemoryRecordBackfillApplied drift repair string should name the writer, the Some(...) wrap, and the savepoint const: {row:?}"

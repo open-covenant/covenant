@@ -192,6 +192,7 @@ async fn main() -> Result<()> {
     let mut tools_vec: Vec<Arc<dyn covenant_mcp::Tool>> = vec![
         Arc::new(covenant_mcp::native::EchoTool),
         Arc::new(covenant_mcp::native::ClockTool),
+        Arc::new(covenant_mcp::native::SolanaProposeTxTool),
     ];
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;

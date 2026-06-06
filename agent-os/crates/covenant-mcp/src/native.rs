@@ -62,6 +62,241 @@ impl Tool for ClockTool {
     }
 }
 
+/// Builds an unsigned Solana transaction proposal in the shape the
+/// `@covenant/sdk` instruction builders emit (`PreparedSolanaBundle` in
+/// `packages/sdk/src/solana/instructions.ts`):
+///
+/// ```json
+/// { "chain": "solana", "cluster": "...", "rpcUrl": "...",
+///   "instructions": [{ "programId": "...", "instruction": "...",
+///     "accounts": [{ "name": "...", "address": "...",
+///                    "signer": false, "writable": true }],
+///     "data": { "...": "..." } }] }
+/// ```
+///
+/// The tool ONLY structures and validates the proposal. It never signs,
+/// never sends, and holds no keypair, RPC client, or filesystem handle —
+/// so there is no code path by which it can mutate chain state. Devnet is
+/// the default cluster. Simulation, capability-gating, and signing are the
+/// daemon broker's responsibility downstream; the program/instruction
+/// account layout is knowledge the skill supplies in the call arguments.
+pub struct SolanaProposeTxTool;
+
+const PROPOSE_ARG_KEYS: [&str; 6] = [
+    "programId",
+    "instruction",
+    "accounts",
+    "data",
+    "cluster",
+    "rpcUrl",
+];
+const ACCOUNT_META_KEYS: [&str; 4] = ["name", "address", "signer", "writable"];
+
+/// Mirror of `@covenant/config` `SOLANA_ADDRESS_REGEX`
+/// (`/^[1-9A-HJ-NP-Za-km-z]{32,44}$/`) and the SDK's `assertSolanaAddress`:
+/// 32–44 base58 characters (the bitcoin alphabet excludes `0`, `O`, `I`, `l`).
+fn is_base58_address(value: &str) -> bool {
+    let len = value.len();
+    (32..=44).contains(&len)
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() && !matches!(b, b'0' | b'O' | b'I' | b'l'))
+}
+
+/// Resolve `(cluster, default_rpc_url)` for a cluster key, mirroring
+/// `resolveCovenantNetwork`: an absent or unrecognised key falls back to
+/// devnet (`covenantSolanaNetworks[selected] ?? devnet`), and the `mainnet`
+/// key resolves to the `mainnet-beta` cluster label.
+fn cluster_network(cluster: Option<&str>) -> (&'static str, &'static str) {
+    match cluster {
+        Some("localnet") => ("localnet", "http://127.0.0.1:8899"),
+        Some("mainnet") => ("mainnet-beta", "https://api.mainnet-beta.solana.com"),
+        _ => ("devnet", "https://api.devnet.solana.com"),
+    }
+}
+
+#[async_trait]
+impl Tool for SolanaProposeTxTool {
+    fn name(&self) -> &str {
+        "solana_propose_tx"
+    }
+    fn description(&self) -> &str {
+        "Builds an unsigned Solana transaction proposal (`programId`, \
+         `instruction`, `accounts`, `data`) in the @covenant/sdk bundle \
+         shape. Never signs or sends."
+    }
+    fn input_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "programId": { "type": "string" },
+                "instruction": { "type": "string" },
+                "accounts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string" },
+                            "address": { "type": "string" },
+                            "signer": { "type": "boolean" },
+                            "writable": { "type": "boolean" }
+                        },
+                        "required": ["name", "address", "signer", "writable"],
+                        "additionalProperties": false
+                    }
+                },
+                "data": {
+                    "type": "object",
+                    "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+                },
+                "cluster": { "type": "string" },
+                "rpcUrl": { "type": "string" }
+            },
+            "required": ["programId", "instruction", "accounts", "data"],
+            "additionalProperties": false
+        })
+    }
+    async fn call(&self, arguments: Value) -> Result<ToolCallResult, ToolError> {
+        let obj = arguments
+            .as_object()
+            .ok_or_else(|| ToolError::InvalidArguments("arguments must be a JSON object".into()))?;
+        for key in obj.keys() {
+            if !PROPOSE_ARG_KEYS.contains(&key.as_str()) {
+                return Err(ToolError::InvalidArguments(format!(
+                    "unknown argument `{key}`"
+                )));
+            }
+        }
+
+        let program_id = obj
+            .get("programId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::InvalidArguments("missing string `programId`".into()))?;
+        if !is_base58_address(program_id) {
+            return Err(ToolError::InvalidArguments(
+                "`programId` must be a Solana base58 address".into(),
+            ));
+        }
+
+        let instruction = obj
+            .get("instruction")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ToolError::InvalidArguments("missing string `instruction`".into()))?;
+        if instruction.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "`instruction` must not be empty".into(),
+            ));
+        }
+
+        let accounts_in = obj
+            .get("accounts")
+            .and_then(Value::as_array)
+            .ok_or_else(|| ToolError::InvalidArguments("missing array `accounts`".into()))?;
+        if accounts_in.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "`accounts` must not be empty".into(),
+            ));
+        }
+        let mut accounts = Vec::with_capacity(accounts_in.len());
+        for (i, entry) in accounts_in.iter().enumerate() {
+            let meta = entry.as_object().ok_or_else(|| {
+                ToolError::InvalidArguments(format!("accounts[{i}] must be an object"))
+            })?;
+            for key in meta.keys() {
+                if !ACCOUNT_META_KEYS.contains(&key.as_str()) {
+                    return Err(ToolError::InvalidArguments(format!(
+                        "accounts[{i}] has unknown field `{key}`"
+                    )));
+                }
+            }
+            let name = meta.get("name").and_then(Value::as_str).ok_or_else(|| {
+                ToolError::InvalidArguments(format!("accounts[{i}].name must be a string"))
+            })?;
+            if name.is_empty() {
+                return Err(ToolError::InvalidArguments(format!(
+                    "accounts[{i}].name must not be empty"
+                )));
+            }
+            let address = meta.get("address").and_then(Value::as_str).ok_or_else(|| {
+                ToolError::InvalidArguments(format!("accounts[{i}].address must be a string"))
+            })?;
+            if !is_base58_address(address) {
+                return Err(ToolError::InvalidArguments(format!(
+                    "accounts[{i}].address must be a Solana base58 address"
+                )));
+            }
+            let signer = meta.get("signer").and_then(Value::as_bool).ok_or_else(|| {
+                ToolError::InvalidArguments(format!("accounts[{i}].signer must be a boolean"))
+            })?;
+            let writable = meta
+                .get("writable")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    ToolError::InvalidArguments(format!("accounts[{i}].writable must be a boolean"))
+                })?;
+            accounts.push(serde_json::json!({
+                "name": name,
+                "address": address,
+                "signer": signer,
+                "writable": writable,
+            }));
+        }
+
+        let data = obj
+            .get("data")
+            .ok_or_else(|| ToolError::InvalidArguments("missing object `data`".into()))?;
+        let data_map = data
+            .as_object()
+            .ok_or_else(|| ToolError::InvalidArguments("`data` must be a JSON object".into()))?;
+        for (key, value) in data_map {
+            if !(value.is_string() || value.is_number() || value.is_boolean() || value.is_null()) {
+                return Err(ToolError::InvalidArguments(format!(
+                    "data.{key} must be a string, number, boolean, or null"
+                )));
+            }
+        }
+
+        let cluster_key = match obj.get("cluster") {
+            None => None,
+            Some(Value::String(s)) => Some(s.as_str()),
+            Some(_) => {
+                return Err(ToolError::InvalidArguments(
+                    "`cluster` must be a string".into(),
+                ))
+            }
+        };
+        let (cluster, default_rpc) = cluster_network(cluster_key);
+
+        let rpc_url = match obj.get("rpcUrl") {
+            None => default_rpc.to_string(),
+            Some(Value::String(s)) if !s.is_empty() => s.clone(),
+            Some(Value::String(_)) => {
+                return Err(ToolError::InvalidArguments(
+                    "`rpcUrl` must not be empty".into(),
+                ))
+            }
+            Some(_) => {
+                return Err(ToolError::InvalidArguments(
+                    "`rpcUrl` must be a string".into(),
+                ))
+            }
+        };
+
+        Ok(ToolCallResult::ok(vec![Content::json(serde_json::json!({
+            "chain": "solana",
+            "cluster": cluster,
+            "rpcUrl": rpc_url,
+            "instructions": [{
+                "programId": program_id,
+                "instruction": instruction,
+                "accounts": accounts,
+                "data": data.clone(),
+            }],
+        }))]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +511,364 @@ mod tests {
              'Get current time.' or 'Return Unix time.') would silently \
              let operators consume the value as seconds and parse the \
              returned epoch as a date ~1000x earlier than intended",
+        );
+    }
+
+    fn valid_propose_args() -> Value {
+        // A register_agent-shaped proposal: the SDK's
+        // prepareRegisterAgentInstruction account layout, with addresses
+        // the caller (the skill) supplies. Used as the happy-path fixture
+        // the rejection tests mutate one field at a time.
+        serde_json::json!({
+            "programId": "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y",
+            "instruction": "register_agent",
+            "accounts": [
+                { "name": "config", "address": "11111111111111111111111111111111", "signer": false, "writable": false },
+                { "name": "agent", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "signer": false, "writable": true },
+                { "name": "operator", "address": "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y", "signer": true, "writable": true }
+            ],
+            "data": {
+                "agent_key": "0000000000000000000000000000000000000000000000000000000000000001",
+                "metadata_hash": "0000000000000000000000000000000000000000000000000000000000000002"
+            }
+        })
+    }
+
+    fn json_keys_recursively<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+        match value {
+            Value::Object(map) => {
+                for (k, v) in map {
+                    out.push(k.as_str());
+                    json_keys_recursively(v, out);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|v| json_keys_recursively(v, out)),
+            _ => {}
+        }
+    }
+
+    async fn call_bundle(args: Value) -> Value {
+        let r = SolanaProposeTxTool.call(args).await.unwrap();
+        assert!(!r.is_error);
+        match &r.content[0] {
+            Content::Json { value } => value.clone(),
+            other => panic!("expected json content, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn propose_returns_sdk_shaped_unsigned_bundle() {
+        let r = SolanaProposeTxTool
+            .call(valid_propose_args())
+            .await
+            .unwrap();
+        assert!(!r.is_error);
+        let bundle = match &r.content[0] {
+            Content::Json { value } => value,
+            other => panic!("expected json content, got {other:?}"),
+        };
+
+        assert_eq!(bundle["chain"], "solana");
+        assert_eq!(bundle["cluster"], "devnet");
+        assert_eq!(bundle["rpcUrl"], "https://api.devnet.solana.com");
+
+        let ix = &bundle["instructions"][0];
+        assert_eq!(
+            ix["programId"],
+            "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
+        );
+        assert_eq!(ix["instruction"], "register_agent");
+        assert_eq!(
+            ix["data"]["agent_key"],
+            valid_propose_args()["data"]["agent_key"]
+        );
+
+        let accounts = ix["accounts"].as_array().expect("accounts array");
+        assert_eq!(accounts.len(), 3);
+        let operator = &accounts[2];
+        assert_eq!(operator["name"], "operator");
+        assert_eq!(operator["signer"], true);
+        assert_eq!(operator["writable"], true);
+        let meta_keys: std::collections::BTreeSet<&str> = operator
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            meta_keys,
+            ["address", "name", "signer", "writable"]
+                .into_iter()
+                .collect(),
+            "each account meta must expose exactly the PreparedAccountMeta keys; \
+             a divergence breaks shape parity with packages/sdk",
+        );
+    }
+
+    #[tokio::test]
+    async fn propose_never_emits_a_signature_field() {
+        // The whole point of skills-30 is propose-only: the broker signs
+        // later, never this tool. The tool holds no keypair and no RPC
+        // handle, so the only way a signature could appear is a refactor
+        // that started signing here. Pin that no emitted key resembles a
+        // produced signature or secret.
+        let bundle = call_bundle(valid_propose_args()).await;
+        let mut keys = Vec::new();
+        json_keys_recursively(&bundle, &mut keys);
+        for forbidden in [
+            "signature",
+            "signatures",
+            "signedTx",
+            "sig",
+            "secretKey",
+            "keypair",
+        ] {
+            assert!(
+                !keys.contains(&forbidden),
+                "propose output must never carry `{forbidden}` — this tool \
+                 proposes, it must not sign or send",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn propose_defaults_cluster_and_rpc_to_devnet() {
+        let bundle = call_bundle(valid_propose_args()).await;
+        assert_eq!(bundle["cluster"], "devnet");
+        assert_eq!(bundle["rpcUrl"], "https://api.devnet.solana.com");
+    }
+
+    #[tokio::test]
+    async fn propose_resolves_known_cluster_rpc_defaults() {
+        let mut args = valid_propose_args();
+        args["cluster"] = "localnet".into();
+        let bundle = call_bundle(args).await;
+        assert_eq!(bundle["cluster"], "localnet");
+        assert_eq!(bundle["rpcUrl"], "http://127.0.0.1:8899");
+
+        let mut args = valid_propose_args();
+        args["cluster"] = "mainnet".into();
+        let bundle = call_bundle(args).await;
+        assert_eq!(
+            bundle["cluster"], "mainnet-beta",
+            "the `mainnet` key must resolve to the mainnet-beta cluster label, mirroring resolveCovenantNetwork",
+        );
+        assert_eq!(bundle["rpcUrl"], "https://api.mainnet-beta.solana.com");
+    }
+
+    #[tokio::test]
+    async fn propose_unknown_cluster_falls_back_to_devnet() {
+        let mut args = valid_propose_args();
+        args["cluster"] = "staging".into();
+        let bundle = call_bundle(args).await;
+        assert_eq!(
+            bundle["cluster"], "devnet",
+            "an unrecognised cluster key must fall back to devnet, mirroring \
+             `covenantSolanaNetworks[selected] ?? devnet`",
+        );
+        assert_eq!(bundle["rpcUrl"], "https://api.devnet.solana.com");
+    }
+
+    #[tokio::test]
+    async fn propose_respects_explicit_rpc_url() {
+        let mut args = valid_propose_args();
+        args["rpcUrl"] = "https://devnet.helius-rpc.com/?api-key=x".into();
+        let bundle = call_bundle(args).await;
+        assert_eq!(bundle["rpcUrl"], "https://devnet.helius-rpc.com/?api-key=x");
+    }
+
+    #[tokio::test]
+    async fn propose_rejects_non_base58_program_id() {
+        let mut args = valid_propose_args();
+        args["programId"] = "not a base58 address".into();
+        assert!(matches!(
+            SolanaProposeTxTool.call(args).await.unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+
+        // 31 chars (one under the floor) and a base58-excluded char ('0').
+        let mut args = valid_propose_args();
+        args["programId"] = "1111111111111111111111111111111".into();
+        assert!(matches!(
+            SolanaProposeTxTool.call(args).await.unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+        let mut args = valid_propose_args();
+        args["programId"] = "cov0UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into();
+        assert!(matches!(
+            SolanaProposeTxTool.call(args).await.unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn propose_rejects_non_base58_account_address() {
+        let mut args = valid_propose_args();
+        args["accounts"][0]["address"] = "bad!".into();
+        assert!(matches!(
+            SolanaProposeTxTool.call(args).await.unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn propose_rejects_empty_accounts() {
+        let mut args = valid_propose_args();
+        args["accounts"] = serde_json::json!([]);
+        assert!(matches!(
+            SolanaProposeTxTool.call(args).await.unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn propose_rejects_non_scalar_data_value() {
+        // SDK data is Record<string, string|number|boolean|null>. A nested
+        // object or array means the skill skipped serialising the field to
+        // its instruction-data scalar form; reject it at the boundary.
+        let mut args = valid_propose_args();
+        args["data"]["nested"] = serde_json::json!({ "x": 1 });
+        assert!(matches!(
+            SolanaProposeTxTool.call(args).await.unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+        let mut args = valid_propose_args();
+        args["data"]["list"] = serde_json::json!([1, 2]);
+        assert!(matches!(
+            SolanaProposeTxTool.call(args).await.unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn propose_accepts_mixed_scalar_data_values() {
+        let mut args = valid_propose_args();
+        args["data"] = serde_json::json!({
+            "amount_covnt": "1000",
+            "receipt_count": 3,
+            "dry_run": true,
+            "memo": Value::Null,
+        });
+        let bundle = call_bundle(args).await;
+        let data = &bundle["instructions"][0]["data"];
+        assert_eq!(data["amount_covnt"], "1000");
+        assert_eq!(data["receipt_count"], 3);
+        assert_eq!(data["dry_run"], true);
+        assert!(data["memo"].is_null());
+    }
+
+    #[tokio::test]
+    async fn propose_rejects_missing_required_args() {
+        for missing in ["programId", "instruction", "accounts", "data"] {
+            let mut args = valid_propose_args();
+            args.as_object_mut().unwrap().remove(missing);
+            let err = SolanaProposeTxTool.call(args).await.unwrap_err();
+            assert!(
+                matches!(err, ToolError::InvalidArguments(_)),
+                "omitting required `{missing}` must be rejected, got {err:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn propose_rejects_unknown_fields() {
+        let mut args = valid_propose_args();
+        args["sign"] = true.into();
+        assert!(
+            matches!(
+                SolanaProposeTxTool.call(args).await.unwrap_err(),
+                ToolError::InvalidArguments(_)
+            ),
+            "an unknown top-level argument (e.g. a `sign` flag) must be \
+             rejected so the closed-world schema cannot be widened silently",
+        );
+        let mut args = valid_propose_args();
+        args["accounts"][0]["pubkey"] = "x".into();
+        assert!(matches!(
+            SolanaProposeTxTool.call(args).await.unwrap_err(),
+            ToolError::InvalidArguments(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn propose_tool_registers_and_dispatches_via_registry() {
+        // Defends the "not registered in ToolRegistry" failure mode at the
+        // unit level: the tool must list under its name and be callable
+        // through ToolRegistry::call, the same path covenantd's daemon uses.
+        use crate::ToolRegistry;
+        use std::sync::Arc;
+        let reg = ToolRegistry::from_tools(vec![Arc::new(SolanaProposeTxTool)]);
+        assert!(reg.names().contains(&"solana_propose_tx".to_string()));
+        let r = reg
+            .call("solana_propose_tx", valid_propose_args())
+            .await
+            .unwrap();
+        assert!(!r.is_error);
+    }
+
+    #[test]
+    fn propose_input_schema_pins_required_set_and_closed_world() {
+        let schema = SolanaProposeTxTool.input_schema();
+        assert_eq!(schema["type"], "object");
+        let required: std::collections::BTreeSet<&str> = schema["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            required,
+            ["programId", "instruction", "accounts", "data"]
+                .into_iter()
+                .collect(),
+            "the four required args are the proposal's load-bearing fields; \
+             cluster and rpcUrl stay optional with devnet defaults",
+        );
+        assert_eq!(
+            schema["additionalProperties"],
+            Value::Bool(false),
+            "the proposal schema must stay closed-world so MCP clients \
+             cannot smuggle a sign/send flag past the daemon",
+        );
+        assert_eq!(
+            schema["properties"]["accounts"]["items"]["additionalProperties"],
+            Value::Bool(false),
+            "account metas must stay closed-world to preserve PreparedAccountMeta parity",
+        );
+        // The schema must advertise the same non-empty/scalar-only contracts
+        // call() enforces, so MCP clients reject bad input before dispatch.
+        assert_eq!(
+            schema["properties"]["accounts"]["minItems"], 1,
+            "accounts must declare minItems:1 to match the runtime non-empty guard",
+        );
+        let data_values: std::collections::BTreeSet<&str> = schema["properties"]["data"]
+            ["additionalProperties"]["type"]
+            .as_array()
+            .expect("data.additionalProperties.type array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            data_values,
+            ["boolean", "null", "number", "string"]
+                .into_iter()
+                .collect(),
+            "data values must be schema-constrained to scalars, mirroring the \
+             SDK Record<string, string|number|boolean|null> and the runtime check",
+        );
+    }
+
+    #[test]
+    fn propose_tool_name_and_description_pin() {
+        assert_eq!(
+            SolanaProposeTxTool.name(),
+            "solana_propose_tx",
+            "the name is the selector the broker keys on and the registry sort key",
+        );
+        let desc = SolanaProposeTxTool.description();
+        assert!(
+            desc.contains("unsigned") && desc.contains("Never signs"),
+            "the description must keep advertising the propose-only contract: {desc:?}",
         );
     }
 }

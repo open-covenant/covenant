@@ -1430,8 +1430,8 @@ impl Server {
     /// [`covenant_runtime::preempt_subprocess_pg`] with the supplied
     /// grace window, maps the returned `PreemptOutcome` to either a
     /// `BudgetPreempted` or `BudgetPreemptFailed` audit row, and
-    /// returns a [`PreemptResult`] for the caller (today: tests; soon:
-    /// the daemon-side projection tick).
+    /// returns a [`PreemptResult`] for the caller — the daemon-side budget
+    /// projection tick (and tests, which drive it directly).
     ///
     /// The lookup and the kill happen back-to-back; there is no
     /// intermediate await between `tracker.get` and `preempt_subprocess_pg`,
@@ -1512,11 +1512,11 @@ impl Server {
     /// number of successful preempts (`PreemptResult::Preempted`).
     ///
     /// This is the single-iteration core of the budget projection tick.
-    /// The companion follow-on slice wires a `tokio::time::interval`
+    /// The `spawn_projection_tick_driver` task wires a `tokio::time::interval`
     /// driver that calls this on each tick; the iteration is exposed as
     /// a separate `pub async fn` so tests can drive it deterministically
-    /// without time-mocking, and so the driver slice can focus only on
-    /// scheduling concerns (cadence, shutdown signal, policy).
+    /// without time-mocking, and so the driver keeps only scheduling
+    /// concerns (cadence, shutdown signal, policy).
     ///
     /// `would_exceed(agent, 1)` is the v0.x exhaustion trigger: the
     /// [`BudgetLedger`] trait does not expose per-agent capacity, so the

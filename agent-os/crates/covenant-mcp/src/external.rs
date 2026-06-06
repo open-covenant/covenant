@@ -18,6 +18,24 @@ use std::sync::Arc;
 /// downgrade; we don't enforce a specific version yet (Phase 4+).
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// Well-known hosted Solana MCP endpoint (Streamable HTTP transport). The
+/// Solana dev skill installs it with `claude mcp add --transport http`.
+pub const SOLANA_MCP_URL: &str = "https://mcp.solana.com/mcp";
+
+/// Build the stdio shim command that bridges a hosted (HTTP) MCP server to
+/// the daemon's stdio JSON-RPC transport via the `mcp-remote` adapter.
+///
+/// Covenant has no in-process HTTP MCP client. Routing a hosted endpoint
+/// through a subprocess keeps it behind the same `kill_on_drop` boundary as
+/// every other external MCP server, so the remote never reaches the
+/// daemon's address space directly.
+pub fn hosted_bridge_command(url: &str) -> (String, Vec<String>) {
+    (
+        "npx".to_string(),
+        vec!["-y".to_string(), "mcp-remote".to_string(), url.to_string()],
+    )
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapError {
     #[error("transport: {0}")]
@@ -235,6 +253,45 @@ fn parse_tool_call_result(v: Value) -> Result<ToolCallResult, ToolError> {
 mod tests {
     use super::*;
     use crate::transport::MockMcpClient;
+
+    #[test]
+    fn hosted_bridge_command_wraps_url_in_mcp_remote_stdio_shim() {
+        // hosted_bridge_command is the single source of truth for how a
+        // hosted (HTTP) MCP endpoint is reached: Covenant ships no
+        // in-process HTTP client, so the URL is wrapped in the `mcp-remote`
+        // stdio adapter and spawned as a subprocess like any other server.
+        // The url MUST be the final argument verbatim — a refactor that
+        // reordered the args or injected the URL into an --flag would break
+        // mcp-remote's positional contract and silently fail to connect.
+        let (command, args) = hosted_bridge_command(SOLANA_MCP_URL);
+        assert_eq!(
+            command, "npx",
+            "hosted bridge must launch via npx so the mcp-remote adapter \
+             resolves without a global install",
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-y".to_string(),
+                "mcp-remote".to_string(),
+                SOLANA_MCP_URL.to_string(),
+            ],
+            "args must be exactly [-y, mcp-remote, <url>] — the documented \
+             stdio shim invocation; the URL is positional and last",
+        );
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some(SOLANA_MCP_URL),
+            "the endpoint URL must be the final positional arg",
+        );
+
+        assert_eq!(
+            SOLANA_MCP_URL, "https://mcp.solana.com/mcp",
+            "SOLANA_MCP_URL pins the well-known hosted endpoint the Solana \
+             dev skill installs; drift here silently points the bridge at \
+             the wrong host",
+        );
+    }
 
     #[test]
     fn protocol_version_pins_exact_mcp_spec_date_string() {

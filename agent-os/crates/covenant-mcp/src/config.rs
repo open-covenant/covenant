@@ -12,10 +12,26 @@
 //!
 //! The `name` is informational (logging + audit). `tool_prefix` makes remote
 //! tool names stable inside Covenant as `mcp_<prefix>_<upstream_tool>`.
+//!
+//! The hosted Solana MCP server is wired through a dedicated, off-by-default
+//! bridge rather than a hand-written server block:
+//!
+//! ```toml
+//! [mcp.solana]
+//! enabled = true          # default false — nothing connects unless set
+//! # url = "https://mcp.solana.com/mcp"   # optional override
+//! # tool_prefix = "solana"               # tools land as mcp_solana_*
+//! ```
+//!
+//! When enabled it materializes into an ordinary stdio server (the
+//! `mcp-remote` shim), so it runs behind the same subprocess sandbox as
+//! every other MCP server.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+use crate::external::{hosted_bridge_command, SOLANA_MCP_URL};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct McpConfigFile {
@@ -27,6 +43,58 @@ pub struct McpConfigFile {
 pub struct McpSection {
     #[serde(default)]
     pub server: Vec<McpServer>,
+    #[serde(default)]
+    pub solana: Option<SolanaBridge>,
+}
+
+/// Config-gated bridge to the hosted Solana MCP server. Off unless
+/// `enabled = true`; when on it resolves to a stdio `mcp-remote` server so
+/// skills get live Solana docs inside the governed runtime without a new
+/// in-process transport.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SolanaBridge {
+    pub enabled: bool,
+    pub url: String,
+    pub tool_prefix: String,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+impl Default for SolanaBridge {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: SOLANA_MCP_URL.to_string(),
+            tool_prefix: "solana".to_string(),
+            include: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+}
+
+impl SolanaBridge {
+    /// Materialize into a stdio server entry the daemon spawns like any
+    /// other, or `None` when disabled. `NO_DNA=1` mirrors the hosted
+    /// server's non-human-CLI signal.
+    fn to_server(&self) -> Option<McpServer> {
+        if !self.enabled {
+            return None;
+        }
+        let (command, args) = hosted_bridge_command(&self.url);
+        let mut env = BTreeMap::new();
+        env.insert("NO_DNA".to_string(), "1".to_string());
+        Some(McpServer {
+            name: "solana".to_string(),
+            command,
+            args,
+            enabled: true,
+            tool_prefix: Some(self.tool_prefix.clone()),
+            include: self.include.clone(),
+            exclude: self.exclude.clone(),
+            env,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,7 +133,20 @@ impl McpConfigFile {
             return Ok(Self::default());
         }
         let s = std::fs::read_to_string(p)?;
-        Ok(toml::from_str(&s)?)
+        let mut cfg: Self = toml::from_str(&s)?;
+        cfg.materialize_hosted_bridges();
+        Ok(cfg)
+    }
+
+    /// Fold any enabled hosted bridges (`[mcp.solana]`) into the server list
+    /// so `servers()` is the effective set the daemon spawns. Disabled or
+    /// absent bridges add nothing.
+    fn materialize_hosted_bridges(&mut self) {
+        if let Some(section) = self.mcp.as_mut() {
+            if let Some(server) = section.solana.as_ref().and_then(SolanaBridge::to_server) {
+                section.server.push(server);
+            }
+        }
     }
 
     pub fn servers(&self) -> &[McpServer] {
@@ -481,6 +562,152 @@ env = { HERMES_API_BASE_URL = "http://127.0.0.1:8642/v1" }
         assert_eq!(
             srv.env.get("HERMES_API_BASE_URL").map(String::as_str),
             Some("http://127.0.0.1:8642/v1")
+        );
+    }
+
+    #[test]
+    fn solana_bridge_default_is_disabled_with_well_known_url_and_prefix() {
+        // The hosted Solana bridge MUST be off by default — an enabled
+        // default would silently open an outbound MCP subprocess on every
+        // daemon that merely upgraded the crate. A refactor that flipped
+        // `enabled` to true, or pointed `url` at a non-default host, would
+        // surface here.
+        let b = SolanaBridge::default();
+        assert!(
+            !b.enabled,
+            "SolanaBridge::default().enabled MUST be false — nothing connects unless the operator opts in",
+        );
+        assert_eq!(b.url, SOLANA_MCP_URL);
+        assert_eq!(b.tool_prefix, "solana");
+        assert!(b.include.is_empty());
+        assert!(b.exclude.is_empty());
+        assert!(
+            b.to_server().is_none(),
+            "a disabled bridge must materialize no server",
+        );
+    }
+
+    #[test]
+    fn solana_bridge_parses_operator_overrides() {
+        let cfg: McpConfigFile = toml::from_str(
+            r#"
+[mcp.solana]
+enabled = true
+url = "https://mcp.example.test/mcp"
+tool_prefix = "sol"
+include = ["getBalance"]
+exclude = ["airdrop"]
+"#,
+        )
+        .unwrap();
+        let b = cfg
+            .mcp
+            .as_ref()
+            .and_then(|m| m.solana.as_ref())
+            .expect("[mcp.solana] must surface a SolanaBridge");
+        assert!(b.enabled);
+        assert_eq!(b.url, "https://mcp.example.test/mcp");
+        assert_eq!(b.tool_prefix, "sol");
+        assert_eq!(b.include, vec!["getBalance".to_string()]);
+        assert_eq!(b.exclude, vec!["airdrop".to_string()]);
+
+        // Omitted fields fall back to the container-level serde default —
+        // an operator who writes only `enabled = true` still gets the
+        // well-known endpoint and prefix.
+        let minimal: McpConfigFile = toml::from_str(
+            r#"
+[mcp.solana]
+enabled = true
+"#,
+        )
+        .unwrap();
+        let b = minimal.mcp.unwrap().solana.unwrap();
+        assert_eq!(b.url, SOLANA_MCP_URL);
+        assert_eq!(b.tool_prefix, "solana");
+    }
+
+    #[test]
+    fn materialize_hosted_bridges_appends_enabled_solana_stdio_server() {
+        let mut cfg: McpConfigFile = toml::from_str(
+            r#"
+[[mcp.server]]
+name = "fs"
+command = "node"
+
+[mcp.solana]
+enabled = true
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.servers().len(),
+            1,
+            "before materialization only the configured server is present",
+        );
+
+        cfg.materialize_hosted_bridges();
+
+        let names: Vec<&str> = cfg.servers().iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["fs", "solana"],
+            "the enabled bridge appends a 'solana' server to the effective list",
+        );
+        let solana = cfg
+            .servers()
+            .iter()
+            .find(|s| s.name == "solana")
+            .expect("materialized solana server");
+        assert!(solana.enabled);
+        assert_eq!(solana.command, "npx");
+        assert_eq!(
+            solana.args,
+            vec![
+                "-y".to_string(),
+                "mcp-remote".to_string(),
+                SOLANA_MCP_URL.to_string(),
+            ],
+            "the bridge must route through the documented mcp-remote stdio shim",
+        );
+        assert_eq!(solana.tool_prefix.as_deref(), Some("solana"));
+        assert_eq!(
+            solana.env.get("NO_DNA").map(String::as_str),
+            Some("1"),
+            "NO_DNA=1 mirrors the hosted server's non-human-CLI signal",
+        );
+
+        // Idempotency is NOT claimed: materialize runs once inside
+        // from_path. Calling it twice would append twice — pin that the
+        // daemon path (single from_path call) yields exactly one bridge.
+    }
+
+    #[test]
+    fn materialize_hosted_bridges_noop_when_solana_absent_or_disabled() {
+        // Absent section: nothing to add.
+        let mut absent: McpConfigFile = toml::from_str(
+            r#"
+[[mcp.server]]
+name = "fs"
+command = "node"
+"#,
+        )
+        .unwrap();
+        absent.materialize_hosted_bridges();
+        assert_eq!(absent.servers().len(), 1);
+
+        // Present but disabled (the off-by-default state, written
+        // explicitly): the section parses but must materialize nothing.
+        let mut disabled: McpConfigFile = toml::from_str(
+            r#"
+[mcp.solana]
+url = "https://mcp.solana.com/mcp"
+"#,
+        )
+        .unwrap();
+        disabled.materialize_hosted_bridges();
+        assert!(
+            disabled.servers().is_empty(),
+            "a disabled [mcp.solana] block must not spawn a server",
         );
     }
 

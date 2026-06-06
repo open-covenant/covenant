@@ -54,8 +54,8 @@ use covenant_router::{AgentCard, Router};
 use covenant_runtime::{AgentResult, Runner};
 use covenant_sap_bridge::{Config as SapBridgeConfig, SapBridge};
 use covenant_settlement::{
-    build_receipt_batch, intent_dispatch_credits, memory_write_credits, ChainConfirmation,
-    Settlement,
+    build_receipt_batch, intent_dispatch_credits, memory_write_credits, skill_tx_credits,
+    ChainConfirmation, Settlement,
 };
 use covenant_skills::{
     install_skill, parse_skill_md_path, SkillIntegrityError, SkillManifest, SkillSource,
@@ -923,10 +923,48 @@ pub struct Server {
 /// sign is the approval policy's call, not the broker's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillTxProposal {
+    /// Devnet cluster label the proposal cleared (`devnet` | `localnet`).
+    /// Carried out of the broker so the signer can bind it into the
+    /// signed message — a devnet authorization can never read as a
+    /// mainnet one.
+    pub cluster: String,
     pub program: String,
     pub instruction: String,
     pub accounts_hash_hex: String,
     pub simulated_ok: bool,
+}
+
+/// Approval decision the W009 signing policy consumes alongside a brokered
+/// proposal. `Autonomous` signs only inside the capability+budget envelope:
+/// the broker has already proven the `chain.tx.*` capability, and
+/// [`Server::sign_skill_tx`] additionally debits the caller's budget bucket —
+/// an exhausted or unseeded bucket fails the envelope closed. `Human` carries
+/// an operator's explicit out-of-band approval of this exact proposal and is
+/// its own authority, so it does not debit the budget bucket. Both paths
+/// still require a devnet cluster and a passing structural simulate; neither
+/// can sign outside the envelope the broker enforced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillTxApproval {
+    Human,
+    Autonomous,
+}
+
+/// Outcome of [`Server::sign_skill_tx`]: a Covenant authorization signature
+/// over a brokered proposal plus the settlement receipt id the signing event
+/// recorded. `signature_b58` is the daemon identity key's ed25519 signature
+/// over a domain-separated message binding the skill, cluster, program,
+/// instruction, and account-set hash (87..=88 base58 chars, the same
+/// convention as a capability signature). It is the W009 governance witness,
+/// not a wire-ready Solana transaction signature — the daemon keeps the
+/// Solana signer dep tree out of its build, so live message-signing and
+/// submission ride this authorization downstream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillTxSignature {
+    pub program: String,
+    pub instruction: String,
+    pub accounts_hash_hex: String,
+    pub signature_b58: String,
+    pub receipt_id: Uuid,
 }
 
 /// Upper bound on accounts in a brokered instruction. A real Solana
@@ -2470,6 +2508,7 @@ impl Server {
         }
 
         Ok(SkillTxProposal {
+            cluster: parsed.cluster,
             program: parsed.program,
             instruction: parsed.instruction,
             accounts_hash_hex,
@@ -2497,6 +2536,157 @@ impl Server {
         Response::Error {
             message: format!("skill tx broker refused '{skill_name}': {reason}"),
         }
+    }
+
+    /// Skill tx signer (W009 "never sign without approval"): apply the
+    /// approval policy to a brokered proposal and, only if it clears, sign it
+    /// with the daemon identity key and record both an
+    /// [`AuditKind::SkillTxSigned`] row and a settlement receipt.
+    ///
+    /// The proposal is re-run through [`Server::broker_skill_tx`] here, so the
+    /// full envelope — skill installed, devnet cluster, `chain.tx.*`
+    /// capability — is re-checked at signing time (never trusted from an
+    /// earlier proposal), and the broker's [`AuditKind::SkillTxProposed`] row
+    /// binds exactly what is about to be signed. An out-of-envelope proposal
+    /// returns `Err` from the broker and is never signed.
+    ///
+    /// On top of the broker's gates the signing policy adds:
+    /// - the structural simulate must have passed (`simulated_ok`); a tx with
+    ///   no signer can never execute, so signing it is refused;
+    /// - [`SkillTxApproval::Autonomous`] must clear the budget envelope — the
+    ///   caller's bucket is debited [`covenant_settlement::skill_tx_credits`]
+    ///   and an exhausted or unseeded bucket is refused;
+    /// - [`SkillTxApproval::Human`] is the operator's explicit authority and
+    ///   skips the budget debit, but still requires the devnet + capability +
+    ///   simulate envelope above.
+    ///
+    /// The signature is domain-separated (`covenant.skill.tx.v1`) over a
+    /// canonical message binding skill, cluster, program, instruction, and the
+    /// account-set hash, so it can never be replayed as a capability or
+    /// identity attestation and a verifier can reconstruct exactly what was
+    /// authorized. It is a Covenant governance witness, not a wire Solana
+    /// signature (see [`SkillTxSignature`]). Every refusal records an
+    /// [`AuditKind::SkillRefused`] row; nothing is signed outside the envelope.
+    pub async fn sign_skill_tx(
+        &self,
+        skill_name: String,
+        proposal: serde_json::Value,
+        approval: SkillTxApproval,
+        peer: &AgentId,
+    ) -> Result<SkillTxSignature, Response> {
+        const SKILL_TX_DOMAIN: &[u8] = b"covenant.skill.tx.v1\n";
+
+        // Re-broker: re-enforces installed-skill + devnet + capability and
+        // emits SkillTxProposed binding what we are about to sign. A blocked
+        // proposal returns Err (with its SkillRefused row) and never reaches
+        // the signer.
+        let brokered = self
+            .broker_skill_tx(skill_name.clone(), proposal, peer)
+            .await?;
+
+        // Never sign a structurally invalid tx. The broker records the
+        // verdict; the signing policy is where it gates — a no-signer tx can
+        // never execute, so a signature over it is meaningless.
+        if !brokered.simulated_ok {
+            return Err(self
+                .refuse_skill_tx(
+                    &skill_name,
+                    peer,
+                    format!(
+                        "refusing to sign {}.{}: structural simulate failed",
+                        brokered.program, brokered.instruction
+                    ),
+                )
+                .await);
+        }
+
+        // Pre-allocated so the autonomous budget debit's paired_receipt and
+        // the settlement receipt id agree — the budget log joins the
+        // settlement log on this UUID 1:1.
+        let receipt_id = Uuid::new_v4();
+
+        // The "+budget" half of the autonomous envelope. Human approval is its
+        // own authority and skips the debit. Fail closed on both exhaustion
+        // and an unseeded bucket: autonomous signing requires a provisioned
+        // budget, so a missing bucket is outside the envelope, not a bypass.
+        if matches!(approval, SkillTxApproval::Autonomous) {
+            if let Err(e) = self
+                .budget
+                .try_debit(peer, skill_tx_credits(), receipt_id)
+                .await
+            {
+                return Err(self
+                    .refuse_skill_tx(
+                        &skill_name,
+                        peer,
+                        format!("autonomous signing refused: outside budget envelope ({e})"),
+                    )
+                    .await);
+            }
+        }
+
+        let canonical = serde_json::json!([
+            skill_name,
+            brokered.cluster,
+            brokered.program,
+            brokered.instruction,
+            brokered.accounts_hash_hex,
+        ])
+        .to_string();
+        let mut message = SKILL_TX_DOMAIN.to_vec();
+        message.extend_from_slice(canonical.as_bytes());
+        let signature_b58 = bs58::encode(self.identity.sign(&message).to_bytes()).into_string();
+
+        // The audit chain is the authoritative provenance record: a signed tx
+        // MUST carry a SkillTxSigned row, so this is a must-write — a failure
+        // returns the generic audit-failure response and the signature never
+        // leaves the daemon.
+        let signed_event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::SkillTxSigned {
+                skill_name: skill_name.clone(),
+                signature_b58: signature_b58.clone(),
+            },
+        };
+        if let Err(e) = self.record_peer_event_required(peer, signed_event).await {
+            return Err(audit_failure_response(e));
+        }
+
+        // Settlement receipt for the signing authorization, charged as a Tool
+        // resource. Chain metadata stays empty — this records the governed
+        // signature (the cluster binding lives in the signature, not the
+        // receipt), not an on-chain confirmation, which the settlement batch
+        // pipeline populates downstream. Best-effort like the dispatch
+        // receipt: the authoritative record is the SkillTxSigned row above.
+        let receipt = SettlementReceipt {
+            id: receipt_id,
+            payer: peer.clone(),
+            resource: ResourceKind::Tool,
+            memory_record_id: None,
+            credits_consumed: skill_tx_credits(),
+            settled_at: epoch_ms(),
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        if let Err(e) = self.settlement.record(receipt).await {
+            warn!(error = %e, "skill tx settlement record failed");
+        }
+
+        Ok(SkillTxSignature {
+            program: brokered.program,
+            instruction: brokered.instruction,
+            accounts_hash_hex: brokered.accounts_hash_hex,
+            signature_b58,
+            receipt_id,
+        })
     }
 
     async fn send_a2a_task(&self, task: covenant_a2a::A2ATask, peer: &AgentId) -> Response {
@@ -31741,6 +31931,355 @@ budget_credits_per_hour = {credits}
         assert_ne!(
             h_injected, h_plain,
             "a delimiter-injected account set must not collide with a distinct set",
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_skill_tx_autonomous_within_envelope_signs_records_audit_and_receipt() {
+        // Happy path + failure mode "receipt/audit missing for a signed tx":
+        // an in-envelope autonomous proposal signs and persists BOTH a
+        // SkillTxSigned row and a settlement receipt joined on receipt_id.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+        s.budget.set_capacity(&peer, 10).await.expect("seed budget");
+
+        let signed = s
+            .sign_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                SkillTxApproval::Autonomous,
+                &peer,
+            )
+            .await
+            .expect("in-envelope autonomous proposal must sign");
+
+        assert_eq!(signed.program, BROKER_TEST_PROGRAM);
+        assert_eq!(signed.instruction, "register_agent");
+        assert!(
+            (87..=88).contains(&signed.signature_b58.len()),
+            "ed25519 signature must be 87..=88 base58 chars, got {}",
+            signed.signature_b58.len(),
+        );
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillTxProposed { skill_name, accounts_hash_hex, .. }
+                    if skill_name == "covenant" && accounts_hash_hex == &signed.accounts_hash_hex
+            )),
+            "the broker leg must record SkillTxProposed binding what is signed",
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillTxSigned { skill_name, signature_b58 }
+                    if skill_name == "covenant" && signature_b58 == &signed.signature_b58
+            )),
+            "a signed tx must persist a SkillTxSigned row carrying the signature",
+        );
+
+        let receipts = s.settlement.recent(10).await.unwrap();
+        assert!(
+            receipts.iter().any(|r| r.id == signed.receipt_id
+                && r.payer.pubkey == peer.pubkey
+                && r.resource == ResourceKind::Tool
+                && r.credits_consumed == covenant_settlement::skill_tx_credits()),
+            "a signed tx must record a Tool settlement receipt joined on receipt_id",
+        );
+        assert_eq!(
+            s.budget.tokens_remaining(&peer).await.unwrap(),
+            9,
+            "the autonomous path must debit the budget envelope once",
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_skill_tx_human_approval_signs_without_budget_envelope() {
+        // Human approval is its own authority: it signs inside the devnet +
+        // capability + simulate envelope with no budget bucket seeded, proving
+        // the budget gate is the autonomous-only half of the policy.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+
+        let signed = s
+            .sign_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                SkillTxApproval::Human,
+                &peer,
+            )
+            .await
+            .expect("human-approved proposal must sign without a budget bucket");
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillTxSigned { signature_b58, .. }
+                    if signature_b58 == &signed.signature_b58
+            )),
+            "human-approved sign must persist a SkillTxSigned row",
+        );
+        assert!(
+            s.settlement
+                .recent(10)
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.id == signed.receipt_id),
+            "human-approved sign must still record a settlement receipt",
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_skill_tx_autonomous_without_budget_refuses_and_never_signs() {
+        // Failure mode "out-of-envelope proposal gets signed": the capability
+        // is held but the autonomous budget bucket is unseeded, so the
+        // proposal is outside the capability+budget envelope and is refused
+        // unsigned, with no receipt.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+
+        let result = s
+            .sign_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                SkillTxApproval::Autonomous,
+                &peer,
+            )
+            .await;
+        let Err(Response::Error { message }) = result else {
+            panic!("autonomous sign without a budget bucket must be refused, got {result:?}");
+        };
+        assert!(message.contains("budget envelope"), "got {message}");
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillRefused { reason, .. } if reason.contains("budget envelope")
+            )),
+            "the deny must persist a SkillRefused row",
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::SkillTxSigned { .. })),
+            "a refused proposal must never emit SkillTxSigned",
+        );
+        assert!(
+            s.settlement.recent(10).await.unwrap().is_empty(),
+            "a refused proposal must not record a settlement receipt",
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_skill_tx_without_capability_refuses_without_signing_or_debit() {
+        // The broker leg refuses an ungranted chain.tx before the signer runs;
+        // a seeded budget cannot carry an out-of-capability proposal to a
+        // signature, and the cap check precedes the debit so nothing is spent.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        s.budget.set_capacity(&peer, 10).await.expect("seed budget");
+
+        let result = s
+            .sign_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                SkillTxApproval::Autonomous,
+                &peer,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(Response::Error { .. })),
+            "an ungranted proposal must be refused, got {result:?}",
+        );
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::SkillTxSigned { .. })),
+            "an ungranted proposal must never emit SkillTxSigned",
+        );
+        assert!(
+            s.settlement.recent(10).await.unwrap().is_empty(),
+            "an ungranted proposal must not record a settlement receipt",
+        );
+        assert_eq!(
+            s.budget.tokens_remaining(&peer).await.unwrap(),
+            10,
+            "the capability refusal must precede the budget debit",
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_skill_tx_non_devnet_refuses_without_signing_or_debit() {
+        // Failure mode "signing key used on mainnet": the broker's devnet
+        // allowlist refuses a mainnet cluster before the signer runs, even
+        // with the capability granted and the budget seeded — the identity key
+        // can never sign a mainnet proposal.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+        s.budget.set_capacity(&peer, 10).await.expect("seed budget");
+
+        let result = s
+            .sign_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("mainnet-beta", "register_agent", true),
+                SkillTxApproval::Autonomous,
+                &peer,
+            )
+            .await;
+        let Err(Response::Error { message }) = result else {
+            panic!("a mainnet proposal must be refused, got {result:?}");
+        };
+        assert!(message.contains("non-devnet"), "got {message}");
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::SkillTxSigned { .. })),
+            "a mainnet proposal must never emit SkillTxSigned",
+        );
+        assert!(
+            s.settlement.recent(10).await.unwrap().is_empty(),
+            "a mainnet proposal must not record a settlement receipt",
+        );
+        assert_eq!(
+            s.budget.tokens_remaining(&peer).await.unwrap(),
+            10,
+            "a refused mainnet proposal must not debit the budget",
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_skill_tx_failed_simulate_refuses_and_never_signs() {
+        // A proposal with no signer account can never execute, so the
+        // structural simulate verdict is false and the signing policy refuses
+        // it. Human approval isolates the simulate gate from the budget gate.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, "register_agent");
+        grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+
+        let result = s
+            .sign_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", false),
+                SkillTxApproval::Human,
+                &peer,
+            )
+            .await;
+        let Err(Response::Error { message }) = result else {
+            panic!("a proposal that fails simulate must be refused, got {result:?}");
+        };
+        assert!(message.contains("simulate"), "got {message}");
+
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SkillRefused { reason, .. } if reason.contains("simulate")
+            )),
+            "the simulate refusal must persist a SkillRefused row",
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::SkillTxSigned { .. })),
+            "a failed-simulate proposal must never emit SkillTxSigned",
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_skill_tx_signature_verifies_against_daemon_key_and_binds_fields() {
+        // The W009 governance signature must be externally verifiable and bind
+        // every defining field: a verifier reconstructs the domain-separated
+        // pre-image and checks it against the daemon identity pubkey, and a
+        // cluster swap or a different instruction breaks the check.
+        let home = tempfile::tempdir().expect("home");
+        let s = server_with(vec![], "").with_home(home.path().to_path_buf());
+        let peer = AgentId::new("delegate@local", [7u8; 32]);
+        install_broker_test_skill(&s, "covenant").await;
+        for ix in ["register_agent", "update_agent"] {
+            let action = covenant_permissions::chain_tx_action(BROKER_TEST_PROGRAM, ix);
+            grant_scoped_action_to(&s, &peer, &action, serde_json::json!({})).await;
+        }
+        s.budget.set_capacity(&peer, 10).await.expect("seed budget");
+
+        let signed = s
+            .sign_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "register_agent", true),
+                SkillTxApproval::Autonomous,
+                &peer,
+            )
+            .await
+            .expect("sign");
+
+        let signed_message = |cluster: &str| {
+            let canonical = serde_json::json!([
+                "covenant",
+                cluster,
+                signed.program,
+                signed.instruction,
+                signed.accounts_hash_hex,
+            ])
+            .to_string();
+            let mut message = b"covenant.skill.tx.v1\n".to_vec();
+            message.extend_from_slice(canonical.as_bytes());
+            message
+        };
+        let sig_bytes: [u8; 64] = bs58::decode(&signed.signature_b58)
+            .into_vec()
+            .unwrap()
+            .try_into()
+            .expect("64-byte signature");
+        let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+        let pubkey = s.identity.agent_id().pubkey;
+        covenant_identity::verify_with_pubkey(pubkey, &signed_message("devnet"), &sig)
+            .expect("daemon signature must verify over the reconstructed proposal message");
+        assert!(
+            covenant_identity::verify_with_pubkey(pubkey, &signed_message("mainnet-beta"), &sig)
+                .is_err(),
+            "a cluster-swapped message must not verify — the devnet binding holds",
+        );
+
+        let other = s
+            .sign_skill_tx(
+                "covenant".to_string(),
+                broker_proposal("devnet", "update_agent", true),
+                SkillTxApproval::Autonomous,
+                &peer,
+            )
+            .await
+            .expect("sign other");
+        assert_ne!(
+            signed.signature_b58, other.signature_b58,
+            "different instructions must produce different signatures",
         );
     }
 

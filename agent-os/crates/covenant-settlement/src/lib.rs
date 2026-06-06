@@ -583,6 +583,23 @@ pub fn intent_dispatch_credits() -> u64 {
     INTENT_DISPATCH_CREDITS
 }
 
+/// Credit cost charged to a caller's budget envelope when the daemon
+/// autonomously signs a skill-proposed Solana transaction (W009). Flat, not
+/// size-based: a signing authorization is a single discrete decision, and the
+/// approval envelope governs *whether* to sign, not how many bytes the
+/// instruction carries. The autonomous signing path debits this from the
+/// caller's bucket before signing, so an exhausted or unseeded budget fails
+/// the envelope closed. The human-approval path does not debit — explicit
+/// operator approval is its own authority — but still records the settlement
+/// receipt at this cost.
+pub const SKILL_TX_CREDITS: u64 = 1;
+
+/// Accessor mirror of [`SKILL_TX_CREDITS`]. A future per-program or
+/// per-instruction price would replace the body without touching callers.
+pub fn skill_tx_credits() -> u64 {
+    SKILL_TX_CREDITS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1564,6 +1581,44 @@ mod tests {
              search-replace that hits both lines); the accessor-mirror \
              equality pin above passes for any matched pair but only \
              this direct value pin catches the lockstep regression",
+        );
+    }
+
+    #[test]
+    fn skill_tx_credits_pins_v0_flat_cost_constant_and_accessor_equality() {
+        // SKILL_TX_CREDITS is the autonomous skill-tx signing cost the
+        // daemon debits from a caller's budget bucket before signing a
+        // skill-proposed Solana transaction (W009 "never sign without
+        // approval"). The constant is the v0 tripwire; skill_tx_credits()
+        // is the indirection point for a future per-program price. Same
+        // three-arm shape as intent_dispatch_credits.
+        //
+        // A regression flipping the constant to 0 would let the autonomous
+        // path debit nothing, so an unseeded or exhausted budget would no
+        // longer fail the envelope closed — the "+budget" half of the
+        // capability+budget envelope would become a no-op and autonomous
+        // signing would proceed with no rate floor.
+        assert_eq!(
+            SKILL_TX_CREDITS, 1u64,
+            "SKILL_TX_CREDITS must remain the v0 flat-cost floor of 1 \
+             credit per autonomous skill-tx signature — a refactor that \
+             flipped it to 0 would make the autonomous budget debit a \
+             no-op, so try_debit would approve on an empty bucket and the \
+             capability+budget envelope would lose its budget half",
+        );
+        assert_eq!(
+            skill_tx_credits(),
+            SKILL_TX_CREDITS,
+            "skill_tx_credits() must mirror SKILL_TX_CREDITS so a v1 \
+             pricing migration can replace the accessor body without \
+             diverging callers from the constant",
+        );
+        assert_eq!(
+            skill_tx_credits(),
+            1u64,
+            "skill_tx_credits() must remain 1 — independent floor pin that \
+             catches a lockstep refactor bumping the constant and the \
+             accessor body together",
         );
     }
 

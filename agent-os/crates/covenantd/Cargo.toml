@@ -53,6 +53,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 covenant-audit = { path = "../covenant-audit" }
 covenant-identity = { path = "../covenant-identity" }
+ed25519-dalek = { workspace = true }
 covenant-llm = { path = "../covenant-llm" }
 covenant-manifest = { path = "../covenant-manifest" }
 covenant-peer-auth = { path = "../covenant-peer-auth" }

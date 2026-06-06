@@ -1547,6 +1547,7 @@ dependencies = [
  "covenant-types",
  "covenant-x402",
  "dotenvy",
+ "ed25519-dalek 2.2.0",
  "futures",
  "reqwest 0.12.28",
  "serde",

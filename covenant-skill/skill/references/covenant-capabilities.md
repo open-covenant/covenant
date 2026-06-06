@@ -1,18 +1,7 @@
-# identity-capabilities
+# covenant-capabilities
 
-How the daemon binds an action to a signed authorization, and how to think about
-the `skill.` and `chain.` namespaces when planning what the agent may do.
-
-## Agent identity
-
-Each agent has a long-lived ed25519 keypair owned by the `covenantd` daemon —
-not by the agent process. The agent never reads its own private key. Asking the
-user for a seed phrase, mnemonic, secret recovery phrase, or keystore file is a
-hard refusal; the daemon mints, stores, and uses signing material itself.
-
-The agent's *public* identity is exposed to the model as `$AGENT_ID` (an
-ed25519 public key in base58). Use it when forming capability grant or
-verification requests, never when forming signing requests.
+How the daemon binds an action to a signed authorization, and how to think
+about the `skill.` and `chain.` namespaces when planning what the agent may do.
 
 ## Capability tokens
 
@@ -22,7 +11,7 @@ A capability is a signed object that binds:
 - an **action** — a dotted namespace path (`skill.use.covenant`,
   `chain.tx.<program>.<ix>`, `memory.read`, …)
 - a **scope** — a JSON object whose fields constrain the action (cluster,
-  pubkey, predicate)
+  pubkey, predicate, budget)
 - an **issuer** — the operator key that signed the grant
 - an **expiry** — optional `expires_at` timestamp
 
@@ -49,8 +38,8 @@ required, it surfaces the request to the operator and waits.
 
 ## The `chain.tx.<program>.<ix>` predicate
 
-On-chain action authority is keyed by **program** and **instruction**, never
-by transaction hash. A grant authorizes the daemon to sign **any** transaction
+On-chain action authority is keyed by **program** and **instruction**, never by
+transaction hash. A grant authorizes the daemon to sign **any** transaction
 whose top-level instruction matches the predicate, within the scope.
 
 ```json
@@ -61,13 +50,9 @@ whose top-level instruction matches the predicate, within the scope.
     "version": 1,
     "cluster": "devnet",
     "accounts": {
-      "allow": {
-        "destination": "<allowed-destination-pubkey-base58>"
-      }
+      "allow": { "destination": "<allowed-destination-pubkey-base58>" }
     },
-    "budget": {
-      "max_lamports": 1000000
-    }
+    "budget": { "max_lamports": 1000000 }
   },
   "expires_at": "2026-06-06T00:00:00Z"
 }
@@ -75,7 +60,8 @@ whose top-level instruction matches the predicate, within the scope.
 
 The scope is *signed*: the daemon refuses to sign a transaction whose accounts
 or budget violate the scope, even if the broader action matches. This is W009
-encoded as a check rather than a hope.
+encoded as a check rather than a hope (see
+[covenant-settlement](covenant-settlement.md)).
 
 ## Grant flow
 
@@ -97,7 +83,8 @@ If the agent encounters an action whose required capability is missing or
 expired, it must:
 
 1. Stop the in-flight operation.
-2. Emit a `SkillRefused` audit row with the missing action string.
+2. Emit a `SkillRefused` audit row with the missing action string (see
+   [covenant-audit](covenant-audit.md)).
 3. Surface a structured request to the operator. Never improvise an alternative
    path that bypasses the capability check.
 

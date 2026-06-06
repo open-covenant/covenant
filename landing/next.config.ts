@@ -17,8 +17,11 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      // walletconnect/web3modal serve wallet logos; qwerti pulls token media from defined.fi
-      "img-src 'self' data: blob: https://api.web3modal.org https://*.walletconnect.com https://*.qwerti.ai https://*.defined.fi",
+      // Allow any https image: the qwerti buy widget pulls token logos, chain
+      // icons (relay.link), and provider logos from many third-party CDNs across
+      // 70+ chains. img-src is the safest directive to broaden (images can't
+      // execute). Scripts/connections stay strictly allowlisted below.
+      "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
       // qwerti buy widget (/token) loads its loader + core script from *.qwerti.ai

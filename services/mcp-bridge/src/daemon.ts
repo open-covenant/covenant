@@ -23,6 +23,10 @@ const limitSchema = z.object({
   limit: z.number().int().positive().max(500).optional(),
 });
 
+const witnessProofSchema = z.object({
+  window: z.number().int().positive().max(1000).optional(),
+});
+
 const memoryTierSchema = z.enum(['working', 'episodic', 'longterm']);
 
 const memoryRecentSchema = limitSchema.extend({
@@ -223,6 +227,12 @@ export const daemonTools = [
       limit: { type: 'number' },
     },
   }),
+  describeTool('fetch_witness_proof', 'Fetch the Covenant verifier witness proof — the audit-chain verdict over a window of recent events for the authenticated peer.', {
+    type: 'object',
+    properties: {
+      window: { type: 'number' },
+    },
+  }),
   describeTool('daemon_receipts_recent', 'Read recent Covenant settlement receipts for the authenticated peer.', {
     type: 'object',
     properties: {
@@ -336,6 +346,10 @@ export async function callDaemonTool(
       case 'daemon_audit_recent': {
         const parsed = limitSchema.parse(args);
         return asText(await daemonRequest('/audit/recent', { env, fetchImpl, params: parsed }));
+      }
+      case 'fetch_witness_proof': {
+        const parsed = witnessProofSchema.parse(args);
+        return asText(await daemonRequest('/verify', { env, fetchImpl, params: { window: parsed.window } }));
       }
       case 'daemon_receipts_recent': {
         const parsed = limitSchema.parse(args);

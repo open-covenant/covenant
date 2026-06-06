@@ -5,6 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { callDaemonTool, daemonTools } from './daemon.js';
+import { buildSolanaProposal, solanaProposeTxTool } from './verifiable.js';
 
 function randomHash32(): string {
   return randomBytes(32).toString('hex');
@@ -263,6 +264,7 @@ export const tools = [
     },
     required: ['value'],
   }),
+  solanaProposeTxTool,
   ...daemonTools,
 ];
 
@@ -337,6 +339,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       case 'prepare_anchor_receipt_batch':
         return asText(prepareAnchorReceiptBatchInstruction(receiptBatchSchema.parse(args)));
+      case 'solana_propose_tx':
+        return asText(buildSolanaProposal(args));
       case 'derive_hash32_id': {
         const { value } = deriveIdSchema.parse(args);
         return asText({

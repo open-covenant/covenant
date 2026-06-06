@@ -54,8 +54,8 @@ use covenant_router::{AgentCard, Router};
 use covenant_runtime::{AgentResult, Runner};
 use covenant_sap_bridge::{Config as SapBridgeConfig, SapBridge};
 use covenant_settlement::{
-    build_receipt_batch, intent_dispatch_credits, memory_write_credits, skill_tx_credits,
-    ChainConfirmation, Settlement,
+    build_witness_batch, intent_dispatch_credits, is_devnet_cluster, memory_write_credits,
+    skill_tx_credits, witness_leaf, ChainConfirmation, Settlement,
 };
 use covenant_skills::{
     install_skill, parse_skill_md_path, SkillIntegrityError, SkillManifest, SkillSource,
@@ -347,6 +347,34 @@ pub fn a2a_auto_retry_scheduler_config_from_values(
 /// Lift a `RuntimeTrace` from a runner (currently only Hermes) into the
 /// matching `AuditKind` row. The raw `preview` payload is hashed here so
 /// the chain never embeds tool input verbatim.
+/// Skill audit events folded into the devnet Witness audit-root: the
+/// skill-context pair (injected + invoked) and the skill-tx pair (proposed +
+/// signed). Refusals and installs are excluded — the root commits to what a
+/// run actually did under a skill, not to administration.
+fn is_skill_witness_event(kind: &AuditKind) -> bool {
+    matches!(
+        kind,
+        AuditKind::SkillContextInjected { .. }
+            | AuditKind::SkillInvoked { .. }
+            | AuditKind::SkillTxProposed { .. }
+            | AuditKind::SkillTxSigned { .. }
+    )
+}
+
+/// Encode `peer`'s skill audit events into Witness leaves so they fold into
+/// the anchored root. Each leaf is the domain-separated hash of the canonical
+/// event JSON; only the peer's own events are folded, keeping the root scoped
+/// like the receipts in the same batch.
+fn skill_witness_leaves(events: &[AuditEvent], peer: &AgentId) -> Vec<[u8; 32]> {
+    events
+        .iter()
+        .filter(|event| event.issuer.pubkey == peer.pubkey)
+        .filter(|event| is_skill_witness_event(&event.kind))
+        .filter_map(|event| serde_json::to_vec(event).ok())
+        .map(|bytes| witness_leaf("covenant-skill-event", &bytes))
+        .collect()
+}
+
 fn runtime_trace_to_audit_kind(
     intent_id: Uuid,
     trace: covenant_runtime::RuntimeTrace,
@@ -6015,7 +6043,30 @@ impl Server {
             }
         };
 
-        let batch = match build_receipt_batch(&receipts) {
+        // Devnet-only Witness anchor: a non-devnet cluster can never anchor.
+        // Allowlist (not blocklist) so an unknown cluster label fails closed.
+        if !is_devnet_cluster(&status.cluster) {
+            return Response::Error {
+                message: format!(
+                    "witness anchor refused on non-devnet cluster '{}'",
+                    status.cluster
+                ),
+            };
+        }
+
+        // Fold this peer's skill-context + skill-tx audit events into the
+        // anchored root so the on-chain batch witnesses what the agent ran
+        // under, not only the receipts it settled.
+        let skill_leaves = match self.audit.recent(limit).await {
+            Ok(events) => skill_witness_leaves(&events, peer),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("audit: {e}"),
+                };
+            }
+        };
+
+        let batch = match build_witness_batch(&receipts, &skill_leaves) {
             Ok(batch) => batch,
             Err(e) => {
                 return Response::Error {
@@ -30695,6 +30746,77 @@ required = {caps:?}
                 AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.batches"
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn flush_receipts_folds_skill_events_into_the_witness_root() {
+        // The anchored root must commit to skill-context/skill-tx events, and
+        // a light verifier must recompute it. Record one receipt and one
+        // skill event, flush, then recompute the witness root independently.
+        let s = server_with(vec![], "");
+        grant_action(&s, "chain.flush").await;
+        let me = s.identity.agent_id();
+
+        let receipt = SettlementReceipt {
+            id: Uuid::new_v4(),
+            payer: me.clone(),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: epoch_ms(),
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        s.settlement.record(receipt.clone()).await.unwrap();
+
+        let skill_event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: me.clone(),
+            kind: AuditKind::SkillInvoked {
+                skill_name: "covenant".into(),
+                intent_id: Uuid::new_v4(),
+            },
+        };
+        s.audit.record(skill_event.clone()).await.unwrap();
+
+        let merkle_root = match s.op_respond(Request::FlushReceipts { limit: 50 }).await {
+            Response::ReceiptBatchFlushed {
+                batch,
+                receipts_updated,
+            } => {
+                assert_eq!(receipts_updated, 1, "the one receipt is flushed");
+                assert_eq!(batch.receipt_count, 1);
+                assert!(!batch.merkle_root.is_empty());
+                batch.merkle_root
+            }
+            other => panic!("expected Response::ReceiptBatchFlushed, got {other:?}"),
+        };
+
+        // Light-verification: recompute the witness root from the folded
+        // leaves — the receipt plus the skill-event leaf.
+        let skill_leaf = covenant_settlement::witness_leaf(
+            "covenant-skill-event",
+            &serde_json::to_vec(&skill_event).unwrap(),
+        );
+        assert!(
+            covenant_settlement::verify_witness_root(
+                &[receipt.clone()],
+                &[skill_leaf],
+                &merkle_root
+            ),
+            "the anchored root must recompute from the receipt + the skill-event leaf",
+        );
+        assert!(
+            !covenant_settlement::verify_witness_root(&[receipt], &[], &merkle_root),
+            "dropping the skill leaf must fail verification — the skill event is in the root",
+        );
     }
 
     #[tokio::test]

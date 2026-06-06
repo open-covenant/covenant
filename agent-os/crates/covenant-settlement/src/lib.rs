@@ -600,6 +600,122 @@ pub fn skill_tx_credits() -> u64 {
     SKILL_TX_CREDITS
 }
 
+/// A non-receipt leaf folded into the Witness audit-root — a skill audit
+/// event the caller has hashed to 32 bytes via [`witness_leaf`]. Keeping the
+/// leaf opaque lets this crate commit skill-context/skill-tx events into the
+/// anchored root without depending on the audit-event schema.
+pub type WitnessLeaf = [u8; 32];
+
+/// A devnet Witness audit-root batch: settlement receipts plus skill
+/// [`WitnessLeaf`]s folded into one Merkle root for anchoring via the
+/// settlement program's `anchor_receipt_batch`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitnessBatch {
+    pub batch_id: String,
+    pub merkle_root: String,
+    pub receipt_ids: Vec<uuid::Uuid>,
+    pub receipt_count: u32,
+    pub witness_leaf_count: u32,
+}
+
+/// The only clusters a Witness root may be anchored on. Devnet-only is the
+/// project invariant; an unknown label fails closed (returns false).
+pub fn is_devnet_cluster(cluster: &str) -> bool {
+    matches!(cluster, "devnet" | "localnet")
+}
+
+/// SHA-256 binary Merkle root over `leaves`, duplicating the last leaf on an
+/// odd level — the same convention [`build_receipt_batch`] uses. Panics on
+/// empty input; callers gate emptiness upstream.
+fn merkle_root_bytes(leaves: &[[u8; 32]]) -> [u8; 32] {
+    let mut level = leaves.to_vec();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        for pair in level.chunks(2) {
+            let right = pair.get(1).copied().unwrap_or(pair[0]);
+            let mut hasher = Sha256::new();
+            hasher.update(pair[0]);
+            hasher.update(right);
+            next.push(hasher.finalize().into());
+        }
+        level = next;
+    }
+    level[0]
+}
+
+/// Hash a preimage into a [`WitnessLeaf`] under a domain tag so callers can
+/// fold non-receipt evidence (skill audit events) into the Witness root
+/// without this crate knowing the evidence schema. The domain tag plus the
+/// separator byte keep skill leaves in a different preimage space from
+/// receipt leaves, so no skill leaf can collide with a receipt hash.
+pub fn witness_leaf(domain: &str, preimage: &[u8]) -> WitnessLeaf {
+    let mut hasher = Sha256::new();
+    hasher.update(domain.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(preimage);
+    hasher.finalize().into()
+}
+
+fn witness_leaf_set(
+    receipts: &[&SettlementReceipt],
+    witness_leaves: &[WitnessLeaf],
+) -> Vec<[u8; 32]> {
+    let mut leaves: Vec<[u8; 32]> = receipts.iter().map(|r| receipt_hash(r)).collect();
+    leaves.extend_from_slice(witness_leaves);
+    leaves
+}
+
+/// Fold settlement receipts and skill [`WitnessLeaf`]s into ONE Witness
+/// audit-root. Receipt leaves come first (in receipt order, unsettled only),
+/// then witness leaves, so the anchored root commits to both. Errors
+/// [`SettlementError::EmptyBatch`] only when there is nothing to anchor (no
+/// unsettled receipts and no witness leaves). The devnet-only policy is the
+/// caller's gate ([`is_devnet_cluster`]) — the root itself is cluster-agnostic.
+pub fn build_witness_batch(
+    receipts: &[SettlementReceipt],
+    witness_leaves: &[WitnessLeaf],
+) -> Result<WitnessBatch, SettlementError> {
+    let unsettled: Vec<&SettlementReceipt> = receipts
+        .iter()
+        .filter(|receipt| receipt.batch_id.is_none())
+        .collect();
+    if unsettled.is_empty() && witness_leaves.is_empty() {
+        return Err(SettlementError::EmptyBatch);
+    }
+    let leaves = witness_leaf_set(&unsettled, witness_leaves);
+    let merkle_root = hex32(merkle_root_bytes(&leaves));
+    // Same batch_id domain as build_receipt_batch: a witness batch with no
+    // skill leaves is byte-identical to the receipt batch for the same
+    // receipts, so folding skill events never changes a receipt-only flush.
+    let batch_id = hex32(Sha256::digest(format!("covenant-receipts:{merkle_root}")).into());
+    Ok(WitnessBatch {
+        batch_id,
+        merkle_root,
+        receipt_ids: unsettled.iter().map(|receipt| receipt.id).collect(),
+        receipt_count: unsettled.len() as u32,
+        witness_leaf_count: witness_leaves.len() as u32,
+    })
+}
+
+/// Light-verification: recompute the Witness audit-root from the same leaf
+/// set (receipt leaves in order, then witness leaves) and report whether it
+/// matches `anchored_merkle_root`. Receipts are taken as given — NOT filtered
+/// to unsettled — so a verifier can replay a batch whose receipts were since
+/// marked confirmed. Supply the exact receipts and witness leaves that were
+/// folded at anchor time.
+pub fn verify_witness_root(
+    receipts: &[SettlementReceipt],
+    witness_leaves: &[WitnessLeaf],
+    anchored_merkle_root: &str,
+) -> bool {
+    let refs: Vec<&SettlementReceipt> = receipts.iter().collect();
+    let leaves = witness_leaf_set(&refs, witness_leaves);
+    if leaves.is_empty() {
+        return false;
+    }
+    hex32(merkle_root_bytes(&leaves)) == anchored_merkle_root
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -623,6 +739,109 @@ mod tests {
             confirmed_at: None,
             onchain_sig: None,
         }
+    }
+
+    #[test]
+    fn is_devnet_cluster_gates_the_mainnet_anchor_attempt() {
+        // The mainnet-anchor-attempted failure mode: the caller's devnet
+        // gate must accept only devnet/localnet and fail closed on anything
+        // else (including an unknown or empty label).
+        for cluster in ["devnet", "localnet"] {
+            assert!(is_devnet_cluster(cluster), "{cluster} must be allowed");
+        }
+        for cluster in ["mainnet", "mainnet-beta", "testnet", "", "Devnet", "DEVNET"] {
+            assert!(!is_devnet_cluster(cluster), "{cluster:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn build_witness_batch_folds_skill_leaves_into_the_root() {
+        // The skill-events-excluded failure mode: adding a skill leaf must
+        // change the anchored root, proving skill events are folded in.
+        let receipts = [receipt(1), receipt(2)];
+        let receipts_only = build_witness_batch(&receipts, &[]).unwrap();
+        let leaf = witness_leaf("covenant-skill-event", b"SkillInvoked:covenant");
+        let with_skill = build_witness_batch(&receipts, &[leaf]).unwrap();
+
+        assert_ne!(
+            receipts_only.merkle_root, with_skill.merkle_root,
+            "folding a skill leaf must change the witness root",
+        );
+        assert_eq!(with_skill.receipt_count, 2);
+        assert_eq!(with_skill.witness_leaf_count, 1);
+        assert_eq!(with_skill.receipt_ids.len(), 2);
+        // A receipt-only witness batch is byte-identical to the receipt
+        // batch — folding skill events never perturbs a receipt-only flush.
+        let receipt_batch = build_receipt_batch(&receipts).unwrap();
+        assert_eq!(receipt_batch.batch_id, receipts_only.batch_id);
+        assert_eq!(receipt_batch.merkle_root, receipts_only.merkle_root);
+    }
+
+    #[test]
+    fn verify_witness_root_recomputes_the_anchored_root() {
+        // Light-verification: recomputing from the same leaves matches the
+        // anchored root; any tampering with the leaf set does not.
+        let receipts = vec![receipt(1), receipt(2)];
+        let leaf = witness_leaf("covenant-skill-event", b"SkillTxSigned:covenant");
+        let batch = build_witness_batch(&receipts, &[leaf]).unwrap();
+
+        assert!(
+            verify_witness_root(&receipts, &[leaf], &batch.merkle_root),
+            "recomputation from the folded leaves must match the anchored root",
+        );
+        assert!(
+            !verify_witness_root(&receipts, &[], &batch.merkle_root),
+            "dropping the skill leaf must fail verification — the leaf is in the root",
+        );
+        let other = witness_leaf("covenant-skill-event", b"tampered");
+        assert!(
+            !verify_witness_root(&receipts, &[other], &batch.merkle_root),
+            "a substituted skill leaf must fail verification",
+        );
+        assert!(
+            !verify_witness_root(&[], &[], &batch.merkle_root),
+            "an empty leaf set never verifies a non-empty root",
+        );
+    }
+
+    #[test]
+    fn build_witness_batch_anchors_skill_only_and_rejects_fully_empty() {
+        // A witness with no unsettled receipts but skill events present is a
+        // valid anchor (receipt_count 0); only a fully empty input errors.
+        let leaf = witness_leaf("covenant-skill-event", b"SkillContextInjected:covenant");
+        let skill_only = build_witness_batch(&[], &[leaf]).unwrap();
+        assert_eq!(skill_only.receipt_count, 0);
+        assert_eq!(skill_only.witness_leaf_count, 1);
+        assert!(!skill_only.merkle_root.is_empty());
+
+        let mut settled = receipt(1);
+        settled.batch_id = Some("done".into());
+        match build_witness_batch(&[settled], &[]) {
+            Err(SettlementError::EmptyBatch) => {}
+            other => {
+                panic!("no unsettled receipts and no witness leaves must be EmptyBatch: {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn witness_leaf_is_domain_separated_and_deterministic() {
+        let a = witness_leaf("covenant-skill-event", b"x");
+        assert_eq!(
+            a,
+            witness_leaf("covenant-skill-event", b"x"),
+            "deterministic"
+        );
+        assert_ne!(
+            a,
+            witness_leaf("other-domain", b"x"),
+            "the domain tag must change the leaf",
+        );
+        assert_ne!(
+            a,
+            witness_leaf("covenant-skill-event", b"y"),
+            "the preimage must change the leaf",
+        );
     }
 
     fn read_receipt_file(path: &Path) -> Vec<SettlementReceipt> {
@@ -1014,8 +1233,9 @@ mod tests {
         // merkle_root hash (also a sha256 product) so an attacker
         // cannot pre-compute one from the other under a length-
         // extension or hash-collision attack on the same input
-        // domain. The prefix appears exactly ONCE in the crate (line
-        // 91) and no test references it.
+        // domain. build_witness_batch reuses the same prefix so a
+        // receipt-only witness batch stays byte-identical to the
+        // receipt batch; this test pins build_receipt_batch's copy.
         //
         // receipt_batch_uses_only_unsettled_receipts pins
         // 'batch.batch_id.len() == 64' (length, not content);

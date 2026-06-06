@@ -17,8 +17,8 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      // walletconnect/web3modal serve wallet logos over https for the AppKit modal
-      "img-src 'self' data: blob: https://api.web3modal.org https://*.walletconnect.com https://*.qwerti.ai",
+      // walletconnect/web3modal serve wallet logos; qwerti pulls token media from defined.fi
+      "img-src 'self' data: blob: https://api.web3modal.org https://*.walletconnect.com https://*.qwerti.ai https://*.defined.fi",
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
       // qwerti buy widget (/token) loads its loader + core script from *.qwerti.ai

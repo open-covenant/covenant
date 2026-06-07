@@ -12031,16 +12031,20 @@ impl Server {
             if receipt.resource != ResourceKind::Tool {
                 continue;
             }
-            // Gate on the receipt's payer.pubkey being non-zero so the
-            // receipt_payer_pubkey_zeroed shape arm (Check 6) owns the case
-            // where the receipt side is zeroed. Do NOT gate on the debit's
-            // agent.pubkey being non-zero: the budget log has no shape arm,
-            // so a zeroed debit agent (an anonymized "charged nobody" row)
-            // paired to a valid Tool receipt must surface here as a mismatch
-            // rather than escape unflagged. A clean production debit always
-            // carries the payer's real ed25519 key, so this never fires on a
-            // well-formed pair.
-            if receipt.payer.pubkey != [0u8; 32] && debit.agent.pubkey != receipt.payer.pubkey {
+            // Gate on both the receipt's payer.pubkey and the debit's
+            // agent.pubkey being non-zero so the within-row shape arms own the
+            // all-zero sentinel: receipt_payer_pubkey_zeroed (Check 6) for the
+            // receipt side and budget_debit_agent_pubkey_zeroed (the shape pass
+            // above) for the debit side. A clean production debit always carries
+            // the payer's real ed25519 key, so this never fires on a well-formed
+            // pair; a zeroed debit agent is surfaced by its own shape arm
+            // regardless of whether the paired receipt is in the window (which
+            // this join requires), so gating it out here never lets a "charged
+            // nobody" debit escape.
+            if receipt.payer.pubkey != [0u8; 32]
+                && debit.agent.pubkey != [0u8; 32]
+                && debit.agent.pubkey != receipt.payer.pubkey
+            {
                 debit_receipt_payer_mismatch_refs += 1;
                 drift.push(VerifyDrift {
                     kind: "budget_debit_paired_receipt_payer_mismatch".into(),
@@ -12049,7 +12053,7 @@ impl Server {
                         "budget debit paired_receipt = {} resolves to a ResourceKind::Tool SettlementReceipt whose payer.pubkey differs from the debit's agent.pubkey (debit agent {:?}, receipt payer {:?}); the sole production writer of a (BudgetDebit, Tool receipt) pair is record_paid_call (covenantd/src/x402.rs:206-264), which debits the payer via budget.try_debit(payer, call.credits, receipt_id) (x402.rs:215) and records the receipt with the same payer under that receipt_id (x402.rs:220-223), so every production paid call satisfies debit.agent.pubkey == receipt.payer.pubkey — a matched pair whose pubkeys differ is a pairing no production write emits",
                         debit.paired_receipt, debit.agent.display, receipt.payer.display
                     ),
-                    repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; record_paid_call (x402.rs:206-264) charges the debit and records the Tool receipt from the same payer in one call, so a matched pair whose agent.pubkey differs from the receipt's payer.pubkey is out-of-band evidence of a JSONL edit that reassigned which identity a paid call's debit charged (misattributing the USDC spend to the wrong agent's budget) while leaving the receipt's payer intact, an import tool that paired the debit with a foreign receipt, or a serde regression that hydrated either pubkey from a different row; the budget ledger and settlement log are separate unsigned local JSONL files with no cross-log signature so no within-row arm in either log covers this, making the join the sole detector; it fires only on a debit whose paired_receipt resolves to a Tool receipt (memory-dispatch debits pair with ResourceKind::Memory receipts whose payer is the submitting peer rather than the debited agent, so they are excluded by design) and only when the receipt's payer.pubkey is non-zero so the receipt_payer_pubkey_zeroed shape arm owns the zeroed-receipt-payer case; a zeroed debit agent paired to a valid Tool receipt is intentionally reported here since the budget log has no shape arm of its own".into(),
+                    repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; record_paid_call (x402.rs:206-264) charges the debit and records the Tool receipt from the same payer in one call, so a matched pair whose agent.pubkey differs from the receipt's payer.pubkey is out-of-band evidence of a JSONL edit that reassigned which identity a paid call's debit charged (misattributing the USDC spend to the wrong agent's budget) while leaving the receipt's payer intact, an import tool that paired the debit with a foreign receipt, or a serde regression that hydrated either pubkey from a different row; the budget ledger and settlement log are separate unsigned local JSONL files with no cross-log signature so no within-row arm in either log covers this, making the join the sole detector; it fires only on a debit whose paired_receipt resolves to a Tool receipt (memory-dispatch debits pair with ResourceKind::Memory receipts whose payer is the submitting peer rather than the debited agent, so they are excluded by design) and only when both the receipt's payer.pubkey and the debit's agent.pubkey are non-zero so the within-row shape arms own the all-zero sentinel — receipt_payer_pubkey_zeroed for the receipt side and budget_debit_agent_pubkey_zeroed for the debit side; the latter flags a zeroed debit agent regardless of whether the paired receipt is in the window, so a 'charged nobody' debit can never escape this disjointness".into(),
                 });
             }
             // Display half of the payer binding. record_paid_call clones one
@@ -12098,6 +12102,44 @@ impl Server {
                 });
             }
         }
+        // Shape (identity): ed25519 verifying keys are never the all-zero
+        // sequence, and both production try_debit callers source a non-zero
+        // agent — record_paid_call debits the authenticated peer's real ed25519
+        // key (covenantd/src/x402.rs:215) and dispatch_intent_run debits
+        // agent_id_for_card(card), whose synthesized pubkey copies the card.id
+        // bytes into a [0u8; 32] buffer (covenantd/src/lib.rs:13394-13399) over a
+        // card.id that Manifest::validate constrains to [A-Za-z0-9_.-]+, so the
+        // id — and thus pubkey[0] — is never empty. A faithful debit therefore
+        // always carries a non-zero agent.pubkey. A zeroed agent is a serde
+        // regression that hydrated the all-zero pubkey, an import or replay
+        // tool that wrote a placeholder identity, or a JSONL edit that
+        // anonymized which payer a debit charged — collapsing every per-payer
+        // budget bucket into one "charged nobody" bucket while the credit still
+        // counts against the burn. This is the sixth carrier of the
+        // zeroed-pubkey family (receipt_payer_pubkey_zeroed,
+        // audit_event_issuer_pubkey_zeroed, memory_record_owner_pubkey_zeroed,
+        // capability_subject_pubkey_zeroed, capability_grantor_pubkey_zeroed) and
+        // the budget ledger's first identity-shape arm. Like the at_ms shape arm
+        // below it runs independent of the join loop above (which skips a debit
+        // whose paired_receipt is windowed out), so a zeroed agent is flagged
+        // regardless of receipt presence, and it owns the all-zero sentinel for
+        // the debit side of the budget_debit_paired_receipt_payer_mismatch join,
+        // which gates on debit.agent.pubkey != [0u8; 32] so the two are disjoint.
+        let mut zeroed_agent_debit_refs = 0_u64;
+        for debit in &debits {
+            if debit.agent.pubkey == [0u8; 32] {
+                zeroed_agent_debit_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "budget_debit_agent_pubkey_zeroed".into(),
+                    id: Some(debit.paired_receipt.to_string()),
+                    message: format!(
+                        "budget debit paired_receipt = {} has agent.pubkey = [0u8; 32]; ed25519 verifying keys are never the all-zero sequence, and both production try_debit callers source a non-zero agent — record_paid_call debits the authenticated peer's real ed25519 key (covenantd/src/x402.rs:215) and dispatch_intent_run debits agent_id_for_card(card), whose synthesized pubkey copies the card.id bytes into the buffer (covenantd/src/lib.rs:13394-13399) over a card.id that Manifest::validate constrains to [A-Za-z0-9_.-]+, so pubkey[0] is never zero — a zeroed agent collapses every per-payer budget bucket into one anonymous bucket while the credit still counts against the burn",
+                        debit.paired_receipt
+                    ),
+                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit callers carry a non-zero agent — record_paid_call passes the authenticated peer (a real ed25519 key) and dispatch_intent_run passes agent_id_for_card(card), whose synthesized pubkey copies the non-empty card.id bytes (Manifest::validate constrains card.id to [A-Za-z0-9_.-]+) — so an all-zero agent.pubkey is out-of-band evidence of a serde regression that hydrated the all-zero pubkey, an import or replay tool that constructed the debit with a placeholder identity, or a JSONL edit that anonymized which payer a debit charged (collapsing the per-payer budget bucket the token-bucket gate enforces into one 'charged nobody' bucket and detaching the burn from the identity it should bill); this is the sixth carrier of the zeroed-pubkey family (receipt_payer_pubkey_zeroed, audit_event_issuer_pubkey_zeroed, memory_record_owner_pubkey_zeroed, capability_subject_pubkey_zeroed, capability_grantor_pubkey_zeroed) and the budget ledger's first identity-shape arm; it runs independent of the join loop (which skips a debit whose paired_receipt is windowed out) so a zeroed agent is flagged regardless of receipt presence, and it owns the all-zero sentinel for the debit side of the budget_debit_paired_receipt_payer_mismatch join, which gates on debit.agent.pubkey != [0u8; 32] so the two arms are strictly disjoint".into(),
+                });
+            }
+        }
         // Shape: every production BudgetDebit stamps at_ms from epoch_ms() inside
         // try_debit — both store backends bind now = epoch_ms() and set
         // at_ms = now in the same call (covenant-budget/src/lib.rs:397,415 and
@@ -12108,7 +12150,7 @@ impl Server {
         // cannot surface a legitimately zero at_ms. A zero at_ms is therefore a
         // serde regression (u64::default() is 0), an import or replay tool that
         // bypassed epoch_ms(), or a JSONL edit that anonymized when the debit was
-        // charged. This is the first within-row shape arm for the budget ledger
+        // charged. This is a within-row shape arm for the budget ledger
         // (an unsigned local JSONL with no chain-hash anchor) and the budget-log
         // leg of the zero-timestamp family: receipt_settled_at_zero on the
         // settlement log, audit_event_timestamp_zero on the audit log, and
@@ -12127,7 +12169,7 @@ impl Server {
                         "budget debit paired_receipt = {} has at_ms = 0; every production BudgetDebit stamps at_ms from epoch_ms() inside try_debit (covenant-budget/src/lib.rs, both store backends bind now = epoch_ms() and set at_ms = now in the same call), and epoch_ms() returns 0 only when the system clock predates 1970-01-01 (impossible), so a faithful debit always carries a non-zero at_ms — a zero at_ms is a serde regression (u64::default() is 0), an import tool that bypassed epoch_ms(), or a JSONL edit that anonymized when the debit was charged",
                         debit.paired_receipt
                     ),
-                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit backends bind now = epoch_ms() and stamp at_ms = now in the same call (covenant-budget/src/lib.rs), and compact_older_than only drops pre-cutoff Debit rows while emitting Snapshot rows (never a Debit with at_ms = 0), so a zero at_ms is out-of-band evidence of a serde regression (u64::default() is 0), an import or replay tool that constructed the debit without epoch_ms(), or a JSONL edit that anonymized when the per-payer budget was charged; the budget ledger is an unsigned local JSONL with no chain-hash anchor covering this invariant, so this within-row shape arm is the sole detector — it is the first shape arm for the budget ledger and the budget-log leg of the zero-timestamp family (receipt_settled_at_zero on the settlement log, audit_event_timestamp_zero on the audit log, memory_record_created_at_zero on the memory store)".into(),
+                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit backends bind now = epoch_ms() and stamp at_ms = now in the same call (covenant-budget/src/lib.rs), and compact_older_than only drops pre-cutoff Debit rows while emitting Snapshot rows (never a Debit with at_ms = 0), so a zero at_ms is out-of-band evidence of a serde regression (u64::default() is 0), an import or replay tool that constructed the debit without epoch_ms(), or a JSONL edit that anonymized when the per-payer budget was charged; the budget ledger is an unsigned local JSONL with no chain-hash anchor covering this invariant, so this within-row shape arm is the sole detector — it is a shape arm for the budget ledger and the budget-log leg of the zero-timestamp family (receipt_settled_at_zero on the settlement log, audit_event_timestamp_zero on the audit log, memory_record_created_at_zero on the memory store)".into(),
                 });
             }
         }
@@ -12179,6 +12221,7 @@ impl Server {
             + debit_receipt_payer_display_mismatch_refs
             + debit_receipt_credits_mismatch_refs
             + debit_memory_receipt_credits_not_flat_refs
+            + zeroed_agent_debit_refs
             + zero_at_ms_debit_refs
             + duplicate_paired_receipt_refs;
         orphans_total += budget_join_drift;
@@ -12186,7 +12229,7 @@ impl Server {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
             ),
         });
 
@@ -22301,12 +22344,15 @@ required = {caps:?}
     }
 
     #[tokio::test]
-    async fn verify_reports_payer_mismatch_when_debit_agent_pubkey_zeroed() {
+    async fn verify_reports_budget_debit_agent_pubkey_zeroed_drift() {
         let s = server_with(vec![], "");
-        // A zeroed debit agent (an anonymized "charged nobody" budget row)
-        // paired to a valid Tool receipt has no budget-log shape arm of its
-        // own, so the join must surface it as a payer mismatch rather than
-        // let it escape. Credits agree so only the payer arm fires.
+        // A zeroed debit agent (an anonymized "charged nobody" budget row) is
+        // caught by the budget_debit_agent_pubkey_zeroed within-row shape arm,
+        // the sixth carrier of the zeroed-pubkey family, which owns the all-zero
+        // sentinel for the debit side. The budget_debit_paired_receipt_payer_mismatch
+        // join arm gates on debit.agent.pubkey != [0u8; 32], so even with a
+        // valid Tool receipt to join against (credits agree) the payer-mismatch
+        // arm stays silent and only the shape arm fires.
         let receipt_id = Uuid::new_v4();
         let payer = AgentId::new("payer@host", [7u8; 32]);
         s.settlement
@@ -22323,19 +22369,59 @@ required = {caps:?}
         s.budget.try_debit(&zeroed, 4, receipt_id).await.unwrap();
 
         match s.op_respond(Request::Verify { window: 100 }).await {
-            Response::VerifyReport { drift, checks, .. } => {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let matches: Vec<_> = drift
+                    .iter()
+                    .filter(|i| i.kind == "budget_debit_agent_pubkey_zeroed")
+                    .collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "exactly one zeroed-agent debit must surface: {drift:?}"
+                );
+                assert_eq!(
+                    matches[0].id.as_deref(),
+                    Some(receipt_id.to_string().as_str())
+                );
                 assert!(
-                    drift.iter().any(|i| {
-                        i.kind == "budget_debit_paired_receipt_payer_mismatch"
-                            && i.id.as_deref() == Some(&receipt_id.to_string())
-                    }),
-                    "a zeroed debit agent vs a valid Tool receipt payer must be flagged: {drift:?}"
+                    matches[0].message.contains("agent.pubkey = [0u8; 32]")
+                        && matches[0].message.contains("ed25519"),
+                    "message should name the zeroed pubkey and the ed25519 invariant: {}",
+                    matches[0].message
+                );
+                assert!(
+                    matches[0]
+                        .repair
+                        .contains("sixth carrier of the zeroed-pubkey family")
+                        && matches[0].repair.contains("receipt_payer_pubkey_zeroed"),
+                    "repair hint should place it in the zeroed-pubkey family: {}",
+                    matches[0].repair
+                );
+                // The shape arm owns the sentinel: the payer-mismatch join arm
+                // gates on a non-zero agent, so it stays silent here.
+                assert!(
+                    !drift
+                        .iter()
+                        .any(|i| i.kind == "budget_debit_paired_receipt_payer_mismatch"),
+                    "payer-mismatch must be gated out for a zeroed agent: {drift:?}"
                 );
                 let check = checks
                     .iter()
                     .find(|c| c.name == "budget ↔ receipts")
                     .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
                 assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 zeroed-agent-pubkey debit")
+                        && check.message.contains("0 payer-mismatched debit"),
+                    "check message should count the zeroed-agent debit and show payer-mismatch silent: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),
         }

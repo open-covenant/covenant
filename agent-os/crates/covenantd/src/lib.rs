@@ -11869,15 +11869,60 @@ impl Server {
                 });
             }
         }
+        // Cardinality: the pairing between a budget debit and its settlement
+        // receipt is 1:1. Both production try_debit callers mint a fresh
+        // receipt_id = Uuid::new_v4() and pass it to exactly one try_debit
+        // before recording the matching receipt under that id —
+        // record_paid_call (covenantd/src/x402.rs:211,215) for the Tool
+        // pairing and dispatch_intent_run (covenantd/src/lib.rs:3926,4045) for
+        // the Memory pairing — so a given non-nil paired_receipt value is
+        // carried by at most one BudgetDebit in faithful data.
+        // compact_older_than only emits Snapshot rows and drops pre-cutoff
+        // Debit rows (never duplicating one), so recent_debits_all cannot
+        // surface a legitimately repeated paired_receipt. Two debits sharing
+        // one is a second charge against a receipt that already settled
+        // exactly one debit: a replayed or duplicated budget-log row, a forged
+        // debit reusing a live receipt_id, or a serde regression — none of
+        // which the budget ledger (an unsigned local JSONL with no within-row
+        // shape arm) otherwise catches. Mirrors Check 1's
+        // intent_dispatched_duplicate per-intent_id replay count. Skip the nil
+        // UUID: a defaulted or forged all-zeros paired_receipt is a distinct
+        // signal the join arms already leave unresolved, and counting it here
+        // would conflate serde-defaulted rows with a real receipt_id collision.
+        // Windowing can only hide a real duplicate (one copy aged out of
+        // recent_debits_all), never invent one.
+        let mut paired_receipt_debit_counts: HashMap<Uuid, usize> = HashMap::new();
+        for debit in &debits {
+            if !debit.paired_receipt.is_nil() {
+                *paired_receipt_debit_counts
+                    .entry(debit.paired_receipt)
+                    .or_insert(0) += 1;
+            }
+        }
+        let mut duplicate_paired_receipt_refs = 0_u64;
+        for (receipt_id, count) in &paired_receipt_debit_counts {
+            if *count > 1 {
+                duplicate_paired_receipt_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "budget_debit_paired_receipt_shared_by_multiple_debits".into(),
+                    id: Some(receipt_id.to_string()),
+                    message: format!(
+                        "{count} BudgetDebit rows share paired_receipt {receipt_id}, but the pairing between a budget debit and its settlement receipt is 1:1 — both production try_debit callers, record_paid_call (covenantd/src/x402.rs:206-264) and dispatch_intent_run (covenantd/src/lib.rs), mint a fresh receipt_id = Uuid::new_v4() and pass it to exactly one try_debit before recording the matching SettlementReceipt under that id, so every production receipt_id is carried by exactly one debit — two debits sharing one is a second charge against a receipt that already settled a single debit, a pairing no production write emits"
+                    ),
+                    repair: "review the budget-ledger JSONL rows that carry this paired_receipt; record_paid_call (x402.rs:206-264) and dispatch_intent_run each allocate a fresh receipt_id via Uuid::new_v4() and debit it exactly once, and compact_older_than only emits Snapshot rows while dropping pre-cutoff Debit rows (never duplicating one), so two debits sharing a receipt_id is out-of-band evidence of a replayed or duplicated budget-log row (a crash-recovery or import tool re-appending a debit), a forged debit reusing a live receipt_id to attach a second charge to an already-settled receipt, or a serde regression that hydrated two rows with the same paired_receipt; the budget ledger is an unsigned local JSONL with no within-row shape arm of its own, so this cross-row cardinality check is the sole detector — identify the canonical debit (the one whose agent and credits match the paired receipt) before truncating the duplicate, since the duplicate double-counts against the per-payer budget bucket and desyncs the budget log from the 1:1 settlement pairing the flush and on-chain batch reconciliation rely on".into(),
+                });
+            }
+        }
         let budget_join_drift = debit_receipt_payer_mismatch_refs
             + debit_receipt_credits_mismatch_refs
-            + debit_memory_receipt_credits_not_flat_refs;
+            + debit_memory_receipt_credits_not_flat_refs
+            + duplicate_paired_receipt_refs;
         orphans_total += budget_join_drift;
         checks.push(VerifyCheck {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
             ),
         });
 
@@ -21792,6 +21837,78 @@ required = {caps:?}
                 assert!(
                     check.message.contains("1 non-flat-credits"),
                     "check message should count non-flat memory-dispatch debits: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_budget_debit_duplicate_paired_receipt_drift() {
+        let s = server_with(vec![], "");
+        // Each receipt_id is minted once and debited once. Here two BudgetDebit
+        // rows carry the same paired_receipt -- the replay or duplicate a
+        // budget-log re-append would produce -- against one clean Tool receipt
+        // whose payer and credits match the debits, so only the cardinality arm
+        // fires (the Tool field arms stay silent) and it fires exactly once for
+        // the shared receipt_id, not once per debit.
+        let receipt_id = Uuid::new_v4();
+        let payer = AgentId::new("payer@host", [4u8; 32]);
+        s.settlement
+            .record(budget_join_test_receipt(
+                receipt_id,
+                payer.clone(),
+                ResourceKind::Tool,
+                5,
+            ))
+            .await
+            .unwrap();
+        s.budget.set_capacity(&payer, 100).await.unwrap();
+        s.budget.try_debit(&payer, 5, receipt_id).await.unwrap();
+        s.budget.try_debit(&payer, 5, receipt_id).await.unwrap();
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let matches: Vec<_> = drift
+                    .iter()
+                    .filter(|item| {
+                        item.kind == "budget_debit_paired_receipt_shared_by_multiple_debits"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "duplicate paired_receipt must surface exactly once for the shared id: {drift:?}"
+                );
+                assert!(
+                    matches[0].message.contains("2 BudgetDebit rows share")
+                        && matches[0].message.contains("1:1"),
+                    "message should count the sharing debits and name the 1:1 pairing: {}",
+                    matches[0].message
+                );
+                assert!(
+                    !drift.iter().any(|i| {
+                        i.kind == "budget_debit_paired_receipt_payer_mismatch"
+                            || i.kind == "budget_debit_paired_receipt_credits_mismatch"
+                    }),
+                    "a clean Tool pair must not trip the payer/credits field arms: {drift:?}"
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 duplicate-paired-receipt"),
+                    "check message should count duplicate paired receipts: {}",
                     check.message
                 );
                 assert!(orphans_total >= 1);

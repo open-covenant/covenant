@@ -6482,7 +6482,20 @@ impl Server {
         // unparseable sub-key is left alone) and on the receipt being present in
         // the store (so a windowed-out or purged receipt is left to the
         // orphan-free join rather than flagged here).
+        // Same join, second invariant: covenant-memory's matcher builds its
+        // legacy candidate set from Memory-resource receipts only
+        // (match_legacy_receipts_to_memory_records filters
+        // receipt.resource == ResourceKind::Memory, covenant-memory/src/lib.rs:411-414),
+        // and resource is immutable after write, so every production
+        // metadata.receipt_id back-reference resolves to a Memory receipt. A
+        // back-reference resolving to a non-Memory receipt is therefore
+        // out-of-band, and — unlike the payer arm — catches the same-payer case
+        // where the acting peer itself paid for the unrelated (e.g. Tool)
+        // receipt the reference was repointed at. Disjoint from the forward
+        // memory_receipt_resource_mismatch pre-scan, which keys on
+        // receipt.memory_record_id (a legacy backfilled receipt carries none).
         let mut backref_payer_not_owner_refs = 0_u64;
+        let mut backref_resource_not_memory_refs = 0_u64;
         for memory in &memories {
             let Some(serde_json::Value::String(receipt_id_str)) = memory.metadata.get("receipt_id")
             else {
@@ -6494,6 +6507,18 @@ impl Server {
             let Some(receipt) = receipt_by_id.get(&receipt_id) else {
                 continue;
             };
+            if receipt.resource != ResourceKind::Memory {
+                backref_resource_not_memory_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_record_receipt_id_backref_resource_not_memory".into(),
+                    id: Some(memory.id.to_string()),
+                    message: format!(
+                        "memory record {} has metadata.receipt_id = {receipt_id} joined to settlement receipt {receipt_id} whose resource is {:?} rather than Memory; the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id), fed only by match_legacy_receipts_to_memory_records whose legacy candidate set is pre-filtered to Memory receipts (receipt.resource == ResourceKind::Memory, covenant-memory/src/lib.rs:411-414), and resource is immutable after write, so every production back-reference resolves to a Memory receipt — a back-reference resolving to a non-Memory receipt is a pairing no production backfill emits",
+                        memory.id, receipt.resource
+                    ),
+                    repair: "review the memory store row and the settlement receipt its metadata.receipt_id points at; covenant-memory's receipt-correlation backfill only ever references a Memory-resource receipt (its legacy candidate set filters receipt.resource == ResourceKind::Memory before correlating, covenant-memory/src/lib.rs:411-414) and resource is immutable after write, so a back-reference resolving to a non-Memory (e.g. Tool) receipt is out-of-band evidence of a JSONL edit that repointed metadata.receipt_id at an unrelated receipt or an import/serde regression that hydrated it from a different row; this arm is disjoint from the sibling memory_record_receipt_id_backref_payer_not_matching_owner arm (which checks the resolved receipt's payer.pubkey) and catches the same-payer case that arm cannot see (a non-Memory receipt the acting peer itself paid for), and from the forward memory_receipt_resource_mismatch pre-scan (which joins receipt.memory_record_id -> memory.id on receipts carrying a memory_record_id, which a legacy backfilled receipt never does); it fires only when metadata.receipt_id is a string Uuid resolving to a receipt present in the store whose resource is not Memory".into(),
+                });
+            }
             if receipt.payer.pubkey != memory.owner.pubkey {
                 backref_payer_not_owner_refs += 1;
                 drift.push(VerifyDrift {
@@ -6702,22 +6727,27 @@ impl Server {
             });
         }
         let receipt_drift = exact_diff.max(pair_diff);
-        orphans_total += receipt_drift + resource_mismatch_refs + backref_payer_not_owner_refs;
+        orphans_total += receipt_drift
+            + resource_mismatch_refs
+            + backref_payer_not_owner_refs
+            + backref_resource_not_memory_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ receipts".into(),
             passed: exact_diff == 0
                 && pair_diff == 0
                 && resource_mismatch_refs == 0
-                && backref_payer_not_owner_refs == 0,
+                && backref_payer_not_owner_refs == 0
+                && backref_resource_not_memory_refs == 0,
             message: format!(
-                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}",
+                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}; back-reference resource mismatch = {}",
                 memories.len(),
                 memory_receipts.len(),
                 pair_diff,
                 exact_diff,
                 legacy_fallback_used,
                 resource_mismatch_refs,
-                backref_payer_not_owner_refs
+                backref_payer_not_owner_refs,
+                backref_resource_not_memory_refs
             ),
         });
 
@@ -34804,6 +34834,213 @@ required = {caps:?}
                         && receipt_check.message.contains("exact drift = 0")
                         && receipt_check.message.contains("resource mismatch = 0"),
                     "only the back-reference arm should fail the check: {}",
+                    receipt_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_receipt_id_backref_resource_not_memory_drift() {
+        // covenant-memory's receipt-correlation backfill builds its legacy
+        // candidate set from Memory-resource receipts only, so a metadata
+        // .receipt_id back-reference resolving to a non-Memory receipt is a
+        // pairing no production backfill emits. The tamper receipt shares the
+        // record's payer pubkey, so the sibling payer-mismatch arm stays silent
+        // and only the resource arm flips the check — proving the resource arm
+        // catches a case the payer arm cannot see.
+        async fn put_dispatch_memory(
+            s: &Server,
+            id: Uuid,
+            owner: &AgentId,
+            text: &str,
+            metadata: serde_json::Value,
+        ) {
+            s.memory
+                .put(MemoryRecord {
+                    id,
+                    tier: MemoryTier::Working,
+                    owner: owner.clone(),
+                    text: text.to_string(),
+                    embedding: vec![],
+                    metadata,
+                    created_at: 1_000,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: owner.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id: id,
+                        intent_text: text.to_string(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(text.as_bytes()),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        async fn put_receipt(
+            s: &Server,
+            id: Uuid,
+            payer: &AgentId,
+            resource: ResourceKind,
+            text: &str,
+        ) {
+            s.settlement
+                .record(SettlementReceipt {
+                    id,
+                    payer: payer.clone(),
+                    resource,
+                    memory_record_id: None,
+                    credits_consumed: memory_write_credits(text.len()),
+                    settled_at: 2_000,
+                    chain: None,
+                    cluster: None,
+                    batch_id: None,
+                    merkle_root: None,
+                    tx_sig: None,
+                    slot: None,
+                    confirmed_at: None,
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Tamper: a me-owned record whose metadata.receipt_id resolves to a
+        // me-paid Tool receipt. A balancing me-owned legacy Memory receipt keeps
+        // the count/exact/legacy halves clean so only the resource arm can flip
+        // the check, and the shared payer keeps the payer arm silent.
+        let tamper_id = Uuid::new_v4();
+        let tool_receipt_id = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            tamper_id,
+            &me,
+            "resource backref tamper",
+            serde_json::json!({ "receipt_id": tool_receipt_id.to_string() }),
+        )
+        .await;
+        put_receipt(
+            &s,
+            tool_receipt_id,
+            &me,
+            ResourceKind::Tool,
+            "resource backref tamper",
+        )
+        .await;
+        put_receipt(
+            &s,
+            Uuid::new_v4(),
+            &me,
+            ResourceKind::Memory,
+            "resource backref tamper",
+        )
+        .await;
+
+        // Control: a me-owned record whose back-reference resolves to a Memory
+        // receipt — the production-valid resource.
+        let control_id = Uuid::new_v4();
+        let control_receipt_id = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            control_id,
+            &me,
+            "resource backref control",
+            serde_json::json!({ "receipt_id": control_receipt_id.to_string() }),
+        )
+        .await;
+        put_receipt(
+            &s,
+            control_receipt_id,
+            &me,
+            ResourceKind::Memory,
+            "resource backref control",
+        )
+        .await;
+
+        let resp = s.op_respond(Request::Verify { window: 1000 }).await;
+        let kind = "memory_record_receipt_id_backref_resource_not_memory";
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let fired = |memory_id: &Uuid, k: &str| {
+                    drift
+                        .iter()
+                        .any(|i| i.kind == k && i.id.as_deref() == Some(&memory_id.to_string()))
+                };
+                let row = drift
+                    .iter()
+                    .find(|i| i.kind == kind && i.id.as_deref() == Some(&tamper_id.to_string()))
+                    .unwrap_or_else(|| panic!("expected {kind} on tamper row: {drift:?}"));
+                assert!(
+                    row.message.contains("Tool") && row.message.contains("rather than Memory"),
+                    "message should name the offending resource: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("same-payer case that arm cannot see"),
+                    "repair hint should explain what the payer arm misses: {}",
+                    row.repair
+                );
+                // The shared payer keeps the payer-mismatch arm silent: this row
+                // trips ONLY the resource arm, proving the two arms are disjoint
+                // and the resource arm covers a strictly additional case.
+                assert!(
+                    !fired(
+                        &tamper_id,
+                        "memory_record_receipt_id_backref_payer_not_matching_owner"
+                    ),
+                    "a same-payer non-Memory back-reference must not trip the payer arm"
+                );
+                assert!(
+                    drift
+                        .iter()
+                        .all(|i| i.id.as_deref() != Some(&tamper_id.to_string()) || i.kind == kind),
+                    "the resource arm must be the only drift on the tamper row: {drift:?}"
+                );
+                assert!(
+                    !fired(&control_id, kind),
+                    "a Memory-resource back-reference must stay silent"
+                );
+
+                let receipt_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
+                assert!(!receipt_check.passed);
+                assert!(
+                    receipt_check
+                        .message
+                        .contains("back-reference resource mismatch = 1")
+                        && receipt_check
+                            .message
+                            .contains("back-reference payer mismatch = 0"),
+                    "check message should isolate the resource mismatch: {}",
+                    receipt_check.message
+                );
+                // The count-based halves and the forward resource pre-scan stay
+                // clean, proving the back-reference resource arm alone flipped it.
+                assert!(
+                    receipt_check.message.contains("count diff = 0")
+                        && receipt_check.message.contains("exact drift = 0")
+                        && receipt_check.message.contains("resource mismatch = 0"),
+                    "only the back-reference resource arm should fail the check: {}",
                     receipt_check.message
                 );
                 assert!(orphans_total >= 1);

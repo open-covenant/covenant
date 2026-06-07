@@ -6097,6 +6097,23 @@ impl Server {
                                 repair: "review receipt correlation: settled_at < memory.created_at indicates a backfill correlation mistake or a clock-tamper restore".into(),
                             });
                         }
+                        let expected_credits = memory_write_credits(memory.text.len());
+                        if receipt.credits_consumed != 0
+                            && receipt.credits_consumed != expected_credits
+                        {
+                            exact_diff += 1;
+                            drift.push(VerifyDrift {
+                                kind: "memory_receipt_credits_not_derived_from_text_bytes".into(),
+                                id: Some(receipt.id.to_string()),
+                                message: format!(
+                                    "receipt {} has credits_consumed = {} but its joined memory record {memory_id} has text byte length {}, for which covenant_settlement::memory_write_credits = {expected_credits}; the sole production path that pairs a Memory receipt with a memory_record_id (covenantd dispatch_intent's memory-write branch at lib.rs:4204) stamps credits_consumed = memory_write_credits(record.text.len()) = ((bytes as u64).div_ceil(1024)).max(1) for the same record it writes, and memory record text is immutable after first write (every memory store UPDATE preserves the text column verbatim), so a matched pair whose credits_consumed does not equal the recomputation is a value no production write emits",
+                                    receipt.id,
+                                    receipt.credits_consumed,
+                                    memory.text.len()
+                                ),
+                                repair: "review the receipt JSONL row and the writer that produced it; production Memory receipts route through covenantd's memory-write branch (lib.rs:4204), which sets credits_consumed = covenant_settlement::memory_write_credits(record.text.len()) for the record it just wrote and joins them by memory_record_id, so a matched pair whose credits_consumed != memory_write_credits(memory.text.len()) is out-of-band evidence of a JSONL edit that inflated a payer's burn (over-billing) or deflated it (hiding spend), an import tool that paired a receipt with a foreign credit count, or a serde regression that hydrated credits_consumed from a different row; this arm recomputes through the same covenant_settlement::memory_write_credits the producer calls so it cannot drift from the production pricing formula, and it fires only when credits_consumed != 0 so it is strictly disjoint from the receipt_credits_consumed_zero arm (which owns the zero-sentinel case) and independent of the memory_receipt_owner_mismatch and memory_receipt_settled_before_created arms that check the same matched pair on different fields".into(),
+                            });
+                        }
                     }
                 }
                 None => {
@@ -32797,6 +32814,184 @@ required = {caps:?}
                             && item.id.as_deref() == Some(&receipt_id.to_string())
                     }),
                     "matching payer must not double-report as owner mismatch: {drift:?}"
+                );
+                let receipt_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
+                assert!(!receipt_check.passed);
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_receipt_credits_not_derived_from_text_bytes_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Tamper: a Memory receipt whose payer and settled_at agree with the
+        // joined record (so it passes owner_mismatch and settled_before_created)
+        // and whose credits_consumed is non-zero (so it passes
+        // receipt_credits_consumed_zero) but does not equal
+        // memory_write_credits(text.len()). 2000 text bytes price at
+        // ((2000).div_ceil(1024)).max(1) = 2 credits; 9 is a forged burn.
+        let tamper_memory_id = Uuid::new_v4();
+        let tamper_receipt_id = Uuid::new_v4();
+        let tamper_text = "x".repeat(2000);
+        s.memory
+            .put(MemoryRecord {
+                id: tamper_memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: tamper_text.clone(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: tamper_memory_id,
+                    intent_text: tamper_text.clone(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(tamper_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        s.settlement
+            .record(SettlementReceipt {
+                id: tamper_receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(tamper_memory_id),
+                credits_consumed: 9,
+                settled_at: 2_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        // Control: a matched pair whose credits_consumed IS the canonical
+        // derivation. 3000 text bytes price at ((3000).div_ceil(1024)).max(1)
+        // = 3 credits — proves the arm recomputes through the producer's
+        // memory_write_credits and does not false-positive on a faithful row.
+        let ok_memory_id = Uuid::new_v4();
+        let ok_receipt_id = Uuid::new_v4();
+        let ok_text = "y".repeat(3000);
+        let ok_credits = memory_write_credits(ok_text.len());
+        s.memory
+            .put(MemoryRecord {
+                id: ok_memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: ok_text.clone(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: ok_memory_id,
+                    intent_text: ok_text.clone(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(ok_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        s.settlement
+            .record(SettlementReceipt {
+                id: ok_receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(ok_memory_id),
+                credits_consumed: ok_credits,
+                settled_at: 2_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_receipt_credits_not_derived_from_text_bytes"
+                            && item.id.as_deref() == Some(&tamper_receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "expected memory_receipt_credits_not_derived_from_text_bytes: {drift:?}"
+                        )
+                    });
+                assert!(
+                    row.message.contains("credits_consumed = 9")
+                        && row.message.contains("text byte length 2000")
+                        && row.message.contains("memory_write_credits = 2"),
+                    "message should record the stored credits, the joined text byte length, and the recomputation: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("memory_write_credits")
+                        && row.repair.contains("receipt_credits_consumed_zero"),
+                    "repair hint should name the shared memory_write_credits and the disjoint zero arm: {}",
+                    row.repair
+                );
+                // The tamper receipt agrees on payer and settled_at and carries
+                // non-zero credits, so it must surface only as the credits arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&tamper_receipt_id.to_string())
+                            || (item.kind != "memory_receipt_owner_mismatch"
+                                && item.kind != "memory_receipt_settled_before_created"
+                                && item.kind != "receipt_credits_consumed_zero")
+                    }),
+                    "credits arm must be disjoint from the owner, settled-before-created, and zero-credits arms: {drift:?}"
+                );
+                // The canonical pair must not trip the arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "memory_receipt_credits_not_derived_from_text_bytes"
+                            || item.id.as_deref() != Some(&ok_receipt_id.to_string())
+                    }),
+                    "a receipt whose credits_consumed equals memory_write_credits(text.len()) must not trip the arm: {drift:?}"
                 );
                 let receipt_check = checks
                     .iter()

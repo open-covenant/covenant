@@ -7666,7 +7666,47 @@ impl Server {
                 }
             }
         }
+        // Cardinality: every production settlement receipt is written with
+        // id = Uuid::new_v4() — record_paid_call mints receipt_id at
+        // covenantd/src/x402.rs:211 for the Tool receipt and dispatch_intent_run
+        // mints it at covenantd/src/lib.rs:3926 for the Memory receipt — and
+        // both JsonlReceiptStore::record and InMemorySettlement::record append
+        // the receipt verbatim without deduplication while recent returns one
+        // receipt per persisted line (covenant-settlement/src/lib.rs), so a
+        // given non-nil receipt id is carried by at most one receipt in
+        // faithful data. The settlement-receipt backfill mutator rewrites the
+        // store one-to-one, preserving each receipt's id, so it never adds a
+        // duplicate. Two receipts sharing one non-nil id is a replayed or
+        // duplicated settlement-log row, an import tool that reused a prior id
+        // instead of allocating Uuid::new_v4(), or a serde regression. The
+        // receipts_by_id index the cross-record arms below build collapses such
+        // a collision to one entry, so only this cardinality pass over the raw
+        // receipts surfaces it. Skip the nil UUID — receipt_id_nil owns it per
+        // row. Mirrors the audit ↔ event.id and budget ↔ paired_receipt
+        // cardinality arms; windowing can only hide a real duplicate, never
+        // invent one.
+        let mut receipt_id_counts: HashMap<Uuid, usize> = HashMap::new();
+        for receipt in &receipts {
+            if !receipt.id.is_nil() {
+                *receipt_id_counts.entry(receipt.id).or_insert(0) += 1;
+            }
+        }
+        let mut duplicate_id_receipt_refs = 0_u64;
+        for (receipt_id, count) in &receipt_id_counts {
+            if *count > 1 {
+                duplicate_id_receipt_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_id_duplicate".into(),
+                    id: Some(receipt_id.to_string()),
+                    message: format!(
+                        "{count} settlement receipts share id {receipt_id}, but every production receipt is written with id = Uuid::new_v4() (record_paid_call for the Tool receipt, dispatch_intent_run for the Memory receipt) and JsonlReceiptStore::record appends each receipt as one persisted line without deduplication, so every production receipt id is carried by exactly one receipt — two receipts sharing one id is a replayed or duplicated settlement-log row that no production write emits"
+                    ),
+                    repair: "review the settlement JSONL rows that carry this id; record_paid_call (x402.rs:206-264) and dispatch_intent_run each allocate a fresh receipt id via Uuid::new_v4() and JsonlReceiptStore::record appends each receipt verbatim as a single line (covenant-settlement/src/lib.rs), while the settlement-receipt backfill mutator rewrites the store one-to-one and preserves each id, so two receipts sharing an id is out-of-band evidence of a replayed or duplicated settlement-log row (a crash-recovery or import tool re-appending a receipt), an import tool that reused a prior id, or a serde regression that hydrated two rows with the same id; identify the canonical receipt before truncating the duplicate, since the duplicate makes the id ambiguous to the ExternalPaymentSettled audit join and the budget-debit paired_receipt pairing that reference receipts by id".into(),
+                });
+            }
+        }
         orphans_total += confirmed_without_chain_refs
+            + duplicate_id_receipt_refs
             + slot_without_chain_refs
             + chain_partial_refs
             + tx_sig_onchain_sig_diverged_refs
@@ -7699,6 +7739,7 @@ impl Server {
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
+                && duplicate_id_receipt_refs == 0
                 && slot_without_chain_refs == 0
                 && chain_partial_refs == 0
                 && tx_sig_onchain_sig_diverged_refs == 0
@@ -7729,7 +7770,7 @@ impl Server {
                 && not_base58_onchain_sig_receipt_refs == 0
                 && wrong_byte_length_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {slot_without_chain_refs} slot-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {not_derived_batch_id_receipt_refs} not-derived-batch-id receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {wrong_byte_length_tx_sig_receipt_refs} wrong-byte-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s), {wrong_byte_length_onchain_sig_receipt_refs} wrong-byte-length-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {slot_without_chain_refs} slot-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {duplicate_id_receipt_refs} duplicate-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {not_derived_batch_id_receipt_refs} not-derived-batch-id receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {wrong_byte_length_tx_sig_receipt_refs} wrong-byte-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s), {wrong_byte_length_onchain_sig_receipt_refs} wrong-byte-length-onchain-sig receipt(s)"
             ),
         });
 
@@ -18114,6 +18155,83 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 nil-id receipt"),
                     "check message should count nil-id receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_id_duplicate_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let shared = Uuid::new_v4();
+        let make = |id: Uuid| SettlementReceipt {
+            id,
+            payer: me.clone(),
+            resource: ResourceKind::Compute,
+            memory_record_id: None,
+            credits_consumed: 1,
+            settled_at: 1_000,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+        // Two receipts sharing one non-nil id: a replayed or duplicated
+        // settlement-log row no production write emits.
+        s.settlement.record(make(shared)).await.unwrap();
+        s.settlement.record(make(shared)).await.unwrap();
+        // A nil-id pair must NOT surface as receipt_id_duplicate: receipt_id_nil
+        // owns the nil case per row and the cardinality pass skips it.
+        s.settlement.record(make(Uuid::nil())).await.unwrap();
+        s.settlement.record(make(Uuid::nil())).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let dups: Vec<_> = drift
+                    .iter()
+                    .filter(|item| item.kind == "receipt_id_duplicate")
+                    .collect();
+                assert_eq!(
+                    dups.len(),
+                    1,
+                    "exactly one receipt_id_duplicate row, and the nil pair must be skipped: {drift:?}"
+                );
+                let row = dups[0];
+                let shared_str = shared.to_string();
+                assert_eq!(row.id.as_deref(), Some(shared_str.as_str()));
+                assert!(
+                    row.message.contains("2 settlement receipts share id")
+                        && row.message.contains("Uuid::new_v4()"),
+                    "drift message should count the shared receipts and name the new_v4 invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("Uuid::new_v4()"),
+                    "repair hint should name Uuid::new_v4: {}",
+                    row.repair
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 duplicate-id receipt"),
+                    "check message should count duplicate-id receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

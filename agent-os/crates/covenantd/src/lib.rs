@@ -6432,6 +6432,13 @@ impl Server {
         // passing when their aggregate accounting is still balanced.
         let memory_by_id: HashMap<Uuid, &MemoryRecord> =
             memories.iter().map(|memory| (memory.id, memory)).collect();
+        // Index every receipt by id so the metadata.receipt_id back-reference
+        // arm below can resolve a memory record's recorded receipt id to the
+        // receipt it points at.
+        let receipt_by_id: HashMap<Uuid, &SettlementReceipt> = receipts
+            .iter()
+            .map(|receipt| (receipt.id, receipt))
+            .collect();
         // memory_record_id is only set by memory writes, so a receipt that
         // carries one while reporting a non-Memory resource is out-of-band
         // mutation evidence. Pre-scan before the memory-resource filter so
@@ -6448,6 +6455,57 @@ impl Server {
                         receipt.id, receipt.resource
                     ),
                     repair: "review settlement provenance before retaining; memory_record_id is only set by memory writes".into(),
+                });
+            }
+        }
+        // Cross-record back-reference (memory record -> receipt): the legacy
+        // receipt-correlation backfill is the sole production writer of a memory
+        // record's metadata.receipt_id — covenant-memory's merge_receipt_id
+        // stores it as Value::String(receipt_id.to_string()) — and it pairs a
+        // legacy Memory receipt with a memory record only when
+        // memory.owner.pubkey == receipt.payer.pubkey
+        // (match_legacy_receipts_to_memory_records, covenant-memory/src/lib.rs:429-433),
+        // with the daemon backfill pre-filtering both stores to the acting
+        // peer's own pubkey before correlating (lib.rs:11686-11707). owner and
+        // payer are immutable after write, so every production back-reference
+        // resolves to a receipt whose payer.pubkey equals the referencing
+        // record's owner.pubkey. This is the backward-reference analog of the
+        // forward memory_receipt_owner_mismatch arm (which joins
+        // receipt.memory_record_id -> memory.id): the two join surfaces are
+        // disjoint — a modern receipt carries memory_record_id and its memory
+        // record has no metadata.receipt_id, while a legacy backfilled receipt
+        // has no memory_record_id and its memory record carries
+        // metadata.receipt_id — so no existing arm checks this direction. Gate
+        // on the metadata carrying a string receipt_id that parses as a Uuid (so
+        // a non-object metadata is owned by the Check 5
+        // memory_record_metadata_non_object arm and a missing/non-string/
+        // unparseable sub-key is left alone) and on the receipt being present in
+        // the store (so a windowed-out or purged receipt is left to the
+        // orphan-free join rather than flagged here).
+        let mut backref_payer_not_owner_refs = 0_u64;
+        for memory in &memories {
+            let Some(serde_json::Value::String(receipt_id_str)) = memory.metadata.get("receipt_id")
+            else {
+                continue;
+            };
+            let Ok(receipt_id) = receipt_id_str.parse::<Uuid>() else {
+                continue;
+            };
+            let Some(receipt) = receipt_by_id.get(&receipt_id) else {
+                continue;
+            };
+            if receipt.payer.pubkey != memory.owner.pubkey {
+                backref_payer_not_owner_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_record_receipt_id_backref_payer_not_matching_owner".into(),
+                    id: Some(memory.id.to_string()),
+                    message: format!(
+                        "memory record {} has metadata.receipt_id = {receipt_id} joined to settlement receipt {receipt_id} whose payer.pubkey (base58 {}) does not equal that memory record's owner.pubkey (base58 {}); the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id stores it as the receipt id string), which pairs a legacy Memory receipt with a memory record only when memory.owner.pubkey == receipt.payer.pubkey (match_legacy_receipts_to_memory_records, covenant-memory/src/lib.rs:429-433) over stores the daemon backfill pre-scoped to the acting peer's own pubkey (covenantd/src/lib.rs:11686-11707), and owner/payer are immutable after write, so every production back-reference resolves to a receipt whose payer.pubkey equals the referencing record's owner.pubkey — a back-reference resolving to a foreign-payer receipt is a pairing no production backfill emits",
+                        memory.id,
+                        receipt.payer.pubkey_base58(),
+                        memory.owner.pubkey_base58()
+                    ),
+                    repair: "review the memory store row and the settlement receipt its metadata.receipt_id points at; the sole production writer of metadata.receipt_id (covenant-memory's receipt-correlation backfill) correlates a legacy Memory receipt with a memory record only when their pubkeys match (match_legacy_receipts_to_memory_records requires memory.owner.pubkey == receipt.payer.pubkey, and the daemon backfill pre-filters both stores to the acting peer's own pubkey), so a back-reference resolving to a receipt whose payer pubkey differs from the record's owner pubkey is out-of-band evidence of a JSONL edit that repointed the back-reference at a foreign payer's receipt (mis-attributing across owners which identity paid for the memory write), an import tool that correlated records across owners, or a serde regression that hydrated metadata.receipt_id from a different row; this is the backward-reference analog of the forward memory_receipt_owner_mismatch arm and joins on a disjoint key (that arm joins receipt.memory_record_id -> memory.id on modern receipts whose record carries no metadata.receipt_id; this arm joins memory.metadata.receipt_id -> receipt.id on legacy receipts whose record carries no memory_record_id) so neither catches the other's direction; it fires only when the metadata carries a string receipt_id that parses as a Uuid (so a non-object metadata is owned by the Check 5 memory_record_metadata_non_object arm and a missing/non-string/unparseable sub-key is left alone) and only on a receipt_id present in the receipt store (so a windowed-out or purged receipt is left alone rather than flagged here)".into(),
                 });
             }
         }
@@ -6644,18 +6702,22 @@ impl Server {
             });
         }
         let receipt_drift = exact_diff.max(pair_diff);
-        orphans_total += receipt_drift + resource_mismatch_refs;
+        orphans_total += receipt_drift + resource_mismatch_refs + backref_payer_not_owner_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ receipts".into(),
-            passed: exact_diff == 0 && pair_diff == 0 && resource_mismatch_refs == 0,
+            passed: exact_diff == 0
+                && pair_diff == 0
+                && resource_mismatch_refs == 0
+                && backref_payer_not_owner_refs == 0,
             message: format!(
-                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}",
+                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}",
                 memories.len(),
                 memory_receipts.len(),
                 pair_diff,
                 exact_diff,
                 legacy_fallback_used,
-                resource_mismatch_refs
+                resource_mismatch_refs,
+                backref_payer_not_owner_refs
             ),
         });
 
@@ -34510,6 +34572,240 @@ required = {caps:?}
                     .find(|c| c.name == "memory ↔ receipts")
                     .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
                 assert!(!receipt_check.passed);
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_receipt_id_backref_payer_not_matching_owner_drift() {
+        // metadata.receipt_id is written only by covenant-memory's
+        // receipt-correlation backfill, which correlates a legacy Memory receipt
+        // with a memory record only when memory.owner.pubkey ==
+        // receipt.payer.pubkey, so a back-reference resolving to a foreign-payer
+        // receipt is a pairing no production backfill emits. Build
+        // legacy-correlated records (no forward memory_record_id) plus a balancing
+        // legacy receipt per owner so the count arms stay clean and only the new
+        // back-reference arm can flip the check.
+        async fn put_dispatch_memory(
+            s: &Server,
+            id: Uuid,
+            owner: &AgentId,
+            text: &str,
+            metadata: serde_json::Value,
+        ) {
+            s.memory
+                .put(MemoryRecord {
+                    id,
+                    tier: MemoryTier::Working,
+                    owner: owner.clone(),
+                    text: text.to_string(),
+                    embedding: vec![],
+                    metadata,
+                    created_at: 1_000,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            // Pair every memory record with a faithful dispatch audit so Check 1
+            // does not flag it as a memory_without_audit orphan; the metadata
+            // omits the intent_text/agent_id/status sub-keys, so Check 1's
+            // cross-record arms gate off and stay silent.
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: owner.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id: id,
+                        intent_text: text.to_string(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(text.as_bytes()),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        async fn put_legacy_memory_receipt(s: &Server, id: Uuid, payer: &AgentId, text: &str) {
+            s.settlement
+                .record(SettlementReceipt {
+                    id,
+                    payer: payer.clone(),
+                    resource: ResourceKind::Memory,
+                    memory_record_id: None,
+                    credits_consumed: memory_write_credits(text.len()),
+                    settled_at: 2_000,
+                    chain: None,
+                    cluster: None,
+                    batch_id: None,
+                    merkle_root: None,
+                    tx_sig: None,
+                    slot: None,
+                    confirmed_at: None,
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let mut alice_pk = me.pubkey;
+        alice_pk[0] ^= 0xff;
+        let alice = AgentId::new("alice@local", alice_pk);
+
+        // Tamper: a me-owned record whose metadata.receipt_id was repointed at
+        // alice's Memory receipt. me's own legacy receipt balances me's count;
+        // alice's record + receipt balance alice's count, so the only non-passing
+        // signal is the back-reference payer mismatch.
+        let tamper_id = Uuid::new_v4();
+        let alice_receipt_id = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            tamper_id,
+            &me,
+            "backref tamper fixture",
+            serde_json::json!({ "receipt_id": alice_receipt_id.to_string() }),
+        )
+        .await;
+        put_legacy_memory_receipt(&s, Uuid::new_v4(), &me, "backref tamper fixture").await;
+        put_dispatch_memory(
+            &s,
+            Uuid::new_v4(),
+            &alice,
+            "alice fixture",
+            serde_json::json!({}),
+        )
+        .await;
+        put_legacy_memory_receipt(&s, alice_receipt_id, &alice, "alice fixture").await;
+
+        // Control: a me-owned record whose back-reference resolves to a me-owned
+        // receipt — the production-valid same-pubkey pairing.
+        let control_id = Uuid::new_v4();
+        let control_receipt_id = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            control_id,
+            &me,
+            "backref control fixture",
+            serde_json::json!({ "receipt_id": control_receipt_id.to_string() }),
+        )
+        .await;
+        put_legacy_memory_receipt(&s, control_receipt_id, &me, "backref control fixture").await;
+
+        // Gates (each balanced by a me-owned legacy receipt so only the shape of
+        // metadata.receipt_id, not the count, can change the outcome): a
+        // non-string value, a string that does not parse as a Uuid, and a Uuid
+        // that matches no receipt in the store must all stay silent.
+        let non_string_id = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            non_string_id,
+            &me,
+            "non-string gate",
+            serde_json::json!({ "receipt_id": 123 }),
+        )
+        .await;
+        put_legacy_memory_receipt(&s, Uuid::new_v4(), &me, "non-string gate").await;
+        let unparseable_id = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            unparseable_id,
+            &me,
+            "unparseable gate",
+            serde_json::json!({ "receipt_id": "not-a-uuid" }),
+        )
+        .await;
+        put_legacy_memory_receipt(&s, Uuid::new_v4(), &me, "unparseable gate").await;
+        let unmatched_id = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            unmatched_id,
+            &me,
+            "unmatched gate",
+            serde_json::json!({ "receipt_id": Uuid::new_v4().to_string() }),
+        )
+        .await;
+        put_legacy_memory_receipt(&s, Uuid::new_v4(), &me, "unmatched gate").await;
+
+        let resp = s.op_respond(Request::Verify { window: 1000 }).await;
+        let kind = "memory_record_receipt_id_backref_payer_not_matching_owner";
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let fired = |memory_id: &Uuid| {
+                    drift
+                        .iter()
+                        .any(|i| i.kind == kind && i.id.as_deref() == Some(&memory_id.to_string()))
+                };
+                let row = drift
+                    .iter()
+                    .find(|i| i.kind == kind && i.id.as_deref() == Some(&tamper_id.to_string()))
+                    .unwrap_or_else(|| panic!("expected {kind} on tamper row: {drift:?}"));
+                assert!(
+                    row.message.contains(&alice.pubkey_base58())
+                        && row.message.contains(&me.pubkey_base58()),
+                    "message should record both the receipt payer pubkey and the memory owner pubkey: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("backward-reference analog")
+                        && row.repair.contains("memory_receipt_owner_mismatch"),
+                    "repair hint should name the forward arm it mirrors: {}",
+                    row.repair
+                );
+                // The tamper row must trip only this arm (counts are balanced and
+                // every other field is faithful).
+                assert!(
+                    drift
+                        .iter()
+                        .all(|i| i.id.as_deref() != Some(&tamper_id.to_string()) || i.kind == kind),
+                    "the back-reference arm must be the only drift on the tamper row: {drift:?}"
+                );
+                assert!(
+                    !fired(&control_id),
+                    "same-pubkey back-reference must stay silent"
+                );
+                assert!(
+                    !fired(&non_string_id),
+                    "a non-string receipt_id must stay silent"
+                );
+                assert!(
+                    !fired(&unparseable_id),
+                    "an unparseable receipt_id must stay silent"
+                );
+                assert!(
+                    !fired(&unmatched_id),
+                    "a receipt_id matching no receipt in the store must stay silent"
+                );
+
+                let receipt_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
+                assert!(!receipt_check.passed);
+                assert!(
+                    receipt_check
+                        .message
+                        .contains("back-reference payer mismatch = 1"),
+                    "check message should count exactly one back-reference mismatch: {}",
+                    receipt_check.message
+                );
+                // The count-based halves of the check stay clean, proving the
+                // back-reference arm alone flipped the check.
+                assert!(
+                    receipt_check.message.contains("count diff = 0")
+                        && receipt_check.message.contains("exact drift = 0")
+                        && receipt_check.message.contains("resource mismatch = 0"),
+                    "only the back-reference arm should fail the check: {}",
+                    receipt_check.message
+                );
                 assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),

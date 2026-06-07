@@ -11799,10 +11799,39 @@ impl Server {
             receipts.iter().map(|r| (r.id, r)).collect();
         let mut debit_receipt_payer_mismatch_refs = 0_u64;
         let mut debit_receipt_credits_mismatch_refs = 0_u64;
+        let mut debit_memory_receipt_credits_not_flat_refs = 0_u64;
         for debit in &debits {
             let Some(receipt) = budget_join_receipts.get(&debit.paired_receipt) else {
                 continue;
             };
+            // A debit paired to a ResourceKind::Memory receipt is the
+            // dispatch_intent_run pairing: it always debits exactly
+            // intent_dispatch_credits() (the flat v0 per-intent cost) via
+            // try_debit(&agent, intent_dispatch_credits(), receipt_id), wholly
+            // independent of that receipt's credits_consumed =
+            // memory_write_credits(bytes). So debit.credits !=
+            // intent_dispatch_credits() on such a pair is a pairing no
+            // production write emits. Compare against the accessor (not a
+            // literal 1) so the check tracks the constant if it ever changes.
+            // The Tool pairing (record_paid_call) is checked for payer/credits
+            // parity below; no other resource kind carries a paired debit.
+            if receipt.resource == ResourceKind::Memory {
+                if debit.credits != intent_dispatch_credits() {
+                    debit_memory_receipt_credits_not_flat_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "budget_debit_paired_memory_receipt_credits_not_intent_dispatch".into(),
+                        id: Some(debit.paired_receipt.to_string()),
+                        message: format!(
+                            "budget debit paired_receipt = {} resolves to a ResourceKind::Memory SettlementReceipt but the debit's credits = {} is not the flat intent_dispatch_credits() = {}; the sole production writer of a (BudgetDebit, Memory receipt) pair is dispatch_intent_run (covenantd/src/lib.rs), which debits exactly intent_dispatch_credits() via try_debit(&agent, intent_dispatch_credits(), receipt_id) and records the Memory receipt under that receipt_id, so every production memory dispatch satisfies debit.credits == intent_dispatch_credits() — the receipt's own credits_consumed is memory_write_credits(bytes) and is unrelated to the debit's flat per-intent charge — a debit paired to a Memory receipt whose credits is not the flat cost is a pairing no production write emits",
+                            debit.paired_receipt,
+                            debit.credits,
+                            intent_dispatch_credits()
+                        ),
+                        repair: "review the budget-ledger JSONL row and the settlement JSONL Memory receipt it joins by paired_receipt == receipt.id; dispatch_intent_run charges the flat intent_dispatch_credits() per intent regardless of the memory write size, so a memory-dispatch debit whose credits is not that constant is out-of-band evidence of a JSONL edit that repriced the per-intent budget burn (breaking the flat-rate model the budget bucket and the BudgetPauseCheckpoint resume sizing rely on), an import tool that paired the debit with a foreign receipt, or a serde regression that hydrated credits from a different row; the budget ledger has no within-row shape arm of its own, so this cross-store join is the sole detector; it fires only on a debit whose paired_receipt resolves to a Memory receipt (the Tool-receipt pairing from record_paid_call is checked for payer and credits parity by the budget_debit_paired_receipt_payer_mismatch and budget_debit_paired_receipt_credits_mismatch arms instead, since a paid call's debit.credits = call.credits is not the flat per-intent cost)".into(),
+                    });
+                }
+                continue;
+            }
             if receipt.resource != ResourceKind::Tool {
                 continue;
             }
@@ -11840,14 +11869,15 @@ impl Server {
                 });
             }
         }
-        let budget_join_drift =
-            debit_receipt_payer_mismatch_refs + debit_receipt_credits_mismatch_refs;
+        let budget_join_drift = debit_receipt_payer_mismatch_refs
+            + debit_receipt_credits_mismatch_refs
+            + debit_memory_receipt_credits_not_flat_refs;
         orphans_total += budget_join_drift;
         checks.push(VerifyCheck {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s)"
             ),
         });
 
@@ -21695,6 +21725,76 @@ required = {caps:?}
                     .find(|c| c.name == "budget ↔ receipts")
                     .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
                 assert!(!check.passed);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_dispatch_debit_credits_not_intent_dispatch_drift() {
+        let s = server_with(vec![], "");
+        // dispatch_intent_run always debits the flat intent_dispatch_credits()
+        // against a Memory receipt. Here the paired debit charges a non-flat
+        // amount -- the repricing a JSONL edit would make -- so the memory-side
+        // arm fires while the Tool-only payer/credits arms stay silent.
+        let receipt_id = Uuid::new_v4();
+        let submitter = AgentId::new("submitter@host", [8u8; 32]);
+        s.settlement
+            .record(budget_join_test_receipt(
+                receipt_id,
+                submitter,
+                ResourceKind::Memory,
+                3,
+            ))
+            .await
+            .unwrap();
+        let matched_agent = AgentId::new("researcher@agent", [5u8; 32]);
+        s.budget.set_capacity(&matched_agent, 100).await.unwrap();
+        // Charge 5 credits, not the flat intent_dispatch_credits() = 1.
+        s.budget
+            .try_debit(&matched_agent, 5, receipt_id)
+            .await
+            .unwrap();
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind
+                            == "budget_debit_paired_memory_receipt_credits_not_intent_dispatch"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected memory-dispatch credits drift: {drift:?}"));
+                assert!(
+                    row.message.contains("ResourceKind::Memory")
+                        && row.message.contains("intent_dispatch_credits()"),
+                    "message should name the Memory resource and the flat-cost accessor: {}",
+                    row.message
+                );
+                assert!(
+                    !drift.iter().any(|i| {
+                        i.kind == "budget_debit_paired_receipt_payer_mismatch"
+                            || i.kind == "budget_debit_paired_receipt_credits_mismatch"
+                    }),
+                    "Tool-scoped arms must stay silent on a Memory pair: {drift:?}"
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 non-flat-credits"),
+                    "check message should count non-flat memory-dispatch debits: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),
         }

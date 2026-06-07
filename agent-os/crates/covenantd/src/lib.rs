@@ -6611,6 +6611,7 @@ impl Server {
         let mut exact_diff = 0_u64;
         let mut orphaned_receipt_payer_not_audit_issuer_refs = 0_u64;
         let mut orphaned_receipt_payer_display_not_audit_issuer_refs = 0_u64;
+        let mut orphaned_receipt_settled_after_audit_refs = 0_u64;
         for (memory_id, matched_receipts) in &receipts_by_memory_id {
             match memory_by_id.get(memory_id) {
                 Some(memory) => {
@@ -6850,6 +6851,46 @@ impl Server {
                                 });
                             }
                         }
+                        // Cross-entity binding (temporal edge of the orphaned
+                        // audit ↔ receipt join): the two arms above bind the
+                        // payer pubkey and display, but dispatch_intent_run's
+                        // memory-write branch reads epoch_ms() into the
+                        // SettlementReceipt.settled_at (lib.rs:4210) strictly
+                        // before reading epoch_ms() again into the
+                        // IntentDispatched AuditEvent.timestamp_ms (lib.rs:4227) —
+                        // settlement.record runs between the two reads — so every
+                        // production memory write satisfies
+                        // receipt.settled_at <= audit.timestamp_ms. This is the
+                        // orphaned-case mirror of the present-record
+                        // memory_receipt_settled_after_dispatch_audit arm above,
+                        // which binds the same edge but gates on the memory record
+                        // being present (Some(memory)) and so goes silent once the
+                        // working-tier record both rows reference is compacted or
+                        // purged while the append-only audit and settlement rows
+                        // survive — this binding is the sole detector then. Gate on
+                        // the IntentDispatched audit for this intent_id being
+                        // present (so an audit-less receipt is left to the
+                        // receipt_without_memory_record arm alone) and on both
+                        // timestamps being non-zero so the receipt_settled_at_zero
+                        // (Check 6) and audit_event_timestamp_zero (Check 7) shape
+                        // arms own the all-zero sentinel.
+                        if let Some(&audit_ts) = dispatched_timestamp_by_intent.get(memory_id) {
+                            if receipt.settled_at != 0
+                                && audit_ts != 0
+                                && receipt.settled_at > audit_ts
+                            {
+                                orphaned_receipt_settled_after_audit_refs += 1;
+                                drift.push(VerifyDrift {
+                                    kind: "receipt_without_memory_record_settled_after_dispatch_audit".into(),
+                                    id: Some(receipt.id.to_string()),
+                                    message: format!(
+                                        "settlement receipt {} has resource = ResourceKind::Memory and memory_record_id = Some({memory_id}) referencing a memory record absent from the store, and its settled_at = {} is later than the IntentDispatched audit timestamp_ms = {audit_ts} of the dispatch that wrote intent_id {memory_id}; the sole production writer of a Memory receipt carrying a memory_record_id is dispatch_intent_run's memory-write branch (covenantd/src/lib.rs:4185-4223), which reads epoch_ms() into the receipt's settled_at (lib.rs:4210) strictly before reading epoch_ms() again into the IntentDispatched AuditEvent.timestamp_ms (lib.rs:4227) — settlement.record runs between the two reads — so every production memory write satisfies receipt.settled_at <= audit.timestamp_ms; an orphaned pair whose receipt settled after its own dispatch audit is an ordering no production write emits",
+                                        receipt.id, receipt.settled_at
+                                    ),
+                                    repair: "review the settlement JSONL row and the IntentDispatched audit row that share this intent_id/memory_record_id; production dispatch (dispatch_intent_run) reads the wall clock into the Memory receipt's settled_at (lib.rs:4210) before reading it again for the IntentDispatched audit timestamp_ms (lib.rs:4227), so an orphaned pair whose settled_at exceeds its dispatch audit's timestamp_ms is out-of-band evidence of a JSONL edit that forward-dated the settlement on the /settlement feed (overstating when a memory write settled, for example to push it past a budget or reconciliation window) or backdated the audit row, an import tool that paired the receipt with a foreign dispatch audit, a serde regression that hydrated settled_at or timestamp_ms from a different row, or a clock-tamper restore that rewound wall time between the receipt and audit writes; this is the temporal edge of the orphaned audit ↔ receipt join (the payer pubkey edge is receipt_without_memory_record_payer_not_matching_audit_issuer and the display edge is receipt_without_memory_record_payer_display_not_matching_audit_issuer) and the orphaned-case mirror of the present-record memory_receipt_settled_after_dispatch_audit arm, which binds the same settled_at <= timestamp_ms edge but gates on the memory record being present (if let Some(memory) = memory_by_id.get(...)) so it goes silent once the working-tier record both rows reference is compacted or purged while the append-only audit and settlement rows survive, making this binding the sole detector then; it fires only when the memory record is absent from the store (so a present record routes to that memory-anchored arm), only when the IntentDispatched audit for this intent_id is present (so an audit-less orphaned receipt is left to the receipt_without_memory_record arm alone), and only when both timestamps are non-zero so it is strictly disjoint from the receipt_settled_at_zero (Check 6) and audit_event_timestamp_zero (Check 7) shape arms that own the all-zero sentinel".into(),
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -6917,7 +6958,8 @@ impl Server {
             + backref_payer_not_owner_refs
             + backref_resource_not_memory_refs
             + orphaned_receipt_payer_not_audit_issuer_refs
-            + orphaned_receipt_payer_display_not_audit_issuer_refs;
+            + orphaned_receipt_payer_display_not_audit_issuer_refs
+            + orphaned_receipt_settled_after_audit_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ receipts".into(),
             passed: exact_diff == 0
@@ -6926,9 +6968,10 @@ impl Server {
                 && backref_payer_not_owner_refs == 0
                 && backref_resource_not_memory_refs == 0
                 && orphaned_receipt_payer_not_audit_issuer_refs == 0
-                && orphaned_receipt_payer_display_not_audit_issuer_refs == 0,
+                && orphaned_receipt_payer_display_not_audit_issuer_refs == 0
+                && orphaned_receipt_settled_after_audit_refs == 0,
             message: format!(
-                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}; back-reference resource mismatch = {}; orphaned-receipt payer-vs-audit-issuer mismatch = {}; orphaned-receipt payer-display-vs-audit-issuer mismatch = {}",
+                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}; back-reference resource mismatch = {}; orphaned-receipt payer-vs-audit-issuer mismatch = {}; orphaned-receipt payer-display-vs-audit-issuer mismatch = {}; orphaned-receipt settled-after-dispatch-audit = {}",
                 memories.len(),
                 memory_receipts.len(),
                 pair_diff,
@@ -6938,7 +6981,8 @@ impl Server {
                 backref_payer_not_owner_refs,
                 backref_resource_not_memory_refs,
                 orphaned_receipt_payer_not_audit_issuer_refs,
-                orphaned_receipt_payer_display_not_audit_issuer_refs
+                orphaned_receipt_payer_display_not_audit_issuer_refs,
+                orphaned_receipt_settled_after_audit_refs
             ),
         });
 
@@ -36239,6 +36283,179 @@ required = {caps:?}
                         .message
                         .contains("orphaned-receipt payer-display-vs-audit-issuer mismatch = 1"),
                     "check message should count the orphan display mismatch: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_without_memory_record_settled_after_dispatch_audit_drift() {
+        async fn put_intent_audit_at(
+            s: &Server,
+            intent_id: Uuid,
+            issuer: &AgentId,
+            timestamp_ms: u64,
+        ) {
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms,
+                    issuer: issuer.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id,
+                        intent_text: "orphaned dispatch".into(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(b"orphaned dispatch"),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        async fn put_memory_receipt_at(
+            s: &Server,
+            receipt_id: Uuid,
+            memory_record_id: Uuid,
+            payer: &AgentId,
+            settled_at: u64,
+        ) {
+            s.settlement
+                .record(SettlementReceipt {
+                    id: receipt_id,
+                    payer: payer.clone(),
+                    resource: ResourceKind::Memory,
+                    memory_record_id: Some(memory_record_id),
+                    credits_consumed: 1,
+                    settled_at,
+                    chain: None,
+                    cluster: None,
+                    batch_id: None,
+                    merkle_root: None,
+                    tx_sig: None,
+                    slot: None,
+                    confirmed_at: None,
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        // One identity for both the audit issuer and the receipt payer (same
+        // pubkey AND display) so the orphan payer pubkey/display arms stay silent
+        // and only the temporal arm can fire.
+        let issuer = AgentId::new("issuer@local", [7u8; 32]);
+
+        // Tamper: an orphaned Memory receipt (its memory record absent) whose
+        // settled_at (2_000) is later than its dispatch audit's timestamp_ms
+        // (1_000) — the forward-dated settlement a JSONL edit produces. settled_at
+        // is non-zero so the receipt_settled_at_zero shape arm stays out.
+        let tamper_intent = Uuid::new_v4();
+        let tamper_receipt = Uuid::new_v4();
+        put_intent_audit_at(&s, tamper_intent, &issuer, 1_000).await;
+        put_memory_receipt_at(&s, tamper_receipt, tamper_intent, &issuer, 2_000).await;
+
+        // Control 1 (orphaned, faithful): settled_at (1_000) <= timestamp_ms
+        // (2_000), the production ordering; only receipt_without_memory_record
+        // fires for it.
+        let faithful_intent = Uuid::new_v4();
+        let faithful_receipt = Uuid::new_v4();
+        put_intent_audit_at(&s, faithful_intent, &issuer, 2_000).await;
+        put_memory_receipt_at(&s, faithful_receipt, faithful_intent, &issuer, 1_000).await;
+
+        // Control 2 (orphaned, boundary equal): settled_at == timestamp_ms, so
+        // settled_at <= timestamp_ms holds and the strict > gate stays silent.
+        let equal_intent = Uuid::new_v4();
+        let equal_receipt = Uuid::new_v4();
+        put_intent_audit_at(&s, equal_intent, &issuer, 1_500).await;
+        put_memory_receipt_at(&s, equal_receipt, equal_intent, &issuer, 1_500).await;
+
+        // Control 3 (memory present, settled after audit): the record exists, so
+        // the None branch is never taken and the memory-anchored
+        // memory_receipt_settled_after_dispatch_audit arm owns the inversion. Its
+        // text matches the dispatch audit's hashed input so no Check 1 arm fires.
+        let present_intent = Uuid::new_v4();
+        let present_receipt = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: present_intent,
+                tier: MemoryTier::Working,
+                owner: issuer.clone(),
+                text: "orphaned dispatch".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 500,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        put_intent_audit_at(&s, present_intent, &issuer, 1_000).await;
+        put_memory_receipt_at(&s, present_receipt, present_intent, &issuer, 2_000).await;
+
+        let resp = s.op_respond(Request::Verify { window: 1000 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let kind = "receipt_without_memory_record_settled_after_dispatch_audit";
+                let row = drift
+                    .iter()
+                    .find(|item| item.kind == kind)
+                    .unwrap_or_else(|| {
+                        panic!("expected orphaned settled-after-audit drift: {drift:?}")
+                    });
+                assert_eq!(row.id.as_deref(), Some(tamper_receipt.to_string().as_str()));
+                assert!(
+                    row.message.contains("settled_at = 2000")
+                        && row.message.contains("timestamp_ms = 1000"),
+                    "message should name both the receipt settled_at and the audit timestamp_ms: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("temporal edge of the orphaned audit"),
+                    "repair should frame the binding as the temporal edge: {}",
+                    row.repair
+                );
+
+                // Only the tamper pair trips it: faithful orphan, equal-boundary
+                // orphan, and the memory-present inversion all stay silent here.
+                let firing: Vec<&str> = drift
+                    .iter()
+                    .filter(|item| item.kind == kind)
+                    .filter_map(|item| item.id.as_deref())
+                    .collect();
+                assert_eq!(
+                    firing,
+                    vec![tamper_receipt.to_string().as_str()],
+                    "only the tamper pair should fire the orphan temporal arm: {drift:?}"
+                );
+
+                // Memory-present inversion is owned by the Check 4 Some-branch arm,
+                // proving the new arm's memory-absent gate is disjoint from it.
+                assert!(
+                    drift.iter().any(|item| {
+                        item.kind == "memory_receipt_settled_after_dispatch_audit"
+                            && item.id.as_deref() == Some(present_receipt.to_string().as_str())
+                    }),
+                    "memory-present inversion should route to memory_receipt_settled_after_dispatch_audit: {drift:?}"
+                );
+
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected memory↔receipts check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check
+                        .message
+                        .contains("orphaned-receipt settled-after-dispatch-audit = 1"),
+                    "check message should count the orphan temporal mismatch: {}",
                     check.message
                 );
                 assert!(orphans_total >= 1);

@@ -5820,12 +5820,14 @@ impl Server {
         let mut issuer_display_not_owner_refs = 0_u64;
         let mut intent_text_not_metadata_refs = 0_u64;
         let mut matched_agent_not_metadata_refs = 0_u64;
+        let mut status_not_metadata_refs = 0_u64;
         for event in &audits {
             if let AuditKind::IntentDispatched {
                 intent_id,
                 result_hash_hex,
                 intent_text,
                 matched_agent,
+                status,
                 ..
             } = &event.kind
             {
@@ -6012,6 +6014,41 @@ impl Server {
                             }
                         }
                     }
+                    // Cross-entity binding: the matched memory record's
+                    // metadata.status is the same literal the dispatch stamped
+                    // into the audit event's status. dispatch_intent_run writes
+                    // the MemoryRecord metadata "status" key (lib.rs:4194) and
+                    // the AuditEvent status (lib.rs:4234) both as the hardcoded
+                    // literal "ok" in the same dispatch, so every production
+                    // dispatch satisfies memory.metadata["status"] ==
+                    // audit.status. This completes the metadata trio
+                    // (intent_text, agent_id, status). Gate on the audit status
+                    // being its canonical production value "ok" so the within-row
+                    // audit_intent_dispatched_status_{empty,not_ok} arms own
+                    // audit-side deviation, and on the memory metadata carrying a
+                    // string status sub-key so a legacy/non-object metadata is
+                    // owned by the Check 2 metadata_non_object arm — leaving this
+                    // arm the sole detector of a memory-side status relabel while
+                    // the audit row stays canonical.
+                    if status == "ok" {
+                        if let Some(serde_json::Value::String(metadata_status)) =
+                            memory.metadata.get("status")
+                        {
+                            if metadata_status != status {
+                                status_not_metadata_refs += 1;
+                                drift.push(VerifyDrift {
+                                    kind: "intent_dispatched_status_not_matching_memory_metadata"
+                                        .into(),
+                                    id: Some(event.id.to_string()),
+                                    message: format!(
+                                        "audit event {} has kind = AuditKind::IntentDispatched with status = {status:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.status = {metadata_status:?}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) writes the MemoryRecord metadata \"status\" key as the literal \"ok\" (lib.rs:4194) and records the AuditEvent status as \"ok\".into() (lib.rs:4234) — the same hardcoded literal in the same dispatch — so every production dispatch satisfies memory.metadata[\"status\"] == audit.status; a matched pair whose two recorded dispatch outcomes disagree is a pairing no production write emits",
+                                        event.id
+                                    ),
+                                    repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) stamps both the memory record's metadata.status and the IntentDispatched audit status from the same hardcoded \"ok\" literal in one call, so a matched pair whose recorded dispatch outcomes differ is out-of-band evidence of a JSONL edit that relabeled a completed dispatch's status on one feed (misrepresenting on the /audit feed or in the memory store whether an intent completed) while leaving the other intact, an import tool that paired an audit row with a foreign memory record, or a serde regression that hydrated one copy from a different row; the within-row audit_intent_dispatched_status_empty and audit_intent_dispatched_status_not_ok arms constrain the audit value but never its agreement with the memory record, and no arm checks the memory metadata status sub-key at all, so this cross-record binding is the sole detector of a memory-side status relabel; it fires only when the audit status is the canonical \"ok\" (so audit-side deviation is owned by the within-row status arms) and the memory metadata carries a string status sub-key (so a legacy/non-object metadata is owned by the Check 2 metadata_non_object arm and a dropped or non-string status sub-key is left alone), and only on a matched intent_id present in both stores (so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead)".into(),
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -6066,7 +6103,8 @@ impl Server {
             + issuer_not_owner_refs
             + issuer_display_not_owner_refs
             + intent_text_not_metadata_refs
-            + matched_agent_not_metadata_refs;
+            + matched_agent_not_metadata_refs
+            + status_not_metadata_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ audit".into(),
             passed: memory_orphans == 0
@@ -6076,9 +6114,10 @@ impl Server {
                 && issuer_not_owner_refs == 0
                 && issuer_display_not_owner_refs == 0
                 && intent_text_not_metadata_refs == 0
-                && matched_agent_not_metadata_refs == 0,
+                && matched_agent_not_metadata_refs == 0
+                && status_not_metadata_refs == 0,
             message: format!(
-                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s), {issuer_display_not_owner_refs} issuer-display-not-matching-owner intent(s), {intent_text_not_metadata_refs} intent-text-not-matching-metadata intent(s), {matched_agent_not_metadata_refs} matched-agent-not-matching-metadata intent(s)"
+                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s), {issuer_display_not_owner_refs} issuer-display-not-matching-owner intent(s), {intent_text_not_metadata_refs} intent-text-not-matching-metadata intent(s), {matched_agent_not_metadata_refs} matched-agent-not-matching-metadata intent(s), {status_not_metadata_refs} status-not-matching-metadata intent(s)"
             ),
         });
 
@@ -35363,6 +35402,213 @@ required = {caps:?}
                     audit_check
                         .message
                         .contains("matched-agent-not-matching-metadata"),
+                    "check message should count the new arm: {}",
+                    audit_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_intent_dispatched_status_not_matching_memory_metadata_drift() {
+        // Writes a dispatch-shaped memory record (owner/text/result_hash,
+        // metadata.intent_text, and metadata.agent_id all faithful, so only the
+        // status arm can fire) plus a matching IntentDispatched audit row,
+        // varying only the audit status against the memory metadata.status.
+        async fn put_pair(
+            s: &Server,
+            intent_id: Uuid,
+            event_id: Uuid,
+            text: &str,
+            audit_status: &str,
+            meta_status: Option<serde_json::Value>,
+        ) {
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "intent_text".into(),
+                serde_json::Value::String(text.to_string()),
+            );
+            meta.insert("agent_id".into(), serde_json::Value::Null);
+            if let Some(v) = meta_status {
+                meta.insert("status".into(), v);
+            }
+            s.memory
+                .put(MemoryRecord {
+                    id: intent_id,
+                    tier: MemoryTier::Working,
+                    owner: s.identity.agent_id(),
+                    text: text.to_string(),
+                    embedding: vec![],
+                    metadata: serde_json::Value::Object(meta),
+                    created_at: 1_000,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            s.audit
+                .record(AuditEvent {
+                    id: event_id,
+                    timestamp_ms: epoch_ms(),
+                    issuer: s.identity.agent_id(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id,
+                        intent_text: text.to_string(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(text.as_bytes()),
+                        status: audit_status.to_string(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        // Relabel: audit says the dispatch completed ("ok"), memory metadata
+        // says otherwise.
+        let relabel_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            relabel_ev,
+            "relabel fixture",
+            "ok",
+            Some(serde_json::json!("stale")),
+        )
+        .await;
+        // Faithful control: both record "ok".
+        let faithful_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            faithful_ev,
+            "faithful fixture",
+            "ok",
+            Some(serde_json::json!("ok")),
+        )
+        .await;
+        // Disjointness: an audit-side non-"ok" status is owned by the within-row
+        // audit_intent_dispatched_status_not_ok arm, not this cross-record
+        // binding (memory metadata.status stays the faithful "ok").
+        let audit_side_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            audit_side_ev,
+            "audit-side fixture",
+            "failed",
+            Some(serde_json::json!("ok")),
+        )
+        .await;
+        // Gate: object metadata with no status key must stay silent.
+        let missing_key_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            missing_key_ev,
+            "missing-key fixture",
+            "ok",
+            None,
+        )
+        .await;
+        // Gate: a non-string status value is left alone (not this arm's shape).
+        let non_string_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            non_string_ev,
+            "non-string fixture",
+            "ok",
+            Some(serde_json::json!(0)),
+        )
+        .await;
+        // Orphan: an audit with no joined memory record.
+        let orphan_ev = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: orphan_ev,
+                timestamp_ms: epoch_ms(),
+                issuer: s.identity.agent_id(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::new_v4(),
+                    intent_text: "orphan fixture".into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(b"orphan fixture"),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        let kind = "intent_dispatched_status_not_matching_memory_metadata";
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let fired = |event_id: &Uuid| {
+                    drift
+                        .iter()
+                        .any(|i| i.kind == kind && i.id.as_deref() == Some(&event_id.to_string()))
+                };
+                let row = drift
+                    .iter()
+                    .find(|i| i.kind == kind && i.id.as_deref() == Some(&relabel_ev.to_string()))
+                    .unwrap_or_else(|| panic!("expected {kind} on relabel row: {drift:?}"));
+                assert!(
+                    row.message.contains("\"ok\"") && row.message.contains("stale"),
+                    "message should record both the audit status and the memory metadata.status: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("sole detector")
+                        && row.repair.contains("audit_intent_dispatched_status_not_ok")
+                        && row.repair.contains("metadata_non_object"),
+                    "repair hint should name the within-row status arm and explain why it is the sole detector: {}",
+                    row.repair
+                );
+                // The relabel row must not double-report under any other Check 1
+                // arm (owner/text/result_hash/intent_text/agent_id are faithful).
+                assert!(
+                    drift.iter().all(|i| {
+                        i.id.as_deref() != Some(&relabel_ev.to_string()) || i.kind == kind
+                    }),
+                    "status drift must be the only arm firing on the relabel row: {drift:?}"
+                );
+                assert!(!fired(&faithful_ev), "faithful pair must stay silent");
+                assert!(
+                    !fired(&audit_side_ev),
+                    "an audit-side non-\"ok\" status is owned by the within-row arm, not this arm"
+                );
+                // Prove the audit-side deviation is in fact caught by the
+                // within-row arm, so disjointness is real rather than a gap.
+                assert!(
+                    drift.iter().any(|i| {
+                        i.kind == "audit_intent_dispatched_status_not_ok"
+                            && i.id.as_deref() == Some(&audit_side_ev.to_string())
+                    }),
+                    "the audit-side non-\"ok\" status should trip the within-row status arm: {drift:?}"
+                );
+                assert!(
+                    !fired(&missing_key_ev),
+                    "metadata without a status key must stay silent"
+                );
+                assert!(
+                    !fired(&non_string_ev),
+                    "a non-string status value must stay silent"
+                );
+                assert!(!fired(&orphan_ev), "an audit-only orphan must stay silent");
+                let audit_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ audit")
+                    .unwrap_or_else(|| panic!("expected memory ↔ audit check: {checks:?}"));
+                assert!(!audit_check.passed);
+                assert!(
+                    audit_check.message.contains("status-not-matching-metadata"),
                     "check message should count the new arm: {}",
                     audit_check.message
                 );

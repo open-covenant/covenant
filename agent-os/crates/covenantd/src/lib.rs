@@ -5830,6 +5830,7 @@ impl Server {
         let mut intent_text_not_metadata_refs = 0_u64;
         let mut matched_agent_not_metadata_refs = 0_u64;
         let mut status_not_metadata_refs = 0_u64;
+        let mut timestamp_before_memory_created_refs = 0_u64;
         for event in &audits {
             if let AuditKind::IntentDispatched {
                 intent_id,
@@ -6061,6 +6062,35 @@ impl Server {
                             }
                         }
                     }
+                    // Cross-entity temporal ordering: dispatch_intent_run reads
+                    // the wall clock once into let issued_at = epoch_ms()
+                    // (lib.rs:3927) at the top of the dispatch and stamps it into
+                    // the MemoryRecord.created_at (lib.rs:4196), then reads the
+                    // clock again into the IntentDispatched AuditEvent.timestamp_ms
+                    // = epoch_ms() (lib.rs:4227) at the end of the same dispatch —
+                    // strictly after the memory record (and the settlement
+                    // receipt) are written — so on a non-rewound clock every
+                    // production dispatch satisfies audit.timestamp_ms >=
+                    // memory.created_at. This is the audit-side mirror of the
+                    // memory ↔ receipt memory_receipt_settled_before_created arm
+                    // (Check 4), which binds receipt.settled_at >=
+                    // memory.created_at on the same dispatch from the same
+                    // issued_at baseline. Gate on a non-zero timestamp_ms so the
+                    // audit_event_timestamp_zero (Check 7) shape arm owns the
+                    // all-zero sentinel (a zeroed timestamp would otherwise
+                    // spuriously satisfy 0 < created_at).
+                    if event.timestamp_ms != 0 && event.timestamp_ms < memory.created_at {
+                        timestamp_before_memory_created_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "intent_dispatched_timestamp_before_memory_created".into(),
+                            id: Some(event.id.to_string()),
+                            message: format!(
+                                "audit event {} has kind = AuditKind::IntentDispatched with timestamp_ms = {} joined by intent_id to memory record {intent_id}, but that memory record's created_at = {} is later; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:3921-4237) reads let issued_at = epoch_ms() (lib.rs:3927) at the top of the dispatch and stamps it into the MemoryRecord.created_at (lib.rs:4196), then reads the wall clock again into the AuditEvent.timestamp_ms = epoch_ms() (lib.rs:4227) at the end of the same dispatch — strictly after the memory record is written — so on a non-rewound clock every production dispatch satisfies audit.timestamp_ms >= memory.created_at; a matched pair whose audit timestamp precedes the created_at of the memory record it dispatched is an ordering no production write emits",
+                                event.id, event.timestamp_ms, memory.created_at
+                            ),
+                            repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) reads let issued_at = epoch_ms() once at the top (lib.rs:3927), stamps it into the memory record's created_at (lib.rs:4196), and only afterward reads the clock again for the IntentDispatched audit timestamp_ms (lib.rs:4227), so an audit row whose timestamp_ms predates the created_at of the memory record it dispatched is out-of-band evidence of a JSONL edit that backdated the dispatch on the /audit feed (antedating when an intent ran, for example to slip it before a capability grant or a budget window it should have post-dated), an import tool that paired the audit row with a foreign memory record, a serde regression that hydrated timestamp_ms from a different row, or a clock-tamper restore that rewound wall time between the memory write and the audit write; this is the audit-side mirror of the memory_receipt_settled_before_created arm (Check 4), which binds receipt.settled_at >= memory.created_at on the same dispatch from the same issued_at baseline, and it fires only when timestamp_ms is non-zero so the audit_event_timestamp_zero (Check 7) shape arm owns the all-zero sentinel, and only on a matched intent_id present in both stores so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead".into(),
+                        });
+                    }
                 }
             }
         }
@@ -6116,7 +6146,8 @@ impl Server {
             + issuer_display_not_owner_refs
             + intent_text_not_metadata_refs
             + matched_agent_not_metadata_refs
-            + status_not_metadata_refs;
+            + status_not_metadata_refs
+            + timestamp_before_memory_created_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ audit".into(),
             passed: memory_orphans == 0
@@ -6127,9 +6158,10 @@ impl Server {
                 && issuer_display_not_owner_refs == 0
                 && intent_text_not_metadata_refs == 0
                 && matched_agent_not_metadata_refs == 0
-                && status_not_metadata_refs == 0,
+                && status_not_metadata_refs == 0
+                && timestamp_before_memory_created_refs == 0,
             message: format!(
-                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s), {issuer_display_not_owner_refs} issuer-display-not-matching-owner intent(s), {intent_text_not_metadata_refs} intent-text-not-matching-metadata intent(s), {matched_agent_not_metadata_refs} matched-agent-not-matching-metadata intent(s), {status_not_metadata_refs} status-not-matching-metadata intent(s)"
+                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s), {issuer_display_not_owner_refs} issuer-display-not-matching-owner intent(s), {intent_text_not_metadata_refs} intent-text-not-matching-metadata intent(s), {matched_agent_not_metadata_refs} matched-agent-not-matching-metadata intent(s), {status_not_metadata_refs} status-not-matching-metadata intent(s), {timestamp_before_memory_created_refs} timestamp-before-memory-created intent(s)"
             ),
         });
 
@@ -34304,6 +34336,115 @@ required = {caps:?}
                     .find(|c| c.name == "memory ↔ receipts")
                     .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
                 assert!(!receipt_check.passed);
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_intent_dispatched_timestamp_before_memory_created_drift() {
+        async fn put_dispatch_pair(
+            s: &Server,
+            me: &AgentId,
+            intent_id: Uuid,
+            created_at: u64,
+            timestamp_ms: u64,
+            text: &str,
+        ) {
+            s.memory
+                .put(MemoryRecord {
+                    id: intent_id,
+                    tier: MemoryTier::Working,
+                    owner: me.clone(),
+                    text: text.into(),
+                    embedding: vec![],
+                    metadata: serde_json::json!({}),
+                    created_at,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms,
+                    issuer: me.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id,
+                        intent_text: text.into(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(text.as_bytes()),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Tamper: an IntentDispatched audit backdated to timestamp_ms = 1000,
+        // before its joined memory record's created_at = 2000 — an ordering no
+        // production dispatch emits (dispatch_intent_run stamps created_at from
+        // issued_at read at the top, then timestamp_ms from a later epoch_ms()).
+        let tamper_intent = Uuid::new_v4();
+        put_dispatch_pair(&s, &me, tamper_intent, 2_000, 1_000, "backdated dispatch").await;
+
+        // Control 1 (faithful ordering): timestamp_ms = 2000 >= created_at = 2000,
+        // the production invariant — must not fire.
+        let faithful_intent = Uuid::new_v4();
+        put_dispatch_pair(&s, &me, faithful_intent, 2_000, 2_000, "faithful dispatch").await;
+
+        // Control 2 (zeroed timestamp): timestamp_ms = 0 is owned by the
+        // audit_event_timestamp_zero shape arm, not this ordering arm.
+        let zeroed_intent = Uuid::new_v4();
+        put_dispatch_pair(&s, &me, zeroed_intent, 2_000, 0, "zeroed dispatch").await;
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| item.kind == "intent_dispatched_timestamp_before_memory_created")
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "expected intent_dispatched_timestamp_before_memory_created: {drift:?}"
+                        )
+                    });
+                assert!(
+                    row.message.contains("timestamp_ms = 1000")
+                        && row.message.contains("created_at = 2000"),
+                    "message should record both timestamps: {}",
+                    row.message
+                );
+                assert_eq!(
+                    drift
+                        .iter()
+                        .filter(|item| {
+                            item.kind == "intent_dispatched_timestamp_before_memory_created"
+                        })
+                        .count(),
+                    1,
+                    "only the backdated pair should fire, not the faithful or zeroed ones: {drift:?}"
+                );
+                assert!(
+                    drift
+                        .iter()
+                        .any(|item| item.kind == "audit_event_timestamp_zero"),
+                    "the zeroed-timestamp pair must route to the shape arm: {drift:?}"
+                );
+                let audit_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ audit")
+                    .unwrap_or_else(|| panic!("expected memory ↔ audit check: {checks:?}"));
+                assert!(!audit_check.passed);
                 assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),

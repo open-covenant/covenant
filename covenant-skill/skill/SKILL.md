@@ -47,21 +47,32 @@ Reach for this skill when **all** of the following hold:
 
 ## Quick-start (devnet)
 
+Requires a running `covenantd` — the daemon owns the keys, capabilities, and
+audit log. See the [covenant](https://github.com/open-covenant/covenant) repo to
+build and start it.
+
 ```bash
-covenant skill add ./covenant-skill                    # register the skill
-covenant capability grant \
-  --subject "$AGENT_ID" \
-  --action  "skill.use.covenant" \
-  --expires-at "+24h"
-covenant capability grant \
-  --subject "$AGENT_ID" \
-  --action  "chain.tx.<program-id>.<instruction>" \
-  --scope   '{"version":1,"cluster":"devnet"}'
-covenant agent run my-agent --skill covenant
+# Install from a local checkout — the content digest is pinned at install.
+covenant skill add ./covenant-skill/skill
+covenant skill verify covenant                  # re-check the on-disk digest
+
+# Grant what the run needs (the operator is the capability subject).
+covenant capabilities grant skill.use.covenant --expires-at +24h
+covenant capabilities grant memory.write --expires-at +24h
+
+# Run a governed skill use: the skill body is injected, every step audited.
+covenant skill use covenant "check a devnet account"
 ```
 
-Every step in that flow is audited; the resulting events fold into the Witness
-audit-root anchored on devnet.
+To let the skill sign a transaction, grant the exact instruction first:
+
+```bash
+covenant capabilities grant chain.tx.<program-id>.<instruction> \
+  --scope '{"version":1,"cluster":"devnet"}' --expires-at +24h
+```
+
+Every step is audited; the events fold into the Witness audit-root anchored on
+devnet.
 
 ## Safety rules
 

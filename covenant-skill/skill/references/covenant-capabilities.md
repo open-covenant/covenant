@@ -13,7 +13,7 @@ A capability is a signed object that binds:
 - a **scope** — a JSON object whose fields constrain the action (cluster,
   pubkey, predicate, budget)
 - an **issuer** — the operator key that signed the grant
-- an **expiry** — optional `expires_at` timestamp
+- an **expiry** — optional `expires_at` (epoch milliseconds)
 
 Tokens are persisted in the daemon's capability store; revocation is immediate
 and audited.
@@ -29,7 +29,7 @@ is valid; the action name alone is the gate.
   "subject": "<agent pubkey base58>",
   "action":  "skill.use.covenant",
   "scope":   { "version": 1 },
-  "expires_at": "2026-06-06T00:00:00Z"
+  "expires_at": 1780930800000
 }
 ```
 
@@ -46,36 +46,28 @@ whose top-level instruction matches the predicate, within the scope.
 {
   "subject": "<agent pubkey>",
   "action":  "chain.tx.<program-id>.<instruction-name>",
-  "scope": {
-    "version": 1,
-    "cluster": "devnet",
-    "accounts": {
-      "allow": { "destination": "<allowed-destination-pubkey-base58>" }
-    },
-    "budget": { "max_lamports": 1000000 }
-  },
-  "expires_at": "2026-06-06T00:00:00Z"
+  "scope": { "version": 1, "cluster": "devnet" },
+  "expires_at": 1780930800000
 }
 ```
 
-The scope is *signed*: the daemon refuses to sign a transaction whose accounts
-or budget violate the scope, even if the broader action matches. This is W009
-encoded as a check rather than a hope (see
-[covenant-settlement](covenant-settlement.md)).
+The scope is *signed*: the daemon refuses to sign a transaction whose `cluster`
+(or other scoped field) does not match, even if the broader action matches —
+W009 encoded as a check rather than a hope. A capability carries no
+per-transaction lamport cap; autonomous signing is bounded separately by the
+operator's budget envelope (see [covenant-settlement](covenant-settlement.md)).
 
 ## Grant flow
 
 ```bash
-covenant capability grant \
-  --subject "$AGENT_ID" \
-  --action  "chain.tx.<program-id>.<instruction>" \
-  --scope   '{"version":1,"cluster":"devnet","budget":{"max_lamports":1000000}}' \
-  --expires-at "+1h"
+covenant capabilities grant chain.tx.<program-id>.<instruction> \
+  --scope '{"version":1,"cluster":"devnet"}' \
+  --expires-at +1h
 ```
 
-The grant emits a `CapabilityGranted` audit event and returns a token id. The
-operator can revoke any time with `covenant capability revoke <id>`; revocation
-takes effect immediately.
+The grant emits a `CapabilityGranted` audit event and returns a signed token.
+The operator can revoke any time with `covenant capabilities revoke
+<signature-b58>`; revocation takes effect immediately.
 
 ## Refusal contract
 

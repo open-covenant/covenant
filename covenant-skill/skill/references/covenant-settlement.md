@@ -31,12 +31,12 @@ W009 in upstream Solana skills is prompt text the model is *asked* to obey.
 Covenant turns it into a check:
 
 1. The capability must exist — `chain.tx.{program}.{ix}` for this exact
-   instruction, with a scope that contains every account and amount in the
-   proposal.
+   instruction — and its scope (e.g. `cluster`) must match the proposal.
 2. The capability must not be expired.
 3. The capability must not be revoked.
-4. The proposal must be inside the budget scope (if `budget.max_lamports` is
-   set, the simulated fee + lamport movement must be under it).
+4. The structural simulate must pass, and autonomous signing must be inside the
+   operator's budget envelope — a per-peer credit budget that fails closed when
+   exhausted or unseeded.
 
 If any check fails the daemon refuses to sign, full stop. There is no flag that
 disables the check.

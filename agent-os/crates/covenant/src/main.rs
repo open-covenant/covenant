@@ -2049,6 +2049,34 @@ async fn authenticate(stream: &mut UnixStream, home: &std::path::Path) -> Result
     }
 }
 
+// A capability expiry: either an absolute epoch-ms integer, or a relative
+// `+<N><unit>` (s, m, h, d) added to now — so `+24h` reads as a day from now
+// instead of forcing the caller to compute an epoch.
+fn parse_expires_at(s: &str) -> Result<u64> {
+    let Some(rest) = s.strip_prefix('+') else {
+        return s
+            .parse()
+            .context("--expires-at must be +<N>{s,m,h,d} or an epoch-ms integer");
+    };
+    let split = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .context("--expires-at: relative form is +<N><unit>, e.g. +24h")?;
+    let (num, unit) = rest.split_at(split);
+    let n: u64 = num.parse().context("--expires-at: invalid number")?;
+    let per_unit_ms = match unit {
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        other => bail!("--expires-at: unknown unit '{other}' (use s, m, h, or d)"),
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Ok(now_ms + n * per_unit_ms)
+}
+
 fn print_usage() {
     eprintln!("covenant — agent-native operating layer CLI");
     eprintln!();
@@ -2122,10 +2150,21 @@ fn print_usage() {
     eprintln!(
         "  covenant capabilities recent [-n N] [--json]  list recent active capability tokens"
     );
-    eprintln!("  covenant capabilities grant <action> [--scope JSON] [--expires-at M] [--json]");
+    eprintln!("  covenant capabilities grant <action> [--scope JSON] [--expires-at +24h|EPOCH_MS] [--json]");
     eprintln!("  covenant capabilities revoke <signature-b58> [--json]");
     eprintln!(
         "  covenant capabilities purge (--before-ms M | --older-than-ms D) [--json]  drop revoked caps older than ms epoch / D ms ago"
+    );
+    eprintln!(
+        "  covenant skill add <dir> [--url URL --tag TAG --commit SHA] [--json]  install a skill from a local dir; source coords optional, content digest always pinned"
+    );
+    eprintln!("  covenant skill list [--json]            list installed skills");
+    eprintln!("  covenant skill show <name> [--json]     print an installed skill's manifest");
+    eprintln!(
+        "  covenant skill verify <name> [--json]   re-check the on-disk content digest against the install pin"
+    );
+    eprintln!(
+        "  covenant skill use <name> <text> [--json]  run a governed skill use (needs a skill.use.<name> capability)"
     );
     eprintln!(
         "  covenant a2a status [-n N] [--min-lease-age-ms N] [--deadline-within-ms N] [--state queued|in_flight] [--json]  list queued tasks, in-flight leases, and pending results; --deadline-within-ms N keeps only tasks whose deadline_ms is set and within at most N ms from now; --state narrows to one queue state"
@@ -2512,6 +2551,10 @@ async fn main() -> Result<()> {
     if args.is_empty() {
         print_usage();
         std::process::exit(2);
+    }
+    if matches!(args[0].as_str(), "--help" | "-h" | "help") {
+        print_usage();
+        return Ok(());
     }
 
     // Daemon-free chain TX dispatch: register-agent / stake / buy-credits
@@ -3326,10 +3369,7 @@ async fn main() -> Result<()> {
                             "--expires-at" => {
                                 i += 1;
                                 let v = args.get(i).context("--expires-at needs a value")?;
-                                expires_at = Some(
-                                    v.parse()
-                                        .context("--expires-at must be an integer (epoch ms)")?,
-                                );
+                                expires_at = Some(parse_expires_at(v)?);
                             }
                             "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
@@ -4885,7 +4925,7 @@ async fn main() -> Result<()> {
         }
         "skill" => {
             if args.len() < 2 {
-                eprintln!("covenant skill: expected `add`, `list`, `show`, or `verify`");
+                eprintln!("covenant skill: expected `add`, `list`, `show`, `verify`, or `use`");
                 std::process::exit(2);
             }
             match args[1].as_str() {
@@ -4920,9 +4960,13 @@ async fn main() -> Result<()> {
                         }
                         i += 1;
                     }
-                    let url = url.context("skill add requires --url")?;
-                    let tag = tag.context("skill add requires --tag")?;
-                    let commit = commit.context("skill add requires --commit")?;
+                    // Source coordinates are optional. A local install pins the
+                    // content digest and records empty provenance — the same
+                    // empty-source state a not-yet-released skill carries; pass
+                    // --url/--tag/--commit to pin a published source.
+                    let url = url.unwrap_or_default();
+                    let tag = tag.unwrap_or_default();
+                    let commit = commit.unwrap_or_default();
                     write_frame(
                         &mut stream,
                         &Request::SkillAdd {
@@ -5062,6 +5106,55 @@ async fn main() -> Result<()> {
                             }
                             if !digest_ok {
                                 std::process::exit(1);
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "use" => {
+                    if args.len() < 3 {
+                        eprintln!("covenant skill use: missing <name>");
+                        std::process::exit(2);
+                    }
+                    let name = args[2].clone();
+                    let mut text_parts: Vec<String> = Vec::new();
+                    let mut as_json = no_dna_active();
+                    let mut i = 3;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--json" => as_json = true,
+                            other => text_parts.push(other.to_string()),
+                        }
+                        i += 1;
+                    }
+                    let text = text_parts.join(" ");
+                    if text.is_empty() {
+                        eprintln!("covenant skill use: missing <text> after <name>");
+                        std::process::exit(2);
+                    }
+                    write_frame(&mut stream, &Request::SkillUse { name, text }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::IntentResult {
+                            intent_id,
+                            status,
+                            text,
+                            sources,
+                            settlement,
+                        } => {
+                            if as_json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string(&intent_result_json(
+                                        intent_id,
+                                        &status,
+                                        &text,
+                                        &sources,
+                                        settlement.as_ref(),
+                                    ))?
+                                );
+                            } else {
+                                println!("{text}");
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -9544,6 +9637,24 @@ mod tests {
             let mn = resolve_solana_rpc_url(Some("mainnet"), None).unwrap();
             assert_eq!(mb, "https://api.mainnet-beta.solana.com");
             assert_eq!(mb, mn);
+        }
+
+        #[test]
+        fn parse_expires_at_relative_and_absolute() {
+            use crate::parse_expires_at;
+            // Absolute epoch ms passes through unchanged.
+            assert_eq!(parse_expires_at("1780930800000").unwrap(), 1780930800000);
+            // Relative +<N><unit> lands a sensible distance in the future.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let day = parse_expires_at("+24h").unwrap();
+            assert!(day > now + 86_000_000 && day < now + 87_000_000);
+            // Malformed forms are rejected, never silently accepted.
+            assert!(parse_expires_at("+5y").is_err());
+            assert!(parse_expires_at("+h").is_err());
+            assert!(parse_expires_at("notanumber").is_err());
         }
 
         #[test]

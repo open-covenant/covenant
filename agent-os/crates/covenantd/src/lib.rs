@@ -5819,11 +5819,13 @@ impl Server {
         let mut issuer_not_owner_refs = 0_u64;
         let mut issuer_display_not_owner_refs = 0_u64;
         let mut intent_text_not_metadata_refs = 0_u64;
+        let mut matched_agent_not_metadata_refs = 0_u64;
         for event in &audits {
             if let AuditKind::IntentDispatched {
                 intent_id,
                 result_hash_hex,
                 intent_text,
+                matched_agent,
                 ..
             } = &event.kind
             {
@@ -5959,6 +5961,57 @@ impl Server {
                             });
                         }
                     }
+                    // Cross-entity binding (handling-agent attribution half):
+                    // dispatch_intent_run (covenantd/src/lib.rs:4185-4236)
+                    // writes the MemoryRecord metadata "agent_id" key =
+                    // card.map(|c| c.id.clone()) (lib.rs:4193) and records the
+                    // AuditEvent matched_agent = card.map(|c| c.id.clone())
+                    // (lib.rs:4232) from the one `card` binding in the same
+                    // dispatch, so every production dispatch satisfies
+                    // memory.metadata["agent_id"] == serialize(matched_agent) —
+                    // a JSON string when an agent matched, JSON null when none
+                    // did. The within-row matched_agent shape arms own malformed
+                    // audit values, so only bind when the audit matched_agent is
+                    // in its production shape (None or a well-formed manifest id)
+                    // to stay strictly disjoint from
+                    // audit_intent_dispatched_matched_agent_{empty,not_manifest_id_charset};
+                    // consider only the two production metadata shapes (string /
+                    // null) so a legacy/malformed agent_id value is left to the
+                    // Check 2 metadata_non_object arm and the orphan arms.
+                    let audit_matched_agent_well_formed = match matched_agent.as_deref() {
+                        None => true,
+                        Some(a) => {
+                            !a.is_empty()
+                                && a.bytes().all(|b| {
+                                    b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-'
+                                })
+                        }
+                    };
+                    if audit_matched_agent_well_formed {
+                        if let Some(metadata_agent_id) = memory.metadata.get("agent_id") {
+                            let drifted = match (matched_agent.as_deref(), metadata_agent_id) {
+                                (Some(a), serde_json::Value::String(b)) => a != b,
+                                (None, serde_json::Value::Null) => false,
+                                (Some(_), serde_json::Value::Null)
+                                | (None, serde_json::Value::String(_)) => true,
+                                _ => false,
+                            };
+                            if drifted {
+                                matched_agent_not_metadata_refs += 1;
+                                drift.push(VerifyDrift {
+                                    kind:
+                                        "intent_dispatched_matched_agent_not_matching_memory_metadata"
+                                            .into(),
+                                    id: Some(event.id.to_string()),
+                                    message: format!(
+                                        "audit event {} has kind = AuditKind::IntentDispatched with matched_agent = {matched_agent:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.agent_id = {metadata_agent_id}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) sets the MemoryRecord metadata \"agent_id\" key (lib.rs:4193) and the AuditEvent matched_agent (lib.rs:4232) both from the one card.map(|c| c.id.clone()) in the same dispatch, so every production dispatch satisfies memory.metadata[\"agent_id\"] == matched_agent (a JSON string when an agent matched, JSON null when none did) — a matched pair whose recorded handling agent disagrees is a pairing no production write emits",
+                                        event.id
+                                    ),
+                                    repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) stamps both the memory record's metadata.agent_id and the IntentDispatched audit matched_agent from the same card.map(|c| c.id.clone()) in one call, so a matched pair whose recorded handling agents differ is out-of-band evidence of a JSONL edit that relabeled which named agent handled an intent on one feed (misattributing on the /audit feed or in the memory store which agent ran the work) while leaving the other intact, an import tool that paired an audit row with a foreign memory record, or a serde regression that hydrated one copy from a different row; the within-row matched_agent arms (audit_intent_dispatched_matched_agent_empty, audit_intent_dispatched_matched_agent_not_manifest_id_charset) constrain the audit value's shape but never its agreement with the memory record, so this cross-record binding is the sole detector; it fires only when the audit matched_agent is in its production shape (None or a well-formed manifest id, so malformed audit values are owned by the shape arms) and the memory metadata carries an agent_id key whose value is a JSON string or JSON null (the two shapes card.map serializes to, so a legacy/non-object metadata is owned by the Check 2 metadata_non_object arm and a malformed agent_id value is left alone), and only on a matched intent_id present in both stores (so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead)".into(),
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -6012,7 +6065,8 @@ impl Server {
             + result_hash_not_derived_refs
             + issuer_not_owner_refs
             + issuer_display_not_owner_refs
-            + intent_text_not_metadata_refs;
+            + intent_text_not_metadata_refs
+            + matched_agent_not_metadata_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ audit".into(),
             passed: memory_orphans == 0
@@ -6021,9 +6075,10 @@ impl Server {
                 && result_hash_not_derived_refs == 0
                 && issuer_not_owner_refs == 0
                 && issuer_display_not_owner_refs == 0
-                && intent_text_not_metadata_refs == 0,
+                && intent_text_not_metadata_refs == 0
+                && matched_agent_not_metadata_refs == 0,
             message: format!(
-                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s), {issuer_display_not_owner_refs} issuer-display-not-matching-owner intent(s), {intent_text_not_metadata_refs} intent-text-not-matching-metadata intent(s)"
+                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s), {issuer_display_not_owner_refs} issuer-display-not-matching-owner intent(s), {intent_text_not_metadata_refs} intent-text-not-matching-metadata intent(s), {matched_agent_not_metadata_refs} matched-agent-not-matching-metadata intent(s)"
             ),
         });
 
@@ -35076,6 +35131,238 @@ required = {caps:?}
                     audit_check
                         .message
                         .contains("intent-text-not-matching-metadata"),
+                    "check message should count the new arm: {}",
+                    audit_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_intent_dispatched_matched_agent_not_matching_memory_metadata_drift() {
+        // Writes a dispatch-shaped memory record (owner/text/result_hash and
+        // metadata.intent_text all faithful, so only the matched_agent arm can
+        // fire) plus a matching IntentDispatched audit row, varying only the
+        // audit matched_agent against the memory metadata.agent_id.
+        async fn put_pair(
+            s: &Server,
+            intent_id: Uuid,
+            event_id: Uuid,
+            text: &str,
+            audit_matched: Option<&str>,
+            meta_agent_id: Option<serde_json::Value>,
+        ) {
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                "intent_text".into(),
+                serde_json::Value::String(text.to_string()),
+            );
+            if let Some(v) = meta_agent_id {
+                meta.insert("agent_id".into(), v);
+            }
+            s.memory
+                .put(MemoryRecord {
+                    id: intent_id,
+                    tier: MemoryTier::Working,
+                    owner: s.identity.agent_id(),
+                    text: text.to_string(),
+                    embedding: vec![],
+                    metadata: serde_json::Value::Object(meta),
+                    created_at: 1_000,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            s.audit
+                .record(AuditEvent {
+                    id: event_id,
+                    timestamp_ms: epoch_ms(),
+                    issuer: s.identity.agent_id(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id,
+                        intent_text: text.to_string(),
+                        matched_agent: audit_matched.map(|a| a.to_string()),
+                        result_hash_hex: hash_hex(text.as_bytes()),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        // Relabel: audit names one agent, memory metadata names another.
+        let relabel_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            relabel_ev,
+            "relabel fixture",
+            Some("agent.alpha"),
+            Some(serde_json::json!("agent.beta")),
+        )
+        .await;
+        // Faithful control: both name the same agent.
+        let faithful_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            faithful_ev,
+            "faithful fixture",
+            Some("agent.alpha"),
+            Some(serde_json::json!("agent.alpha")),
+        )
+        .await;
+        // Audit matched, memory unmatched (Some vs null).
+        let some_vs_null_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            some_vs_null_ev,
+            "some-vs-null fixture",
+            Some("agent.alpha"),
+            Some(serde_json::Value::Null),
+        )
+        .await;
+        // Audit unmatched, memory matched (null vs string).
+        let null_vs_string_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            null_vs_string_ev,
+            "null-vs-string fixture",
+            None,
+            Some(serde_json::json!("agent.alpha")),
+        )
+        .await;
+        // Faithful unmatched control: both null.
+        let null_faithful_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            null_faithful_ev,
+            "null-faithful fixture",
+            None,
+            Some(serde_json::Value::Null),
+        )
+        .await;
+        // Gate: object metadata with no agent_id key must stay silent.
+        let missing_key_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            missing_key_ev,
+            "missing-key fixture",
+            Some("agent.alpha"),
+            None,
+        )
+        .await;
+        // Disjointness: a malformed audit matched_agent is owned by the
+        // within-row charset shape arm, not this cross-record binding.
+        let malformed_ev = Uuid::new_v4();
+        put_pair(
+            &s,
+            Uuid::new_v4(),
+            malformed_ev,
+            "malformed-audit fixture",
+            Some("bad@id"),
+            Some(serde_json::json!("agent.alpha")),
+        )
+        .await;
+        // Orphan: an audit with no joined memory record.
+        let orphan_ev = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: orphan_ev,
+                timestamp_ms: epoch_ms(),
+                issuer: s.identity.agent_id(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::new_v4(),
+                    intent_text: "orphan fixture".into(),
+                    matched_agent: Some("agent.alpha".into()),
+                    result_hash_hex: hash_hex(b"orphan fixture"),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        let kind = "intent_dispatched_matched_agent_not_matching_memory_metadata";
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let fired = |event_id: &Uuid| {
+                    drift
+                        .iter()
+                        .any(|i| i.kind == kind && i.id.as_deref() == Some(&event_id.to_string()))
+                };
+                let row = drift
+                    .iter()
+                    .find(|i| i.kind == kind && i.id.as_deref() == Some(&relabel_ev.to_string()))
+                    .unwrap_or_else(|| panic!("expected {kind} on relabel row: {drift:?}"));
+                assert!(
+                    row.message.contains("agent.alpha") && row.message.contains("agent.beta"),
+                    "message should record both the audit matched_agent and the memory agent_id: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("sole detector")
+                        && row
+                            .repair
+                            .contains("audit_intent_dispatched_matched_agent_not_manifest_id_charset")
+                        && row.repair.contains("metadata_non_object"),
+                    "repair hint should name the shape arms and explain why it is the sole detector: {}",
+                    row.repair
+                );
+                // The relabel row must not double-report under any other Check 1
+                // arm (owner/text/result_hash/intent_text are all faithful).
+                assert!(
+                    drift.iter().all(|i| {
+                        i.id.as_deref() != Some(&relabel_ev.to_string()) || i.kind == kind
+                    }),
+                    "matched_agent drift must be the only arm firing on the relabel row: {drift:?}"
+                );
+                assert!(fired(&some_vs_null_ev), "Some-vs-null must fire: {drift:?}");
+                assert!(
+                    fired(&null_vs_string_ev),
+                    "null-vs-string must fire: {drift:?}"
+                );
+                assert!(!fired(&faithful_ev), "faithful pair must stay silent");
+                assert!(!fired(&null_faithful_ev), "both-null pair must stay silent");
+                assert!(
+                    !fired(&missing_key_ev),
+                    "metadata without an agent_id key must stay silent"
+                );
+                assert!(
+                    !fired(&malformed_ev),
+                    "a malformed audit matched_agent is owned by the charset shape arm, not this arm"
+                );
+                // Prove the malformed value is in fact caught by the shape arm,
+                // so disjointness is real rather than a silent gap.
+                assert!(
+                    drift.iter().any(|i| {
+                        i.kind == "audit_intent_dispatched_matched_agent_not_manifest_id_charset"
+                            && i.id.as_deref() == Some(&malformed_ev.to_string())
+                    }),
+                    "the malformed matched_agent should trip the charset shape arm: {drift:?}"
+                );
+                assert!(!fired(&orphan_ev), "an audit-only orphan must stay silent");
+                let audit_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ audit")
+                    .unwrap_or_else(|| panic!("expected memory ↔ audit check: {checks:?}"));
+                assert!(!audit_check.passed);
+                assert!(
+                    audit_check
+                        .message
+                        .contains("matched-agent-not-matching-metadata"),
                     "check message should count the new arm: {}",
                     audit_check.message
                 );

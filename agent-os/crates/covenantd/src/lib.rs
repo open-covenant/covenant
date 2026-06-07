@@ -6196,6 +6196,7 @@ impl Server {
         let mut self_parent_refs = 0_u64;
         let mut nil_parent_refs = 0_u64;
         let mut cycle_parent_refs = 0_u64;
+        let mut created_before_parent_refs = 0_u64;
         for record in &memories {
             let Some(parent) = record.parent else {
                 continue;
@@ -6222,6 +6223,45 @@ impl Server {
             }
             match self.memory.get(parent).await {
                 Ok(Some(direct)) => {
+                    // Temporal ordering: a record that references a parent can
+                    // only be written after the parent row exists, so its
+                    // monotonic epoch_ms() created_at stamp is necessarily >=
+                    // the parent's — production writes set created_at =
+                    // epoch_ms() (dispatch_intent_run reads issued_at =
+                    // epoch_ms() at lib.rs:3927 into created_at at lib.rs:4196),
+                    // no writer sets parent = Some(newer) at creation (the sole
+                    // prod write hardcodes parent: None at lib.rs:4197), and
+                    // memory compaction only ever detaches a parent (UPDATE ...
+                    // SET parent = None, covenant-memory/src/lib.rs:1192) rather
+                    // than re-pointing it to a newer record, so a resolved
+                    // parent newer than its child cannot arise from a faithful
+                    // write. This is the memory-internal parent edge of the
+                    // created_at <= settled_at <= timestamp_ms dispatch triangle
+                    // (siblings intent_dispatched_timestamp_before_memory_created
+                    // in Check 1, memory_receipt_settled_before_created and
+                    // memory_receipt_settled_after_dispatch_audit in Check 4) —
+                    // currently the only created_at ordering edge with no
+                    // detector. Gate both timestamps non-zero so the
+                    // memory_record_created_at_zero shape arm (Check 5) owns the
+                    // zero sentinel; this arm only runs once the parent resolves
+                    // (Ok(Some(direct))) so a nil/self/stale parent, which
+                    // continues before this branch, and a cycle are owned by
+                    // their existing arms.
+                    if record.created_at != 0
+                        && direct.created_at != 0
+                        && record.created_at < direct.created_at
+                    {
+                        created_before_parent_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "memory_record_created_before_parent".into(),
+                            id: Some(record.id.to_string()),
+                            message: format!(
+                                "memory record {} has created_at = {} which predates its resolved parent {}'s created_at = {}; production memory writes stamp created_at from epoch_ms() (dispatch_intent_run reads issued_at = epoch_ms() into the record's created_at), and a record that references a parent can only be written after the parent row exists, so every faithful derived record satisfies created_at >= parent.created_at — a child that predates its own parent is an ordering no production write emits",
+                                record.id, record.created_at, parent, direct.created_at
+                            ),
+                            repair: "review the memory store row and the parent it references; production memory writes stamp created_at = epoch_ms() and a child can only be written after its parent exists (no writer sets parent = Some at creation — the sole production memory write records parent = None — and compaction only detaches a parent to None, never re-points it to a newer record), so a child whose created_at is earlier than its resolved parent's is out-of-band evidence of a SQLite edit that backdated the child's created_at, an import or replay tool that paired the child with a foreign newer parent, a serde regression that hydrated created_at from a different row, or a clock-tamper restore that rewound wall time between the parent and child writes; restore the child's created_at or detach the parent through an explicit repair command. This is the memory-internal parent edge of the created_at <= settled_at <= timestamp_ms dispatch triangle (the Check 1 intent_dispatched_timestamp_before_memory_created arm binds created_at <= timestamp_ms and the Check 4 memory_receipt_settled_before_created arm binds created_at <= settled_at, but neither forces a child's created_at against its parent's); it fires only when the parent resolves in the store (so a nil, self, or stale parent is owned by memory_record_parent_nil / memory_self_parent / memory_stale_parent, which continue before this branch, and a cycle by memory_parent_cycle) and only when both created_at values are non-zero so the memory_record_created_at_zero shape arm (Check 5) owns the all-zero sentinel".into(),
+                        });
+                    }
                     let mut visited: HashSet<Uuid> = HashSet::new();
                     visited.insert(record.id);
                     visited.insert(parent);
@@ -6271,15 +6311,20 @@ impl Server {
                 }
             }
         }
-        orphans_total += stale_parent_refs + self_parent_refs + nil_parent_refs + cycle_parent_refs;
+        orphans_total += stale_parent_refs
+            + self_parent_refs
+            + nil_parent_refs
+            + cycle_parent_refs
+            + created_before_parent_refs;
         checks.push(VerifyCheck {
             name: "memory parent references".into(),
             passed: stale_parent_refs == 0
                 && self_parent_refs == 0
                 && nil_parent_refs == 0
-                && cycle_parent_refs == 0,
+                && cycle_parent_refs == 0
+                && created_before_parent_refs == 0,
             message: format!(
-                "{stale_parent_refs} stale parent reference(s), {self_parent_refs} self-parent reference(s), {nil_parent_refs} nil-sentinel parent reference(s), {cycle_parent_refs} parent cycle(s)"
+                "{stale_parent_refs} stale parent reference(s), {self_parent_refs} self-parent reference(s), {nil_parent_refs} nil-sentinel parent reference(s), {cycle_parent_refs} parent cycle(s), {created_before_parent_refs} created-before-parent reference(s)"
             ),
         });
 
@@ -40902,6 +40947,112 @@ required = {caps:?}
                     parent_check.message
                 );
                 assert!(orphans_total >= 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_created_before_parent_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let parent_id = Uuid::new_v4();
+        let early_child_id = Uuid::new_v4();
+        let healthy_child_id = Uuid::new_v4();
+        // Parent created at t = 2000.
+        s.memory
+            .put(MemoryRecord {
+                id: parent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "parent".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 2000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        // Child stamped BEFORE its resolved parent (t = 1000 < 2000): the drift.
+        s.memory
+            .put(MemoryRecord {
+                id: early_child_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "early child".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1000,
+                parent: Some(parent_id),
+            })
+            .await
+            .unwrap();
+        // Healthy child stamped after its parent (t = 3000 >= 2000): silent.
+        s.memory
+            .put(MemoryRecord {
+                id: healthy_child_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: "healthy child".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 3000,
+                parent: Some(parent_id),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_created_before_parent"
+                            && item.id.as_deref() == Some(&early_child_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_created_before_parent: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("predates its resolved parent"),
+                    "drift message should name the ordering invariant: {}",
+                    row.message
+                );
+                // A child created at or after its parent must stay silent.
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "memory_record_created_before_parent"
+                            && item.id.as_deref() == Some(&healthy_child_id.to_string())
+                    }),
+                    "a child created at or after its parent must not fire: {drift:?}"
+                );
+                // Resolved, in-order parents must not trip the other parent arms.
+                assert!(
+                    !drift.iter().any(|item| matches!(
+                        item.kind.as_str(),
+                        "memory_stale_parent" | "memory_self_parent" | "memory_parent_cycle"
+                    )),
+                    "resolved in-order parents must not trip stale/self/cycle: {drift:?}"
+                );
+                let parent_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory parent references")
+                    .unwrap_or_else(|| panic!("expected parent references check: {checks:?}"));
+                assert!(!parent_check.passed);
+                assert!(
+                    parent_check
+                        .message
+                        .contains("1 created-before-parent reference"),
+                    "check message should count created-before-parent refs: {}",
+                    parent_check.message
+                );
+                assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),
         }

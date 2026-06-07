@@ -5,6 +5,7 @@
 // before it has actually been checked.
 
 import { execFileSync } from "node:child_process";
+import { createHash, createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { NextResponse } from "next/server";
@@ -148,6 +149,20 @@ function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
 
 // Anchor 2 — local hash chain. attestations/<sha>.json holds per-LLM-call Step
 // records Merkle-rooted into audit_root_hex; green when present with a root.
+// Recompute the audit chain root from the raw event lines, exactly as the
+// daemon and the standalone verifier do: event_hash = sha256(line), then
+// chain = sha256(prev + "\n" + event_hash). The published steps ARE those
+// canonical lines, so this is a real independent check, not a trust.
+function recomputeAuditRoot(steps: string[]): string {
+  const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  let prev = "0".repeat(64);
+  for (const line of steps) {
+    const eventHash = sha256(Buffer.from(line, "utf8"));
+    prev = sha256(Buffer.from(`${prev}\n${eventHash}`, "utf8"));
+  }
+  return prev;
+}
+
 function checkAnchor2AuditChain(repoRoot: string, sha: string): Witness {
   const attestationPath = join(repoRoot, "attestations", `${sha}.json`);
   if (!existsSync(attestationPath)) {
@@ -156,27 +171,37 @@ function checkAnchor2AuditChain(repoRoot: string, sha: string): Witness {
       label: "Audit hash chain",
       state: "yellow",
       detail:
-        "No audit chain published for this commit yet. Per-LLM-call Step records Merkle-root into attestations/<sha>.json; once present this light recomputes and verifies the root.",
+        "No audit chain published for this commit yet. A run's hash-chained events recompute into attestations/<sha>.json; once present this light recomputes the root and checks it.",
     };
   }
   try {
     const att = JSON.parse(readFileSync(attestationPath, "utf8")) as {
       audit_root_hex?: string;
-      steps?: unknown[];
+      steps?: unknown;
     };
-    if (!att.audit_root_hex) {
+    const steps = Array.isArray(att.steps) ? att.steps : [];
+    if (!att.audit_root_hex || !steps.length || !steps.every((s) => typeof s === "string")) {
       return {
         key: "audit_chain",
         label: "Audit hash chain",
         state: "red",
-        detail: "Attestation present but audit_root_hex missing.",
+        detail: "Attestation present but missing a root or its canonical steps.",
+      };
+    }
+    const recomputed = recomputeAuditRoot(steps as string[]);
+    if (recomputed !== att.audit_root_hex) {
+      return {
+        key: "audit_chain",
+        label: "Audit hash chain",
+        state: "red",
+        detail: `Chain tampered: recomputed root ${recomputed.slice(0, 12)}… does not match the published ${att.audit_root_hex.slice(0, 12)}….`,
       };
     }
     return {
       key: "audit_chain",
       label: "Audit hash chain",
       state: "green",
-      detail: `Root ${att.audit_root_hex.slice(0, 16)}… covers ${att.steps?.length ?? 0} LLM calls.`,
+      detail: `Root ${att.audit_root_hex.slice(0, 16)}… recomputed from ${steps.length} hash-chained events and matches.`,
       drillHref: `https://github.com/open-covenant/covenant/blob/main/attestations/${sha}.json`,
     };
   } catch {
@@ -217,13 +242,56 @@ function checkAnchor4VerifierSig(repoRoot: string, sha: string): Witness {
         "No verifier signature published for this commit yet. A separately-keyed ed25519 verifier signs the audit root; until then this light reads yellow.",
     };
   }
-  return {
-    key: "verifier_sig",
-    label: "Verifier-Refuter signature",
-    state: "yellow",
-    detail:
-      "Verifier signature present but not yet checked. Ed25519 verification against the published verifier pubkey is not wired, so this light stays yellow rather than claim a green it has not verified.",
-  };
+  try {
+    const att = JSON.parse(readFileSync(join(repoRoot, "attestations", `${sha}.json`), "utf8")) as {
+      audit_root_hex?: string;
+      verdict?: string;
+      domain?: string;
+    };
+    const pubkeyPath = join(repoRoot, "landing", "public", "witness", "verifier-pubkey.txt");
+    if (!att.audit_root_hex || !existsSync(pubkeyPath)) {
+      return {
+        key: "verifier_sig",
+        label: "Verifier-Refuter signature",
+        state: "yellow",
+        detail: "Verifier signature present but the published pubkey or audit root is missing.",
+      };
+    }
+    const pubkey = readFileSync(pubkeyPath, "utf8").trim();
+    const sig = readFileSync(sigPath, "utf8").trim();
+    const domain = att.domain || "covenant.witness.v1";
+    const message = Buffer.from(`${domain}\n${att.audit_root_hex}`, "utf8");
+    const key = createPublicKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", x: pubkey } });
+    if (!edVerify(null, message, key, Buffer.from(sig, "base64url"))) {
+      return {
+        key: "verifier_sig",
+        label: "Verifier-Refuter signature",
+        state: "red",
+        detail: "Verifier signature did not verify against the published verifier pubkey.",
+      };
+    }
+    if (att.verdict === "refute") {
+      return {
+        key: "verifier_sig",
+        label: "Verifier-Refuter signature",
+        state: "red",
+        detail: `Verifier refuted this run (signed by ${pubkey.slice(0, 12)}…): a signed action causally followed untrusted on-chain input.`,
+      };
+    }
+    return {
+      key: "verifier_sig",
+      label: "Verifier-Refuter signature",
+      state: "green",
+      detail: `Audit root signed by an independent verifier (${pubkey.slice(0, 12)}…), no refutation. Check it yourself against landing/public/witness/verifier-pubkey.txt.`,
+    };
+  } catch {
+    return {
+      key: "verifier_sig",
+      label: "Verifier-Refuter signature",
+      state: "red",
+      detail: "Verifier signature or pubkey unreadable.",
+    };
+  }
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }> }) {

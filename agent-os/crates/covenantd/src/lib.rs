@@ -5816,6 +5816,7 @@ impl Server {
             memories.iter().map(|m| (m.id, m)).collect();
         let mut dispatched_intent_counts: HashMap<Uuid, usize> = HashMap::new();
         let mut result_hash_not_derived_refs = 0_u64;
+        let mut issuer_not_owner_refs = 0_u64;
         for event in &audits {
             if let AuditKind::IntentDispatched {
                 intent_id,
@@ -5849,6 +5850,38 @@ impl Server {
                                 repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch stores record.text = text_out and records IntentDispatched.result_hash_hex = covenant_audit::hash_hex(text_out.as_bytes()) in the same dispatch, so a matched pair whose result_hash_hex != hash_hex(memory.text) is out-of-band evidence of a JSONL edit that rewrote the dispatch digest, an import tool that paired an audit row with a foreign result digest, or a serde regression that hydrated result_hash_hex from a different row; this arm recomputes through the same covenant_audit::hash_hex the producer calls so it cannot drift from the production formula, and it fires only when result_hash_hex is canonical (exactly 64 chars, all lowercase hex 0-9a-f, not the all-zeros sentinel) so it is strictly disjoint from the audit_intent_dispatched_result_hash_hex_empty, _wrong_length, _not_lowercase_hex, and _all_zeros shape arms, and only on a matched intent_id present in both stores so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead".into(),
                             });
                         }
+                    }
+                    // Cross-entity binding: the matched memory record's owner is
+                    // the same issuer the dispatch stamped into the audit event.
+                    // dispatch_intent_run binds `let issuer = peer.clone()`, then
+                    // writes the MemoryRecord with owner = issuer.clone()
+                    // (lib.rs:4188) and the AuditEvent with issuer = issuer.clone()
+                    // (lib.rs:4228) in one call, and record_peer_event asserts
+                    // event.issuer.pubkey == peer.pubkey at every audit write
+                    // (lib.rs:1838), so every production dispatch satisfies
+                    // audit.issuer.pubkey == memory.owner.pubkey. This is the
+                    // audit-side mirror of memory_receipt_owner_mismatch (Check 4),
+                    // which binds receipt.payer.pubkey == memory.owner.pubkey on
+                    // the same dispatch. Gate on both pubkeys being non-zero so
+                    // the audit_event_issuer_pubkey_zeroed (Check 7) and
+                    // memory_record_owner_pubkey_zeroed (Check 5) shape arms own
+                    // the all-zero sentinel.
+                    if event.issuer.pubkey != [0u8; 32]
+                        && memory.owner.pubkey != [0u8; 32]
+                        && event.issuer.pubkey != memory.owner.pubkey
+                    {
+                        issuer_not_owner_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "intent_dispatched_issuer_not_matching_memory_owner".into(),
+                            id: Some(event.id.to_string()),
+                            message: format!(
+                                "audit event {} has kind = AuditKind::IntentDispatched joined by intent_id to memory record {intent_id}, but the event's issuer.pubkey (base58 {}) does not equal that memory record's owner.pubkey (base58 {}); the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:3921) binds let issuer = peer.clone(), stores the memory record with owner = issuer.clone() (lib.rs:4188), and records the AuditEvent with issuer = issuer.clone() (lib.rs:4228) in the same dispatch, and record_peer_event asserts event.issuer.pubkey == peer.pubkey at every audit write (lib.rs:1838), so every production dispatch satisfies audit.issuer.pubkey == memory.owner.pubkey — a matched pair whose issuer and owner pubkeys disagree is a pairing no production write emits",
+                                event.id,
+                                event.issuer.pubkey_base58(),
+                                memory.owner.pubkey_base58()
+                            ),
+                            repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) binds issuer = peer.clone() and stamps the memory record's owner, the SettlementReceipt.payer, and the IntentDispatched audit issuer all from that one issuer in the same call, while record_peer_event asserts event.issuer.pubkey == peer.pubkey at write time, so a matched pair whose audit issuer.pubkey differs from the memory record's owner.pubkey is out-of-band evidence of a JSONL edit that rewrote the recorded dispatcher identity on the /audit feed (forging which identity ran an intent) while leaving the memory record's true owner intact, an import tool that paired a dispatch audit row with a foreign issuer, or a serde regression that hydrated event.issuer from a different row; this arm is the audit-side mirror of the receipt-side memory_receipt_owner_mismatch (Check 4, which binds receipt.payer.pubkey == memory.owner.pubkey on the same dispatch), and it fires only when both pubkeys are non-zero so it is strictly disjoint from the audit_event_issuer_pubkey_zeroed (Check 7) and memory_record_owner_pubkey_zeroed (Check 5) shape arms that own the all-zero sentinel, and only on a matched intent_id present in both stores so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead".into(),
+                        });
                     }
                 }
             }
@@ -5897,16 +5930,20 @@ impl Server {
                 });
             }
         }
-        orphans_total +=
-            memory_orphans + audit_orphans + duplicate_intent_refs + result_hash_not_derived_refs;
+        orphans_total += memory_orphans
+            + audit_orphans
+            + duplicate_intent_refs
+            + result_hash_not_derived_refs
+            + issuer_not_owner_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ audit".into(),
             passed: memory_orphans == 0
                 && audit_orphans == 0
                 && duplicate_intent_refs == 0
-                && result_hash_not_derived_refs == 0,
+                && result_hash_not_derived_refs == 0
+                && issuer_not_owner_refs == 0,
             message: format!(
-                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s)"
+                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s)"
             ),
         });
 
@@ -33525,6 +33562,161 @@ required = {caps:?}
                 assert!(!audit_check.passed);
                 assert!(
                     audit_check.message.contains("result-hash-not-derived"),
+                    "check message should count the new arm: {}",
+                    audit_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_intent_dispatched_issuer_not_matching_memory_owner_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Tamper: an IntentDispatched whose issuer is a well-formed, non-zero
+        // identity that differs from the joined memory record's owner — exactly
+        // what a rewritten dispatcher identity looks like. result_hash_hex is the
+        // faithful digest of the memory text so the result-hash derivation arm
+        // stays quiet and only the issuer↔owner binding fires.
+        let intruder = AgentId::new("intruder@local", [9u8; 32]);
+        let intruder_b58 = intruder.pubkey_base58();
+        let owner_b58 = me.pubkey_base58();
+        let tamper_intent_id = Uuid::new_v4();
+        let tamper_event_id = Uuid::new_v4();
+        let tamper_text = "issuer-owner tamper fixture";
+        s.memory
+            .put(MemoryRecord {
+                id: tamper_intent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: tamper_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: tamper_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: intruder.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: tamper_intent_id,
+                    intent_text: tamper_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(tamper_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        // Control: issuer == owner — must not fire, proving the arm binds the
+        // event issuer to the joined memory owner and not to a constant.
+        let ok_intent_id = Uuid::new_v4();
+        let ok_event_id = Uuid::new_v4();
+        let ok_text = "issuer-owner control fixture";
+        s.memory
+            .put(MemoryRecord {
+                id: ok_intent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: ok_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: ok_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: ok_intent_id,
+                    intent_text: ok_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(ok_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "intent_dispatched_issuer_not_matching_memory_owner"
+                            && item.id.as_deref() == Some(&tamper_event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected intent_dispatched_issuer_not_matching_memory_owner: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains(intruder_b58.as_str())
+                        && row.message.contains(owner_b58.as_str()),
+                    "message should record the audit issuer pubkey and the memory owner pubkey: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("memory_receipt_owner_mismatch")
+                        && row.repair.contains("audit_event_issuer_pubkey_zeroed"),
+                    "repair hint should name the mirrored receipt arm and the disjoint shape arms: {}",
+                    row.repair
+                );
+                // Both pubkeys are non-zero, so the tampered event must not
+                // double-report under the issuer/owner zeroed shape arms.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&tamper_event_id.to_string())
+                            || item.kind != "audit_event_issuer_pubkey_zeroed"
+                    }),
+                    "issuer↔owner arm must be disjoint from audit_event_issuer_pubkey_zeroed: {drift:?}"
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&tamper_intent_id.to_string())
+                            || item.kind != "memory_record_owner_pubkey_zeroed"
+                    }),
+                    "issuer↔owner arm must be disjoint from memory_record_owner_pubkey_zeroed: {drift:?}"
+                );
+                // The faithful-digest tamper must not trip the result-hash arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&tamper_event_id.to_string())
+                            || item.kind
+                                != "intent_dispatched_result_hash_not_derived_from_memory_text"
+                    }),
+                    "issuer↔owner tamper carries a faithful result_hash_hex and must not trip the result-hash arm: {drift:?}"
+                );
+                // The matched control pair must not trip the arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "intent_dispatched_issuer_not_matching_memory_owner"
+                            || item.id.as_deref() != Some(&ok_event_id.to_string())
+                    }),
+                    "a row whose issuer.pubkey equals memory.owner.pubkey must not trip the arm: {drift:?}"
+                );
+                let audit_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ audit")
+                    .unwrap_or_else(|| panic!("expected memory ↔ audit check: {checks:?}"));
+                assert!(!audit_check.passed);
+                assert!(
+                    audit_check.message.contains("issuer-not-matching-owner"),
                     "check message should count the new arm: {}",
                     audit_check.message
                 );

@@ -5812,10 +5812,45 @@ impl Server {
         // as intent_dispatched_duplicate; collapsing it into a HashSet would
         // hide the second row entirely.
         let memory_ids: HashSet<Uuid> = memories.iter().map(|m| m.id).collect();
+        let memory_by_id: HashMap<Uuid, &MemoryRecord> =
+            memories.iter().map(|m| (m.id, m)).collect();
         let mut dispatched_intent_counts: HashMap<Uuid, usize> = HashMap::new();
+        let mut result_hash_not_derived_refs = 0_u64;
         for event in &audits {
-            if let AuditKind::IntentDispatched { intent_id, .. } = &event.kind {
+            if let AuditKind::IntentDispatched {
+                intent_id,
+                result_hash_hex,
+                ..
+            } = &event.kind
+            {
                 *dispatched_intent_counts.entry(*intent_id).or_insert(0) += 1;
+                // Cross-entity derivation: the matched memory record's text is
+                // the same text_out the dispatch hashed into result_hash_hex.
+                // Gate on a canonical digest so the four Check 7 shape arms own
+                // the empty/wrong-length/non-lowercase/all-zeros cases.
+                if let Some(memory) = memory_by_id.get(intent_id) {
+                    let canonical_hash = result_hash_hex.chars().count() == 64
+                        && !result_hash_hex
+                            .chars()
+                            .any(|c| !c.is_ascii_digit() && !('a'..='f').contains(&c))
+                        && result_hash_hex.bytes().any(|b| b != b'0');
+                    if canonical_hash {
+                        let expected = hash_hex(memory.text.as_bytes());
+                        if *result_hash_hex != expected {
+                            result_hash_not_derived_refs += 1;
+                            drift.push(VerifyDrift {
+                                kind: "intent_dispatched_result_hash_not_derived_from_memory_text"
+                                    .into(),
+                                id: Some(event.id.to_string()),
+                                message: format!(
+                                    "audit event {} has kind = AuditKind::IntentDispatched with result_hash_hex = {result_hash_hex:?} but its matched memory record {intent_id} (memory.id == intent_id) has text whose covenant_audit::hash_hex is {expected}; the sole production IntentDispatched write at dispatch_intent (covenantd/src/lib.rs:4233) sets result_hash_hex = hash_hex(text_out.as_bytes()) for the very text_out it stores as the memory record's text (lib.rs:4189, same dispatch, same intent_id), and memory record text is immutable after first write, so a well-formed 64-char lowercase-hex result_hash_hex that does not equal hash_hex(memory.text) is a pairing no production write emits",
+                                    event.id
+                                ),
+                                repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch stores record.text = text_out and records IntentDispatched.result_hash_hex = covenant_audit::hash_hex(text_out.as_bytes()) in the same dispatch, so a matched pair whose result_hash_hex != hash_hex(memory.text) is out-of-band evidence of a JSONL edit that rewrote the dispatch digest, an import tool that paired an audit row with a foreign result digest, or a serde regression that hydrated result_hash_hex from a different row; this arm recomputes through the same covenant_audit::hash_hex the producer calls so it cannot drift from the production formula, and it fires only when result_hash_hex is canonical (exactly 64 chars, all lowercase hex 0-9a-f, not the all-zeros sentinel) so it is strictly disjoint from the audit_intent_dispatched_result_hash_hex_empty, _wrong_length, _not_lowercase_hex, and _all_zeros shape arms, and only on a matched intent_id present in both stores so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead".into(),
+                            });
+                        }
+                    }
+                }
             }
         }
         let memory_orphans: u64 = memory_ids
@@ -5862,12 +5897,16 @@ impl Server {
                 });
             }
         }
-        orphans_total += memory_orphans + audit_orphans + duplicate_intent_refs;
+        orphans_total +=
+            memory_orphans + audit_orphans + duplicate_intent_refs + result_hash_not_derived_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ audit".into(),
-            passed: memory_orphans == 0 && audit_orphans == 0 && duplicate_intent_refs == 0,
+            passed: memory_orphans == 0
+                && audit_orphans == 0
+                && duplicate_intent_refs == 0
+                && result_hash_not_derived_refs == 0,
             message: format!(
-                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s)"
+                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s)"
             ),
         });
 
@@ -32998,6 +33037,149 @@ required = {caps:?}
                     .find(|c| c.name == "memory ↔ receipts")
                     .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
                 assert!(!receipt_check.passed);
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_intent_dispatched_result_hash_not_derived_from_memory_text_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Tamper: an IntentDispatched whose result_hash_hex is a well-formed
+        // 64-char lowercase-hex digest (so it clears all four shape arms) but
+        // is hash_hex of a DIFFERENT string than the joined memory record's
+        // text — exactly what a rewritten dispatch digest looks like.
+        let tamper_intent_id = Uuid::new_v4();
+        let tamper_event_id = Uuid::new_v4();
+        let tamper_text = "result-hash tamper fixture";
+        let tamper_stored = hash_hex(b"a different result than was stored");
+        let tamper_expected = hash_hex(tamper_text.as_bytes());
+        s.memory
+            .put(MemoryRecord {
+                id: tamper_intent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: tamper_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: tamper_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: tamper_intent_id,
+                    intent_text: tamper_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: tamper_stored.clone(),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        // Control: result_hash_hex IS hash_hex(memory.text) — must not fire,
+        // proving the arm recomputes through the producer's hash_hex.
+        let ok_intent_id = Uuid::new_v4();
+        let ok_event_id = Uuid::new_v4();
+        let ok_text = "result-hash control fixture";
+        s.memory
+            .put(MemoryRecord {
+                id: ok_intent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: ok_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: ok_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: ok_intent_id,
+                    intent_text: ok_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(ok_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "intent_dispatched_result_hash_not_derived_from_memory_text"
+                            && item.id.as_deref() == Some(&tamper_event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected intent_dispatched_result_hash_not_derived_from_memory_text: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains(tamper_stored.as_str())
+                        && row.message.contains(tamper_expected.as_str()),
+                    "message should record the stored digest and the recomputed hash_hex(memory.text): {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("covenant_audit::hash_hex")
+                        && row.repair.contains("_all_zeros"),
+                    "repair hint should name the shared hash_hex and the disjoint shape arms: {}",
+                    row.repair
+                );
+                // The canonical-but-wrong digest must not double-report under any
+                // of the four result_hash_hex shape arms.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&tamper_event_id.to_string())
+                            || (item.kind != "audit_intent_dispatched_result_hash_hex_empty"
+                                && item.kind
+                                    != "audit_intent_dispatched_result_hash_hex_wrong_length"
+                                && item.kind
+                                    != "audit_intent_dispatched_result_hash_hex_not_lowercase_hex"
+                                && item.kind
+                                    != "audit_intent_dispatched_result_hash_hex_all_zeros")
+                    }),
+                    "derivation arm must be disjoint from the result_hash_hex shape arms: {drift:?}"
+                );
+                // The canonical control pair must not trip the arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "intent_dispatched_result_hash_not_derived_from_memory_text"
+                            || item.id.as_deref() != Some(&ok_event_id.to_string())
+                    }),
+                    "a row whose result_hash_hex equals hash_hex(memory.text) must not trip the arm: {drift:?}"
+                );
+                let audit_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ audit")
+                    .unwrap_or_else(|| panic!("expected memory ↔ audit check: {checks:?}"));
+                assert!(!audit_check.passed);
+                assert!(
+                    audit_check.message.contains("result-hash-not-derived"),
+                    "check message should count the new arm: {}",
+                    audit_check.message
+                );
                 assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),

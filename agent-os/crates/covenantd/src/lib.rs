@@ -7338,6 +7338,7 @@ impl Server {
         // bridge rely on.
         let mut confirmed_without_chain_refs = 0_u64;
         let mut slot_without_chain_refs = 0_u64;
+        let mut slot_confirmed_at_presence_diverged_refs = 0_u64;
         let mut chain_partial_refs = 0_u64;
         let mut tx_sig_onchain_sig_diverged_refs = 0_u64;
         let mut zero_settled_at_refs = 0_u64;
@@ -7449,6 +7450,39 @@ impl Server {
                         receipt.id
                     ),
                     repair: "review settlement provenance before retaining; slot is only set by annotate_receipt alongside chain/cluster/batch_id/merkle_root".into(),
+                });
+            }
+            // Confirmation-metadata pairing: annotate_receipt sources
+            // receipt.slot and receipt.confirmed_at from the same
+            // ChainConfirmation (covenant-settlement/src/lib.rs:375-376), and a
+            // Solana confirmation carries both a block slot and a block
+            // timestamp, so faithful data has slot.is_some() ==
+            // confirmed_at.is_some(): both unset in the flushed-but-unconfirmed
+            // state (the production flush path builds ChainConfirmation { slot:
+            // None, confirmed_at: None, .. } at lib.rs:5425-5427) and both set
+            // once on-chain confirmation lands. Exactly one of the two being
+            // present is a torn confirmation-metadata pair no production write
+            // emits. The receipt_confirmed_without_chain and
+            // receipt_slot_without_chain arms above bind each field to `chain`
+            // but never to each other, so a receipt whose chain bundle is set
+            // yet carries only one of slot/confirmed_at slips past both. Gate on
+            // chain.is_some() so the chain = None case stays owned by those two
+            // without-chain arms (a single metadata field present without chain
+            // fires one of them; both present without chain fires both, and this
+            // arm stays silent because both are present), keeping it strictly
+            // disjoint; the receipt_slot_zero and receipt_confirmed_at_zero
+            // value-shape arms are orthogonal (they fire on the Some(0) value,
+            // this on presence).
+            if receipt.chain.is_some() && receipt.slot.is_some() != receipt.confirmed_at.is_some() {
+                slot_confirmed_at_presence_diverged_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "receipt_slot_confirmed_at_presence_diverged".into(),
+                    id: Some(receipt.id.to_string()),
+                    message: format!(
+                        "receipt {} has a set chain provenance bundle but its confirmation metadata is torn: slot = {:?}, confirmed_at = {:?} (exactly one is present); annotate_receipt sources receipt.slot and receipt.confirmed_at from the same ChainConfirmation (covenant-settlement/src/lib.rs:375-376) and a Solana confirmation carries both a block slot and a block timestamp, so every faithful receipt has slot and confirmed_at either both unset (the flushed-but-unconfirmed state the production flush path writes via ChainConfirmation {{ slot: None, confirmed_at: None, .. }} at covenantd/src/lib.rs:5425-5427) or both set once on-chain confirmation lands — exactly one present is a pairing no production write emits",
+                        receipt.id, receipt.slot, receipt.confirmed_at
+                    ),
+                    repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation routes through annotate_receipt, which sets receipt.slot = confirmation.slot and receipt.confirmed_at = confirmation.confirmed_at from one ChainConfirmation (covenant-settlement/src/lib.rs:375-376), and a Solana confirmation provides a block slot and that block's timestamp together, so a confirmed receipt carries both or (before confirmation) neither — a receipt with exactly one set is out-of-band evidence of a partial on-chain confirmation writer that populated one field without the other, a serde regression that defaulted one Option<u64> to None at hydration while the other survived, or a JSONL edit that detached the confirmation slot from its block timestamp (leaving operator-facing CLI receipt summaries and the /chain/receipt-batches HTTP endpoint rendering half-confirmed provenance); this fires only when receipt.chain.is_some() so the chain = None case stays owned by receipt_confirmed_without_chain and receipt_slot_without_chain (which bind each metadata field to chain individually), and it is orthogonal to the receipt_slot_zero and receipt_confirmed_at_zero value-shape arms that own the Some(0) sentinel".into(),
                 });
             }
             let bundle_set = [
@@ -7818,6 +7852,7 @@ impl Server {
         orphans_total += confirmed_without_chain_refs
             + duplicate_id_receipt_refs
             + slot_without_chain_refs
+            + slot_confirmed_at_presence_diverged_refs
             + chain_partial_refs
             + tx_sig_onchain_sig_diverged_refs
             + zero_settled_at_refs
@@ -7851,6 +7886,7 @@ impl Server {
             passed: confirmed_without_chain_refs == 0
                 && duplicate_id_receipt_refs == 0
                 && slot_without_chain_refs == 0
+                && slot_confirmed_at_presence_diverged_refs == 0
                 && chain_partial_refs == 0
                 && tx_sig_onchain_sig_diverged_refs == 0
                 && zero_settled_at_refs == 0
@@ -7880,7 +7916,7 @@ impl Server {
                 && not_base58_onchain_sig_receipt_refs == 0
                 && wrong_byte_length_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {slot_without_chain_refs} slot-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {duplicate_id_receipt_refs} duplicate-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {not_derived_batch_id_receipt_refs} not-derived-batch-id receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {wrong_byte_length_tx_sig_receipt_refs} wrong-byte-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s), {wrong_byte_length_onchain_sig_receipt_refs} wrong-byte-length-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {slot_without_chain_refs} slot-without-chain receipt(s), {slot_confirmed_at_presence_diverged_refs} torn-confirmation-metadata receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {duplicate_id_receipt_refs} duplicate-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {not_derived_batch_id_receipt_refs} not-derived-batch-id receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {wrong_byte_length_tx_sig_receipt_refs} wrong-byte-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s), {wrong_byte_length_onchain_sig_receipt_refs} wrong-byte-length-onchain-sig receipt(s)"
             ),
         });
 
@@ -16406,6 +16442,141 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn verify_reports_receipt_slot_confirmed_at_presence_diverged_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Torn confirmation metadata: a receipt with a full chain bundle that
+        // carries a block slot but no block timestamp. annotate_receipt sets
+        // slot and confirmed_at from one ChainConfirmation, so exactly one
+        // present is a pairing no production write emits.
+        let torn_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: torn_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some(derive_batch_id(&"a".repeat(64))),
+                merkle_root: Some("a".repeat(64)),
+                tx_sig: None,
+                slot: Some(42),
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        // Control 1: a fully confirmed receipt (both slot and confirmed_at set)
+        // must stay silent.
+        let confirmed_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: confirmed_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some(derive_batch_id(&"a".repeat(64))),
+                merkle_root: Some("a".repeat(64)),
+                tx_sig: None,
+                slot: Some(42),
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        // Control 2: a flushed-but-unconfirmed receipt (chain bundle set, both
+        // slot and confirmed_at None) must stay silent — this is the current
+        // production state the flush path writes.
+        let flushed_id = Uuid::new_v4();
+        s.settlement
+            .record(SettlementReceipt {
+                id: flushed_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some(derive_batch_id(&"a".repeat(64))),
+                merkle_root: Some("a".repeat(64)),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_slot_confirmed_at_presence_diverged"
+                            && item.id.as_deref() == Some(&torn_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected receipt_slot_confirmed_at_presence_diverged: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("torn") && row.message.contains("Some(42)"),
+                    "message should name the torn pair and the present value: {}",
+                    row.message
+                );
+                // The chain bundle is fully set, so the chain = None
+                // without-chain arms must not co-fire on the torn receipt.
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.id.as_deref() == Some(&torn_id.to_string())
+                            && matches!(
+                                item.kind.as_str(),
+                                "receipt_slot_without_chain" | "receipt_confirmed_without_chain"
+                            )
+                    }),
+                    "a chain-set torn receipt must not co-fire the without-chain arms: {drift:?}"
+                );
+                // Both healthy controls stay silent.
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_slot_confirmed_at_presence_diverged"
+                            && (item.id.as_deref() == Some(&confirmed_id.to_string())
+                                || item.id.as_deref() == Some(&flushed_id.to_string()))
+                    }),
+                    "a both-set or both-unset receipt must not fire: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 torn-confirmation-metadata receipt"),
+                    "check message should count torn-confirmation-metadata receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn verify_reports_receipt_chain_partial_drift() {
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();
@@ -16586,7 +16757,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -16661,7 +16832,7 @@ required = {caps:?}
                 batch_id: Some(String::new()),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -16736,7 +16907,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -16808,7 +16979,7 @@ required = {caps:?}
                 batch_id: Some("deadbeef".into()),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -16884,7 +17055,7 @@ required = {caps:?}
                 batch_id: Some("0".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -16961,7 +17132,7 @@ required = {caps:?}
                 batch_id: Some("A".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -17047,7 +17218,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -17071,7 +17242,7 @@ required = {caps:?}
                 batch_id: Some(derive_batch_id(&derived_merkle)),
                 merkle_root: Some(derived_merkle),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -17165,7 +17336,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some(String::new()),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -17240,7 +17411,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("deadbeef".into()),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -17318,7 +17489,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("0".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -17397,7 +17568,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("A".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -17480,7 +17651,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: Some(String::new()),
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: Some(String::new()),
             })
@@ -17555,7 +17726,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: Some("deadbeef".into()),
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: Some("deadbeef".into()),
             })
@@ -17627,7 +17798,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: Some(String::new()),
             })
@@ -17709,7 +17880,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: Some("deadbeef".into()),
             })
@@ -17799,7 +17970,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: Some(sig),
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -17887,7 +18058,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: Some(sig),
             })
@@ -17988,7 +18159,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: Some(sig),
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: None,
             })
@@ -18082,7 +18253,7 @@ required = {caps:?}
                 batch_id: Some("b".repeat(64)),
                 merkle_root: Some("a".repeat(64)),
                 tx_sig: None,
-                slot: None,
+                slot: Some(2_000),
                 confirmed_at: Some(2_000),
                 onchain_sig: Some(sig),
             })

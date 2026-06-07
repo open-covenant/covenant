@@ -1653,7 +1653,7 @@ async fn live_cli_verify_json_reports_receipt_chain_empty_drift() {
         batch_id: Some("b".repeat(64)),
         merkle_root: Some("a".repeat(64)),
         tx_sig: None,
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: None,
     };
@@ -2052,7 +2052,7 @@ async fn live_cli_verify_json_reports_receipt_batch_id_empty_drift() {
         batch_id: Some(String::new()),
         merkle_root: Some("a".repeat(64)),
         tx_sig: None,
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: None,
     };
@@ -2155,7 +2155,7 @@ async fn live_cli_verify_json_reports_receipt_onchain_sig_empty_drift() {
         batch_id: Some("b".repeat(64)),
         merkle_root: Some("a".repeat(64)),
         tx_sig: None,
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: Some(String::new()),
     };
@@ -2265,7 +2265,7 @@ async fn live_cli_verify_json_reports_receipt_tx_sig_empty_drift() {
         batch_id: Some("b".repeat(64)),
         merkle_root: Some("a".repeat(64)),
         tx_sig: Some(String::new()),
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: Some(String::new()),
     };
@@ -2368,7 +2368,7 @@ async fn live_cli_verify_json_reports_receipt_merkle_root_empty_drift() {
         batch_id: Some("b".repeat(64)),
         merkle_root: Some(String::new()),
         tx_sig: None,
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: None,
     };

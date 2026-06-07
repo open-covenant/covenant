@@ -1,20 +1,15 @@
-// /api/verify/[sha] — Server-side proxy verification of a Covenant-author commit.
-//
-// Four witnesses are checked. Each returns a state (green/yellow/red/gray)
-// and a detail line. This is the v0.2 SKELETON: real verification plugs in
-// per-anchor as the Week 1+ ship targets land.
-//
-// Anchor 1 took the Spike-2 Option-D pivot: per-commit Solana Memo tx
-// instead of Sigstore Rekor. Same four-witness chain, no Sigstore Fulcio
-// OIDC dependency, trust root = operator authority pubkey on Solana
-// (rotates to multisig at v0.3). Same Memo-program primitive the
-// constitution anchor uses (different payload schema).
+// /api/verify/[sha] — server-side witness check for a Covenant-author commit.
+// Resolves commit metadata, then reports four independent witnesses (commit
+// memo, audit hash chain, settlement anchor, verifier signature). Each anchor
+// reads yellow until its artifact is published — a witness is never green
+// before it has actually been checked.
 
 import { execFileSync } from "node:child_process";
+import { createHash, createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { NextResponse } from "next/server";
-import { findRepoRoot } from "@/lib/agentStream.mjs";
+import { clean, findRepoRoot } from "@/lib/agentStream.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,12 +25,56 @@ type Witness = {
   badge?: { text: string; tone: "yellow" | "red" } | null;
 };
 
+type SkillRunTx = { sig: string; cluster: "devnet" | "mainnet"; slot: number | null };
+type SkillRun = {
+  skill: { name: string; digest: string };
+  capabilities: string[];
+  tx: SkillRunTx | null;
+};
+
+// A skill-driven run anchored to this commit, sourced from
+// landing/public/witness/skill/<sha>.json. Null for an ordinary code commit.
+function checkSkillRun(repoRoot: string, sha: string): SkillRun | null {
+  const manifest = join(repoRoot, "landing", "public", "witness", "skill", `${sha}.json`);
+  if (!existsSync(manifest)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
+    const skill = (raw.skill ?? {}) as Record<string, unknown>;
+    const name = typeof skill.name === "string" ? skill.name : "";
+    const digest = typeof skill.digest === "string" ? skill.digest : "";
+    if (!name || !digest) return null;
+    const capabilities = Array.isArray(raw.capabilities)
+      ? raw.capabilities.filter((c): c is string => typeof c === "string")
+      : [];
+    const txRaw = (raw.tx ?? null) as Record<string, unknown> | null;
+    const tx: SkillRunTx | null =
+      txRaw && typeof txRaw.sig === "string" && txRaw.sig
+        ? {
+            sig: txRaw.sig,
+            cluster: txRaw.cluster === "mainnet" ? "mainnet" : "devnet",
+            slot: typeof txRaw.slot === "number" ? txRaw.slot : null,
+          }
+        : null;
+    return { skill: { name, digest }, capabilities, tx };
+  } catch {
+    return null;
+  }
+}
+
 const COVENANT_AUTHOR_EMAIL = "covenant@users.noreply.github.com";
 
-// Witness-loop cutover SHA — first commit produced under the gitsign pipeline.
-// Empty string until the pipeline ships (Week 1 ship target). When set, all
-// commits BEFORE this SHA render as "predates witness loop".
+// First commit produced under the witness pipeline. Commits before it render as
+// historical (all anchors gray). Empty until the pipeline ships.
 const WITNESS_CUTOVER_SHA = process.env.WITNESS_CUTOVER_SHA || "";
+
+// Substitute a public label when an author name/email trips the banned-token
+// scan, so historical commits still render without leaking an operator identity.
+function redactAuthor(name: string, email: string): { display: string; email: string } {
+  if (clean(name) === null || clean(email) === null) {
+    return { display: "Covenant Legacy", email: "legacy@opencovenant.org" };
+  }
+  return { display: name, email };
+}
 
 function git(repoRoot: string, args: string[]): string | null {
   try {
@@ -50,29 +89,15 @@ function git(repoRoot: string, args: string[]): string | null {
 
 function predatesCutover(repoRoot: string, sha: string): boolean {
   if (!WITNESS_CUTOVER_SHA) return false;
-  const isAncestor = git(repoRoot, [
-    "merge-base",
-    "--is-ancestor",
-    sha,
-    WITNESS_CUTOVER_SHA,
-  ]);
-  // merge-base --is-ancestor returns exit code only; our git() returns null on
-  // non-zero, which means "not an ancestor". When the call succeeds (exit 0
-  // → empty string), sha IS an ancestor of cutover (= predates).
-  return isAncestor !== null;
+  // merge-base --is-ancestor signals via exit code; git() returns null on
+  // non-zero (not an ancestor) and "" on success (sha is an ancestor = predates).
+  return git(repoRoot, ["merge-base", "--is-ancestor", sha, WITNESS_CUTOVER_SHA]) !== null;
 }
 
+// Anchor 1 — per-commit Solana Memo tx, signed by the operator authority, with
+// payload covenant-commit-v1:<sha>:<audit_root_hex>:<unix_ms>. Reads the
+// recorded tx from landing/public/witness/memo/<sha>.json and confirms it.
 function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
-  // Anchor 1 — Solana commit memo. Spike 2 picked Option D: per-commit memo
-  // tx posted by the witness-anchor daemon, signed by the operator authority
-  // (id.json today, multisig at v0.3). Memo payload format:
-  //   covenant-commit-v1:<sha>:<audit_root_hex>:<unix_ms>
-  // Verification: query memo program for txs where the authority pubkey is a
-  // signer and the payload references this sha; return green when present
-  // and the tx is finalized.
-  // Skeleton reads landing/public/witness/memo/<sha>.json with the recorded
-  // tx signature; Week 1's anchor-publisher writes that manifest after each
-  // commit. Drill-href routes to solscan for the tx.
   const memoManifest = join(repoRoot, "landing", "public", "witness", "memo", `${sha}.json`);
   if (!existsSync(memoManifest)) {
     return {
@@ -80,11 +105,8 @@ function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
       label: "Solana commit memo",
       state: "yellow",
       detail:
-        "Per-commit Memo-program anchor ships Week 1 (witness-anchor daemon posts one memo tx per Covenant commit, payload covenant-commit-v1:<sha>:<audit_root_hex>:<ts>, signed by operator authority). Until the first memo lands this light reads yellow.",
-      badge: {
-        text: "Witness-anchor daemon pending — Week 1 ship target",
-        tone: "yellow",
-      },
+        "No memo anchor published for this commit yet. When the anchor daemon posts a memo tx (payload covenant-commit-v1:<sha>:<audit_root_hex>:<ts>, signed by the operator authority), this light verifies it.",
+      badge: { text: "Anchor not yet live", tone: "yellow" },
     };
   }
   try {
@@ -104,7 +126,7 @@ function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
         key: "rekor",
         label: "Solana commit memo",
         state: "red",
-        detail: `Memo tx ${parsed.tx || "missing"} did not verify against operator authority pubkey.`,
+        detail: `Memo tx ${parsed.tx || "missing"} did not verify against the operator authority pubkey.`,
         drillHref: solscan,
       };
     }
@@ -125,10 +147,23 @@ function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
   }
 }
 
+// Anchor 2 — local hash chain. attestations/<sha>.json holds per-LLM-call Step
+// records Merkle-rooted into audit_root_hex; green when present with a root.
+// Recompute the audit chain root from the raw event lines, exactly as the
+// daemon and the standalone verifier do: event_hash = sha256(line), then
+// chain = sha256(prev + "\n" + event_hash). The published steps ARE those
+// canonical lines, so this is a real independent check, not a trust.
+function recomputeAuditRoot(steps: string[]): string {
+  const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+  let prev = "0".repeat(64);
+  for (const line of steps) {
+    const eventHash = sha256(Buffer.from(line, "utf8"));
+    prev = sha256(Buffer.from(`${prev}\n${eventHash}`, "utf8"));
+  }
+  return prev;
+}
+
 function checkAnchor2AuditChain(repoRoot: string, sha: string): Witness {
-  // Anchor 2 — Local hash chain. attestations/<sha>.json contains per-LLM-call
-  // Step records Merkle-rooted into audit_root_hex. v0.2 skeleton: green when
-  // attestation present + non-empty audit_root; red on mismatch.
   const attestationPath = join(repoRoot, "attestations", `${sha}.json`);
   if (!existsSync(attestationPath)) {
     return {
@@ -136,27 +171,37 @@ function checkAnchor2AuditChain(repoRoot: string, sha: string): Witness {
       label: "Audit hash chain",
       state: "yellow",
       detail:
-        "Audit chain pipeline ships in Week 1. Per-LLM-call Step records (lifted from Letta StepManager schema) Merkle-root into attestations/<sha>.json; once present this light verifies the root by recomputing.",
+        "No audit chain published for this commit yet. A run's hash-chained events recompute into attestations/<sha>.json; once present this light recomputes the root and checks it.",
     };
   }
   try {
     const att = JSON.parse(readFileSync(attestationPath, "utf8")) as {
       audit_root_hex?: string;
-      steps?: unknown[];
+      steps?: unknown;
     };
-    if (!att.audit_root_hex) {
+    const steps = Array.isArray(att.steps) ? att.steps : [];
+    if (!att.audit_root_hex || !steps.length || !steps.every((s) => typeof s === "string")) {
       return {
         key: "audit_chain",
         label: "Audit hash chain",
         state: "red",
-        detail: "Attestation present but audit_root_hex missing.",
+        detail: "Attestation present but missing a root or its canonical steps.",
+      };
+    }
+    const recomputed = recomputeAuditRoot(steps as string[]);
+    if (recomputed !== att.audit_root_hex) {
+      return {
+        key: "audit_chain",
+        label: "Audit hash chain",
+        state: "red",
+        detail: `Chain tampered: recomputed root ${recomputed.slice(0, 12)}… does not match the published ${att.audit_root_hex.slice(0, 12)}….`,
       };
     }
     return {
       key: "audit_chain",
       label: "Audit hash chain",
       state: "green",
-      detail: `Root ${att.audit_root_hex.slice(0, 16)}… covers ${att.steps?.length ?? 0} LLM calls.`,
+      detail: `Root ${att.audit_root_hex.slice(0, 16)}… recomputed from ${steps.length} hash-chained events and matches.`,
       drillHref: `https://github.com/open-covenant/covenant/blob/main/attestations/${sha}.json`,
     };
   } catch {
@@ -169,30 +214,24 @@ function checkAnchor2AuditChain(repoRoot: string, sha: string): Witness {
   }
 }
 
+// Anchor 3 — settlement-program anchor. Looks for a ReceiptBatch PDA on the
+// settlement program holding this commit's Merkle leaf in a confirmed batch.
 function checkAnchor3Solana(_repoRoot: string, sha: string): Witness {
-  // Anchor 3 — Solana settlement-program anchor. v0.2 skeleton stub. Week 2
-  // ship target: queries the settlement program at cov9UDypG7nsry... for
-  // a ReceiptBatch PDA containing this commit's Merkle leaf, returns green
-  // when the leaf is present in a confirmed batch.
-  // Lookup function lives in services/settlement-publisher; this route will
-  // call it via a thin RPC fetch once the publisher exposes /lookup.
   return {
     key: "solana_anchor",
     label: "Solana settlement anchor",
     state: "yellow",
     detail:
-      "Anchor publisher ships Week 1 (services/settlement-publisher batches receipts via anchor_receipt_batch on cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y). Until first batch lands this light reads yellow.",
+      "No settlement batch anchored for this commit yet. The publisher batches receipts via anchor_receipt_batch on cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y; until the first batch lands this light reads yellow.",
     drillHref: `https://solscan.io/account/cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y?cluster=devnet`,
   };
 }
 
+// Anchor 4 — verifier-refuter signature. A separately-keyed ed25519 verifier
+// signs the audit root into attestations/<sha>.verifier.sig. Presence alone is
+// not sufficient: the light stays yellow until the signature is checked against
+// the published verifier pubkey.
 function checkAnchor4VerifierSig(repoRoot: string, sha: string): Witness {
-  // Anchor 4 — Verifier-Refuter signature. Separately-keyed ed25519 identity
-  // at $COVENANT_HOME/identity-verifier/local.key. Loaded via
-  // covenant_identity::LocalIdentity::load_or_create (Spike 6: GO, no
-  // refactor). attestations/<sha>.verifier.sig contains the detached signature
-  // over the audit_root_hex; this route reads + verifies against the
-  // verifier's published pubkey at landing/public/witness/verifier-pubkey.txt.
   const sigPath = join(repoRoot, "attestations", `${sha}.verifier.sig`);
   if (!existsSync(sigPath)) {
     return {
@@ -200,25 +239,59 @@ function checkAnchor4VerifierSig(repoRoot: string, sha: string): Witness {
       label: "Verifier-Refuter signature",
       state: "yellow",
       detail:
-        "Verifier-Refuter persona ships Week 2 under a separate launchd job (org.opencovenant.verifier) with its own ed25519 key. Until then this light reads yellow.",
-      badge: {
-        text: "Same-family weeks 1-4; cross-family verifier-B → fallback Week 4 stretch",
-        tone: "yellow",
-      },
+        "No verifier signature published for this commit yet. A separately-keyed ed25519 verifier signs the audit root; until then this light reads yellow.",
     };
   }
-  // Real verification plugs in here in Week 2.
-  return {
-    key: "verifier_sig",
-    label: "Verifier-Refuter signature",
-    state: "green",
-    detail:
-      "Signature present. Full Ed25519 verification against published pubkey ships with the Week-2 verifier persona.",
-    badge: {
-      text: "Same-family verifier (Sonnet vs Opus, model-tier-different)",
-      tone: "yellow",
-    },
-  };
+  try {
+    const att = JSON.parse(readFileSync(join(repoRoot, "attestations", `${sha}.json`), "utf8")) as {
+      audit_root_hex?: string;
+      verdict?: string;
+      domain?: string;
+    };
+    const pubkeyPath = join(repoRoot, "landing", "public", "witness", "verifier-pubkey.txt");
+    if (!att.audit_root_hex || !existsSync(pubkeyPath)) {
+      return {
+        key: "verifier_sig",
+        label: "Verifier-Refuter signature",
+        state: "yellow",
+        detail: "Verifier signature present but the published pubkey or audit root is missing.",
+      };
+    }
+    const pubkey = readFileSync(pubkeyPath, "utf8").trim();
+    const sig = readFileSync(sigPath, "utf8").trim();
+    const domain = att.domain || "covenant.witness.v1";
+    const message = Buffer.from(`${domain}\n${att.audit_root_hex}`, "utf8");
+    const key = createPublicKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", x: pubkey } });
+    if (!edVerify(null, message, key, Buffer.from(sig, "base64url"))) {
+      return {
+        key: "verifier_sig",
+        label: "Verifier-Refuter signature",
+        state: "red",
+        detail: "Verifier signature did not verify against the published verifier pubkey.",
+      };
+    }
+    if (att.verdict === "refute") {
+      return {
+        key: "verifier_sig",
+        label: "Verifier-Refuter signature",
+        state: "red",
+        detail: `Verifier refuted this run (signed by ${pubkey.slice(0, 12)}…): a signed action causally followed untrusted on-chain input.`,
+      };
+    }
+    return {
+      key: "verifier_sig",
+      label: "Verifier-Refuter signature",
+      state: "green",
+      detail: `Audit root signed by an independent verifier (${pubkey.slice(0, 12)}…), no refutation. Check it yourself against landing/public/witness/verifier-pubkey.txt.`,
+    };
+  } catch {
+    return {
+      key: "verifier_sig",
+      label: "Verifier-Refuter signature",
+      state: "red",
+      detail: "Verifier signature or pubkey unreadable.",
+    };
+  }
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }> }) {
@@ -227,10 +300,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
     return NextResponse.json({ error: "invalid sha" }, { status: 400 });
   }
 
-  const repoRoot =
-    findRepoRoot(process.cwd()) || resolve(process.cwd(), "..");
+  const repoRoot = findRepoRoot(process.cwd()) || resolve(process.cwd(), "..");
 
-  // Resolve commit metadata. notFound when sha doesn't exist in repo.
   const meta = git(repoRoot, [
     "show",
     "-s",
@@ -240,68 +311,59 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
   if (!meta) {
     return NextResponse.json({ error: "unknown sha" }, { status: 404 });
   }
-  const [fullSha, shortSha, authorDisplay, authorEmail, isoDate, subject, ...bodyParts] = meta.split("\t");
+  const [fullSha, shortSha, rawAuthorDisplay, rawAuthorEmail, isoDate, subject, ...bodyParts] =
+    meta.split("\t");
   const bodyText = bodyParts.join("\t").trim();
+  const author = redactAuthor(rawAuthorDisplay, rawAuthorEmail);
 
   const predatesWitnessLoop =
-    authorEmail !== COVENANT_AUTHOR_EMAIL && WITNESS_CUTOVER_SHA
+    rawAuthorEmail !== COVENANT_AUTHOR_EMAIL && WITNESS_CUTOVER_SHA
       ? predatesCutover(repoRoot, fullSha)
-      : authorEmail !== COVENANT_AUTHOR_EMAIL;
+      : rawAuthorEmail !== COVENANT_AUTHOR_EMAIL;
 
-  // Pre-cutover commits short-circuit to all-gray witnesses with the
-  // explanatory copy on the page. They are still queryable; we render the
-  // historical metadata so the URL doesn't 404 on legitimate history.
+  const commit = {
+    sha: fullSha,
+    shortSha,
+    authorDisplay: author.display,
+    authorEmail: author.email,
+    subject,
+    bodyText,
+    isoDate,
+    predatesWitnessLoop,
+  };
+
+  const fifth = {
+    label: "Code Quality (Not Witnessed)",
+    detail:
+      "Semantic correctness is never witnessed by the chain — see the mutation-quality trend for the test-suite's catch rate over time.",
+    href: "/lineage/mutation-quality",
+  };
+
+  // Pre-cutover commits are still queryable; render historical metadata with all
+  // anchors gray so a legitimate-history URL doesn't 404.
   if (predatesWitnessLoop) {
     return NextResponse.json({
-      commit: {
-        sha: fullSha,
-        shortSha,
-        authorDisplay,
-        authorEmail,
-        subject,
-        bodyText,
-        isoDate,
-        predatesWitnessLoop: true,
-      },
+      commit: { ...commit, predatesWitnessLoop: true },
       witnesses: [
-        { key: "rekor", label: "Sigstore Rekor inclusion", state: "gray", detail: "Predates witness loop." },
+        { key: "rekor", label: "Solana commit memo", state: "gray", detail: "Predates witness loop." },
         { key: "audit_chain", label: "Audit hash chain", state: "gray", detail: "Predates witness loop." },
         { key: "solana_anchor", label: "Solana settlement anchor", state: "gray", detail: "Predates witness loop." },
         { key: "verifier_sig", label: "Verifier-Refuter signature", state: "gray", detail: "Predates witness loop." },
       ] satisfies Witness[],
-      fifth: {
-        label: "Code Quality (Not Witnessed)",
-        detail:
-          "Semantic correctness is never witnessed by the chain — see the mutation-quality trend for the test-suite's catch rate over time.",
-        href: "/lineage/mutation-quality",
-      },
+      skillRun: null,
+      fifth,
     });
   }
 
-  const witnesses: Witness[] = [
-    checkAnchor1CommitMemo(repoRoot, fullSha),
-    checkAnchor2AuditChain(repoRoot, fullSha),
-    checkAnchor3Solana(repoRoot, fullSha),
-    checkAnchor4VerifierSig(repoRoot, fullSha),
-  ];
-
   return NextResponse.json({
-    commit: {
-      sha: fullSha,
-      shortSha,
-      authorDisplay,
-      authorEmail,
-      subject,
-      bodyText,
-      isoDate,
-      predatesWitnessLoop: false,
-    },
-    witnesses,
-    fifth: {
-      label: "Code Quality (Not Witnessed)",
-      detail:
-        "Semantic correctness is never witnessed by the chain — see the mutation-quality trend for the test-suite's catch rate over time.",
-      href: "/lineage/mutation-quality",
-    },
+    commit,
+    witnesses: [
+      checkAnchor1CommitMemo(repoRoot, fullSha),
+      checkAnchor2AuditChain(repoRoot, fullSha),
+      checkAnchor3Solana(repoRoot, fullSha),
+      checkAnchor4VerifierSig(repoRoot, fullSha),
+    ],
+    skillRun: checkSkillRun(repoRoot, fullSha),
+    fifth,
   });
 }

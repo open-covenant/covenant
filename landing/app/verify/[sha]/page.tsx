@@ -1,16 +1,6 @@
-// /verify/[sha] — Four Witnesses Present for a Covenant-author commit.
-//
-// Renders the v0.2 witness UX:
-//   * Four lights (gitsign+Rekor / audit hash chain / Solana anchor / verifier signature)
-//   * Permanent yellow fifth status line "Code Quality (Not Witnessed)" linking to /lineage/mutation-quality
-//   * SAME-FAMILY badge on Anchor 4 (yellow weeks 1-4, model-tier sub-label weeks 3-4)
-//   * Force-Fail demo CTA (Week 2 ship target)
-//   * Pre-cutoff history rendered as "Predates witness loop" with all lights gray
-//
-// The page is server-rendered: it calls the /api/verify/[sha] route handler
-// which is the Path 1 server-side proxy from Spike 7. Path 2 (browser-side
-// bundle verification via @sigstore/verify) lands as a v0.2.x card; the page
-// will swap to client-side checks then without UX changes.
+// /verify/[sha] — four-witness state for a Covenant commit, plus the skill-run
+// panel when the commit has an associated skill run. Verification runs in the
+// /api/verify/[sha] route handler this page reads.
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -43,9 +33,17 @@ type CommitMeta = {
   predatesWitnessLoop: boolean;
 };
 
+type SkillRunTx = { sig: string; cluster: "devnet" | "mainnet"; slot: number | null };
+type SkillRun = {
+  skill: { name: string; digest: string };
+  capabilities: string[];
+  tx: SkillRunTx | null;
+};
+
 type VerifyPayload = {
   commit: CommitMeta;
   witnesses: Witness[];
+  skillRun: SkillRun | null;
   fifth: {
     label: string;
     detail: string;
@@ -66,9 +64,6 @@ function redactAuthor(name: string, email: string): { display: string; email: st
 }
 
 async function fetchWitness(sha: string): Promise<VerifyPayload | null> {
-  // Server component fetching its own API route — Next.js pattern for keeping
-  // verification logic in the route handler so the same surface backs an
-  // eventual public /api/verify/<sha> consumer.
   const host = process.env.VERCEL_URL
     ? `https://${process.env.VERCEL_URL}`
     : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
@@ -132,6 +127,80 @@ function WitnessCard({ w }: { w: Witness }) {
   );
 }
 
+function SkillRunPanel({ run }: { run: SkillRun }) {
+  const solscan = run.tx
+    ? `https://solscan.io/tx/${run.tx.sig}${run.tx.cluster === "devnet" ? "?cluster=devnet" : ""}`
+    : null;
+  return (
+    <div className="mb-6 border border-neutral-800 bg-neutral-950/60 p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+          Skill run
+        </h2>
+        <span className="font-mono text-[13px] text-white">{run.skill.name}</span>
+      </div>
+
+      <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">Skill digest</dt>
+          <dd className="mt-1.5 break-all font-mono text-[12px] text-emerald-300">
+            {run.skill.digest}
+          </dd>
+        </div>
+
+        <div className="sm:col-span-2">
+          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">
+            Capabilities exercised
+          </dt>
+          <dd className="mt-1.5">
+            {run.capabilities.length ? (
+              <div className="flex flex-wrap gap-1.5">
+                {run.capabilities.map((c) => (
+                  <span
+                    key={c}
+                    className="border border-neutral-800 bg-neutral-900/60 px-2 py-0.5 font-mono text-[11px] text-neutral-300"
+                  >
+                    {c}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="text-[12px] text-neutral-600">none recorded</span>
+            )}
+          </dd>
+        </div>
+
+        <div className="sm:col-span-2">
+          <dt className="text-[10px] uppercase tracking-[2px] text-neutral-500">
+            On-chain transaction
+          </dt>
+          <dd className="mt-1.5 text-[12px]">
+            {solscan && run.tx ? (
+              <a
+                href={solscan}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-neutral-300 underline-offset-4 hover:text-neutral-100 hover:underline"
+              >
+                {run.tx.sig.slice(0, 16)}… ({run.tx.cluster})
+              </a>
+            ) : (
+              <span className="text-neutral-600">
+                pending — no on-chain transaction anchored for this run
+              </span>
+            )}
+          </dd>
+        </div>
+      </dl>
+
+      <p className="mt-4 text-[12px] font-light leading-relaxed text-neutral-500">
+        When the anchors below land, the same witnesses that attest the commit also bind this
+        skill&apos;s content digest and signed actions — not a separate trust path.
+      </p>
+    </div>
+  );
+}
+
 export default async function VerifyPage({ params }: { params: Promise<{ sha: string }> }) {
   const { sha } = await params;
   if (!/^[0-9a-f]{7,40}$/i.test(sha)) notFound();
@@ -144,7 +213,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
   }
   if (!payload) notFound();
 
-  const { commit, witnesses, fifth } = payload;
+  const { commit, witnesses, skillRun, fifth } = payload;
   const author = redactAuthor(commit.authorDisplay, commit.authorEmail);
 
   return (
@@ -161,7 +230,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
           </h1>
           {commit.predatesWitnessLoop && (
             <p className="mt-2 max-w-2xl border border-neutral-800 bg-neutral-950/60 px-4 py-3 text-[13px] font-light leading-relaxed text-amber-300">
-              This commit predates the witness loop. Anchors below are gray because the cosign + audit-chain + on-chain + verifier-signature pipeline was not yet active when this commit landed. Treat as historical record only.
+              This commit predates the witness loop. Anchors below are gray because the commit-memo + audit-chain + on-chain + verifier-signature pipeline was not yet active when this commit landed. Treat as historical record only.
             </p>
           )}
           <p className="mt-2 text-[13px] font-light leading-relaxed text-neutral-400">
@@ -178,6 +247,8 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
             </pre>
           )}
         </div>
+
+        {skillRun && <SkillRunPanel run={skillRun} />}
 
         <div className="grid gap-4 sm:grid-cols-2">
           {witnesses.map((w) => (
@@ -206,11 +277,13 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
         {!commit.predatesWitnessLoop && (
           <div className="mt-10 border border-neutral-800 bg-neutral-950/60 p-5">
             <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
-              Try to break it (Force-Fail Demo)
+              Witness independence
             </h2>
             <p className="mt-3 max-w-2xl text-[13px] font-light leading-relaxed text-neutral-400">
-              Clone the repo. Hand-edit one byte of <code className="text-neutral-200">landing/public/audit/events.jsonl</code>. Refresh this page with{" "}
-              <code className="text-neutral-200">?audit=local</code> appended. The audit-chain light flips red while gitsign + Solana + verifier-signature stay green. This proves the four witnesses are structurally independent: the audit chain is the only one Covenant operates locally; the other three live on Sigstore Rekor, Solana, and a separately-keyed verifier process Covenant cannot tamper with without leaving cryptographic evidence.
+              The audit hash chain is the only witness Covenant operates locally. The other three
+              are external — a Solana commit memo, the on-chain settlement anchor, and a
+              separately-keyed verifier — so tampering with the local chain cannot forge them.
+              Each anchor is checked on its own evidence, independently of the others.
             </p>
           </div>
         )}

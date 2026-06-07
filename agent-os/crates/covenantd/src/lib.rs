@@ -12240,6 +12240,7 @@ impl Server {
         let mut zero_expires_cap_refs = 0_u64;
         let mut zeroed_signature_cap_refs = 0_u64;
         let mut scope_non_object_cap_refs = 0_u64;
+        let mut scope_invalid_cap_refs = 0_u64;
         let mut invalid_signature_cap_refs = 0_u64;
         let mut grantor_not_trust_root_cap_refs = 0_u64;
         // The daemon trust root: every production capability is granted by
@@ -12348,6 +12349,42 @@ impl Server {
                     repair: "review the granted.jsonl row and the writer that produced it; production capability grants always source granted_by from self.identity.agent_id() at grant dispatch (grant_capability is the sole writer to the capability store) and the daemon identity is a stable persisted-seed key, so a capability whose granted_by.pubkey is a non-zero key other than the trust root cannot come from a production write — it is out-of-band evidence of an attacker who forged a grant and signed it under their own key (granted_by set to that key so covenant_permissions::verify passes), an import or migration tool that preserved another daemon's grantor instead of re-issuing under the local trust root, or a serde/merge regression that hydrated granted_by from a foreign identity's row; revoke the row and re-issue through grant_capability so a fresh CapabilityGranted audit row records an authentically trust-rooted replacement. This arm is the verifier-side mirror of the daemon's use-time verify_with_clock_and_trust_root UntrustedGrantor check (covenant-permissions/src/lib.rs:1157): the residual capability_signature_invalid arm runs signature-only covenant_permissions::verify (which checks the signature against the cap's own granted_by.pubkey, permissions/src/lib.rs:1128), so a self-consistent alien grant verifies and escapes it; this arm closes that gap. It fires only when verify(cap).is_ok() so it is strictly disjoint from capability_signature_invalid (which owns the verify-err case, including a granted_by.pubkey tampered after signing — granted_by.pubkey is part of canonical_message at permissions/src/lib.rs:1106 so the signature breaks), and only when granted_by.pubkey != [0u8; 32] so capability_grantor_pubkey_zeroed owns the all-zero sentinel".into(),
                 });
             }
+            // Scope-content validity. capability_scope_non_object below mirrors
+            // validate_scope's object-shape branch (covenant-permissions/src/lib.rs:132);
+            // this arm mirrors the rest of the same grant-time contract — the
+            // version gate (a non-empty scope must declare version 1, and only
+            // version 1 is supported) and the per-namespace content rules
+            // (validate_tool_scope / validate_memory_scope / validate_chain_scope
+            // and siblings reject, e.g., an unsupported memory tier, a tool
+            // scope whose `tool` field disagrees with the action suffix, or a
+            // chain `resource` outside the known set). grant_capability runs the
+            // same covenant_permissions::validate_scope before signing and
+            // recording every grant (covenantd/src/lib.rs:4620) and returns
+            // early on Err, and grant_capability is the sole non-test writer to
+            // the capability store, so every persisted capability satisfies its
+            // own scope contract — a persisted object scope that fails it is
+            // out-of-band evidence (a serde regression that hydrated a stale
+            // scope shape, an import or migration tool that recorded a grant
+            // without re-validating, or a JSONL edit that rewrote the scope
+            // object while leaving the row otherwise well-formed). It gates on
+            // scope.as_object().is_some() so capability_scope_non_object owns the
+            // non-object branch (the only case where validate_scope returns its
+            // "scope must be a JSON object" error), keeping the two arms strictly
+            // disjoint; together they fully mirror the grant-time scope contract.
+            if cap.capability.scope.as_object().is_some() {
+                if let Err(e) = validate_scope(&cap.capability.action, &cap.capability.scope) {
+                    scope_invalid_cap_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "capability_scope_invalid_for_action".into(),
+                        id: Some(signature_b58.clone()),
+                        message: format!(
+                            "capability scope is a JSON object but fails covenant_permissions::validate_scope for action {:?}: {e}; production grant_capability validates every scope through the same validate_scope before signing and recording the grant (covenantd/src/lib.rs:4620), returns early on error, and is the sole non-test writer to the capability store, so every persisted capability satisfies its own scope contract — the version gate (a non-empty scope must declare version 1, and only version 1 is supported) and the per-namespace content rules — making an object scope that fails validation out-of-band evidence that the row was written outside grant_capability",
+                            cap.capability.action
+                        ),
+                        repair: "review the granted.jsonl row and the writer that produced it; revoke and re-grant through grant_capability so validate_scope (the same routine the daemon runs at grant time and at every dispatch-time scope check) accepts the scope and a fresh CapabilityGranted audit row records the corrected grant. This arm mirrors the version-gate and per-namespace content branches of validate_scope that capability_scope_non_object (object-shape branch) does not cover, so together they fully reflect the grant-time scope contract; it fires only when the scope is a JSON object, so capability_scope_non_object owns the non-object case and the two arms are disjoint".into(),
+                    });
+                }
+            }
             if cap.capability.scope.as_object().is_none() {
                 scope_non_object_cap_refs += 1;
                 let shape = match &cap.capability.scope {
@@ -12374,6 +12411,7 @@ impl Server {
             + zero_expires_cap_refs
             + zeroed_signature_cap_refs
             + scope_non_object_cap_refs
+            + scope_invalid_cap_refs
             + invalid_signature_cap_refs
             + grantor_not_trust_root_cap_refs;
         checks.push(VerifyCheck {
@@ -12384,10 +12422,11 @@ impl Server {
                 && zero_expires_cap_refs == 0
                 && zeroed_signature_cap_refs == 0
                 && scope_non_object_cap_refs == 0
+                && scope_invalid_cap_refs == 0
                 && invalid_signature_cap_refs == 0
                 && grantor_not_trust_root_cap_refs == 0,
             message: format!(
-                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies), {scope_non_object_cap_refs} non-object-scope capabilit(ies), {invalid_signature_cap_refs} invalid-signature capabilit(ies), {grantor_not_trust_root_cap_refs} grantor-not-trust-root capabilit(ies)"
+                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies), {scope_non_object_cap_refs} non-object-scope capabilit(ies), {scope_invalid_cap_refs} scope-invalid-for-action capabilit(ies), {invalid_signature_cap_refs} invalid-signature capabilit(ies), {grantor_not_trust_root_cap_refs} grantor-not-trust-root capabilit(ies)"
             ),
         });
 
@@ -38964,6 +39003,119 @@ required = {caps:?}
                     integrity.message
                 );
                 assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_capability_scope_invalid_for_action_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // An object scope that passes the object-shape branch but fails the
+        // per-namespace content rules: memory.read with an unsupported tier.
+        // grant_capability would reject this at validate_scope before signing,
+        // so a persisted, validly-signed grant carrying it is out-of-band drift.
+        let cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: "memory.read".into(),
+            scope: serde_json::json!({ "version": 1, "tiers": ["bogus"] }),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        let signature_b58 = bs58::encode(signed.signature).into_string();
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "capability_scope_invalid_for_action"
+                            && item.id.as_deref() == Some(signature_b58.as_str())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected capability_scope_invalid_for_action: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("validate_scope")
+                        && row.message.contains("unsupported value"),
+                    "drift message should name validate_scope and the scope error: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("grant_capability"),
+                    "repair hint should name the canonical grant source: {}",
+                    row.repair
+                );
+                // Disjoint from capability_scope_non_object: the scope is an
+                // object, so the non-object arm must not fire for this row.
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "capability_scope_non_object"
+                            && item.id.as_deref() == Some(signature_b58.as_str())
+                    }),
+                    "object-scope drift must not also report capability_scope_non_object: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "capability integrity")
+                    .unwrap_or_else(|| panic!("expected capability integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 scope-invalid-for-action capabilit"),
+                    "check message should count scope-invalid caps: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_tolerates_capability_valid_non_empty_object_scope() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // A non-empty object scope that satisfies validate_scope (version 1, a
+        // recognized memory tier) must not trip the scope-validity arm.
+        let cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: "memory.read".into(),
+            scope: serde_json::json!({ "version": 1, "tiers": ["working"] }),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport { drift, checks, .. } => {
+                assert!(
+                    !drift
+                        .iter()
+                        .any(|item| item.kind == "capability_scope_invalid_for_action"),
+                    "valid non-empty object scope must not report scope-invalid drift: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "capability integrity")
+                    .unwrap_or_else(|| panic!("expected capability integrity check: {checks:?}"));
+                assert!(
+                    integrity.passed,
+                    "capability integrity should pass for a fully valid grant: {}",
+                    integrity.message
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }

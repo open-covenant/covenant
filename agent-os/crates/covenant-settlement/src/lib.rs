@@ -103,7 +103,7 @@ pub fn build_receipt_batch(
     }
 
     let merkle_root = hex32(level[0]);
-    let batch_id = hex32(Sha256::digest(format!("covenant-receipts:{merkle_root}")).into());
+    let batch_id = derive_batch_id(&merkle_root);
     Ok(ReceiptBatch {
         batch_id,
         merkle_root,
@@ -583,6 +583,19 @@ pub fn intent_dispatch_credits() -> u64 {
     INTENT_DISPATCH_CREDITS
 }
 
+/// Derive the canonical `batch_id` for a receipt batch from its `merkle_root`.
+///
+/// This is the single source of truth for the `batch_id` ↔ `merkle_root`
+/// binding: [`build_receipt_batch`] stamps the id from this function, and the
+/// covenantd Check 6 verifier recomputes it to detect a stored receipt whose
+/// `batch_id` no longer matches its `merkle_root`. Sharing one implementation
+/// is what lets the verifier treat a mismatch as drift in the data rather than
+/// risk false-positives from a second copy of the derivation drifting out of
+/// step with the producer.
+pub fn derive_batch_id(merkle_root: &str) -> String {
+    hex32(Sha256::digest(format!("covenant-receipts:{merkle_root}")).into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -997,8 +1010,8 @@ mod tests {
         // merkle_root hash (also a sha256 product) so an attacker
         // cannot pre-compute one from the other under a length-
         // extension or hash-collision attack on the same input
-        // domain. The prefix appears exactly ONCE in the crate (line
-        // 91) and no test references it.
+        // domain. The prefix appears exactly ONCE in non-test code,
+        // inside `derive_batch_id`, which `build_receipt_batch` calls.
         //
         // receipt_batch_uses_only_unsettled_receipts pins
         // 'batch.batch_id.len() == 64' (length, not content);
@@ -1033,6 +1046,15 @@ mod tests {
              ':' separator for '/' would silently shift every \
              batch_id and break on-chain anchoring against historical \
              batches",
+        );
+        assert_eq!(
+            batch.batch_id,
+            derive_batch_id(&batch.merkle_root),
+            "build_receipt_batch must stamp batch_id through the shared \
+             derive_batch_id so the covenantd Check 6 verifier recomputes \
+             the identical batch_id<->merkle_root binding; a second copy of \
+             the derivation drifting out of step would make the verifier \
+             false-positive on every confirmed receipt",
         );
 
         // Second batch with different receipts produces a different

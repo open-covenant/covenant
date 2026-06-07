@@ -12098,6 +12098,39 @@ impl Server {
                 });
             }
         }
+        // Shape: every production BudgetDebit stamps at_ms from epoch_ms() inside
+        // try_debit — both store backends bind now = epoch_ms() and set
+        // at_ms = now in the same call (covenant-budget/src/lib.rs:397,415 and
+        // :859,876) — and epoch_ms() returns 0 only when the system clock
+        // predates 1970-01-01 (impossible), so a faithful debit always carries a
+        // non-zero at_ms. compact_older_than only drops pre-cutoff Debit rows and
+        // emits Snapshot rows (never a Debit with at_ms = 0), so recent_debits_all
+        // cannot surface a legitimately zero at_ms. A zero at_ms is therefore a
+        // serde regression (u64::default() is 0), an import or replay tool that
+        // bypassed epoch_ms(), or a JSONL edit that anonymized when the debit was
+        // charged. This is the first within-row shape arm for the budget ledger
+        // (an unsigned local JSONL with no chain-hash anchor) and the budget-log
+        // leg of the zero-timestamp family: receipt_settled_at_zero on the
+        // settlement log, audit_event_timestamp_zero on the audit log, and
+        // memory_record_created_at_zero on the memory store. It is independent of
+        // the join loop above (which skips a debit whose paired_receipt is
+        // windowed out) so a zero-at_ms debit is flagged regardless of whether
+        // its receipt is in the window.
+        let mut zero_at_ms_debit_refs = 0_u64;
+        for debit in &debits {
+            if debit.at_ms == 0 {
+                zero_at_ms_debit_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "budget_debit_at_ms_zero".into(),
+                    id: Some(debit.paired_receipt.to_string()),
+                    message: format!(
+                        "budget debit paired_receipt = {} has at_ms = 0; every production BudgetDebit stamps at_ms from epoch_ms() inside try_debit (covenant-budget/src/lib.rs, both store backends bind now = epoch_ms() and set at_ms = now in the same call), and epoch_ms() returns 0 only when the system clock predates 1970-01-01 (impossible), so a faithful debit always carries a non-zero at_ms — a zero at_ms is a serde regression (u64::default() is 0), an import tool that bypassed epoch_ms(), or a JSONL edit that anonymized when the debit was charged",
+                        debit.paired_receipt
+                    ),
+                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit backends bind now = epoch_ms() and stamp at_ms = now in the same call (covenant-budget/src/lib.rs), and compact_older_than only drops pre-cutoff Debit rows while emitting Snapshot rows (never a Debit with at_ms = 0), so a zero at_ms is out-of-band evidence of a serde regression (u64::default() is 0), an import or replay tool that constructed the debit without epoch_ms(), or a JSONL edit that anonymized when the per-payer budget was charged; the budget ledger is an unsigned local JSONL with no chain-hash anchor covering this invariant, so this within-row shape arm is the sole detector — it is the first shape arm for the budget ledger and the budget-log leg of the zero-timestamp family (receipt_settled_at_zero on the settlement log, audit_event_timestamp_zero on the audit log, memory_record_created_at_zero on the memory store)".into(),
+                });
+            }
+        }
         // Cardinality: the pairing between a budget debit and its settlement
         // receipt is 1:1. Both production try_debit callers mint a fresh
         // receipt_id = Uuid::new_v4() and pass it to exactly one try_debit
@@ -12146,13 +12179,14 @@ impl Server {
             + debit_receipt_payer_display_mismatch_refs
             + debit_receipt_credits_mismatch_refs
             + debit_memory_receipt_credits_not_flat_refs
+            + zero_at_ms_debit_refs
             + duplicate_paired_receipt_refs;
         orphans_total += budget_join_drift;
         checks.push(VerifyCheck {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
             ),
         });
 
@@ -13682,6 +13716,27 @@ required = {caps:?}
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
             Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
+    fn server_with_budget(budget: Arc<dyn covenant_budget::BudgetLedger>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget,
         )
     }
 
@@ -22420,6 +22475,147 @@ required = {caps:?}
                 assert!(
                     check.message.contains("1 duplicate-paired-receipt"),
                     "check message should count duplicate paired receipts: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    struct ZeroAtMsBudget {
+        debits: Vec<covenant_budget::BudgetDebit>,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for ZeroAtMsBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(self.debits.iter().take(limit).cloned().collect())
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_budget_debit_at_ms_zero_drift() {
+        // Every production BudgetDebit stamps at_ms from epoch_ms() inside
+        // try_debit (both store backends), which is never 0, so the ledger cannot
+        // produce a zero at_ms through its public API. Inject a raw debit with
+        // at_ms == 0 — the serde-default / import-tool / JSONL-edit shape no
+        // production write emits — through a stub BudgetLedger so the verifier
+        // reads it via recent_debits_all. This is the first within-row shape arm
+        // for the budget ledger and the budget-log leg of the zero-timestamp
+        // family. No receipts are seeded, so the join arms continue past both
+        // debits and the distinct paired_receipts keep the cardinality arm silent
+        // — only the new shape arm can fail the check.
+        let zeroed_receipt = Uuid::new_v4();
+        let healthy_receipt = Uuid::new_v4();
+        let payer = AgentId::new("payer@host", [7u8; 32]);
+        let budget = Arc::new(ZeroAtMsBudget {
+            debits: vec![
+                covenant_budget::BudgetDebit {
+                    agent: payer.clone(),
+                    credits: 5,
+                    paired_receipt: zeroed_receipt,
+                    at_ms: 0,
+                },
+                covenant_budget::BudgetDebit {
+                    agent: payer.clone(),
+                    credits: 5,
+                    paired_receipt: healthy_receipt,
+                    at_ms: 1_700_000_000_000,
+                },
+            ],
+        });
+        let s = server_with_budget(budget);
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let matches: Vec<_> = drift
+                    .iter()
+                    .filter(|item| item.kind == "budget_debit_at_ms_zero")
+                    .collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "exactly one zero-at_ms debit must surface, and the healthy debit must stay silent: {drift:?}"
+                );
+                let row = matches[0];
+                assert_eq!(row.id.as_deref(), Some(zeroed_receipt.to_string().as_str()));
+                assert!(
+                    row.message.contains("at_ms = 0") && row.message.contains("epoch_ms()"),
+                    "message should name the zero value and the epoch_ms() invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("zero-timestamp family")
+                        && row.repair.contains("receipt_settled_at_zero"),
+                    "repair hint should place it in the zero-timestamp family: {}",
+                    row.repair
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 zero-at_ms debit"),
+                    "check message should count zero-at_ms debits: {}",
+                    check.message
+                );
+                // Only the new shape arm fails: the join and cardinality halves
+                // stay clean (no receipts seeded, distinct paired_receipts).
+                assert!(
+                    check.message.contains("0 duplicate-paired-receipt")
+                        && check.message.contains("0 payer-mismatched debit"),
+                    "only the zero-at_ms shape arm should fail the check: {}",
                     check.message
                 );
                 assert!(orphans_total >= 1);

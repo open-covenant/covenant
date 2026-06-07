@@ -6597,6 +6597,68 @@ impl Server {
                 });
             }
         }
+        // Cardinality on the metadata.receipt_id back-reference: the pairing
+        // between a legacy Memory settlement receipt and the memory record that
+        // carries its id in metadata.receipt_id is 1:1. The sole production
+        // writer of metadata.receipt_id is covenant-memory's receipt-correlation
+        // backfill (merge_receipt_id stores it as Value::String(receipt_id)),
+        // fed by match_legacy_receipts_to_memory_records, which pairs each legacy
+        // receipt with at most one uncorrelated memory record — it records every
+        // paired record id in a used_memory set and finds a not-yet-used record
+        // per receipt (covenant-memory/src/lib.rs:425-440) — so a given receipt
+        // id is written into exactly one record's metadata. This is the
+        // memory-log leg of the receipt_id cardinality family: the settlement-log
+        // leg is receipt_id_duplicate (Check 6, keyed on receipt.id), the
+        // audit-log leg is
+        // external_payment_settled_receipt_id_shared_by_multiple_events (Check 7),
+        // and the budget-log leg is
+        // budget_debit_paired_receipt_shared_by_multiple_debits (Check 9). It is
+        // disjoint from the forward memory_receipt_duplicate arm below, which
+        // keys on receipt.memory_record_id (multiple receipts -> one record) over
+        // modern receipts whose record carries no metadata.receipt_id; this arm
+        // keys on memory.metadata.receipt_id (multiple records -> one receipt)
+        // over legacy receipts whose record carries no memory_record_id, so the
+        // two join surfaces never overlap. Count over records by the parsed
+        // back-reference value without requiring the receipt to be present (a
+        // purged or windowed-out receipt must not hide a real duplicate), gate on
+        // the same string-Uuid parse the per-row back-reference arms above use
+        // (so a non-object metadata is owned by the Check 5
+        // memory_record_metadata_non_object arm and a missing/non-string/
+        // unparseable sub-key is left alone), and skip the nil UUID so a
+        // defaulted or forged all-zeros back-reference is left alone rather than
+        // conflated with a real receipt_id collision. Windowing can only hide a
+        // real duplicate (one copy aged out of the recent window), never invent
+        // one.
+        let mut backref_receipt_id_record_counts: HashMap<Uuid, usize> = HashMap::new();
+        for memory in &memories {
+            let Some(serde_json::Value::String(receipt_id_str)) = memory.metadata.get("receipt_id")
+            else {
+                continue;
+            };
+            let Ok(receipt_id) = receipt_id_str.parse::<Uuid>() else {
+                continue;
+            };
+            if receipt_id.is_nil() {
+                continue;
+            }
+            *backref_receipt_id_record_counts
+                .entry(receipt_id)
+                .or_insert(0) += 1;
+        }
+        let mut backref_receipt_id_shared_refs = 0_u64;
+        for (receipt_id, count) in &backref_receipt_id_record_counts {
+            if *count > 1 {
+                backref_receipt_id_shared_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "memory_record_receipt_id_backref_shared_by_multiple_records".into(),
+                    id: Some(receipt_id.to_string()),
+                    message: format!(
+                        "{count} memory records carry metadata.receipt_id {receipt_id}, but the pairing between a legacy Memory settlement receipt and the memory record that back-references it is 1:1 — the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id), fed by match_legacy_receipts_to_memory_records, which pairs each legacy receipt with at most one uncorrelated memory record (every paired record id is recorded in a used_memory set, covenant-memory/src/lib.rs:425-440), so every production receipt_id is back-referenced by exactly one record — two records sharing one is a second record claiming a receipt that already correlated exactly one memory write, a pairing no production backfill emits"
+                    ),
+                    repair: "review the memory store rows that carry this metadata.receipt_id; covenant-memory's receipt-correlation backfill (merge_receipt_id) writes a given receipt id into exactly one record's metadata because match_legacy_receipts_to_memory_records dedups paired records through a used_memory set (covenant-memory/src/lib.rs:425-440), so two records sharing one is out-of-band evidence of a JSONL edit that copied a back-reference onto a second record (mis-attributing which memory write a receipt paid for), an import tool that correlated one receipt to two records, or a serde regression that hydrated metadata.receipt_id from a different row; this is the memory-log leg of the receipt_id cardinality family (the settlement-log leg is receipt_id_duplicate keyed on receipt.id, the audit-log leg is external_payment_settled_receipt_id_shared_by_multiple_events, the budget-log leg is budget_debit_paired_receipt_shared_by_multiple_debits), disjoint from the forward memory_receipt_duplicate arm which keys on receipt.memory_record_id over modern receipts whose record carries no metadata.receipt_id while this keys on memory.metadata.receipt_id over legacy receipts whose record carries no memory_record_id; identify the canonical record (the one whose owner.pubkey matches the receipt payer) before clearing the duplicate back-reference, since the duplicate makes the receipt_id ambiguous to any reconciliation that resolves a Memory receipt to the record it paid for".into(),
+                });
+            }
+        }
         let memory_receipts: Vec<&SettlementReceipt> = receipts
             .iter()
             .filter(|receipt| receipt.resource == ResourceKind::Memory)
@@ -6965,6 +7027,7 @@ impl Server {
             + resource_mismatch_refs
             + backref_payer_not_owner_refs
             + backref_resource_not_memory_refs
+            + backref_receipt_id_shared_refs
             + orphaned_receipt_payer_not_audit_issuer_refs
             + orphaned_receipt_payer_display_not_audit_issuer_refs
             + orphaned_receipt_settled_after_audit_refs;
@@ -6975,11 +7038,12 @@ impl Server {
                 && resource_mismatch_refs == 0
                 && backref_payer_not_owner_refs == 0
                 && backref_resource_not_memory_refs == 0
+                && backref_receipt_id_shared_refs == 0
                 && orphaned_receipt_payer_not_audit_issuer_refs == 0
                 && orphaned_receipt_payer_display_not_audit_issuer_refs == 0
                 && orphaned_receipt_settled_after_audit_refs == 0,
             message: format!(
-                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}; back-reference resource mismatch = {}; orphaned-receipt payer-vs-audit-issuer mismatch = {}; orphaned-receipt payer-display-vs-audit-issuer mismatch = {}; orphaned-receipt settled-after-dispatch-audit = {}",
+                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}; back-reference resource mismatch = {}; back-reference shared-by-multiple-records = {}; orphaned-receipt payer-vs-audit-issuer mismatch = {}; orphaned-receipt payer-display-vs-audit-issuer mismatch = {}; orphaned-receipt settled-after-dispatch-audit = {}",
                 memories.len(),
                 memory_receipts.len(),
                 pair_diff,
@@ -6988,6 +7052,7 @@ impl Server {
                 resource_mismatch_refs,
                 backref_payer_not_owner_refs,
                 backref_resource_not_memory_refs,
+                backref_receipt_id_shared_refs,
                 orphaned_receipt_payer_not_audit_issuer_refs,
                 orphaned_receipt_payer_display_not_audit_issuer_refs,
                 orphaned_receipt_settled_after_audit_refs
@@ -38246,6 +38311,231 @@ required = {caps:?}
                         && receipt_check.message.contains("exact drift = 0")
                         && receipt_check.message.contains("resource mismatch = 0"),
                     "only the back-reference resource arm should fail the check: {}",
+                    receipt_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_receipt_id_backref_shared_by_multiple_records_drift() {
+        // metadata.receipt_id is written only by covenant-memory's
+        // receipt-correlation backfill (merge_receipt_id), fed by
+        // match_legacy_receipts_to_memory_records, which pairs each legacy
+        // receipt with at most one uncorrelated memory record (a used_memory set
+        // dedups the pairings), so a given receipt id lands in exactly one
+        // record's metadata. Two records carrying the same metadata.receipt_id is
+        // the memory-log leg of the receipt_id cardinality family — a second
+        // record claiming a receipt that already correlated one memory write.
+        // Build legacy-correlated records (no forward memory_record_id) plus a
+        // balancing legacy receipt per record so the count arms stay clean and
+        // only the new cardinality arm can flip the check.
+        async fn put_dispatch_memory(
+            s: &Server,
+            id: Uuid,
+            owner: &AgentId,
+            text: &str,
+            metadata: serde_json::Value,
+        ) {
+            s.memory
+                .put(MemoryRecord {
+                    id,
+                    tier: MemoryTier::Working,
+                    owner: owner.clone(),
+                    text: text.to_string(),
+                    embedding: vec![],
+                    metadata,
+                    created_at: 1_000,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: owner.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id: id,
+                        intent_text: text.to_string(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(text.as_bytes()),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        async fn put_legacy_memory_receipt(s: &Server, id: Uuid, payer: &AgentId, text: &str) {
+            s.settlement
+                .record(SettlementReceipt {
+                    id,
+                    payer: payer.clone(),
+                    resource: ResourceKind::Memory,
+                    memory_record_id: None,
+                    credits_consumed: memory_write_credits(text.len()),
+                    settled_at: 2_000,
+                    chain: None,
+                    cluster: None,
+                    batch_id: None,
+                    merkle_root: None,
+                    tx_sig: None,
+                    slot: None,
+                    confirmed_at: None,
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Tamper: two me-owned records back-referencing one receipt id. The
+        // receipt itself is absent from the store, proving the cardinality arm
+        // does not require the referent present (a purged or windowed-out receipt
+        // must not hide a real duplicate) and keeping the per-row back-reference
+        // shape arms silent (they continue when the receipt is not in the store).
+        let shared = Uuid::new_v4();
+        let dup_a = Uuid::new_v4();
+        let dup_b = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            dup_a,
+            &me,
+            "shared backref a",
+            serde_json::json!({ "receipt_id": shared.to_string() }),
+        )
+        .await;
+        put_dispatch_memory(
+            &s,
+            dup_b,
+            &me,
+            "shared backref b",
+            serde_json::json!({ "receipt_id": shared.to_string() }),
+        )
+        .await;
+
+        // Control: a single record with its own unique back-reference must stay
+        // silent (count == 1).
+        let solo_id = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            solo_id,
+            &me,
+            "solo backref",
+            serde_json::json!({ "receipt_id": Uuid::new_v4().to_string() }),
+        )
+        .await;
+
+        // Gate: two records sharing the NIL receipt_id must NOT surface here —
+        // the nil UUID is skipped so a defaulted or forged all-zeros
+        // back-reference is not conflated with a real receipt_id collision.
+        let nil_a = Uuid::new_v4();
+        let nil_b = Uuid::new_v4();
+        put_dispatch_memory(
+            &s,
+            nil_a,
+            &me,
+            "nil backref a",
+            serde_json::json!({ "receipt_id": Uuid::nil().to_string() }),
+        )
+        .await;
+        put_dispatch_memory(
+            &s,
+            nil_b,
+            &me,
+            "nil backref b",
+            serde_json::json!({ "receipt_id": Uuid::nil().to_string() }),
+        )
+        .await;
+
+        // Balance the per-owner count: five me-owned records need five me-owned
+        // legacy Memory receipts so pair_diff and the legacy fallback stay clean
+        // and only the cardinality arm can fail the check. Each receipt carries a
+        // fresh non-nil id distinct from `shared`, so none is the referent of a
+        // back-reference and receipt_id_duplicate / receipt_id_nil stay silent.
+        for _ in 0..5 {
+            put_legacy_memory_receipt(&s, Uuid::new_v4(), &me, "balance").await;
+        }
+
+        let resp = s.op_respond(Request::Verify { window: 1000 }).await;
+        let kind = "memory_record_receipt_id_backref_shared_by_multiple_records";
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let dups: Vec<_> = drift.iter().filter(|i| i.kind == kind).collect();
+                assert_eq!(
+                    dups.len(),
+                    1,
+                    "exactly one cardinality row, and the nil pair must be skipped: {drift:?}"
+                );
+                let row = dups[0];
+                assert_eq!(row.id.as_deref(), Some(shared.to_string().as_str()));
+                assert!(
+                    row.message
+                        .contains("memory records carry metadata.receipt_id")
+                        && row.message.contains("merge_receipt_id"),
+                    "drift message should count the shared rows and name the sole writer: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("receipt_id_duplicate")
+                        && row.repair.contains(
+                            "external_payment_settled_receipt_id_shared_by_multiple_events"
+                        )
+                        && row
+                            .repair
+                            .contains("budget_debit_paired_receipt_shared_by_multiple_debits")
+                        && row.repair.contains("memory_receipt_duplicate"),
+                    "repair hint should name the sibling cardinality legs and the disjoint forward arm: {}",
+                    row.repair
+                );
+                // The nil-sharing pair must not surface (nil skipped).
+                assert!(
+                    !drift.iter().any(|i| i.kind == kind
+                        && i.id.as_deref() == Some(Uuid::nil().to_string().as_str())),
+                    "a nil back-reference shared by two records must stay silent: {drift:?}"
+                );
+                // The per-row back-reference shape arms must stay silent: the
+                // shared receipt is absent, so neither resolves.
+                assert!(
+                    !drift.iter().any(|i| i.kind
+                        == "memory_record_receipt_id_backref_resource_not_memory"
+                        || i.kind == "memory_record_receipt_id_backref_payer_not_matching_owner"),
+                    "the per-row back-reference shape arms must stay silent: {drift:?}"
+                );
+
+                let receipt_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
+                assert!(!receipt_check.passed);
+                assert!(
+                    receipt_check
+                        .message
+                        .contains("back-reference shared-by-multiple-records = 1"),
+                    "check message should count exactly one shared back-reference: {}",
+                    receipt_check.message
+                );
+                // The count-based halves and the sibling shape arms stay clean,
+                // proving the cardinality arm alone flipped the check.
+                assert!(
+                    receipt_check.message.contains("count diff = 0")
+                        && receipt_check.message.contains("exact drift = 0")
+                        && receipt_check
+                            .message
+                            .contains("back-reference payer mismatch = 0")
+                        && receipt_check
+                            .message
+                            .contains("back-reference resource mismatch = 0"),
+                    "only the cardinality arm should fail the check: {}",
                     receipt_check.message
                 );
                 assert!(orphans_total >= 1);

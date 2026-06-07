@@ -308,29 +308,57 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
     "--format=%H%x09%h%x09%an%x09%ae%x09%aI%x09%s%x09%b",
     sha,
   ]);
-  if (!meta) {
-    return NextResponse.json({ error: "unknown sha" }, { status: 404 });
-  }
-  const [fullSha, shortSha, rawAuthorDisplay, rawAuthorEmail, isoDate, subject, ...bodyParts] =
-    meta.split("\t");
-  const bodyText = bodyParts.join("\t").trim();
-  const author = redactAuthor(rawAuthorDisplay, rawAuthorEmail);
 
-  const predatesWitnessLoop =
-    rawAuthorEmail !== COVENANT_AUTHOR_EMAIL && WITNESS_CUTOVER_SHA
-      ? predatesCutover(repoRoot, fullSha)
-      : rawAuthorEmail !== COVENANT_AUTHOR_EMAIL;
-
-  const commit = {
-    sha: fullSha,
-    shortSha,
-    authorDisplay: author.display,
-    authorEmail: author.email,
-    subject,
-    bodyText,
-    isoDate,
-    predatesWitnessLoop,
+  let commit: {
+    sha: string;
+    shortSha: string;
+    authorDisplay: string;
+    authorEmail: string;
+    subject: string;
+    bodyText: string;
+    isoDate: string;
+    predatesWitnessLoop: boolean;
   };
+  let predatesWitnessLoop: boolean;
+
+  if (meta) {
+    const [fullSha, shortSha, rawAuthorDisplay, rawAuthorEmail, isoDate, subject, ...bodyParts] =
+      meta.split("\t");
+    const bodyText = bodyParts.join("\t").trim();
+    const author = redactAuthor(rawAuthorDisplay, rawAuthorEmail);
+    predatesWitnessLoop =
+      rawAuthorEmail !== COVENANT_AUTHOR_EMAIL && WITNESS_CUTOVER_SHA
+        ? predatesCutover(repoRoot, fullSha)
+        : rawAuthorEmail !== COVENANT_AUTHOR_EMAIL;
+    commit = {
+      sha: fullSha,
+      shortSha,
+      authorDisplay: author.display,
+      authorEmail: author.email,
+      subject,
+      bodyText,
+      isoDate,
+      predatesWitnessLoop,
+    };
+  } else {
+    // Git history is unavailable (a shallow deploy may carry only the HEAD
+    // commit). Verification reads committed files, not git, so still render any
+    // sha that has witness artifacts; just skip the git-only commit header.
+    if (!existsSync(join(repoRoot, "attestations", `${sha}.json`))) {
+      return NextResponse.json({ error: "unknown sha" }, { status: 404 });
+    }
+    predatesWitnessLoop = false;
+    commit = {
+      sha,
+      shortSha: sha.slice(0, 12),
+      authorDisplay: "Covenant",
+      authorEmail: COVENANT_AUTHOR_EMAIL,
+      subject: "Witnessed devnet run",
+      bodyText: "",
+      isoDate: "",
+      predatesWitnessLoop: false,
+    };
+  }
 
   const fifth = {
     label: "Code Quality (Not Witnessed)",
@@ -358,12 +386,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
   return NextResponse.json({
     commit,
     witnesses: [
-      checkAnchor1CommitMemo(repoRoot, fullSha),
-      checkAnchor2AuditChain(repoRoot, fullSha),
-      checkAnchor3Solana(repoRoot, fullSha),
-      checkAnchor4VerifierSig(repoRoot, fullSha),
+      checkAnchor1CommitMemo(repoRoot, commit.sha),
+      checkAnchor2AuditChain(repoRoot, commit.sha),
+      checkAnchor3Solana(repoRoot, commit.sha),
+      checkAnchor4VerifierSig(repoRoot, commit.sha),
     ],
-    skillRun: checkSkillRun(repoRoot, fullSha),
+    skillRun: checkSkillRun(repoRoot, commit.sha),
     fifth,
   });
 }

@@ -12440,6 +12440,7 @@ impl Server {
         let mut debit_receipt_payer_display_mismatch_refs = 0_u64;
         let mut debit_receipt_credits_mismatch_refs = 0_u64;
         let mut debit_memory_receipt_credits_not_flat_refs = 0_u64;
+        let mut debit_receipt_resource_not_tool_or_memory_refs = 0_u64;
         for debit in &debits {
             let Some(receipt) = budget_join_receipts.get(&debit.paired_receipt) else {
                 continue;
@@ -12472,7 +12473,28 @@ impl Server {
                 }
                 continue;
             }
+            // A debit whose paired_receipt resolves to a receipt that is
+            // neither Memory (handled and continued above) nor Tool is a
+            // pairing no production write emits. The only two writers of a
+            // (BudgetDebit, SettlementReceipt) pair are record_paid_call, which
+            // records a ResourceKind::Tool receipt under the debited receipt_id
+            // (covenantd/src/x402.rs:215,220-223), and dispatch_intent_run,
+            // which records a ResourceKind::Memory receipt under the same
+            // Uuid::new_v4() receipt_id it debits (covenantd/src/lib.rs). No
+            // production path pairs a debit with a Compute/Message/Registration
+            // receipt, so a third resource kind here is out-of-band drift. This
+            // replaces the former bare `continue` that silently dropped it.
             if receipt.resource != ResourceKind::Tool {
+                debit_receipt_resource_not_tool_or_memory_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "budget_debit_paired_receipt_resource_not_tool_or_memory".into(),
+                    id: Some(debit.paired_receipt.to_string()),
+                    message: format!(
+                        "budget debit paired_receipt = {} resolves to a SettlementReceipt whose resource is {:?}, neither ResourceKind::Tool nor ResourceKind::Memory; the only two production writers of a (BudgetDebit, SettlementReceipt) pair are record_paid_call (covenantd/src/x402.rs:206-264), which debits via budget.try_debit(payer, call.credits, receipt_id) (x402.rs:215) and records a ResourceKind::Tool receipt under that receipt_id (x402.rs:220-223), and dispatch_intent_run (covenantd/src/lib.rs), which debits via try_debit(&agent, intent_dispatch_credits(), receipt_id) and records a ResourceKind::Memory receipt under that same Uuid::new_v4() receipt_id, so every production debit pairs with a Tool or Memory receipt — a debit paired to a Compute, Message, or Registration receipt is a pairing no production write emits",
+                        debit.paired_receipt, receipt.resource
+                    ),
+                    repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; the only production (BudgetDebit, SettlementReceipt) pairings are record_paid_call's Tool receipt and dispatch_intent_run's Memory receipt, each written under the same Uuid::new_v4() the debit is charged with, so a debit paired to a receipt of any third resource kind is out-of-band evidence of a serde or merge regression that hydrated receipt.resource from a different row, an operator JSONL edit that recategorized a paired receipt, or an import tool that repointed paired_receipt at an unrelated non-Tool/non-Memory receipt; the budget ledger has no within-row resource field and the receipt-side memory_receipt_resource_mismatch arm (which keys on receipt.memory_record_id over the settlement log) and audit_external_payment_settled_receipt_resource_not_tool arm (which keys on the ExternalPaymentSettled audit join) cannot see this budget-join binding, making this cross-store join the sole detector; it is disjoint from budget_debit_paired_receipt_nil (a nil paired_receipt does not resolve to a receipt so the join skips it before this arm) and budget_debit_paired_receipt_shared_by_multiple_debits (cardinality on paired_receipt, not the resolved receipt's resource), and it strictly precedes the Tool-scoped payer and credits arms (which require resource == Tool) and the Memory-scoped flat-credits arm (which requires resource == Memory and continues above), so exactly one resource branch handles each debit; it fires only on a paired_receipt that resolves in the receipt window, so a windowed-out or purged receipt is left to the orphan-free join".into(),
+                });
                 continue;
             }
             // Gate on both the receipt's payer.pubkey and the debit's
@@ -12704,6 +12726,7 @@ impl Server {
             + debit_receipt_payer_display_mismatch_refs
             + debit_receipt_credits_mismatch_refs
             + debit_memory_receipt_credits_not_flat_refs
+            + debit_receipt_resource_not_tool_or_memory_refs
             + zeroed_agent_debit_refs
             + zero_at_ms_debit_refs
             + nil_paired_receipt_debit_refs
@@ -12713,7 +12736,7 @@ impl Server {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {nil_paired_receipt_debit_refs} nil-paired-receipt debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {debit_receipt_resource_not_tool_or_memory_refs} non-tool-or-memory-resource paired-receipt debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {nil_paired_receipt_debit_refs} nil-paired-receipt debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
             ),
         });
 
@@ -23621,6 +23644,77 @@ required = {caps:?}
                     "budget join check should pass for a memory-dispatch pair: {}",
                     check.message
                 );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_budget_debit_paired_receipt_resource_not_tool_or_memory_drift() {
+        let s = server_with(vec![], "");
+        // The only two production (BudgetDebit, SettlementReceipt) pairings are
+        // record_paid_call's Tool receipt and dispatch_intent_run's Memory
+        // receipt. A debit paired to a receipt of any third resource kind (here
+        // ResourceKind::Message) is a pairing no production write emits: it
+        // falls through both the Memory branch and the Tool gate and must trip
+        // the resource-not-tool-or-memory arm. memory_record_id is None and the
+        // receipt joins no ExternalPaymentSettled audit, so the receipt-side
+        // memory_receipt_resource_mismatch and audit resource arms stay silent
+        // and this budget-join arm is the sole detector.
+        let receipt_id = Uuid::new_v4();
+        let payer = AgentId::new("payer@host", [9u8; 32]);
+        s.settlement
+            .record(budget_join_test_receipt(
+                receipt_id,
+                payer.clone(),
+                ResourceKind::Message,
+                5,
+            ))
+            .await
+            .unwrap();
+        s.budget.set_capacity(&payer, 100).await.unwrap();
+        s.budget.try_debit(&payer, 5, receipt_id).await.unwrap();
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "budget_debit_paired_receipt_resource_not_tool_or_memory"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected resource drift: {drift:?}"));
+                assert!(
+                    row.message.contains("Message"),
+                    "message should name the receipt resource: {}",
+                    row.message
+                );
+                assert!(
+                    !drift.iter().any(|i| {
+                        i.kind == "budget_debit_paired_receipt_payer_mismatch"
+                            || i.kind == "budget_debit_paired_receipt_payer_display_mismatch"
+                            || i.kind == "budget_debit_paired_receipt_credits_mismatch"
+                            || i.kind
+                                == "budget_debit_paired_memory_receipt_credits_not_intent_dispatch"
+                    }),
+                    "a non-Tool/non-Memory paired receipt must trip only the resource arm: {drift:?}"
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 non-tool-or-memory-resource"),
+                    "check message should count the resource mismatch: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),
         }

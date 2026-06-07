@@ -6346,6 +6346,46 @@ impl Server {
                                 repair: "review the receipt JSONL row and the writer that produced it; production Memory receipts route through covenantd's memory-write branch (lib.rs:4204), which sets credits_consumed = covenant_settlement::memory_write_credits(record.text.len()) for the record it just wrote and joins them by memory_record_id, so a matched pair whose credits_consumed != memory_write_credits(memory.text.len()) is out-of-band evidence of a JSONL edit that inflated a payer's burn (over-billing) or deflated it (hiding spend), an import tool that paired a receipt with a foreign credit count, or a serde regression that hydrated credits_consumed from a different row; this arm recomputes through the same covenant_settlement::memory_write_credits the producer calls so it cannot drift from the production pricing formula, and it fires only when credits_consumed != 0 so it is strictly disjoint from the receipt_credits_consumed_zero arm (which owns the zero-sentinel case) and independent of the memory_receipt_owner_mismatch and memory_receipt_settled_before_created arms that check the same matched pair on different fields".into(),
                             });
                         }
+                        // Cross-entity binding (display half): an AgentId carries
+                        // both a pubkey and a display label. The owner-pubkey arm
+                        // above binds receipt.payer.pubkey == memory.owner.pubkey,
+                        // but the sole production Memory receipt write
+                        // (dispatch_intent's memory-write branch, lib.rs:4185-4223)
+                        // clones the one `let issuer = peer.clone()` AgentId into
+                        // the memory record's owner (lib.rs:4188) and the
+                        // SettlementReceipt.payer (lib.rs:4206) in the same call,
+                        // so every production memory write also satisfies
+                        // receipt.payer.display == memory.owner.display. Local
+                        // settlement receipts are unsigned plain JSONL, so a row
+                        // edit that relabels the payer's display while preserving
+                        // the pubkey passes the owner-pubkey arm and the
+                        // zeroed_payer_receipt shape arm (the relabel stays a
+                        // well-formed local@host form, the AgentId Deserialize gate
+                        // guarantees it) — this binding is the sole detector. Gate
+                        // on the pubkeys being equal and non-zero so it fires only
+                        // on a display-only relabel, strictly disjoint from the
+                        // owner-pubkey arm above (which fires when the pubkeys
+                        // DIFFER) and from the zeroed_payer_receipt (Check 6) /
+                        // memory_record_owner_pubkey_zeroed (Check 5) shape arms
+                        // that own the all-zero sentinel. Settlement-side mirror of
+                        // the memory↔audit
+                        // intent_dispatched_issuer_display_not_matching_memory_owner
+                        // arm (Check 1).
+                        if receipt.payer.pubkey == memory.owner.pubkey
+                            && receipt.payer.pubkey != [0u8; 32]
+                            && receipt.payer.display != memory.owner.display
+                        {
+                            exact_diff += 1;
+                            drift.push(VerifyDrift {
+                                kind: "memory_receipt_payer_display_not_matching_owner".into(),
+                                id: Some(receipt.id.to_string()),
+                                message: format!(
+                                    "receipt {} has resource = ResourceKind::Memory joined by memory_record_id to memory record {memory_id} and the receipt's payer.pubkey equals that memory record's owner.pubkey, but the receipt's payer.display ({:?}) does not equal that memory record's owner.display ({:?}); the sole production Memory-receipt write at dispatch_intent's memory-write branch (covenantd/src/lib.rs:4185-4223) binds let issuer = peer.clone() and clones that one AgentId into the memory record's owner (lib.rs:4188) and the SettlementReceipt.payer (lib.rs:4206) in the same dispatch, so every production memory write satisfies receipt.payer.display == memory.owner.display — a matched pair whose pubkeys agree but whose display labels disagree is a pairing no production write emits",
+                                    receipt.id, receipt.payer.display, memory.owner.display
+                                ),
+                                repair: "review the receipt JSONL row and the memory record it joins by memory_record_id; the sole production Memory-receipt write (dispatch_intent's memory-write branch, lib.rs:4185-4223) clones one issuer = peer.clone() AgentId into both the memory record's owner and the SettlementReceipt.payer in the same call, so a matched pair whose receipt payer.pubkey equals the memory owner.pubkey while their display labels differ is out-of-band evidence of a JSONL edit that relabeled the recorded payer's display on the settlement feed (misattributing which named identity paid for a memory write) while preserving the cryptographic identity, an import tool that paired a receipt with a foreign payer display, or a serde regression that hydrated receipt.payer.display from a different row; local settlement receipts are unsigned JSONL so no signature covers payer.display, and the owner-pubkey arm memory_receipt_owner_mismatch cannot catch this (the pubkeys agree) while the display is well-formed by the AgentId Deserialize gate so no shape arm catches it, making this cross-record display binding the sole detector; it fires only when the pubkeys are equal and non-zero so it is strictly disjoint from memory_receipt_owner_mismatch and from the zeroed_payer_receipt (Check 6) and memory_record_owner_pubkey_zeroed (Check 5) shape arms, and only on a memory_record_id present in both stores so an unmatched receipt routes to receipt_without_memory_record / memory_without_receipt instead".into(),
+                            });
+                        }
                     }
                 }
                 None => {
@@ -33644,6 +33684,184 @@ required = {caps:?}
                             || item.id.as_deref() != Some(&ok_receipt_id.to_string())
                     }),
                     "a receipt whose credits_consumed equals memory_write_credits(text.len()) must not trip the arm: {drift:?}"
+                );
+                let receipt_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
+                assert!(!receipt_check.passed);
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_receipt_payer_display_not_matching_owner_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let owner_display = me.display.clone();
+        // Tamper: a Memory receipt whose payer has the SAME pubkey as the joined
+        // memory record's owner but a DIFFERENT, well-formed display — exactly
+        // what relabeling the payer on the settlement feed looks like while
+        // preserving the cryptographic identity. The owner-pubkey arm cannot see
+        // it (pubkeys agree), credits_consumed and settled_at are faithful, so
+        // only the display binding fires.
+        let relabeled = AgentId::new("relabeled@local", me.pubkey);
+        let tamper_memory_id = Uuid::new_v4();
+        let tamper_receipt_id = Uuid::new_v4();
+        let tamper_text = "payer-display tamper fixture";
+        s.memory
+            .put(MemoryRecord {
+                id: tamper_memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: tamper_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: tamper_memory_id,
+                    intent_text: tamper_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(tamper_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        s.settlement
+            .record(SettlementReceipt {
+                id: tamper_receipt_id,
+                payer: relabeled.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(tamper_memory_id),
+                credits_consumed: memory_write_credits(tamper_text.len()),
+                settled_at: 2_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        // Control: payer display == owner display (and same pubkey) — must not
+        // fire, proving the arm binds the receipt payer display to the joined
+        // memory owner display and not to a constant.
+        let ok_memory_id = Uuid::new_v4();
+        let ok_receipt_id = Uuid::new_v4();
+        let ok_text = "payer-display control fixture";
+        s.memory
+            .put(MemoryRecord {
+                id: ok_memory_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: ok_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: ok_memory_id,
+                    intent_text: ok_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(ok_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        s.settlement
+            .record(SettlementReceipt {
+                id: ok_receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(ok_memory_id),
+                credits_consumed: memory_write_credits(ok_text.len()),
+                settled_at: 2_000,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_receipt_payer_display_not_matching_owner"
+                            && item.id.as_deref() == Some(&tamper_receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "expected memory_receipt_payer_display_not_matching_owner: {drift:?}"
+                        )
+                    });
+                assert!(
+                    row.message.contains("relabeled@local")
+                        && row.message.contains(owner_display.as_str()),
+                    "message should record the relabeled payer display and the joined owner display: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("memory_receipt_owner_mismatch")
+                        && row.repair.contains("sole detector"),
+                    "repair hint should name the disjoint owner-pubkey arm and the sole-detector role: {}",
+                    row.repair
+                );
+                // The tamper receipt agrees on payer pubkey, settled_at, and
+                // credits, so it must surface only as the display arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&tamper_receipt_id.to_string())
+                            || (item.kind != "memory_receipt_owner_mismatch"
+                                && item.kind != "memory_receipt_settled_before_created"
+                                && item.kind != "memory_receipt_credits_not_derived_from_text_bytes"
+                                && item.kind != "receipt_payer_pubkey_zeroed")
+                    }),
+                    "display arm must be disjoint from the owner-pubkey, settled-before-created, credits, and zeroed-payer arms: {drift:?}"
+                );
+                // The faithful pair must not trip the arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "memory_receipt_payer_display_not_matching_owner"
+                            || item.id.as_deref() != Some(&ok_receipt_id.to_string())
+                    }),
+                    "a receipt whose payer.display equals the joined owner.display must not trip the arm: {drift:?}"
                 );
                 let receipt_check = checks
                     .iter()

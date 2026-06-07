@@ -6442,8 +6442,10 @@ impl Server {
         let mut not_lowercase_hex_merkle_root_receipt_refs = 0_u64;
         let mut empty_tx_sig_receipt_refs = 0_u64;
         let mut wrong_length_tx_sig_receipt_refs = 0_u64;
+        let mut not_base58_tx_sig_receipt_refs = 0_u64;
         let mut empty_onchain_sig_receipt_refs = 0_u64;
         let mut wrong_length_onchain_sig_receipt_refs = 0_u64;
+        let mut not_base58_onchain_sig_receipt_refs = 0_u64;
         for receipt in &receipts {
             if receipt.settled_at == 0 {
                 zero_settled_at_refs += 1;
@@ -6734,6 +6736,18 @@ impl Server {
                         repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt with a ChainConfirmation whose tx_sig field is the hardcoded literal None at flush_receipts in covenantd lib.rs:5060 today, and annotate_receipt copies confirmation.tx_sig.clone() into receipt.tx_sig unchanged — so any Some-value is out-of-band evidence of a JSONL edit that synthesized a placeholder signature, a serde regression that defaulted Option<String> to Some(stub) at hydration, or a future on-chain integration regression that bypassed the covenantd flush path with a non-canonical signature shape; when on-chain integration lands, the canonical base58-encoded ed25519 signature (64-byte raw) is invariably 87 or 88 chars (the 88-char path is the typical case; 87 only when leading zero bytes shorten the bs58 alphabet output), so a length outside that range is evidence of a truncated or padded JSONL edit, an import tool encoding the signature under a different alphabet, or a future regression in the on-chain signing path bypassing the bs58 invariant, while leaving onchain_sig equally drifted (bypassing the receipt_tx_sig_onchain_sig_diverged guard that only fires when both Some values disagree) and the receipt_tx_sig_empty guard that only fires when the string is exactly zero-length".into(),
                     });
                 }
+                if bs58::decode(tx_sig.as_bytes()).into_vec().is_err() {
+                    not_base58_tx_sig_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_tx_sig_not_base58".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has tx_sig = Some({tx_sig:?}) that fails bs58::decode (it contains a character outside the Bitcoin base58 alphabet); annotate_receipt in covenant-settlement writes receipt.tx_sig = confirmation.tx_sig.clone() (covenant-settlement/src/lib.rs:374) and the sole production ChainConfirmation construction site in covenantd hardcodes tx_sig: None, so every Some-value today is structural drift, and when on-chain integration lands the canonical base58-encoded ed25519 transaction signature round-trips through bs58::decode by construction — a value that does not is out-of-band evidence the field was rewritten in an encoding bs58 does not accept",
+                            receipt.id
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt, which writes receipt.tx_sig = confirmation.tx_sig.clone() at covenant-settlement/src/lib.rs:374 fed by a ChainConfirmation whose tx_sig field is the hardcoded literal None in the covenantd flush path — so any Some-value is out-of-band evidence of a JSONL edit, a serde regression, or a future on-chain integration regression; when on-chain integration lands the canonical base58-encoded ed25519 signature (64-byte raw) round-trips through bs58::decode by construction — base64 of a 64-byte signature is 88 chars, which sits inside the 87..=88 length bound the receipt_tx_sig_wrong_length arm checks and therefore bypasses it, yet uses '+', '/', and '=' which are not base58 — so a tx_sig that fails bs58::decode is evidence the field was re-encoded under a different alphabet, detaching the receipt from the on-chain transaction it claims while leaving the value non-empty (bypassing the receipt_tx_sig_empty arm, since bs58::decode of the empty string is Ok) and the character count inside 87..=88 (bypassing the receipt_tx_sig_wrong_length arm); this fires independently of both the receipt_tx_sig_empty and receipt_tx_sig_wrong_length arms".into(),
+                    });
+                }
             }
             if let Some(onchain_sig) = receipt.onchain_sig.as_deref() {
                 if onchain_sig.is_empty() {
@@ -6760,6 +6774,18 @@ impl Server {
                         repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt whose onchain_sig assignment is the backwards-compat alias receipt.onchain_sig = confirmation.tx_sig.clone() at covenant-settlement/src/lib.rs:377, fed by a ChainConfirmation whose tx_sig field is the hardcoded literal None at flush_receipts in covenantd lib.rs:5060 today — so any Some-value is out-of-band evidence of a JSONL edit that synthesized a placeholder backwards-compat signature alias, a serde regression that defaulted Option<String> to Some(stub) at hydration, or a future on-chain integration regression that bypassed the covenantd flush path with a non-canonical signature shape; when on-chain integration lands, the canonical base58-encoded ed25519 signature (64-byte raw) is invariably 87 or 88 chars (the 88-char path is the typical case; 87 only when leading zero bytes shorten the bs58 alphabet output), so a length outside that range is evidence of a truncated or padded JSONL edit, an import tool encoding the signature under a different alphabet, or a future regression in the on-chain signing path bypassing the bs58 invariant, while leaving tx_sig equally drifted (bypassing the receipt_tx_sig_onchain_sig_diverged guard that only fires when both Some values disagree) and the receipt_onchain_sig_empty guard that only fires when the string is exactly zero-length".into(),
                     });
                 }
+                if bs58::decode(onchain_sig.as_bytes()).into_vec().is_err() {
+                    not_base58_onchain_sig_receipt_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "receipt_onchain_sig_not_base58".into(),
+                        id: Some(receipt.id.to_string()),
+                        message: format!(
+                            "receipt {} has onchain_sig = Some({onchain_sig:?}) that fails bs58::decode (it contains a character outside the Bitcoin base58 alphabet); annotate_receipt in covenant-settlement aliases receipt.onchain_sig = confirmation.tx_sig.clone() (covenant-settlement/src/lib.rs:377) and the sole production ChainConfirmation construction site in covenantd hardcodes tx_sig: None, so every Some-value today is structural drift, and when on-chain integration lands the canonical base58-encoded ed25519 transaction signature round-trips through bs58::decode by construction — a value that does not is out-of-band evidence the field was rewritten in an encoding bs58 does not accept",
+                            receipt.id
+                        ),
+                        repair: "review the receipt JSONL row and the writer that produced it; production receipt confirmation always routes through annotate_receipt whose onchain_sig assignment is the backwards-compat alias receipt.onchain_sig = confirmation.tx_sig.clone() at covenant-settlement/src/lib.rs:377, fed by a ChainConfirmation whose tx_sig field is the hardcoded literal None in the covenantd flush path — so any Some-value is out-of-band evidence of a JSONL edit, a serde regression, or a future on-chain integration regression; when on-chain integration lands the canonical base58-encoded ed25519 signature (64-byte raw) round-trips through bs58::decode by construction — base64 of a 64-byte signature is 88 chars, which sits inside the 87..=88 length bound the receipt_onchain_sig_wrong_length arm checks and therefore bypasses it, yet uses '+', '/', and '=' which are not base58 — so an onchain_sig that fails bs58::decode is evidence the field was re-encoded under a different alphabet, detaching the receipt from the on-chain transaction it claims while leaving the value non-empty (bypassing the receipt_onchain_sig_empty arm, since bs58::decode of the empty string is Ok) and the character count inside 87..=88 (bypassing the receipt_onchain_sig_wrong_length arm); this fires independently of both the receipt_onchain_sig_empty and receipt_onchain_sig_wrong_length arms".into(),
+                    });
+                }
             }
         }
         orphans_total += confirmed_without_chain_refs
@@ -6784,8 +6810,10 @@ impl Server {
             + not_lowercase_hex_merkle_root_receipt_refs
             + empty_tx_sig_receipt_refs
             + wrong_length_tx_sig_receipt_refs
+            + not_base58_tx_sig_receipt_refs
             + empty_onchain_sig_receipt_refs
-            + wrong_length_onchain_sig_receipt_refs;
+            + wrong_length_onchain_sig_receipt_refs
+            + not_base58_onchain_sig_receipt_refs;
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
@@ -6810,10 +6838,12 @@ impl Server {
                 && not_lowercase_hex_merkle_root_receipt_refs == 0
                 && empty_tx_sig_receipt_refs == 0
                 && wrong_length_tx_sig_receipt_refs == 0
+                && not_base58_tx_sig_receipt_refs == 0
                 && empty_onchain_sig_receipt_refs == 0
-                && wrong_length_onchain_sig_receipt_refs == 0,
+                && wrong_length_onchain_sig_receipt_refs == 0
+                && not_base58_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s)"
             ),
         });
 
@@ -15549,6 +15579,193 @@ required = {caps:?}
                         .message
                         .contains("1 wrong-length-onchain-sig receipt"),
                     "check message should count wrong-length-onchain-sig receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_tx_sig_not_base58_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        // 88 chars (inside the 87..=88 wrong-length bound) but the leading '0'
+        // is not in the Bitcoin base58 alphabet, so only the charset arm fires.
+        let sig = format!("0{}", "1".repeat(87));
+        assert_eq!(
+            sig.chars().count(),
+            88,
+            "fixture tx_sig must sit inside the 87..=88 wrong-length bound"
+        );
+        assert!(
+            bs58::decode(sig.as_bytes()).into_vec().is_err(),
+            "fixture tx_sig must fail bs58::decode (leading '0' is not base58)"
+        );
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("b".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
+                tx_sig: Some(sig),
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_tx_sig_not_base58"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_tx_sig_not_base58: {drift:?}"));
+                assert!(
+                    row.message.contains("tx_sig = Some(")
+                        && row.message.contains("fails bs58::decode"),
+                    "drift message should name the tx_sig field and the bs58::decode invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("annotate_receipt")
+                        && row.repair.contains("87..=88")
+                        && row.repair.contains("receipt_tx_sig_empty"),
+                    "repair hint should name annotate_receipt, the 87..=88 bypass, and the empty-arm bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "receipt_tx_sig_empty"
+                            && item.kind != "receipt_tx_sig_wrong_length"
+                    }),
+                    "charset arm must not double-count as the empty or wrong-length arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 not-base58-tx-sig receipt"),
+                    "check message should count not-base58-tx-sig receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_onchain_sig_not_base58_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let receipt_id = Uuid::new_v4();
+        // 88 chars (inside the 87..=88 wrong-length bound) but the leading '0'
+        // is not in the Bitcoin base58 alphabet, so only the charset arm fires.
+        let sig = format!("0{}", "1".repeat(87));
+        assert_eq!(
+            sig.chars().count(),
+            88,
+            "fixture onchain_sig must sit inside the 87..=88 wrong-length bound"
+        );
+        assert!(
+            bs58::decode(sig.as_bytes()).into_vec().is_err(),
+            "fixture onchain_sig must fail bs58::decode (leading '0' is not base58)"
+        );
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: me.clone(),
+                resource: ResourceKind::Compute,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: Some("solana".into()),
+                cluster: Some("devnet".into()),
+                batch_id: Some("b".repeat(64)),
+                merkle_root: Some("a".repeat(64)),
+                tx_sig: None,
+                slot: None,
+                confirmed_at: Some(2_000),
+                onchain_sig: Some(sig),
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_onchain_sig_not_base58"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected receipt_onchain_sig_not_base58: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("onchain_sig = Some(")
+                        && row.message.contains("fails bs58::decode"),
+                    "drift message should name the onchain_sig field and the bs58::decode invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("annotate_receipt")
+                        && row.repair.contains("87..=88")
+                        && row.repair.contains("receipt_onchain_sig_empty"),
+                    "repair hint should name annotate_receipt, the 87..=88 bypass, and the empty-arm bypass: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "receipt_onchain_sig_empty"
+                            && item.kind != "receipt_onchain_sig_wrong_length"
+                    }),
+                    "charset arm must not double-count as the empty or wrong-length arm: {drift:?}"
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_tx_sig_onchain_sig_diverged"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    }),
+                    "tx_sig=None must not co-fire receipt_tx_sig_onchain_sig_diverged: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 not-base58-onchain-sig receipt"),
+                    "check message should count not-base58-onchain-sig receipts: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

@@ -221,42 +221,21 @@ args = []
     }
 
     #[test]
-    fn mcp_section_serde_pins_default_server_array() {
-        // McpSection is the [mcp] block in secrets.toml, sitting
-        // between McpConfigFile.mcp (Option<McpSection>) and the
-        // [[mcp.server]] arrays. The struct carries a single field —
-        // server: Vec<McpServer> — with field-level #[serde(default)]
-        // and a derived Default impl, so a [mcp] block that opens the
-        // section but writes no [[mcp.server]] entries decodes to an
-        // empty server Vec rather than failing parse.
-        //
-        // A refactor that renamed McpSection::server (or applied
-        // #[serde(rename)]) silently lets every operator's
-        // secrets.toml decode into a section with an empty server Vec
-        // — McpConfigFile::servers() returns an empty slice with no
-        // parse signal, and configured MCP tool servers disappear on
-        // next daemon restart. A refactor that dropped the field-level
-        // #[serde(default)] silently turns every [mcp] header with no
-        // [[mcp.server]] entries into a parse error.
+    fn mcp_section_default_server() {
         let empty_section = r#"
 [mcp]
 "#;
         let cfg: McpConfigFile = toml::from_str(empty_section).unwrap();
-        let section = cfg.mcp.as_ref().expect(
-            "[mcp] header must surface McpSection even when no [[mcp.server]] entries follow",
-        );
+        let section = cfg
+            .mcp
+            .as_ref()
+            .expect("[mcp] header surfaces McpSection even with no [[mcp.server]] entries");
         assert!(
             section.server.is_empty(),
-            "McpSection::server default must be the empty Vec — a \
-             refactor that dropped the field-level #[serde(default)] \
-             would silently turn every [mcp] header with no \
-             [[mcp.server]] entries into a parse error",
+            "an empty [mcp] section parses to an empty server Vec, not an error",
         );
 
-        // [[mcp.server]] arrays without an explicit [mcp] header — TOML
-        // treats this as the implicit-section pattern and still
-        // populates mcp.server. Pin so a refactor that required an
-        // explicit [mcp] header would surface here.
+        // Implicit-section: [[mcp.server]] arrays without an explicit [mcp] header still populate.
         let two_servers = r#"
 [[mcp.server]]
 name = "fs"
@@ -272,70 +251,32 @@ command = "node"
         assert_eq!(section.server[0].name, "fs");
         assert_eq!(section.server[1].name, "git");
 
-        // McpSection::default() must produce an empty server Vec — pin
-        // this so a refactor that diverged the derived Default impl
-        // from the empty-section parse path would fail loud.
         let default_section = McpSection::default();
         assert!(
             default_section.server.is_empty(),
-            "McpSection::default() must have server == empty Vec",
+            "McpSection::default() has an empty server Vec",
         );
 
-        // Direct toml::from_str<McpSection> of an empty body — pins
-        // the field-level #[serde(default)] independently of the
-        // outer wrapper.
         let bare: McpSection = toml::from_str("").unwrap();
         assert!(
             bare.server.is_empty(),
-            "McpSection deserialized from an empty TOML body must \
-             produce an empty server Vec via field-level \
-             #[serde(default)]; a refactor that dropped the default \
-             would turn this into a parse error and break every test \
-             that constructs McpSection from a {{}} body",
+            "an empty TOML body parses to an empty server Vec",
         );
     }
 
     #[test]
-    fn mcp_config_file_serde_pins_optional_mcp_section_default() {
-        // McpConfigFile is the top-level secrets.toml decoder for the
-        // [mcp] section. The struct carries a single field — mcp:
-        // Option<McpSection> — with field-level #[serde(default)] and a
-        // derived Default impl. McpConfigFile::from_path returns
-        // Self::default() when the file is missing, and
-        // McpConfigFile::servers() treats mcp.is_none() as the empty-
-        // slice fall-through.
-        //
-        // Mirror of the wrapper-pin contract pinned for ProviderConfig
-        // (covenant-llm), EmbedderConfig (covenant-llm), and
-        // SearchConfig (covenant-tools). No test pins the wrapper's
-        // field name, the None default on an empty TOML payload, or
-        // the parse contract when [mcp] is omitted but other root
-        // sections exist. A refactor that renamed McpConfigFile::mcp
-        // silently makes every operator's secrets.toml decode into
-        // McpConfigFile::default(), servers() returns an empty slice
-        // with no parse signal, and configured MCP tool servers
-        // silently disappear on next daemon restart — agents lose
-        // every registered external tool.
+    fn mcp_config_file_optional_section() {
         let empty: McpConfigFile = toml::from_str("").unwrap();
         assert!(
             empty.mcp.is_none(),
-            "McpConfigFile must decode an empty TOML payload as \
-             McpConfigFile::default() with mcp == None — \
-             McpConfigFile::from_path relies on this path for missing \
-             secrets.toml, and McpConfigFile::servers() relies on \
-             mcp.is_none() to return the empty slice",
+            "an empty TOML payload decodes with mcp == None",
         );
         assert!(
             empty.servers().is_empty(),
-            "McpConfigFile::servers() on the empty-TOML decode must \
-             return the empty slice",
+            "servers() on the empty decode returns the empty slice",
         );
 
-        // No [mcp] section but other unknown root keys present —
-        // operators co-locate [llm]/[embed]/[search] blocks in the same
-        // secrets.toml. The wrapper does not carry
-        // #[serde(deny_unknown_fields)] and unrelated sections must
-        // parse without rejecting the file.
+        // Unknown root sections (operators co-locate [llm]/[embed]/[search]) must not reject the file.
         let other_root = r#"
 [llm]
 provider = "anthropic"
@@ -347,19 +288,10 @@ provider = "ollama"
         let cfg: McpConfigFile = toml::from_str(other_root).unwrap();
         assert!(
             cfg.mcp.is_none(),
-            "McpConfigFile must tolerate unknown root sections without \
-             refusing to parse — operators co-locate [llm]/[embed]/\
-             [search] blocks in the same secrets.toml and a refactor \
-             that added #[serde(deny_unknown_fields)] would break \
-             every co-resident secrets.toml at daemon start",
+            "unknown root sections parse without mcp being set",
         );
         assert!(cfg.servers().is_empty());
 
-        // [[mcp.server]] populated — wrapper round-trips into the
-        // McpSection. Pin Some(McpSection) presence and a populated
-        // server list so a refactor that broke the wrapper's
-        // deserialization path would fail this assertion rather than
-        // landing on a misleading inner-field error.
         let full = r#"
 [[mcp.server]]
 name = "filesystem"
@@ -372,48 +304,22 @@ command = "node"
         let cfg: McpConfigFile = toml::from_str(full).unwrap();
         assert!(
             cfg.mcp.is_some(),
-            "McpConfigFile::mcp must surface as Some(McpSection) when \
-             [[mcp.server]] entries exist",
+            "mcp is Some when [[mcp.server]] entries exist",
         );
         assert_eq!(cfg.servers().len(), 2);
         assert_eq!(cfg.servers()[0].name, "filesystem");
         assert_eq!(cfg.servers()[1].name, "git");
 
-        // McpConfigFile::default() must match the empty-TOML decode —
-        // pin this so a refactor that diverged the derived Default
-        // impl from the empty-TOML path would fail loud.
         let default_cfg = McpConfigFile::default();
         assert!(
             default_cfg.mcp.is_none(),
-            "McpConfigFile::default() must have mcp == None to match \
-             the empty-TOML decode path that McpConfigFile::from_path \
-             relies on for missing secrets.toml",
+            "McpConfigFile::default() has mcp == None",
         );
         assert!(default_cfg.servers().is_empty());
     }
 
     #[test]
-    fn mcp_server_serde_pins_two_required_and_six_default_bearing_fields() {
-        // McpServer is the [[mcp.server]] block operators write to
-        // secrets.toml to register an external MCP tool server. Two
-        // strictly required fields (name, command) with no serde
-        // attributes, and six default-bearing fields:
-        //   * args: Vec<String>             #[serde(default)] -> []
-        //   * enabled: bool                 #[serde(default = "default_enabled")] -> true
-        //   * tool_prefix: Option<String>   #[serde(default)] -> None
-        //   * include: Vec<String>          #[serde(default)] -> []
-        //   * exclude: Vec<String>          #[serde(default)] -> []
-        //   * env: BTreeMap<String, String> #[serde(default)] -> empty
-        //
-        // default_enabled returning true is the most load-bearing default
-        // in the file. A refactor that flipped it to false would silently
-        // disable every operator's MCP server block that does not write
-        // an explicit `enabled = true` line; the daemon's tool registry
-        // would collapse to the native EchoTool/ClockTool floor on next
-        // restart with no parse-time signal and agents would lose every
-        // registered external tool. The existing parses_server_hygiene_
-        // fields test exercises a happy path with enabled = false but
-        // does NOT pin the default = true contract for an omitted field.
+    fn mcp_server_field_defaults() {
         let full = r#"
 [[mcp.server]]
 name = "filesystem"
@@ -444,8 +350,7 @@ env = { FOO = "bar", BAZ = "qux" }
         assert_eq!(srv.env.get("FOO").map(String::as_str), Some("bar"));
         assert_eq!(srv.env.get("BAZ").map(String::as_str), Some("qux"));
 
-        // Minimal block — only the two required fields. Every default-
-        // bearing field must fall through to its documented default.
+        // Minimal block: only the two required fields; everything else falls through to defaults.
         let minimal = r#"
 [[mcp.server]]
 name = "tiny"
@@ -455,43 +360,14 @@ command = "node"
         let srv = &cfg.servers()[0];
         assert_eq!(srv.name, "tiny");
         assert_eq!(srv.command, "node");
-        assert!(
-            srv.args.is_empty(),
-            "McpServer::args default must be the empty Vec",
-        );
-        assert!(
-            srv.enabled,
-            "McpServer::enabled default MUST be true — the default_enabled \
-             function returning true is the load-bearing default for every \
-             [[mcp.server]] block that omits an explicit enabled key; a \
-             refactor that flipped default_enabled to false silently \
-             disables every operator's MCP server on next daemon restart \
-             with no parse-time signal and the daemon's tool registry \
-             collapses to the native EchoTool/ClockTool floor",
-        );
-        assert!(
-            srv.tool_prefix.is_none(),
-            "McpServer::tool_prefix default must be None",
-        );
-        assert!(
-            srv.include.is_empty(),
-            "McpServer::include default must be the empty Vec",
-        );
-        assert!(
-            srv.exclude.is_empty(),
-            "McpServer::exclude default must be the empty Vec",
-        );
-        assert!(
-            srv.env.is_empty(),
-            "McpServer::env default must be the empty BTreeMap",
-        );
+        assert!(srv.args.is_empty(), "args defaults to the empty Vec");
+        assert!(srv.enabled, "enabled defaults to true");
+        assert!(srv.tool_prefix.is_none(), "tool_prefix defaults to None");
+        assert!(srv.include.is_empty(), "include defaults to the empty Vec");
+        assert!(srv.exclude.is_empty(), "exclude defaults to the empty Vec");
+        assert!(srv.env.is_empty(), "env defaults to the empty BTreeMap");
 
-        // Each strictly-required field must reject omission so a future
-        // #[serde(default)] regression on name or command does not let
-        // operator deployments boot with empty-string identifiers — the
-        // daemon's MCP audit rows correlate on (server name, tool
-        // invocation) and an empty name silently collapses every server
-        // into one audit bucket.
+        // name and command have no serde default, so a block missing either must fail to parse.
         for (label, toml_src) in [
             (
                 "name",
@@ -510,18 +386,11 @@ name = "tiny"
         ] {
             assert!(
                 toml::from_str::<McpConfigFile>(toml_src).is_err(),
-                "McpServer must reject a block missing {label:?}; a \
-                 refactor that gave the field a #[serde(default)] would \
-                 silently let the block parse with an empty-string \
-                 default and operator MCP audit correlation would break",
+                "a block missing {label:?} must fail to parse",
             );
         }
 
-        // env BTreeMap deterministic ordering — operators writing env
-        // keys in arbitrary order must see them surface in BTreeMap-
-        // sorted order on iteration. A refactor that swapped BTreeMap
-        // for HashMap silently breaks fixture-based audit/JSON output
-        // tests that depend on stable key ordering.
+        // env iterates in sorted key order (BTreeMap, not HashMap).
         let ordered = r#"
 [[mcp.server]]
 name = "ordered"
@@ -533,10 +402,7 @@ env = { ZULU = "z", ALPHA = "a", MIKE = "m" }
         assert_eq!(
             keys,
             vec!["ALPHA", "MIKE", "ZULU"],
-            "McpServer::env must iterate in BTreeMap-sorted key order \
-             — a refactor swapping BTreeMap for HashMap silently breaks \
-             fixture-based audit and JSON output tests that depend on \
-             stable key ordering",
+            "env iterates in sorted key order",
         );
     }
 
@@ -567,15 +433,11 @@ env = { HERMES_API_BASE_URL = "http://127.0.0.1:8642/v1" }
 
     #[test]
     fn solana_bridge_default_is_disabled_with_well_known_url_and_prefix() {
-        // The hosted Solana bridge MUST be off by default — an enabled
-        // default would silently open an outbound MCP subprocess on every
-        // daemon that merely upgraded the crate. A refactor that flipped
-        // `enabled` to true, or pointed `url` at a non-default host, would
-        // surface here.
+        // Off by default: an enabled default would open an outbound MCP subprocess on crate upgrade.
         let b = SolanaBridge::default();
         assert!(
             !b.enabled,
-            "SolanaBridge::default().enabled MUST be false — nothing connects unless the operator opts in",
+            "SolanaBridge::default() is disabled — nothing connects unless the operator opts in",
         );
         assert_eq!(b.url, SOLANA_MCP_URL);
         assert_eq!(b.tool_prefix, "solana");
@@ -675,10 +537,6 @@ enabled = true
             Some("1"),
             "NO_DNA=1 mirrors the hosted server's non-human-CLI signal",
         );
-
-        // Idempotency is NOT claimed: materialize runs once inside
-        // from_path. Calling it twice would append twice — pin that the
-        // daemon path (single from_path call) yields exactly one bridge.
     }
 
     #[test]
@@ -712,8 +570,7 @@ url = "https://mcp.solana.com/mcp"
     }
 
     #[test]
-    fn config_error_io_and_toml_display_messages_pin_prefix_and_external_source_display_delegation()
-    {
+    fn config_error_display_and_source() {
         let io_err = ConfigError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "mcp.toml missing",
@@ -721,15 +578,15 @@ url = "https://mcp.solana.com/mcp"
         let io_message = format!("{io_err}");
         assert!(
             io_message.starts_with("io: "),
-            "ConfigError::Io must surface the literal 'io: ' bootstrap-stage prefix so audit-log filters can distinguish mcp.toml disk faults from TOML syntax faults during MCP config load (dropped-prefix regression class): {io_message}"
+            "ConfigError::Io carries the 'io: ' prefix: {io_message}"
         );
         assert!(
             io_message.contains("mcp.toml missing"),
-            "ConfigError::Io must surface the inner std::io::Error Display rendering after the colon ({{0}}, not {{0:?}}); a Debug refactor would render 'Custom {{ kind: NotFound, error: ... }}' instead of the message payload (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+            "ConfigError::Io surfaces the inner io::Error Display, not Debug: {io_message}"
         );
         assert!(
             !io_message.contains("Custom {") && !io_message.contains("Os {"),
-            "ConfigError::Io must NOT surface the std::io::Error Debug rendering; a Debug refactor on {{0}} would expose internal struct fields like 'Custom {{ kind: ..., error: ... }}' or 'Os {{ code: ..., kind: ..., message: ... }}' (Debug-vs-Display formatting regression class on the {{0}} interpolation): {io_message}"
+            "ConfigError::Io must not surface the io::Error Debug rendering: {io_message}"
         );
 
         let toml_source =
@@ -738,73 +595,73 @@ url = "https://mcp.solana.com/mcp"
         let toml_message = format!("{toml_err}");
         assert!(
             toml_message.starts_with("toml: "),
-            "ConfigError::Toml must surface the literal 'toml: ' bootstrap-stage prefix so audit-log filters can distinguish mcp.toml syntax faults from disk faults during MCP config load (dropped-prefix regression class): {toml_message}"
+            "ConfigError::Toml carries the 'toml: ' prefix: {toml_message}"
         );
         assert!(
             !toml_message.starts_with("toml parse:"),
-            "ConfigError::Toml must surface the 'toml: ' prefix (not 'toml parse: '); covenant_manifest::ManifestError::Parse intentionally uses 'toml parse: ' as a cross-crate discriminator between manifest-parse failures and MCP-config-parse failures. A 'harmonize TOML error prefixes' pass that aligned the two would silently break audit-log filters that grep exactly 'toml: ' for MCP config faults and exactly 'toml parse: ' for manifest faults (cross-crate-prefix-alignment regression class): {toml_message}"
+            "ConfigError::Toml uses 'toml: ', not the manifest crate's 'toml parse: ': {toml_message}"
         );
         assert!(
             toml_message.contains("TOML parse error"),
-            "ConfigError::Toml must surface the inner toml::de::Error Display rendering after the colon ({{0}}, not {{0:?}}); toml v0.8 Display renders parse failures starting with 'TOML parse error at line N, column M', a Debug refactor on {{0}} would render 'TomlError {{ message: ..., raw: ..., keys: ..., span: ... }}' instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {toml_message}"
+            "ConfigError::Toml surfaces the inner toml::de::Error Display, not Debug: {toml_message}"
         );
         assert!(
             !toml_message.contains("TomlError {"),
-            "ConfigError::Toml must NOT surface the toml::de::Error Debug rendering; a Debug refactor on {{0}} would expose 'TomlError {{ message: ..., raw: ..., keys: ..., span: ... }}' internal struct fields (Debug-vs-Display formatting regression class on the {{0}} interpolation): {toml_message}"
+            "ConfigError::Toml must not surface the toml::de::Error Debug rendering: {toml_message}"
         );
 
         assert_ne!(
             io_message, toml_message,
-            "ConfigError::Io and ConfigError::Toml Display must not converge; merging the two prefixes would lose the disk-fault vs TOML-syntax-fault discriminator (prefix-convergence regression class): io={io_message} toml={toml_message}"
+            "Io and Toml Display must not converge: io={io_message} toml={toml_message}"
         );
         assert!(
             !io_message.starts_with("toml:") && !toml_message.starts_with("io:"),
-            "ConfigError::Io must not start with 'toml:' and ConfigError::Toml must not start with 'io:'; a sibling-prefix swap would silently mis-route incident triage (sibling-prefix-swap regression class): io={io_message} toml={toml_message}"
+            "the two prefixes must not be swapped: io={io_message} toml={toml_message}"
         );
     }
 
     #[test]
-    fn config_error_io_source_delegation_pin_returns_inner_std_io_error_via_std_error_source() {
+    fn config_error_io_source() {
         use std::error::Error;
 
         let inner = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "mcp.toml denied");
         let expected_display = format!("{inner}");
         let err = ConfigError::Io(inner);
-        let source = err.source().expect(
-            "covenant_mcp::config::ConfigError::Io must surface the inner std::io::Error via std::error::Error::source so daemon-side MCP config-load classifiers can walk the error chain and downcast source() to std::io::Error to extract io::ErrorKind for distinct decisions on mcp.toml disk faults (NotFound proceeds with default config because mcp.toml is optional, PermissionDenied escalates as operator-attention on a config file present but unreadable, other ErrorKinds surface with the underlying OS context); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
-        );
+        let source = err
+            .source()
+            .expect("ConfigError::Io exposes the inner io::Error via source()");
         assert_eq!(
             format!("{source}"),
             expected_display,
-            "covenant_mcp::config::ConfigError::Io source() Display must match a direct format!() of the same std::io::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+            "source() Display matches the inner io::Error verbatim"
         );
         let kind = source.downcast_ref::<std::io::Error>().map(|e| e.kind());
         assert_eq!(
             kind,
             Some(std::io::ErrorKind::PermissionDenied),
-            "covenant_mcp::config::ConfigError::Io source() must downcast_ref to std::io::Error so daemon-side MCP config-load classifiers can extract io::ErrorKind for distinct decisions on mcp.toml disk faults; a refactor that wrapped the inner in a project-local newtype (e.g., McpConfigIoError(std::io::Error) under a 'tag MCP config IO failures distinctly from sibling Io variants in other crates' rationale) would silently break downcast_ref::<std::io::Error>() at every downstream callsite that classifies mcp.toml-load IO faults (concrete-source-type downcast regression class)"
+            "source() downcasts to io::Error so callers can read ErrorKind"
         );
     }
 
     #[test]
-    fn config_error_toml_source_delegation_pin_returns_inner_toml_de_error_via_std_error_source() {
+    fn config_error_toml_source() {
         use std::error::Error;
 
         let inner =
             toml::from_str::<toml::Value>("not valid toml = =").expect_err("toml parse must fail");
         let expected_display = format!("{inner}");
         let err = ConfigError::Toml(inner);
-        let source = err.source().expect(
-            "covenant_mcp::config::ConfigError::Toml must surface the inner toml::de::Error via std::error::Error::source so daemon-side mcp.toml diagnostics can walk the error chain and downcast source() to toml::de::Error to inspect span information for line/column-anchored operator hints (span points the operator at the offending mcp.toml region, message describes the parse expectation); a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
-        );
+        let source = err
+            .source()
+            .expect("ConfigError::Toml exposes the inner toml::de::Error via source()");
         assert_eq!(
             format!("{source}"),
             expected_display,
-            "covenant_mcp::config::ConfigError::Toml source() Display must match a direct format!() of the same toml::de::Error verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> or any other wrapper would silently break daemon-side downcasts even though the wrapper's Display would continue to flow through {{0}} (concrete-source-type regression class)"
+            "source() Display matches the inner toml::de::Error verbatim"
         );
         assert!(
             source.downcast_ref::<toml::de::Error>().is_some(),
-            "covenant_mcp::config::ConfigError::Toml source() must downcast_ref to toml::de::Error so daemon-side mcp.toml diagnostics can call toml::de::Error::span/message for line/column-anchored operator hints; a refactor that wrapped the inner in a project-local newtype (e.g., McpConfigParseError(toml::de::Error) under a 'consolidate all TOML errors into a single Config variant' rationale) would silently break downcast_ref::<toml::de::Error>() at every downstream callsite that classifies mcp.toml syntax faults (concrete-source-type downcast regression class)"
+            "source() downcasts to toml::de::Error so callers can read span/message"
         );
     }
 }

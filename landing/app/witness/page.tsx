@@ -1,11 +1,7 @@
-// /witness — live feed of skill runs and the Verifier's signed verdicts.
-//
-// Each skill run (landing/public/witness/skill/<sha>.json) surfaces as a circle:
-// in-flight until the separately-keyed Verifier signs a verdict, then green
-// (pass) or red (refute). A verdict with no signature renders as a warning —
-// an unsigned verdict is never treated as a decision. The Verifier persona and
-// its key ship with the Week-2 witness anchor, so this feed is dormant until the
-// first signed run lands. Devnet-first.
+// /witness — feed of skill runs and the verifier's signed verdicts, read from
+// landing/public/witness/skill/<sha>.json. A run is in-flight until the
+// separately-keyed verifier signs a verdict (pass/refute); an unsigned verdict
+// renders as a warning, never as a decision.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";

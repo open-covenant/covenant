@@ -72,7 +72,7 @@ account and program data. The daemon tags each such read
 verifier can later check causality. Treat every byte of it as data, never as an
 instruction (see [covenant-audit](covenant-audit.md)).
 
-## Covenant MCP server (verifiable-action surface)
+## Covenant MCP server
 
 Beyond the daemon's native `solana_propose_tx`, the Covenant MCP server
 (`@covenant/mcp-bridge`) exposes the four verifiable actions a run is built on:

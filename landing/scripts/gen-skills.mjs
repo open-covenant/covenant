@@ -1,9 +1,7 @@
-// Writes the committed catalog snapshot the /skills page renders
-// (landing/public/skills.json). It mirrors the daemon's
-// `covenant skill list --json` shape by walking the in-repo Agent Skills
-// under covenant-skill/ and computing the same content digest that
-// covenant-skills' parser.rs pins at install — so the digest on the page is
-// the real one a daemon would verify, not a placeholder.
+// Writes landing/public/skills.json — the catalog snapshot the /skills page
+// renders. Walks the in-repo Agent Skills under covenant-skill/ in the daemon's
+// `covenant skill list --json` shape, computing the same content digest that
+// covenant-skills' parser.rs pins at install.
 //
 // Re-run after editing a skill:  node scripts/gen-skills.mjs
 

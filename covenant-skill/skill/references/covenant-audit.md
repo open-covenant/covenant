@@ -17,7 +17,7 @@ Skill-relevant `AuditKind` variants:
 | `SkillInstalled` | A skill is added; pins `{digest, source{url,tag,commit}}` so a later URL or content swap is detected at load. |
 | `SkillContextInjected` | The daemon injects the skill body (or a progressive-disclosure reference) into the agent's system context. Records the reference list — the row is proof of *which instructions the agent ran under*. |
 | `SkillInvoked` | The agent began acting under the skill's guidance. |
-| `SkillTxProposed` | A `solana_propose_tx` call cleared simulation and the capability check; carries `accounts_hash` and the simulation summary. |
+| `SkillTxProposed` | A `solana_propose_tx` call cleared simulation and the capability check; carries `accounts_hash`, `data_hash`, and the simulation summary. |
 | `SkillTxSigned` | The daemon signed the proposed transaction inside the approval envelope. Carries the signature. |
 | `SkillRefused` | The agent or daemon refused an action — missing capability, scope violation, or an untrusted-input causality break. |
 | `UntrustedInputObserved` | A Solana RPC read returned data the agent then exposed to the model. Records `{source, digest}` so a later refutation can prove or disprove that signed actions causally followed this input. |

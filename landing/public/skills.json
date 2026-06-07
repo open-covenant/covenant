@@ -3,18 +3,21 @@
   "skills": [
     {
       "name": "covenant",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "Use when an AI agent needs to take actions on Solana with cryptographic provenance — signed capability gating, hash-chained audit, separately-keyed verifier refutation, and on-chain anchored witness. Devnet-first. Apply when the workflow requires that \"what the agent ran under\" and \"what the agent signed\" be publicly verifiable rather than trusted on faith.",
-      "digest": "sha256:5a4c763faa18f2d62758f9762907783218ce5bf183625e3ce1f80d2751b33677",
+      "digest": "sha256:ca5fc6fd135c762862c35adaaf1cbb3a13a586763532973ce794e3e0965acc4f",
       "source": {
         "url": "",
         "tag": "",
         "commit": ""
       },
       "references": [
-        "references/audit-witness.md",
-        "references/identity-capabilities.md",
-        "references/settlement-receipts.md"
+        "references/covenant-audit.md",
+        "references/covenant-capabilities.md",
+        "references/covenant-identity.md",
+        "references/covenant-mcp-tools.md",
+        "references/covenant-settlement.md",
+        "references/covenant-witness.md"
       ],
       "declared_capabilities": [],
       "declared_programs": [],

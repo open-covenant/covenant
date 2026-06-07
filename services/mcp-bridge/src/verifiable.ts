@@ -2,10 +2,9 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { isSolanaAddress } from '@covenant/sdk';
 
-// Mirror of the daemon's native `solana_propose_tx` tool: structure and
-// validate an unsigned Solana transaction proposal in the `@covenant/sdk`
-// bundle shape. It never signs, never sends, and holds no keypair — simulation,
-// capability-gating, and signing are the daemon broker's job downstream.
+// Pure builder for an unsigned `@covenant/sdk` proposal bundle. Holds no keypair
+// and never signs or sends — simulation, capability-gating, and signing happen
+// in the daemon broker downstream.
 
 const addressSchema = z.string().refine(isSolanaAddress, 'expected a Solana address');
 
@@ -33,14 +32,9 @@ export const proposeTxSchema = z
 
 type ClusterNetwork = { cluster: string; rpcUrl: string };
 
-// Resolve the cluster the way Covenant does elsewhere: an explicit per-call
-// `cluster` wins, otherwise the `COVENANT_SOLANA_CLUSTER` env (the pin the
-// auto-install config sets), otherwise devnet. This intentionally covers only
-// the cluster key — not the SDK's per-cluster RPC-URL env overrides — since a
-// proposal needs just a label and a default RPC. An unrecognised value falls
-// back to devnet; `mainnet`/`mainnet-beta` resolve to the `mainnet-beta` label.
-// The tool only structures the proposal; the daemon still refuses to sign
-// outside devnet.
+// Explicit `cluster` wins, then the COVENANT_SOLANA_CLUSTER pin, else devnet.
+// Per-cluster RPC-URL env overrides are deliberately ignored — a proposal needs
+// only a label and a default RPC.
 function clusterNetwork(cluster: string | undefined, env: NodeJS.ProcessEnv): ClusterNetwork {
   switch (cluster ?? env.COVENANT_SOLANA_CLUSTER) {
     case 'localnet':
@@ -65,8 +59,7 @@ export type SolanaProposal = {
   }>;
 };
 
-/** Build an unsigned proposal bundle from tool arguments. Throws `ZodError` on
- * malformed input; the caller surfaces that as a tool error. */
+/** Throws `ZodError` on malformed input; the caller surfaces it as a tool error. */
 export function buildSolanaProposal(args: unknown, env: NodeJS.ProcessEnv = process.env): SolanaProposal {
   const parsed = proposeTxSchema.parse(args);
   const network = clusterNetwork(parsed.cluster, env);

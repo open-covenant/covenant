@@ -61,8 +61,6 @@ impl ChatMessage {
     }
 }
 
-// ---------- Agent context + skill injection ----------
-
 /// A skill's identity as it enters an agent's system context: the pinned
 /// `name` + install-time `digest`, plus the `SKILL.md` body. References are
 /// *not* carried here — they load on demand via

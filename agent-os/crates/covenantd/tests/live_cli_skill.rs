@@ -97,7 +97,6 @@ async fn live_cli_skill_add_list_show_verify_round_trip() {
 
     let cli = covenant_cli_bin();
 
-    // add
     let added: Value = serde_json::from_str(
         run_cli(
             &cli,
@@ -127,7 +126,6 @@ async fn live_cli_skill_add_list_show_verify_round_trip() {
         .to_string();
     assert!(installed_digest.starts_with("sha256:"));
 
-    // list
     let listed: Value = serde_json::from_str(
         run_cli(&cli, home.path(), &["skill", "list", "--json"])
             .await
@@ -143,7 +141,6 @@ async fn live_cli_skill_add_list_show_verify_round_trip() {
         "skill list must include the installed skill: {listed:?}",
     );
 
-    // show
     let shown: Value = serde_json::from_str(
         run_cli(&cli, home.path(), &["skill", "show", "covenant", "--json"])
             .await

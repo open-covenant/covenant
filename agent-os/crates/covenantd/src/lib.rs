@@ -959,6 +959,10 @@ pub struct SkillTxProposal {
     pub program: String,
     pub instruction: String,
     pub accounts_hash_hex: String,
+    /// SHA-256 over the canonicalized instruction `data` (sorted scalar
+    /// key/value pairs). Bound into the signed message alongside the account
+    /// hash so a proposal's call data cannot be swapped under the signature.
+    pub data_hash_hex: String,
     pub simulated_ok: bool,
 }
 
@@ -981,8 +985,8 @@ pub enum SkillTxApproval {
 /// over a brokered proposal plus the settlement receipt id the signing event
 /// recorded. `signature_b58` is the daemon identity key's ed25519 signature
 /// over a domain-separated message binding the skill, cluster, program,
-/// instruction, and account-set hash (87..=88 base58 chars, the same
-/// convention as a capability signature). It is the W009 governance witness,
+/// instruction, account-set hash, and instruction-data hash (87..=88 base58
+/// chars, the same convention as a capability signature). It is the W009 governance witness,
 /// not a wire-ready Solana transaction signature — the daemon keeps the
 /// Solana signer dep tree out of its build, so live message-signing and
 /// submission ride this authorization downstream.
@@ -991,6 +995,7 @@ pub struct SkillTxSignature {
     pub program: String,
     pub instruction: String,
     pub accounts_hash_hex: String,
+    pub data_hash_hex: String,
     pub signature_b58: String,
     pub receipt_id: Uuid,
 }
@@ -1006,6 +1011,7 @@ struct ParsedSkillTxProposal {
     program: String,
     instruction: String,
     accounts_canonical: String,
+    data_canonical: String,
     has_signer: bool,
 }
 
@@ -1098,11 +1104,42 @@ fn parse_skill_tx_proposal(proposal: &serde_json::Value) -> Result<ParsedSkillTx
         canonical_accounts.push(serde_json::json!([name, address, signer, writable]));
     }
     let accounts_canonical = serde_json::Value::Array(canonical_accounts).to_string();
+
+    // Canonicalize the instruction `data` deterministically: a flat object of
+    // scalar values emitted as `[key, value]` pairs sorted by key. Key order in
+    // the proposal is not semantically significant, so sorting makes the hash
+    // order-independent; JSON-encoding each pair keeps the pre-image unambiguous,
+    // the same property the account canonicalisation relies on.
+    let data_obj = match ix.get("data") {
+        None | Some(serde_json::Value::Null) => serde_json::Map::new(),
+        Some(serde_json::Value::Object(map)) => map.clone(),
+        Some(_) => return Err("instructions[0].data must be an object".into()),
+    };
+    let mut data_pairs: Vec<(&String, &serde_json::Value)> = data_obj.iter().collect();
+    data_pairs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut canonical_data = Vec::with_capacity(data_pairs.len());
+    for (key, value) in data_pairs {
+        if !matches!(
+            value,
+            serde_json::Value::String(_)
+                | serde_json::Value::Number(_)
+                | serde_json::Value::Bool(_)
+                | serde_json::Value::Null
+        ) {
+            return Err(format!(
+                "instructions[0].data.{key} must be a string, number, boolean, or null"
+            ));
+        }
+        canonical_data.push(serde_json::json!([key, value]));
+    }
+    let data_canonical = serde_json::Value::Array(canonical_data).to_string();
+
     Ok(ParsedSkillTxProposal {
         cluster,
         program,
         instruction,
         accounts_canonical,
+        data_canonical,
         has_signer,
     })
 }
@@ -2411,8 +2448,8 @@ impl Server {
     /// targets a devnet cluster (never mainnet); and the caller holds the
     /// `chain.tx.{program}.{instruction}` capability. Only then does it run a
     /// pre-sign simulation and persist an [`AuditKind::SkillTxProposed`] row
-    /// binding skill, program, instruction, the account-set hash, and the
-    /// simulation verdict. A blocked proposal records an
+    /// binding skill, program, instruction, the account-set hash, the data
+    /// hash, and the simulation verdict. A blocked proposal records an
     /// [`AuditKind::SkillRefused`] row attributed to `peer` and returns
     /// `Err`. Nothing is signed here — that is the approval+signing pipeline,
     /// which consumes this proposal.
@@ -2424,11 +2461,13 @@ impl Server {
     /// enforcement is deferred until those fields are populated from
     /// frontmatter — authorization binds to the capability today.
     ///
-    /// The proposal row binds the program, instruction, and exact account set
-    /// (hash). It does not separately hash the instruction's `data` arguments:
-    /// those are committed when the transaction is signed, since the ed25519
-    /// signature in [`AuditKind::SkillTxSigned`] covers the whole serialized
-    /// message — the durable provenance for `data` lives on the signed row.
+    /// The proposal row binds the program, instruction, exact account set
+    /// (hash), and the instruction `data` (hash). The `covenant.skill.tx.v2`
+    /// signature covers the skill, cluster, program, instruction, account-set
+    /// hash, and data hash — so a proposal's call data cannot be swapped under
+    /// an existing signature, and an external verifier reconstructs the signed
+    /// message from the hashes the row records. Raw account lists and call data
+    /// never enter the chain, only their digests.
     pub async fn broker_skill_tx(
         &self,
         skill_name: String,
@@ -2514,6 +2553,7 @@ impl Server {
         }
 
         let accounts_hash_hex = hash_hex(parsed.accounts_canonical.as_bytes());
+        let data_hash_hex = hash_hex(parsed.data_canonical.as_bytes());
         // Structural pre-flight: a transaction with no signer can never
         // execute, so it cannot simulate cleanly. The verdict is recorded, not
         // gated on — the signing policy decides what to do with a false.
@@ -2528,6 +2568,7 @@ impl Server {
                 program: parsed.program.clone(),
                 instruction: parsed.instruction.clone(),
                 accounts_hash_hex: accounts_hash_hex.clone(),
+                data_hash_hex: data_hash_hex.clone(),
                 simulated_ok,
             },
         };
@@ -2540,6 +2581,7 @@ impl Server {
             program: parsed.program,
             instruction: parsed.instruction,
             accounts_hash_hex,
+            data_hash_hex,
             simulated_ok,
         })
     }
@@ -2588,11 +2630,11 @@ impl Server {
     ///   skips the budget debit, but still requires the devnet + capability +
     ///   simulate envelope above.
     ///
-    /// The signature is domain-separated (`covenant.skill.tx.v1`) over a
-    /// canonical message binding skill, cluster, program, instruction, and the
-    /// account-set hash, so it can never be replayed as a capability or
-    /// identity attestation and a verifier can reconstruct exactly what was
-    /// authorized. It is a Covenant governance witness, not a wire Solana
+    /// The signature is domain-separated (`covenant.skill.tx.v2`) over a
+    /// canonical message binding skill, cluster, program, instruction, the
+    /// account-set hash, and the instruction-data hash, so it can never be
+    /// replayed as a capability or identity attestation and a verifier can
+    /// reconstruct exactly what was authorized. It is a Covenant governance witness, not a wire Solana
     /// signature (see [`SkillTxSignature`]). Every refusal records an
     /// [`AuditKind::SkillRefused`] row; nothing is signed outside the envelope.
     pub async fn sign_skill_tx(
@@ -2602,7 +2644,7 @@ impl Server {
         approval: SkillTxApproval,
         peer: &AgentId,
     ) -> Result<SkillTxSignature, Response> {
-        const SKILL_TX_DOMAIN: &[u8] = b"covenant.skill.tx.v1\n";
+        const SKILL_TX_DOMAIN: &[u8] = b"covenant.skill.tx.v2\n";
 
         // Re-broker: re-enforces installed-skill + devnet + capability and
         // emits SkillTxProposed binding what we are about to sign. A blocked
@@ -2659,6 +2701,7 @@ impl Server {
             brokered.program,
             brokered.instruction,
             brokered.accounts_hash_hex,
+            brokered.data_hash_hex,
         ])
         .to_string();
         let mut message = SKILL_TX_DOMAIN.to_vec();
@@ -2712,6 +2755,7 @@ impl Server {
             program: brokered.program,
             instruction: brokered.instruction,
             accounts_hash_hex: brokered.accounts_hash_hex,
+            data_hash_hex: brokered.data_hash_hex,
             signature_b58,
             receipt_id,
         })
@@ -31673,6 +31717,7 @@ budget_credits_per_hour = {credits}
                 program: "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into(),
                 instruction: "register_agent".into(),
                 accounts_hash_hex: "0".repeat(64),
+                data_hash_hex: "0".repeat(64),
                 simulated_ok: true,
             },
             AuditKind::SkillRefused {
@@ -31953,11 +31998,12 @@ budget_credits_per_hour = {credits}
         assert!(
             events.iter().any(|e| matches!(
                 &e.kind,
-                AuditKind::SkillTxProposed { skill_name, program, instruction, accounts_hash_hex, simulated_ok }
+                AuditKind::SkillTxProposed { skill_name, program, instruction, accounts_hash_hex, data_hash_hex, simulated_ok }
                     if skill_name == "covenant"
                         && program == BROKER_TEST_PROGRAM
                         && instruction == "register_agent"
                         && accounts_hash_hex == &proposed.accounts_hash_hex
+                        && data_hash_hex == &proposed.data_hash_hex
                         && *simulated_ok
             )),
             "broker must persist a SkillTxProposed row carrying the sim verdict",
@@ -31981,6 +32027,30 @@ budget_credits_per_hour = {credits}
         assert_ne!(
             other.accounts_hash_hex, proposed.accounts_hash_hex,
             "changing an account address must change the accounts hash",
+        );
+
+        // The data hash binds the instruction call data independently of the
+        // accounts: changing a `data` value changes the data hash and nothing
+        // else, so two proposals differing only in data sign differently.
+        let other_data = s
+            .broker_skill_tx(
+                "covenant".to_string(),
+                {
+                    let mut p = broker_proposal("devnet", "register_agent", true);
+                    p["instructions"][0]["data"]["agent_key"] = "02".into();
+                    p
+                },
+                &peer,
+            )
+            .await
+            .expect("data-varied proposal");
+        assert_ne!(
+            other_data.data_hash_hex, proposed.data_hash_hex,
+            "changing an instruction data value must change the data hash",
+        );
+        assert_eq!(
+            other_data.accounts_hash_hex, proposed.accounts_hash_hex,
+            "changing only data must leave the accounts hash unchanged",
         );
     }
 
@@ -32525,9 +32595,10 @@ budget_credits_per_hour = {credits}
                 signed.program,
                 signed.instruction,
                 signed.accounts_hash_hex,
+                signed.data_hash_hex,
             ])
             .to_string();
-            let mut message = b"covenant.skill.tx.v1\n".to_vec();
+            let mut message = b"covenant.skill.tx.v2\n".to_vec();
             message.extend_from_slice(canonical.as_bytes());
             message
         };

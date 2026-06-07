@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 /// MCP protocol version we advertise during `initialize`. The server may
-/// downgrade; we don't enforce a specific version yet (Phase 4+).
+/// downgrade; a version mismatch is logged, not enforced.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Well-known hosted Solana MCP endpoint (Streamable HTTP transport). The
@@ -256,19 +256,8 @@ mod tests {
 
     #[test]
     fn hosted_bridge_command_wraps_url_in_mcp_remote_stdio_shim() {
-        // hosted_bridge_command is the single source of truth for how a
-        // hosted (HTTP) MCP endpoint is reached: Covenant ships no
-        // in-process HTTP client, so the URL is wrapped in the `mcp-remote`
-        // stdio adapter and spawned as a subprocess like any other server.
-        // The url MUST be the final argument verbatim — a refactor that
-        // reordered the args or injected the URL into an --flag would break
-        // mcp-remote's positional contract and silently fail to connect.
         let (command, args) = hosted_bridge_command(SOLANA_MCP_URL);
-        assert_eq!(
-            command, "npx",
-            "hosted bridge must launch via npx so the mcp-remote adapter \
-             resolves without a global install",
-        );
+        assert_eq!(command, "npx", "hosted bridge launches via npx");
         assert_eq!(
             args,
             vec![
@@ -276,70 +265,38 @@ mod tests {
                 "mcp-remote".to_string(),
                 SOLANA_MCP_URL.to_string(),
             ],
-            "args must be exactly [-y, mcp-remote, <url>] — the documented \
-             stdio shim invocation; the URL is positional and last",
+            "args are exactly [-y, mcp-remote, <url>] with the URL last",
         );
         assert_eq!(
             args.last().map(String::as_str),
             Some(SOLANA_MCP_URL),
-            "the endpoint URL must be the final positional arg",
+            "the endpoint URL is the final positional arg",
         );
 
         assert_eq!(
             SOLANA_MCP_URL, "https://mcp.solana.com/mcp",
-            "SOLANA_MCP_URL pins the well-known hosted endpoint the Solana \
-             dev skill installs; drift here silently points the bridge at \
-             the wrong host",
+            "SOLANA_MCP_URL pins the well-known hosted endpoint",
         );
     }
 
     #[test]
-    fn protocol_version_pins_exact_mcp_spec_date_string() {
-        // covenant_mcp::external::PROTOCOL_VERSION is the public const
-        // every external MCP server initialize handshake quotes via
-        // 'protocolVersion' in the initialize request, the initialize
-        // response, and the initialized notification. External MCP
-        // servers parse the field as a
-        // date string and compare it against their supported versions
-        // to decide whether to accept the handshake.
-        //
-        // No direct test today; the value is exercised indirectly via
-        // stdio transport handshake tests that capture the field. A
-        // refactor that bumped this to a newer date without
-        // coordinating the request/response shape changes that newer
-        // MCP versions require would silently fail every external
-        // server's handshake; a refactor that dropped the const in
-        // favor of inline literals at the three call sites would split
-        // the source of truth and let drift creep in.
+    fn protocol_version_is_mcp_spec_date() {
         assert_eq!(
             PROTOCOL_VERSION, "2024-11-05",
-            "PROTOCOL_VERSION must remain '2024-11-05' — the MCP \
-             spec revision the daemon's external transport implements. \
-             A refactor that bumped this without coordinating the wire \
-             shape changes would silently break every operator's MCP \
-             integration on the next initialize handshake",
+            "PROTOCOL_VERSION is the MCP spec revision the external transport implements",
         );
 
         assert_eq!(
             PROTOCOL_VERSION.len(),
             10,
-            "PROTOCOL_VERSION must be exactly 10 chars (YYYY-MM-DD) — \
-             a refactor that switched to semver ('1.0.0' is 5 chars; \
-             'v2024.11.05' is 11 chars) would silently break the \
-             documented MCP spec contract that external servers parse \
-             this field as a date string and reject anything that does \
-             not match the date-string shape",
+            "PROTOCOL_VERSION is a 10-char YYYY-MM-DD date string",
         );
 
         let parts: Vec<&str> = PROTOCOL_VERSION.split('-').collect();
         assert_eq!(
             parts.len(),
             3,
-            "PROTOCOL_VERSION must contain exactly two '-' separators \
-             splitting it into [year, month, day] — a refactor that \
-             changed the separator (e.g., to '/' or '.') or dropped a \
-             component (e.g., to 'YYYY-MM') would silently break MCP \
-             servers that parse the field as date components",
+            "PROTOCOL_VERSION splits on '-' into [year, month, day]",
         );
         for (label, part, expected_len) in [
             ("year", parts[0], 4),
@@ -349,149 +306,114 @@ mod tests {
             assert_eq!(
                 part.len(),
                 expected_len,
-                "PROTOCOL_VERSION {label} component must be {expected_len} \
-                 chars — pinning the YYYY-MM-DD structure (4-2-2) so a \
-                 refactor that emitted a 1-digit month or 3-digit year \
-                 surfaces here; got {part:?} ({} chars)",
-                part.len(),
+                "{label} component is {expected_len} digits; got {part:?}",
             );
             assert!(
                 part.chars().all(|c| c.is_ascii_digit()),
-                "PROTOCOL_VERSION {label} component must be all ASCII \
-                 digits — pinning that the date string carries no \
-                 letters (e.g., 'v', 'rc1') or punctuation; a refactor \
-                 that prefixed with 'v' or suffixed with a milestone \
-                 tag would silently break the date-string contract; \
-                 got {part:?}",
+                "{label} component is all ASCII digits; got {part:?}",
             );
         }
     }
 
     #[test]
-    fn matches_filter_pins_star_exact_and_prefix_glob_branches() {
-        assert!(
-            matches_filter("*", "anything"),
-            "'*' must pass every tool name; dropping this arm silently blocks every tool when the operator wires '*' in allowed_tools",
-        );
-        assert!(
-            matches_filter("*", ""),
-            "'*' must even pass the empty name so the all-pass arm is unconditional",
-        );
+    fn matches_filter_branches() {
+        assert!(matches_filter("*", "anything"), "'*' passes every name");
+        assert!(matches_filter("*", ""), "'*' passes the empty name");
 
         assert!(
             matches_filter("foo", "foo"),
-            "an exact literal must match itself",
+            "an exact literal matches itself"
         );
         assert!(
             !matches_filter("foo", "bar"),
-            "an exact literal must not match a different name",
+            "an exact literal does not match a different name",
         );
         assert!(
             !matches_filter("foo", "foobar"),
-            "an exact literal must NOT match a longer name; otherwise the literal silently widens to a prefix",
+            "an exact literal does not match a longer name",
         );
 
         assert!(
             matches_filter("foo*", "foo"),
-            "the trailing-* glob must match the bare prefix; pattern='foo*' is documented to allow 'foo'",
+            "the trailing-* glob matches the bare prefix",
         );
         assert!(
             matches_filter("foo*", "foobar"),
-            "the trailing-* glob must match anything that starts with the prefix",
+            "the trailing-* glob matches anything starting with the prefix",
         );
         assert!(
             !matches_filter("foo*", "fo"),
-            "the trailing-* glob must NOT match a name that is shorter than the prefix",
+            "the trailing-* glob does not match a name shorter than the prefix",
         );
         assert!(
             !matches_filter("foo*", "barfoo"),
-            "the trailing-* glob is starts_with, not contains; embedded matches must reject",
+            "the trailing-* glob is starts_with, not contains",
         );
 
         assert!(
             matches_filter("  *  ", "x"),
-            "leading/trailing whitespace on '*' must be trimmed before matching",
+            "'*' is trimmed before matching"
         );
         assert!(
             matches_filter("  foo  ", "foo"),
-            "leading/trailing whitespace on an exact pattern must be trimmed before matching",
+            "an exact pattern is trimmed before matching",
         );
         assert!(
             matches_filter(" foo* ", "foobar"),
-            "leading/trailing whitespace on a glob pattern must be trimmed before matching",
+            "a glob pattern is trimmed before matching",
         );
     }
 
     #[test]
-    fn sanitize_prefix_maps_non_alnum_to_underscore_trims_edges_and_falls_back_to_remote() {
+    fn sanitize_prefix_branches() {
         assert_eq!(
             sanitize_prefix("myserver"),
             "myserver",
-            "alphanumeric prefixes must pass through unchanged; otherwise operator-supplied names get rewritten in ways the tool-allowlist can't anticipate",
+            "alphanumeric prefixes pass through unchanged",
         );
         assert_eq!(
             sanitize_prefix("123"),
             "123",
-            "digit-only prefixes must pass through unchanged so a numeric server label remains a valid tool-name fragment",
+            "digit-only prefixes pass through unchanged",
         );
         assert_eq!(
             sanitize_prefix("my-server"),
             "my_server",
-            "documented character map: dash becomes underscore so the result stays inside the tool-name allowed alphabet",
+            "dash maps to underscore",
         );
         assert_eq!(
             sanitize_prefix("my.server"),
             "my_server",
-            "documented character map: dot becomes underscore so dotted hostnames don't collide with the mcp_<prefix>_<name> separator convention",
+            "dot maps to underscore",
         );
         assert_eq!(
             sanitize_prefix("  my-server  "),
             "my_server",
-            "surrounding whitespace must be mapped to underscore then trimmed; otherwise a stray space in operator config leaks into the wire tool name",
+            "surrounding whitespace is mapped then trimmed",
         );
         assert_eq!(
             sanitize_prefix(""),
             "remote",
-            "an empty prefix must fall back to the literal 'remote' so the generated tool name mcp_remote_<name> never collapses to mcp__<name> and silently merges two unconfigured servers",
+            "an empty prefix falls back to 'remote'",
         );
         assert_eq!(
             sanitize_prefix("..."),
             "remote",
-            "an all-punctuation prefix becomes all-underscore then trims to empty; the fallback must still kick in or the tool-name shape collapses",
+            "an all-punctuation prefix trims to empty and falls back to 'remote'",
         );
         assert_eq!(
             sanitize_prefix("   "),
             "remote",
-            "an all-whitespace prefix is equivalent to empty after mapping and trimming; the fallback must apply consistently with the empty-input case",
+            "an all-whitespace prefix falls back to 'remote'",
         );
     }
 
     #[test]
-    fn remote_tool_options_allows_pins_include_then_exclude_precedence_and_default_arms() {
-        // RemoteToolOptions::allows is the per-tool admission gate
-        // that bootstrap_remote_tools_with_options consults to decide
-        // whether each upstream MCP
-        // tools/list spec enters the operator's covenantd registry.
-        // The function encodes a documented include-then-exclude
-        // precedence: if include is non-empty the name must match at
-        // least one include pattern via matches_filter — otherwise
-        // default-deny on the include side; regardless of include,
-        // any matching exclude pattern denies.
-        //
-        // matches_filter_pins_star_exact_and_prefix_glob_branches
-        // (above) pins matches_filter itself. This pin closes the
-        // composition: how allows() chains include and exclude, the
-        // default-allow when both lists are empty, the include-as-
-        // allowlist when include is non-empty, and the exclude-wins
-        // arm when both match.
+    fn allows_include_exclude_precedence() {
         let default = RemoteToolOptions::default();
         assert!(
             default.allows("anything"),
-            "default options (include=[], exclude=[]) must allow every \
-             tool name — a refactor that defaulted to deny under a \
-             'least-privilege default' rationale would silently drop \
-             EVERY upstream MCP tool from EVERY registry on first \
-             deploy with no operator-visible signal",
+            "empty include and exclude allow every name",
         );
 
         let include_only = RemoteToolOptions {
@@ -501,16 +423,11 @@ mod tests {
         };
         assert!(
             include_only.allows("exact"),
-            "a tool whose name matches a literal include pattern must \
-             be allowed when include is the only filter",
+            "a name matching the include pattern is allowed",
         );
         assert!(
             !include_only.allows("other"),
-            "a tool whose name does NOT match any include pattern must \
-             be denied when include is non-empty — the include list is \
-             an allowlist gate, not an additive list. A refactor that \
-             treated non-empty include as informational would silently \
-             let unlisted tools through",
+            "a non-empty include acts as an allowlist; unmatched names are denied",
         );
 
         let exclude_only = RemoteToolOptions {
@@ -520,17 +437,11 @@ mod tests {
         };
         assert!(
             !exclude_only.allows("banned"),
-            "exclude must apply even when include is empty — otherwise \
-             a deny-only configuration (the simpler 'block these few' \
-             setup most operators reach for first) would silently \
-             allow every tool",
+            "exclude applies even when include is empty",
         );
         assert!(
             exclude_only.allows("other"),
-            "a tool whose name does not match any exclude pattern must \
-             be allowed when only exclude is set — the empty-include \
-             arm must default to allow, otherwise this configuration \
-             would deny everything despite having no allowlist",
+            "with only exclude set, unmatched names are allowed",
         );
 
         let star_include_with_exclude = RemoteToolOptions {
@@ -540,19 +451,11 @@ mod tests {
         };
         assert!(
             !star_include_with_exclude.allows("banned"),
-            "exclude must win over include — even when include='*' \
-             matches every name, a matching exclude pattern must \
-             deny. A refactor that swapped the precedence so include \
-             was checked LAST and short-circuited on a match would \
-             silently let exclude entries leak through any catch-all \
-             include",
+            "exclude wins over a catch-all include",
         );
         assert!(
             star_include_with_exclude.allows("other"),
-            "the catch-all include must still allow non-excluded names \
-             — pinning that '*' is honored as a glob via matches_filter, \
-             not silently re-treated as a literal '*' that would only \
-             match the literal name '*'",
+            "the catch-all include still allows non-excluded names",
         );
 
         let glob_include = RemoteToolOptions {
@@ -562,53 +465,21 @@ mod tests {
         };
         assert!(
             glob_include.allows("foobar"),
-            "an include pattern with a trailing '*' must use the \
-             matches_filter glob path — a refactor that 'simplified' \
-             allows by replacing matches_filter with Vec::contains \
-             would silently drop this branch because Vec::contains \
-             does literal equality and 'foobar' is not equal to \
-             'foo*'",
+            "a trailing-* include uses the matches_filter glob path",
         );
         assert!(
             !glob_include.allows("bar"),
-            "an include pattern with a trailing '*' must NOT match \
-             unrelated names — pins that the glob is starts_with-only, \
-             not contains-anywhere, so an unrelated tool that happens \
-             to share a substring with the include prefix is still \
-             denied",
+            "the include glob is starts_with-only",
         );
     }
 
     #[test]
-    fn remote_tool_options_advertised_name_pins_none_empty_trimmed_and_format_arms() {
-        // RemoteToolOptions::advertised_name decides the
-        // registry-facing name for each remote MCP tool. The
-        // function maps tool_prefix Option through three documented
-        // arms: None -> verbatim upstream_name; Some(s) where
-        // s.trim().is_empty() -> verbatim upstream_name; Some(non-
-        // empty after trim) -> "mcp_<sanitize_prefix(trimmed)>_
-        // <upstream_name>".
-        //
-        // sanitize_prefix_maps_non_alnum_to_underscore_trims_edges_
-        // and_falls_back_to_remote (above) pins sanitize_prefix
-        // itself. This pin closes the composition: the trim-and-
-        // fallback short-circuit, the literal "mcp_" prefix on the
-        // wrap branch, and the sanitize_prefix wiring on the prefix
-        // (but NOT on the upstream name — upstream passes verbatim).
+    fn advertised_name_branches() {
         let none = RemoteToolOptions::default();
         assert_eq!(
             none.advertised_name("foo"),
             "foo",
-            "None tool_prefix must return upstream_name verbatim — a \
-             refactor that always wrapped (e.g., \
-             'format!(\"mcp_{{}}_{{}}\", \
-             sanitize_prefix(prefix.unwrap_or_default()), \
-             upstream_name)' under a 'tool names should always be \
-             qualified' rationale) would silently rename every tool \
-             from 'foo' to 'mcp_remote_foo' on operators with no \
-             prefix configured (the empty string passed to \
-             sanitize_prefix falls back to the literal 'remote'), \
-             breaking every existing tools/call wire-name reference",
+            "None prefix returns the upstream name verbatim",
         );
 
         let empty = RemoteToolOptions {
@@ -619,11 +490,7 @@ mod tests {
         assert_eq!(
             empty.advertised_name("foo"),
             "foo",
-            "Some('') tool_prefix must return upstream_name verbatim \
-             — empty after trim must short-circuit to the same path \
-             as None, otherwise an operator who set tool_prefix='' \
-             expecting it to be a no-op would see every tool renamed \
-             to 'mcp_remote_<name>'",
+            "an empty prefix returns the upstream name verbatim",
         );
 
         let whitespace = RemoteToolOptions {
@@ -634,10 +501,7 @@ mod tests {
         assert_eq!(
             whitespace.advertised_name("foo"),
             "foo",
-            "Some('   ') tool_prefix must return upstream_name \
-             verbatim — whitespace-only after trim must short-circuit \
-             to the same path as None and empty, pinning that the \
-             trim-then-is_empty filter applies before the wrap branch",
+            "a whitespace-only prefix returns the upstream name verbatim",
         );
 
         let plain = RemoteToolOptions {
@@ -648,15 +512,7 @@ mod tests {
         assert_eq!(
             plain.advertised_name("foo"),
             "mcp_myserver_foo",
-            "Some('myserver') tool_prefix must wrap as \
-             'mcp_<prefix>_<upstream>' — pins the literal 'mcp_' \
-             prefix on the wrap branch. A refactor that swapped the \
-             format string from 'mcp_{{}}_{{}}' to '{{}}_{{}}' under \
-             a 'drop the redundant mcp_ prefix' rationale would \
-             silently break tool-namespace collision handling, since \
-             two MCP servers with the same prefix 'fs' would both \
-             produce 'fs_read' instead of distinct 'mcp_fs_read' \
-             names",
+            "a prefix wraps as mcp_<prefix>_<upstream>",
         );
 
         let dashed = RemoteToolOptions {
@@ -667,92 +523,49 @@ mod tests {
         assert_eq!(
             dashed.advertised_name("foo"),
             "mcp_my_server_foo",
-            "Some('my-server') tool_prefix must wrap with the dash \
-             mapped to underscore via sanitize_prefix — pins that \
-             the sanitize_prefix composition is wired through \
-             advertised_name. A refactor that bypassed sanitize_prefix \
-             and called the prefix verbatim under a 'sanitize_prefix \
-             is overcautious' rationale would produce \
-             'mcp_my-server_foo' and surface here",
+            "the prefix is sanitized (dash to underscore) before wrapping",
         );
     }
 
     #[test]
-    fn parse_tool_call_result_pins_default_content_default_is_error_camel_case_alias_and_error_wrap(
-    ) {
-        let r = parse_tool_call_result(serde_json::json!({})).expect(
-            "an empty object must decode to an Ok ToolCallResult so MCP servers that omit content do not error out",
-        );
+    fn parse_tool_call_result_defaults() {
+        let r = parse_tool_call_result(serde_json::json!({}))
+            .expect("an empty object decodes to an Ok ToolCallResult");
         assert!(
             r.content.is_empty(),
-            "missing content field must default to an empty Vec<Content>; otherwise a spec-compliant server that returns only is_error is silently rejected",
+            "missing content defaults to an empty Vec"
         );
-        assert!(
-            !r.is_error,
-            "missing is_error field must default to false; otherwise every spec-compliant tools/call success would be treated as an error",
-        );
+        assert!(!r.is_error, "missing is_error defaults to false");
 
         let r = parse_tool_call_result(serde_json::json!({ "isError": true }))
-            .expect("the camelCase isError wire field must decode without error");
-        assert!(
-            r.is_error,
-            "the isError serde alias must map onto is_error; otherwise every MCP-spec error result silently looks like a success because the wire form is camelCase",
-        );
+            .expect("the camelCase isError field decodes");
+        assert!(r.is_error, "the isError alias maps onto is_error");
 
         let r = parse_tool_call_result(serde_json::json!({
             "content": [ { "type": "text", "text": "hello" } ],
             "isError": false
         }))
-        .expect("a payload with text content must decode");
+        .expect("a payload with text content decodes");
         assert_eq!(
             r.content,
             vec![Content::text("hello")],
-            "text content must round-trip through parse_tool_call_result; otherwise tool output is silently dropped or mistyped",
+            "text content round-trips",
         );
-        assert!(
-            !r.is_error,
-            "isError=false must keep is_error=false; the alias must not invert the value",
-        );
+        assert!(!r.is_error, "isError=false keeps is_error=false");
 
         let err = parse_tool_call_result(serde_json::json!("not an object"))
-            .expect_err("a non-object payload must not decode as a ToolCallResult");
+            .expect_err("a non-object payload does not decode");
         match err {
             ToolError::Failed(msg) => assert!(
                 msg.starts_with("bad tools/call result: "),
-                "the error message must begin with the documented prefix so operators can grep for upstream wire failures; got: {msg}",
+                "the error message carries the documented prefix; got: {msg}",
             ),
-            other => panic!(
-                "expected ToolError::Failed for a malformed wire payload, got: {other:?}"
-            ),
+            other => panic!("expected ToolError::Failed, got: {other:?}"),
         }
     }
 
     #[test]
-    fn parse_tool_call_result_pins_multi_block_content_and_snake_case_is_error() {
-        // parse_tool_call_result_pins_default_content_default_is_error_camel_case_alias_and_error_wrap
-        // covers four cases (empty object, isError camelCase alias,
-        // single-text-block content, non-object error wrap), but two
-        // forward-compat surfaces of the Wire struct's deserialization
-        // are not pinned:
-        //
-        // 1. Multi-block content with mixed Content variants. Real MCP
-        //    tools routinely return both human-readable text and a
-        //    structured JSON payload in the same tools/call response;
-        //    Vec<Content> must compose through serde with both
-        //    variants in one payload preserving order. A custom
-        //    Vec<Content> deserializer that only handled single-block
-        //    payloads would silently drop the trailing blocks and
-        //    Covenant's RemoteTool wrapper would surface an
-        //    incomplete result.
-        // 2. The canonical snake_case is_error decoding path. The
-        //    Wire struct's #[serde(default, alias = "isError")] makes
-        //    both names accept on the wire — the existing test only
-        //    asserts the camelCase alias path. A refactor that
-        //    hardened the field to camelCase-only by removing the
-        //    canonical name (or by reversing the alias direction in
-        //    a way that drops the snake_case decode path) would
-        //    silently break MCP proxies and future server
-        //    implementations that emit the Rust-native shape.
+    fn parse_tool_call_result_multi_block_and_snake_case() {
         let multi = parse_tool_call_result(serde_json::json!({
             "content": [
                 { "type": "text", "text": "first block" },
@@ -760,39 +573,25 @@ mod tests {
             ],
             "isError": false
         }))
-        .expect("a multi-block payload with mixed Text+Json content variants must decode");
+        .expect("a multi-block payload with mixed Text+Json content decodes");
         assert_eq!(
             multi.content,
             vec![
                 Content::text("first block"),
                 Content::json(serde_json::json!({ "k": "v" })),
             ],
-            "Vec<Content> must preserve order and variant identity through \
-             parse_tool_call_result; a custom deserializer that only handled \
-             single-block payloads would silently drop the trailing block \
-             and Covenant's RemoteTool wrapper would surface an incomplete \
-             result for every multi-block tools/call response",
+            "Vec<Content> preserves order and variant identity",
         );
         assert!(
             !multi.is_error,
-            "multi-block ok results must keep is_error=false; the second-block \
-             decode must not silently flip the error flag",
+            "multi-block ok results keep is_error=false"
         );
 
-        let snake = parse_tool_call_result(serde_json::json!({ "is_error": true })).expect(
-            "the canonical snake_case is_error must decode without error; the \
-             Wire struct's alias = \"isError\" attribute opens the camelCase \
-             surface but the Rust-native snake_case name is the underlying \
-             field and must remain a valid wire form for MCP proxies and \
-             future spec versions emitting the canonical shape",
-        );
+        let snake = parse_tool_call_result(serde_json::json!({ "is_error": true }))
+            .expect("the canonical snake_case is_error decodes");
         assert!(
             snake.is_error,
-            "snake_case is_error=true must map onto is_error=true; a refactor \
-             that hardened the field to camelCase-only (removing the canonical \
-             name in favour of #[serde(rename = \"isError\")] without an alias \
-             back to is_error) would silently treat every snake_case error \
-             result as a success",
+            "snake_case is_error=true maps onto is_error=true"
         );
     }
 
@@ -967,75 +766,72 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_error_display_messages_pin_two_string_variant_format_strings() {
+    fn bootstrap_error_display() {
         let bad_list = format!("{}", BootstrapError::BadList("missing field tools".into()));
         assert_eq!(
             bad_list, "malformed tools/list response: missing field tools",
-            "BootstrapError::BadList Display drifted (typo or dropped 'tools/list' protocol-stage marker regression class)"
+            "BootstrapError::BadList Display drifted"
         );
 
         let duplicate = format!("{}", BootstrapError::DuplicateToolName("fs.read".into()));
         assert_eq!(
             duplicate, "duplicate remote tool name after MCP prefixing: fs.read",
-            "BootstrapError::DuplicateToolName Display drifted (typo or dropped 'after MCP prefixing' post-prefix-namespace qualifier regression class)"
+            "BootstrapError::DuplicateToolName Display drifted"
         );
 
         assert_ne!(
             bad_list, duplicate,
-            "BootstrapError::BadList must not converge with BootstrapError::DuplicateToolName \
-             (prefix-convergence regression class would merge protocol-stage failures with namespace-collision failures)"
+            "BootstrapError::BadList and DuplicateToolName Display must not converge"
         );
     }
 
     #[test]
-    fn bootstrap_error_transport_display_message_pins_prefix_and_inner_mcp_client_error_display_delegation(
-    ) {
+    fn bootstrap_error_transport_display() {
         let err = BootstrapError::Transport(McpClientError::Closed);
         let message = format!("{err}");
         assert_eq!(
             message, "transport: transport closed",
-            "BootstrapError::Transport Display drifted (typo, dropped bootstrap-stage prefix, sibling-variant prefix convergence, or Debug-vs-Display formatting regression class on the {{0}} interpolation)"
+            "BootstrapError::Transport Display drifted"
         );
         assert!(
             message.starts_with("transport: "),
-            "BootstrapError::Transport must surface the 'transport: ' bootstrap-stage prefix so audit-log filters can distinguish MCP-bootstrap-transport-failures from BootstrapError::BadList (protocol-layer) and BootstrapError::DuplicateToolName (namespace-collision) (dropped-bootstrap-stage-prefix regression class): {message}"
+            "BootstrapError::Transport carries the 'transport: ' prefix: {message}"
         );
         assert!(
             message.contains("transport closed"),
-            "BootstrapError::Transport must surface the inner McpClientError via its Display impl ('transport closed' for Closed); a refactor to {{0:?}} would surface the Debug rendering ('Closed' as the bare variant name) instead (Debug-vs-Display formatting regression class on the {{0}} interpolation): {message}"
+            "BootstrapError::Transport surfaces the inner McpClientError Display, not Debug: {message}"
         );
         assert_ne!(
             message, "transport: Closed",
-            "BootstrapError::Transport must NOT surface the bare variant name 'Closed' (the McpClientError Debug rendering); the {{0}} interpolation must use Display, not Debug (Debug-vs-Display formatting regression class on the {{0}} interpolation): {message}"
+            "BootstrapError::Transport must not surface the bare Debug variant name: {message}"
         );
         assert!(
             !message.starts_with("malformed tools/list response:"),
-            "BootstrapError::Transport must not converge with BootstrapError::BadList prefix; the bootstrap-stage prefix discriminator must distinguish transport-layer failures from protocol-layer failures (sibling-variant prefix-convergence regression class): {message}"
+            "BootstrapError::Transport must not share the BadList prefix: {message}"
         );
         assert!(
             !message.starts_with("duplicate remote tool name after MCP prefixing:"),
-            "BootstrapError::Transport must not converge with BootstrapError::DuplicateToolName prefix; the bootstrap-stage prefix discriminator must distinguish transport-layer failures from namespace-collision failures (sibling-variant prefix-convergence regression class): {message}"
+            "BootstrapError::Transport must not share the DuplicateToolName prefix: {message}"
         );
     }
 
     #[test]
-    fn bootstrap_error_transport_source_delegation_pin_returns_inner_mcp_client_error_via_std_error_source(
-    ) {
+    fn bootstrap_error_transport_source() {
         use std::error::Error;
         let inner = McpClientError::Closed;
         let expected_display = format!("{inner}");
         let err = BootstrapError::Transport(inner);
-        let source = err.source().expect(
-            "BootstrapError::Transport must surface the inner McpClientError via std::error::Error::source so anyhow chain printers, tracing's source-walking emitters, and daemon-side bootstrap audit-log emitters that may downcast source() to McpClientError to classify Closed vs Io vs Serde vs Wire failures can render the wrapper context AND the inner cause; a refactor that converted the variant from #[from] to a hand-written Error impl returning None (under a 'simpler error wrapping' rationale) would silently change source() to return None while leaving Display intact (dropped-source-attribute regression class)",
-        );
+        let source = err
+            .source()
+            .expect("BootstrapError::Transport exposes the inner McpClientError via source()");
         let source_message = format!("{source}");
         assert_eq!(
             source_message, expected_display,
-            "BootstrapError::Transport source() Display must match a direct format!() of the same McpClientError variant verbatim; a refactor that swapped the inner field type to Box<dyn Error + Send + Sync> (under a 'support arbitrary transport error types' rationale) would silently break daemon-side downcasts to McpClientError used to extract the specific Closed/Io/Serde/Wire subkind for audit-log classification (concrete-source-type regression class)"
+            "source() Display matches the inner McpClientError verbatim"
         );
         assert_eq!(
             source_message, "transport closed",
-            "BootstrapError::Transport source() Display must remain the literal 'transport closed' — anchors the McpClientError::Closed Display verbatim through the wrapper so a cross-crate refactor that changed McpClientError::Closed's Display under a 'consistency with sibling variants' rationale would surface as a Transport pin failure (cross-crate-Display-drift regression class)"
+            "anchors the McpClientError::Closed Display through the wrapper"
         );
     }
 

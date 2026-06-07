@@ -527,7 +527,8 @@ pub enum AuditKind {
     /// target program-id (base58), `instruction` is the Anchor/IDL
     /// instruction name (`"transfer"`, `"initialize"`, …), and
     /// `accounts_hash_hex` is the SHA-256 over the JSON-canonicalized
-    /// account metas — raw account lists never enter the chain.
+    /// account metas and `data_hash_hex` the SHA-256 over the canonicalized
+    /// instruction data — raw account lists and call data never enter the chain.
     /// `simulated_ok` is the broker's structural pre-sign check; a live
     /// devnet `simulateTransaction` is the production upgrade and rides the
     /// same field. An out-of-envelope proposal is rejected here, never signed.
@@ -536,6 +537,7 @@ pub enum AuditKind {
         program: String,
         instruction: String,
         accounts_hash_hex: String,
+        data_hash_hex: String,
         simulated_ok: bool,
     },
     /// Logged when the daemon signs a skill-proposed transaction. W009
@@ -4412,18 +4414,20 @@ mod tests {
     }
 
     #[test]
-    fn audit_kind_skill_tx_proposed_serde_pins_five_field_variant() {
+    fn audit_kind_skill_tx_proposed_serde_pins_six_field_variant() {
         pin_audit_variant(
             AuditKind::SkillTxProposed {
                 skill_name: "covenant".into(),
                 program: "11111111111111111111111111111111".into(),
                 instruction: "transfer".into(),
                 accounts_hash_hex: "deadbeef".into(),
+                data_hash_hex: "feedface".into(),
                 simulated_ok: true,
             },
             "skill_tx_proposed",
             &[
                 "accounts_hash_hex",
+                "data_hash_hex",
                 "instruction",
                 "program",
                 "simulated_ok",

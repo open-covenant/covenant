@@ -6,10 +6,6 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { callDaemonTool, daemonTools } from './daemon.js';
 import { buildSolanaProposal, solanaProposeTxTool } from './verifiable.js';
-
-function randomHash32(): string {
-  return randomBytes(32).toString('hex');
-}
 import {
   MOCK_AGENT_DETAILS,
   MOCK_TASKS,
@@ -23,6 +19,10 @@ import {
   resolveSolanaNetwork,
   isSolanaAddress,
 } from '@covenant/sdk';
+
+function randomHash32(): string {
+  return randomBytes(32).toString('hex');
+}
 
 const network = resolveSolanaNetwork();
 

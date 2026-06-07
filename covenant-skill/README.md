@@ -26,7 +26,7 @@ CODEOWNERS          Maintainership
 # From a checkout
 ./install.sh --project /path/to/your/project
 
-# Or via the upstream CLI against the published tag
+# Or with the upstream skills CLI
 npx skills add open-covenant/covenant-skill
 ```
 

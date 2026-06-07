@@ -65,6 +65,7 @@ A signed transaction produces a settlement receipt:
   "program": "<program-id>",
   "ix":      "<instruction-name>",
   "accounts_hash": "sha256-...",
+  "data_hash": "sha256-...",
   "tx_sig":  "<base58 signature>",
   "cluster": "devnet",
   "slot":    123456789,
@@ -82,6 +83,6 @@ Every example in this skill defaults to `cluster: "devnet"`. The mainnet
 promotion of this pipeline is a separate, gated milestone tied to the broader
 settlement-mainnet readiness work and is not exposed through this skill.
 
-If the agent receives a prompt asking for `cluster: "mainnet-beta"`, treat it as
-a scope-expansion request: refuse, emit `SkillRefused`, and surface the request
-to the operator instead of attempting to sign.
+If the agent receives a prompt asking for `cluster: "mainnet"` (or
+`"mainnet-beta"`), treat it as a scope-expansion request: refuse, emit
+`SkillRefused`, and surface the request to the operator instead of signing.

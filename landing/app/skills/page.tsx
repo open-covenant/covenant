@@ -1,10 +1,6 @@
-// /skills — the Covenant skill catalog.
-//
-// Renders the daemon's `covenant skill list --json` shape (skill_list_json)
-// from the committed snapshot at landing/public/skills.json, regenerated at
-// prebuild by scripts/gen-skills.mjs. Each entry is content-addressed by the
-// same digest covenant-skills pins at install, so the hash shown here is the
-// one a daemon verifies — not a placeholder. Devnet-first, pre-release.
+// /skills — the Covenant skill catalog. Renders landing/public/skills.json
+// (the `covenant skill list --json` shape), regenerated at prebuild by
+// scripts/gen-skills.mjs. Each entry's hash is the install-time content digest.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

@@ -1,16 +1,6 @@
-// /verify/[sha] — Four Witnesses Present for a Covenant-author commit.
-//
-// Renders the v0.2 witness UX:
-//   * Four lights (gitsign+Rekor / audit hash chain / Solana anchor / verifier signature)
-//   * Permanent yellow fifth status line "Code Quality (Not Witnessed)" linking to /lineage/mutation-quality
-//   * SAME-FAMILY badge on Anchor 4 (yellow weeks 1-4, model-tier sub-label weeks 3-4)
-//   * Force-Fail demo CTA (Week 2 ship target)
-//   * Pre-cutoff history rendered as "Predates witness loop" with all lights gray
-//
-// The page is server-rendered: it calls the /api/verify/[sha] route handler
-// which is the Path 1 server-side proxy from Spike 7. Path 2 (browser-side
-// bundle verification via @sigstore/verify) lands as a v0.2.x card; the page
-// will swap to client-side checks then without UX changes.
+// /verify/[sha] — four-witness state for a Covenant commit, plus the skill-run
+// panel when the commit has an associated skill run. Verification runs in the
+// /api/verify/[sha] route handler this page reads.
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -74,9 +64,6 @@ function redactAuthor(name: string, email: string): { display: string; email: st
 }
 
 async function fetchWitness(sha: string): Promise<VerifyPayload | null> {
-  // Server component fetching its own API route — Next.js pattern for keeping
-  // verification logic in the route handler so the same surface backs an
-  // eventual public /api/verify/<sha> consumer.
   const host = process.env.VERCEL_URL
     ? `https://${process.env.VERCEL_URL}`
     : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
@@ -243,7 +230,7 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
           </h1>
           {commit.predatesWitnessLoop && (
             <p className="mt-2 max-w-2xl border border-neutral-800 bg-neutral-950/60 px-4 py-3 text-[13px] font-light leading-relaxed text-amber-300">
-              This commit predates the witness loop. Anchors below are gray because the cosign + audit-chain + on-chain + verifier-signature pipeline was not yet active when this commit landed. Treat as historical record only.
+              This commit predates the witness loop. Anchors below are gray because the commit-memo + audit-chain + on-chain + verifier-signature pipeline was not yet active when this commit landed. Treat as historical record only.
             </p>
           )}
           <p className="mt-2 text-[13px] font-light leading-relaxed text-neutral-400">
@@ -290,11 +277,13 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
         {!commit.predatesWitnessLoop && (
           <div className="mt-10 border border-neutral-800 bg-neutral-950/60 p-5">
             <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
-              Try to break it (Force-Fail Demo)
+              Witness independence
             </h2>
             <p className="mt-3 max-w-2xl text-[13px] font-light leading-relaxed text-neutral-400">
-              Clone the repo. Hand-edit one byte of <code className="text-neutral-200">landing/public/audit/events.jsonl</code>. Refresh this page with{" "}
-              <code className="text-neutral-200">?audit=local</code> appended. The audit-chain light flips red while gitsign + Solana + verifier-signature stay green. This proves the four witnesses are structurally independent: the audit chain is the only one Covenant operates locally; the other three live on Sigstore Rekor, Solana, and a separately-keyed verifier process Covenant cannot tamper with without leaving cryptographic evidence.
+              The audit hash chain is the only witness Covenant operates locally. The other three
+              are external — a Solana commit memo, the on-chain settlement anchor, and a
+              separately-keyed verifier — so tampering with the local chain cannot forge them.
+              Each anchor is checked on its own evidence, independently of the others.
             </p>
           </div>
         )}

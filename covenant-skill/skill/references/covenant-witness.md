@@ -42,8 +42,7 @@ Each anchored batch ties together:
 4. The verifier verdict (proves *no detected refutation*).
 
 A consumer of the witness only needs the run's content hash to pull these four
-together. The landing UI surfaces this at `/verify/<sha>` for any commit-scoped
-or skill-driven run — same UI patterns as the rest of Covenant's witness work.
+together. The landing UI presents each run at `/verify/<sha>`.
 
 ## What this means for the agent
 

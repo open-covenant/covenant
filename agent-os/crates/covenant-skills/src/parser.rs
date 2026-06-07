@@ -2,8 +2,9 @@
 //! a skill directory's `references/**` tree to compute a deterministic
 //! content digest.
 //!
-//! Digest contract: `sha256(`for each tracked file, sorted by relative
-//! path: `"{relpath}\t{sha256(normalized_content)}\n"`). Normalization
+//! Digest contract: for each tracked file, sorted by relative path, fold
+//! `"{relpath}\t{sha256(normalized_content)}\n"` into one rolling SHA-256.
+//! Normalization
 //! strips `\r`, trims trailing whitespace per line, and trims trailing
 //! newlines from the file. Reordering directory listings or rewriting a
 //! file with only line-ending / trailing-whitespace differences leaves
@@ -156,7 +157,9 @@ fn reference_files(skill_dir: &Path) -> Result<Vec<(String, PathBuf)>, SkillPars
     if !references_dir.is_dir() {
         return Ok(out);
     }
-    let strip_root = references_dir.parent().unwrap_or(&references_dir);
+    let strip_root = references_dir
+        .parent()
+        .expect("references_dir is skill_dir.join(\"references\"), which always has a parent");
     let mut stack = vec![references_dir.clone()];
     while let Some(dir) = stack.pop() {
         let read = fs::read_dir(&dir).map_err(|source| SkillParseError::Io {
@@ -182,7 +185,7 @@ fn reference_files(skill_dir: &Path) -> Result<Vec<(String, PathBuf)>, SkillPars
             }
             let rel = path
                 .strip_prefix(strip_root)
-                .unwrap_or(&path)
+                .expect("walked path is always a descendant of references_dir")
                 .to_string_lossy()
                 .replace('\\', "/");
             out.push((rel, path));

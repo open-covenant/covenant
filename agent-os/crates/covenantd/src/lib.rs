@@ -11798,6 +11798,7 @@ impl Server {
         let budget_join_receipts: HashMap<Uuid, &SettlementReceipt> =
             receipts.iter().map(|r| (r.id, r)).collect();
         let mut debit_receipt_payer_mismatch_refs = 0_u64;
+        let mut debit_receipt_payer_display_mismatch_refs = 0_u64;
         let mut debit_receipt_credits_mismatch_refs = 0_u64;
         let mut debit_memory_receipt_credits_not_flat_refs = 0_u64;
         for debit in &debits {
@@ -11854,6 +11855,39 @@ impl Server {
                         debit.paired_receipt, debit.agent.display, receipt.payer.display
                     ),
                     repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; record_paid_call (x402.rs:206-264) charges the debit and records the Tool receipt from the same payer in one call, so a matched pair whose agent.pubkey differs from the receipt's payer.pubkey is out-of-band evidence of a JSONL edit that reassigned which identity a paid call's debit charged (misattributing the USDC spend to the wrong agent's budget) while leaving the receipt's payer intact, an import tool that paired the debit with a foreign receipt, or a serde regression that hydrated either pubkey from a different row; the budget ledger and settlement log are separate unsigned local JSONL files with no cross-log signature so no within-row arm in either log covers this, making the join the sole detector; it fires only on a debit whose paired_receipt resolves to a Tool receipt (memory-dispatch debits pair with ResourceKind::Memory receipts whose payer is the submitting peer rather than the debited agent, so they are excluded by design) and only when the receipt's payer.pubkey is non-zero so the receipt_payer_pubkey_zeroed shape arm owns the zeroed-receipt-payer case; a zeroed debit agent paired to a valid Tool receipt is intentionally reported here since the budget log has no shape arm of its own".into(),
+                });
+            }
+            // Display half of the payer binding. record_paid_call clones one
+            // payer: &AgentId into both the debit's stored agent (try_debit
+            // pushes agent: agent.clone(), covenant-budget/src/lib.rs:412) and
+            // the Tool receipt's payer (payer.clone(), x402.rs:222) under one
+            // receipt_id, so a clean Tool pair carries byte-identical
+            // payer.display on both sides. A pair whose pubkeys agree but whose
+            // displays differ is a display-only relabel on one unsigned JSONL
+            // log: it passes the pubkey arm above (the keys still match), the
+            // budget ledger has no within-row shape arm of its own, and the
+            // display is well-formed by the AgentId Deserialize gate so no
+            // shape arm catches it — this cross-store binding is the sole
+            // detector. It is the budget-side mirror of the present-record
+            // memory_receipt_payer_display_not_matching_owner arm (Check 4) and
+            // the capability_granted display arms (Check 3). Gate on pubkey
+            // equality so it is strictly disjoint from the pubkey-mismatch arm,
+            // and with the receipt payer non-zero above both pubkeys are
+            // non-zero so the receipt_payer_pubkey_zeroed shape arm (Check 6)
+            // owns the zeroed-receipt case.
+            if receipt.payer.pubkey != [0u8; 32]
+                && debit.agent.pubkey == receipt.payer.pubkey
+                && debit.agent.display != receipt.payer.display
+            {
+                debit_receipt_payer_display_mismatch_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "budget_debit_paired_receipt_payer_display_mismatch".into(),
+                    id: Some(debit.paired_receipt.to_string()),
+                    message: format!(
+                        "budget debit paired_receipt = {} resolves to a ResourceKind::Tool SettlementReceipt whose payer.pubkey equals the debit's agent.pubkey while their display labels differ (debit agent {:?}, receipt payer {:?}); the sole production writer of a (BudgetDebit, Tool receipt) pair is record_paid_call (covenantd/src/x402.rs:206-264), which clones one payer AgentId into both the debit's agent via budget.try_debit(payer, call.credits, receipt_id) (covenant-budget/src/lib.rs:412) and the receipt's payer (x402.rs:222) under one receipt_id, so every production paid call satisfies debit.agent.display == receipt.payer.display — a matched pair whose pubkeys agree but whose displays differ is a relabel no production write emits",
+                        debit.paired_receipt, debit.agent.display, receipt.payer.display
+                    ),
+                    repair: "review the budget-ledger JSONL row and the settlement JSONL receipt it joins by paired_receipt == receipt.id; record_paid_call (x402.rs:206-264) clones one payer AgentId into both the debit's stored agent and the Tool receipt's payer in the same call, so a matched pair whose pubkeys agree but whose payer.display labels differ is out-of-band evidence of a JSONL edit that relabeled which named identity a paid call's debit charged (misattributing the USDC spend to a differently-named identity) while preserving the cryptographic key, an import tool that paired the debit with a foreign receipt display, or a serde regression that hydrated payer.display from a different row; local settlement receipts and the budget ledger are separate unsigned local JSONL files so no signature covers payer.display, the pubkey arm budget_debit_paired_receipt_payer_mismatch cannot catch this (the pubkeys agree), and the display is well-formed by the AgentId Deserialize gate so no within-row shape arm catches it, making this cross-store display binding the sole detector; it is the display half of the payer binding (the pubkey half is budget_debit_paired_receipt_payer_mismatch) and the budget-side mirror of the memory_receipt_payer_display_not_matching_owner arm (Check 4); it fires only on a debit whose paired_receipt resolves to a Tool receipt (memory-dispatch debits pair with ResourceKind::Memory receipts whose payer is the submitting peer rather than the debited agent, so they are excluded by design), only when the pubkeys are equal (so it is strictly disjoint from the pubkey-mismatch arm) and, the receipt payer.pubkey being non-zero, both pubkeys are non-zero so the receipt_payer_pubkey_zeroed shape arm (Check 6) owns the zeroed-receipt case".into(),
                 });
             }
             if receipt.credits_consumed != 0 && debit.credits != receipt.credits_consumed {
@@ -11914,6 +11948,7 @@ impl Server {
             }
         }
         let budget_join_drift = debit_receipt_payer_mismatch_refs
+            + debit_receipt_payer_display_mismatch_refs
             + debit_receipt_credits_mismatch_refs
             + debit_memory_receipt_credits_not_flat_refs
             + duplicate_paired_receipt_refs;
@@ -11922,7 +11957,7 @@ impl Server {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
             ),
         });
 
@@ -21909,6 +21944,75 @@ required = {caps:?}
                 assert!(
                     check.message.contains("1 duplicate-paired-receipt"),
                     "check message should count duplicate paired receipts: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_budget_debit_paired_receipt_payer_display_mismatch_drift() {
+        let s = server_with(vec![], "");
+        // record_paid_call clones one payer AgentId into both the debit's
+        // stored agent and the Tool receipt's payer, so a clean pair carries
+        // identical payer.display. Here the debit's agent shares the receipt
+        // payer's pubkey but carries a different display -- the display-only
+        // relabel a JSONL edit to one log would make -- so only the display
+        // arm fires and the pubkey arm stays silent (the keys still agree).
+        let receipt_id = Uuid::new_v4();
+        let payer = AgentId::new("payer@host", [9u8; 32]);
+        s.settlement
+            .record(budget_join_test_receipt(
+                receipt_id,
+                payer,
+                ResourceKind::Tool,
+                6,
+            ))
+            .await
+            .unwrap();
+        // Same pubkey, relabeled display. set_capacity/try_debit key on the
+        // pubkey, so the bucket lookup still resolves while the debit row
+        // records the relabeled display.
+        let relabeled = AgentId::new("relabeled@host", [9u8; 32]);
+        s.budget.set_capacity(&relabeled, 100).await.unwrap();
+        s.budget.try_debit(&relabeled, 6, receipt_id).await.unwrap();
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "budget_debit_paired_receipt_payer_display_mismatch"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected payer display mismatch drift: {drift:?}"));
+                assert!(
+                    row.message.contains("display labels differ")
+                        && row.message.contains("ResourceKind::Tool"),
+                    "message should name the display divergence and the Tool scope: {}",
+                    row.message
+                );
+                assert!(
+                    !drift
+                        .iter()
+                        .any(|i| i.kind == "budget_debit_paired_receipt_payer_mismatch"),
+                    "matching pubkey must not trip the pubkey arm: {drift:?}"
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 payer-display-mismatched"),
+                    "check message should count payer display mismatches: {}",
                     check.message
                 );
                 assert!(orphans_total >= 1);

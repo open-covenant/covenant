@@ -6097,6 +6097,7 @@ impl Server {
             .collect();
         let mut cap_granted_action_mismatch_refs = 0_u64;
         let mut cap_granted_granted_by_display_mismatch_refs = 0_u64;
+        let mut cap_granted_issuer_not_subject_refs = 0_u64;
         for event in &audits {
             if let AuditKind::CapabilityGranted {
                 signature_b58,
@@ -6147,20 +6148,62 @@ impl Server {
                                 repair: "review the audit JSONL row and the granted.jsonl capability it joins by signature_b58; production grants route through grant_capability, which stamps both cap.granted_by and CapabilityGranted.granted_by_display from the same granting AgentId in one call, so a cryptographically verified SignedCapability whose granted_by.display differs from its CapabilityGranted audit row is out-of-band evidence of a JSONL edit that rewrote the recorded granting identity on the /audit feed (the granted_by.display is not part of canonical_message — only granted_by.pubkey is, covenant-permissions/src/lib.rs:1106 — so the ed25519 signature does not cover it and capability_signature_invalid cannot catch this drift, making this binding the sole detector), an import tool that paired a CapabilityGranted row with a foreign signature_b58, or a serde regression that hydrated granted_by_display from a different row; it fires only when the persisted capability cryptographically verifies (so it is disjoint from capability_signature_invalid in Check 8) and only when the audit granted_by_display is a valid local@host form (so the Check 7 audit_capability_granted_granted_by_display_empty and _not_local_at_host_form shape arms own malformed values), and only on a matched signature_b58 (so the capability_without_audit orphan arm owns the unmatched case)".into(),
                             });
                         }
+                        // Cross-entity identity binding: the audit event's
+                        // issuer is the same authenticated peer the grant stamped
+                        // as the capability's subject. grant_capability builds
+                        // Capability { subject: peer.clone(), .. }
+                        // (covenantd/src/lib.rs:4638) and records the AuditEvent
+                        // with issuer = peer.clone() (lib.rs:4656) from the one
+                        // authenticated peer in a single call, and
+                        // record_peer_event asserts event.issuer.pubkey ==
+                        // peer.pubkey at every audit write (lib.rs:1838), so every
+                        // production grant satisfies audit.issuer.pubkey ==
+                        // cap.capability.subject.pubkey. subject.pubkey is part of
+                        // canonical_message (covenant-permissions/src/lib.rs:1096),
+                        // so a tampered persisted-cap subject breaks the signature
+                        // and routes to capability_signature_invalid; the
+                        // verify(cap).is_ok() gate keeps this arm disjoint from
+                        // that one, catching the complementary tamper — an audit
+                        // row whose recorded recipient identity drifted from an
+                        // authentically signed capability. This is the
+                        // capability↔audit mirror of the memory↔audit
+                        // intent_dispatched_issuer_not_matching_memory_owner arm
+                        // (Check 1). Gate on both pubkeys being non-zero so the
+                        // audit_event_issuer_pubkey_zeroed (Check 7) shape arm
+                        // owns the all-zero sentinel.
+                        if event.issuer.pubkey != [0u8; 32]
+                            && cap.capability.subject.pubkey != [0u8; 32]
+                            && event.issuer.pubkey != cap.capability.subject.pubkey
+                        {
+                            cap_granted_issuer_not_subject_refs += 1;
+                            drift.push(VerifyDrift {
+                                kind: "capability_granted_issuer_not_matching_signed_capability_subject".into(),
+                                id: Some(event.id.to_string()),
+                                message: format!(
+                                    "audit event {} has kind = AuditKind::CapabilityGranted with signature_b58 = {signature_b58:?} and issuer.pubkey (base58 {}), but the persisted SignedCapability it joins by signature_b58 has capability.subject.pubkey (base58 {}); grant_capability (covenantd/src/lib.rs:4637-4664) builds the Capability with subject = peer.clone() (lib.rs:4638) and records CapabilityGranted with issuer = peer.clone() (lib.rs:4656) from the same authenticated peer in one call, and record_peer_event asserts event.issuer.pubkey == peer.pubkey at every audit write (lib.rs:1838), so every production grant satisfies audit.issuer.pubkey == cap.capability.subject.pubkey — a matched pair whose audit issuer and signed-capability subject pubkeys disagree is a pairing no production write emits",
+                                    event.id,
+                                    event.issuer.pubkey_base58(),
+                                    cap.capability.subject.pubkey_base58()
+                                ),
+                                repair: "review the audit JSONL row and the granted.jsonl capability it joins by signature_b58; production grants route through grant_capability, which builds Capability.subject and stamps the CapabilityGranted audit issuer from the same authenticated peer in one call, while record_peer_event asserts event.issuer.pubkey == peer.pubkey at write time, so a cryptographically verified SignedCapability whose subject.pubkey differs from its CapabilityGranted audit issuer.pubkey is out-of-band evidence of a JSONL edit that rewrote the recorded recipient identity on the /audit feed (forging which identity a capability was granted to) while leaving the signed capability authentic, an import tool that paired a CapabilityGranted row with a foreign signature_b58, or a serde regression that hydrated event.issuer from a different row; subject.pubkey is part of canonical_message (covenant-permissions/src/lib.rs:1096), so tampering the persisted cap's own subject breaks its signature and routes to capability_signature_invalid (Check 8), and this arm fires only when the persisted capability cryptographically verifies (covenant_permissions::verify) so it is strictly disjoint from that arm, only when both pubkeys are non-zero so the audit_event_issuer_pubkey_zeroed (Check 7) shape arm owns the all-zero sentinel, and only on a matched signature_b58 so the capability_without_audit orphan arm owns the unmatched case; it is the capability↔audit mirror of the memory↔audit intent_dispatched_issuer_not_matching_memory_owner arm (Check 1)".into(),
+                            });
+                        }
                     }
                 }
             }
         }
         orphans_total += cap_orphans
             + cap_granted_action_mismatch_refs
-            + cap_granted_granted_by_display_mismatch_refs;
+            + cap_granted_granted_by_display_mismatch_refs
+            + cap_granted_issuer_not_subject_refs;
         checks.push(VerifyCheck {
             name: "capability ↔ audit".into(),
             passed: cap_orphans == 0
                 && cap_granted_action_mismatch_refs == 0
-                && cap_granted_granted_by_display_mismatch_refs == 0,
+                && cap_granted_granted_by_display_mismatch_refs == 0
+                && cap_granted_issuer_not_subject_refs == 0,
             message: format!(
-                "{cap_orphans} capabilit(ies) without matching grant audit event, {cap_granted_action_mismatch_refs} capability-grant audit row(s) whose action does not match the signed capability, {cap_granted_granted_by_display_mismatch_refs} capability-grant audit row(s) whose granted_by_display does not match the signed capability"
+                "{cap_orphans} capabilit(ies) without matching grant audit event, {cap_granted_action_mismatch_refs} capability-grant audit row(s) whose action does not match the signed capability, {cap_granted_granted_by_display_mismatch_refs} capability-grant audit row(s) whose granted_by_display does not match the signed capability, {cap_granted_issuer_not_subject_refs} capability-grant audit row(s) whose issuer does not match the signed capability subject"
             ),
         });
 
@@ -33090,6 +33133,154 @@ required = {caps:?}
                     cap_audit
                         .message
                         .contains("whose granted_by_display does not match"),
+                    "check message should count the new arm: {}",
+                    cap_audit.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_capability_granted_issuer_not_matching_signed_capability_subject_drift()
+    {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let me_b58 = me.pubkey_base58();
+        // Tamper: an authentically signed capability whose CapabilityGranted
+        // audit row records a DIFFERENT but well-formed, non-zero issuer than the
+        // cap's subject — exactly what rewriting "who received the grant" on the
+        // /audit feed looks like. subject.pubkey is part of canonical_message, so
+        // the cap still verifies and this drift is invisible to the signature
+        // check; only the cross-entity issuer↔subject binding catches it. action
+        // and granted_by_display match the cap, and subject_display matches the
+        // audit issuer.display, so the sibling action / granted_by_display join
+        // arms and the within-row subject_display↔issuer.display arm all stay
+        // silent and this test isolates the issuer↔subject arm.
+        let intruder = AgentId::new("intruder@local", [9u8; 32]);
+        let intruder_b58 = intruder.pubkey_base58();
+        let tamper_cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: "memory.read".into(),
+            scope: serde_json::json!({}),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let tamper_signed = sign_capability(tamper_cap, s.identity.signing_key());
+        let tamper_b58 = bs58::encode(tamper_signed.signature).into_string();
+        s.capabilities.record(tamper_signed).await.unwrap();
+        let tamper_event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: tamper_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: intruder.clone(),
+                kind: AuditKind::CapabilityGranted {
+                    subject_display: intruder.display.clone(),
+                    action: "memory.read".into(),
+                    granted_by_display: me.display.clone(),
+                    signature_b58: tamper_b58.clone(),
+                },
+            })
+            .await
+            .unwrap();
+        // Control: a signed cap whose audit issuer equals the cap subject —
+        // proves the arm binds to the joined subject and does not false-positive
+        // on a faithful pair.
+        let ok_cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({}),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let ok_signed = sign_capability(ok_cap, s.identity.signing_key());
+        let ok_b58 = bs58::encode(ok_signed.signature).into_string();
+        s.capabilities.record(ok_signed).await.unwrap();
+        let ok_event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: ok_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::CapabilityGranted {
+                    subject_display: me.display.clone(),
+                    action: "tool.call.echo".into(),
+                    granted_by_display: me.display.clone(),
+                    signature_b58: ok_b58.clone(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind
+                            == "capability_granted_issuer_not_matching_signed_capability_subject"
+                            && item.id.as_deref() == Some(&tamper_event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected capability_granted_issuer_not_matching_signed_capability_subject: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains(intruder_b58.as_str())
+                        && row.message.contains(me_b58.as_str()),
+                    "message should record the audit issuer pubkey and the joined capability subject pubkey: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("capability_signature_invalid")
+                        && row.repair.contains("audit_event_issuer_pubkey_zeroed"),
+                    "repair hint should explain disjointness from the signature and zeroed-pubkey arms: {}",
+                    row.repair
+                );
+                // A non-zero issuer pubkey must not trip the Check 7 zeroed arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&tamper_event_id.to_string())
+                            || item.kind != "audit_event_issuer_pubkey_zeroed"
+                    }),
+                    "a non-zero issuer pubkey must not trip audit_event_issuer_pubkey_zeroed: {drift:?}"
+                );
+                // The authentically signed cap must not trip signature_invalid or
+                // be reported as an orphan.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(tamper_b58.as_str())
+                            || (item.kind != "capability_signature_invalid"
+                                && item.kind != "capability_without_audit")
+                    }),
+                    "an authentically signed cap with a matched audit row must not trip signature_invalid or without_audit: {drift:?}"
+                );
+                // The faithful control pair must not trip the arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind
+                            != "capability_granted_issuer_not_matching_signed_capability_subject"
+                            || item.id.as_deref() != Some(&ok_event_id.to_string())
+                    }),
+                    "a pair whose audit issuer pubkey equals the capability subject pubkey must not trip the arm: {drift:?}"
+                );
+                let cap_audit = checks
+                    .iter()
+                    .find(|c| c.name == "capability ↔ audit")
+                    .unwrap_or_else(|| panic!("expected capability ↔ audit check: {checks:?}"));
+                assert!(!cap_audit.passed);
+                assert!(
+                    cap_audit
+                        .message
+                        .contains("whose issuer does not match the signed capability subject"),
                     "check message should count the new arm: {}",
                     cap_audit.message
                 );

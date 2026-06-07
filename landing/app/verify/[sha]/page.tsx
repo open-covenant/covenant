@@ -3,6 +3,7 @@
 // /api/verify/[sha] route handler this page reads.
 
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
@@ -64,10 +65,18 @@ function redactAuthor(name: string, email: string): { display: string; email: st
 }
 
 async function fetchWitness(sha: string): Promise<VerifyPayload | null> {
-  const host = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-  const res = await fetch(`${host}/api/verify/${encodeURIComponent(sha)}`, { cache: "no-store" });
+  // Resolve the API on the host this request arrived on — the app is reachable
+  // there whatever the port or deploy config, which avoids a wrong-port
+  // self-fetch (e.g. localhost:3000) on hosts that aren't Vercel.
+  const h = await headers();
+  const reqHost = h.get("x-forwarded-host") || h.get("host");
+  const proto = h.get("x-forwarded-proto") || "https";
+  const base = reqHost
+    ? `${proto}://${reqHost}`
+    : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  const res = await fetch(`${base}/api/verify/${encodeURIComponent(sha)}`, { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`verify api ${res.status}`);
   return (await res.json()) as VerifyPayload;

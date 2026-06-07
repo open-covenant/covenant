@@ -7849,7 +7849,79 @@ impl Server {
                 });
             }
         }
+        // Intra-batch confirmation consistency. A receipt joins a batch when
+        // flush_receipts calls mark_batch_confirmed(&batch.receipt_ids,
+        // confirmation) (covenantd/src/lib.rs:5429-5431) with the full id set
+        // from build_receipt_batch and one ChainConfirmation; the Jsonl store's
+        // mark_batch_confirmed applies that single confirmation to every
+        // matching receipt via annotate_receipt (which sets receipt.tx_sig =
+        // confirmation.tx_sig.clone() at covenant-settlement/src/lib.rs:374)
+        // before atomically rewriting the store with a tempfile + rename
+        // (covenant-settlement/src/lib.rs:488-494), so a batch is anchored
+        // on-chain by one transaction and every receipt sharing a batch_id
+        // carries the identical tx_sig — all None in the flushed-but-unconfirmed
+        // state the production flush path writes (ChainConfirmation { tx_sig:
+        // None } at lib.rs:5425) and all the same Some once on-chain confirmation
+        // lands. Divergent tx_sig within one batch_id is a torn or replayed
+        // confirmation no production write emits. The per-receipt tx_sig shape
+        // arms validate one value's form and receipt_tx_sig_onchain_sig_diverged
+        // binds one receipt's tx_sig to its own onchain_sig, but none compares
+        // tx_sig across receipts sharing a batch, so two well-formed-but-
+        // different tx_sigs in one batch slip past every existing arm. Group
+        // only canonical-hex32 batch_ids (same predicate the not-derived arm
+        // uses) so malformed ids stay owned by the batch_id shape arms; this is
+        // orthogonal to those, to receipt_tx_sig_onchain_sig_diverged
+        // (intra-receipt), and to receipt_id_duplicate (groups by receipt.id — a
+        // batch legitimately holds many distinct receipt ids).
+        let is_canonical_hex32 = |s: &str| {
+            s.chars().count() == 64
+                && !s.bytes().all(|b| b == b'0')
+                && !s
+                    .chars()
+                    .any(|c| !c.is_ascii_digit() && !('a'..='f').contains(&c))
+        };
+        let mut tx_sig_by_batch: HashMap<&str, HashSet<Option<&str>>> = HashMap::new();
+        let mut batch_order: Vec<&str> = Vec::new();
+        for receipt in &receipts {
+            let Some(batch_id) = receipt.batch_id.as_deref() else {
+                continue;
+            };
+            if !is_canonical_hex32(batch_id) {
+                continue;
+            }
+            let sigs = tx_sig_by_batch.entry(batch_id).or_default();
+            if sigs.is_empty() {
+                batch_order.push(batch_id);
+            }
+            sigs.insert(receipt.tx_sig.as_deref());
+        }
+        let mut batch_tx_sig_diverged_refs = 0_u64;
+        for batch_id in &batch_order {
+            let sigs = &tx_sig_by_batch[batch_id];
+            if sigs.len() > 1 {
+                batch_tx_sig_diverged_refs += 1;
+                let mut shown: Vec<String> = sigs
+                    .iter()
+                    .map(|sig| match sig {
+                        Some(value) => format!("Some({value:?})"),
+                        None => "None".to_string(),
+                    })
+                    .collect();
+                shown.sort();
+                drift.push(VerifyDrift {
+                    kind: "receipt_batch_tx_sig_diverged".into(),
+                    id: Some((*batch_id).to_string()),
+                    message: format!(
+                        "settlement receipts sharing batch_id {batch_id} carry {} distinct tx_sig values [{}]; a receipt batch is anchored on-chain by a single transaction — flush_receipts calls mark_batch_confirmed(&batch.receipt_ids, confirmation) with the full id set from build_receipt_batch and one ChainConfirmation (covenantd/src/lib.rs:5429-5431), and JsonlReceiptStore::mark_batch_confirmed applies that single confirmation to every receipt in the batch via annotate_receipt (which sets receipt.tx_sig = confirmation.tx_sig.clone() at covenant-settlement/src/lib.rs:374) before atomically rewriting the store, so every receipt sharing a batch_id carries the identical tx_sig (all None before confirmation, all the same Some once it lands) — divergent tx_sig within one batch is a torn or replayed confirmation no production write emits",
+                        sigs.len(),
+                        shown.join(", ")
+                    ),
+                    repair: "review the settlement JSONL rows that carry this batch_id; production receipt confirmation routes through mark_batch_confirmed(&batch.receipt_ids, confirmation), which applies one ChainConfirmation to every receipt in the batch via annotate_receipt (receipt.tx_sig = confirmation.tx_sig.clone(), covenant-settlement/src/lib.rs:374) before atomically rewriting the store with a tempfile + rename (covenant-settlement/src/lib.rs:488-494), so a batch is anchored by a single on-chain transaction and all its receipts carry one tx_sig — divergent tx_sig within a batch_id is out-of-band evidence of a partial or retried confirmation writer that re-anchored a subset of the batch under a different transaction signature, an import or replay tool that paired a batch's receipts with mismatched confirmations, or a serde/merge regression that hydrated one receipt's tx_sig from a foreign batch while its batch_id survived; identify the on-chain transaction that anchored merkle_root and re-confirm the whole batch through mark_batch_confirmed so every receipt carries the same tx_sig. This groups only canonical 64-char lowercase-hex batch_ids (the same predicate the receipt_batch_id_not_derived_from_merkle_root arm uses) so malformed batch_ids stay owned by the receipt_batch_id_empty, receipt_batch_id_wrong_length, receipt_batch_id_all_zeros, and receipt_batch_id_not_lowercase_hex shape arms; it is orthogonal to the per-receipt receipt_tx_sig_empty, receipt_tx_sig_wrong_length, receipt_tx_sig_not_base58, and receipt_tx_sig_decodes_to_wrong_byte_length shape arms (which validate one value's form), to receipt_tx_sig_onchain_sig_diverged (which binds one receipt's tx_sig to its own onchain_sig), and to receipt_id_duplicate (which groups by receipt.id, where a batch legitimately holds many distinct receipt ids)".into(),
+                });
+            }
+        }
         orphans_total += confirmed_without_chain_refs
+            + batch_tx_sig_diverged_refs
             + duplicate_id_receipt_refs
             + slot_without_chain_refs
             + slot_confirmed_at_presence_diverged_refs
@@ -7884,6 +7956,7 @@ impl Server {
         checks.push(VerifyCheck {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
+                && batch_tx_sig_diverged_refs == 0
                 && duplicate_id_receipt_refs == 0
                 && slot_without_chain_refs == 0
                 && slot_confirmed_at_presence_diverged_refs == 0
@@ -7916,7 +7989,7 @@ impl Server {
                 && not_base58_onchain_sig_receipt_refs == 0
                 && wrong_byte_length_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {slot_without_chain_refs} slot-without-chain receipt(s), {slot_confirmed_at_presence_diverged_refs} torn-confirmation-metadata receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {duplicate_id_receipt_refs} duplicate-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {not_derived_batch_id_receipt_refs} not-derived-batch-id receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {wrong_byte_length_tx_sig_receipt_refs} wrong-byte-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s), {wrong_byte_length_onchain_sig_receipt_refs} wrong-byte-length-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {batch_tx_sig_diverged_refs} batch-tx-sig-diverged receipt-batch(es), {slot_without_chain_refs} slot-without-chain receipt(s), {slot_confirmed_at_presence_diverged_refs} torn-confirmation-metadata receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {duplicate_id_receipt_refs} duplicate-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {not_derived_batch_id_receipt_refs} not-derived-batch-id receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {wrong_byte_length_tx_sig_receipt_refs} wrong-byte-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s), {wrong_byte_length_onchain_sig_receipt_refs} wrong-byte-length-onchain-sig receipt(s)"
             ),
         });
 
@@ -17310,6 +17383,135 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 not-derived-batch-id receipt"),
                     "check message should count not-derived-batch-id receipts: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_batch_tx_sig_diverged_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Two well-formed but distinct 64-byte ed25519 signatures (base58 of
+        // [1u8; 64] and [2u8; 64], each 87 chars decoding to 64 bytes), so both
+        // pass every per-receipt tx_sig shape arm — only the cross-receipt batch
+        // arm can catch the divergence.
+        let sig_a = bs58::encode([1u8; 64]).into_string();
+        let sig_b = bs58::encode([2u8; 64]).into_string();
+        // Diverged batch: two receipts share one canonical batch_id but carry
+        // different tx_sig — the single ChainConfirmation that anchors a batch
+        // on-chain makes this state unreachable through mark_batch_confirmed.
+        let diverged_merkle = "a".repeat(64);
+        let diverged_batch_id = derive_batch_id(&diverged_merkle);
+        for sig in [&sig_a, &sig_b] {
+            s.settlement
+                .record(SettlementReceipt {
+                    id: Uuid::new_v4(),
+                    payer: me.clone(),
+                    resource: ResourceKind::Compute,
+                    memory_record_id: None,
+                    credits_consumed: 1,
+                    settled_at: 1_000,
+                    chain: Some("solana".into()),
+                    cluster: Some("devnet".into()),
+                    batch_id: Some(diverged_batch_id.clone()),
+                    merkle_root: Some(diverged_merkle.clone()),
+                    tx_sig: Some((*sig).clone()),
+                    slot: Some(2_000),
+                    confirmed_at: Some(2_000),
+                    onchain_sig: Some((*sig).clone()),
+                })
+                .await
+                .unwrap();
+        }
+        // Control: a different batch whose two receipts agree on tx_sig must not
+        // trip the arm — a batch sharing one anchoring transaction is the norm.
+        let agreeing_merkle = "b".repeat(64);
+        let agreeing_batch_id = derive_batch_id(&agreeing_merkle);
+        for _ in 0..2 {
+            s.settlement
+                .record(SettlementReceipt {
+                    id: Uuid::new_v4(),
+                    payer: me.clone(),
+                    resource: ResourceKind::Compute,
+                    memory_record_id: None,
+                    credits_consumed: 1,
+                    settled_at: 1_000,
+                    chain: Some("solana".into()),
+                    cluster: Some("devnet".into()),
+                    batch_id: Some(agreeing_batch_id.clone()),
+                    merkle_root: Some(agreeing_merkle.clone()),
+                    tx_sig: Some(sig_a.clone()),
+                    slot: Some(2_000),
+                    confirmed_at: Some(2_000),
+                    onchain_sig: Some(sig_a.clone()),
+                })
+                .await
+                .unwrap();
+        }
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_batch_tx_sig_diverged"
+                            && item.id.as_deref() == Some(diverged_batch_id.as_str())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_batch_tx_sig_diverged: {drift:?}"));
+                assert!(
+                    row.message.contains("distinct tx_sig")
+                        && row.message.contains(&sig_a)
+                        && row.message.contains(&sig_b),
+                    "drift message should name both divergent tx_sig values: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("mark_batch_confirmed")
+                        && row.repair.contains("receipt_tx_sig_onchain_sig_diverged"),
+                    "repair hint should name the batch confirmation path and the arms it is disjoint from: {}",
+                    row.repair
+                );
+                // Control batch must stay silent: agreement is the norm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "receipt_batch_tx_sig_diverged"
+                            || item.id.as_deref() != Some(agreeing_batch_id.as_str())
+                    }),
+                    "a batch whose receipts agree on tx_sig must not trip the arm: {drift:?}"
+                );
+                // Disjoint from the per-receipt tx_sig/onchain_sig arms: all four
+                // signatures are well-formed, so only the batch arm fires.
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind.starts_with("receipt_tx_sig_")
+                            || item.kind.starts_with("receipt_onchain_sig_")
+                    }),
+                    "well-formed divergent signatures must not trip any per-receipt sig shape arm: {drift:?}"
+                );
+                // Distinct receipt ids: the batch arm must not be confused with
+                // receipt_id_duplicate (which groups by receipt.id).
+                assert!(
+                    !drift.iter().any(|item| item.kind == "receipt_id_duplicate"),
+                    "distinct receipt ids must not trip receipt_id_duplicate: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 batch-tx-sig-diverged"),
+                    "check message should count batch-tx-sig-diverged batches: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

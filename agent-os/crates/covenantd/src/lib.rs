@@ -7920,8 +7920,64 @@ impl Server {
                 });
             }
         }
+        // Slot sibling of receipt_batch_tx_sig_diverged. receipt.slot is the
+        // same single-ChainConfirmation field: annotate_receipt sets receipt.slot
+        // = confirmation.slot (covenant-settlement/src/lib.rs:375) for every
+        // receipt in batch.receipt_ids, so a batch's receipts are anchored in one
+        // transaction in one block and share one slot — all None before
+        // confirmation (ChainConfirmation { slot: None } at lib.rs:5426), all the
+        // same Some after. Divergent slot within one batch_id is a torn or
+        // replayed confirmation no production write emits, and it is non-redundant
+        // with the tx_sig arm: a serde regression or import tool can corrupt slot
+        // across a subset while tx_sig survives. Orthogonal to receipt_slot_zero
+        // (Some(0) value-shape), receipt_slot_without_chain (binds slot to chain
+        // on one receipt), and receipt_slot_confirmed_at_presence_diverged
+        // (intra-receipt slot/confirmed_at presence). Groups only canonical-hex32
+        // batch_ids (the shared predicate) so malformed ids stay owned by the
+        // batch_id shape arms.
+        let mut slot_by_batch: HashMap<&str, HashSet<Option<u64>>> = HashMap::new();
+        let mut slot_batch_order: Vec<&str> = Vec::new();
+        for receipt in &receipts {
+            let Some(batch_id) = receipt.batch_id.as_deref() else {
+                continue;
+            };
+            if !is_canonical_hex32(batch_id) {
+                continue;
+            }
+            let slots = slot_by_batch.entry(batch_id).or_default();
+            if slots.is_empty() {
+                slot_batch_order.push(batch_id);
+            }
+            slots.insert(receipt.slot);
+        }
+        let mut batch_slot_diverged_refs = 0_u64;
+        for batch_id in &slot_batch_order {
+            let slots = &slot_by_batch[batch_id];
+            if slots.len() > 1 {
+                batch_slot_diverged_refs += 1;
+                let mut shown: Vec<String> = slots
+                    .iter()
+                    .map(|slot| match slot {
+                        Some(value) => format!("Some({value})"),
+                        None => "None".to_string(),
+                    })
+                    .collect();
+                shown.sort();
+                drift.push(VerifyDrift {
+                    kind: "receipt_batch_slot_diverged".into(),
+                    id: Some((*batch_id).to_string()),
+                    message: format!(
+                        "settlement receipts sharing batch_id {batch_id} carry {} distinct slot values [{}]; a receipt batch is anchored on-chain by a single transaction in a single block — mark_batch_confirmed(&batch.receipt_ids, confirmation) applies one ChainConfirmation to every receipt in the batch via annotate_receipt (which sets receipt.slot = confirmation.slot at covenant-settlement/src/lib.rs:375) before atomically rewriting the store, so every receipt sharing a batch_id carries the identical slot (all None before confirmation, all the same on-chain block slot once it lands) — divergent slot within one batch is a torn or replayed confirmation no production write emits",
+                        slots.len(),
+                        shown.join(", ")
+                    ),
+                    repair: "review the settlement JSONL rows that carry this batch_id; production receipt confirmation routes through mark_batch_confirmed(&batch.receipt_ids, confirmation), which applies one ChainConfirmation to every receipt in the batch via annotate_receipt (receipt.slot = confirmation.slot, covenant-settlement/src/lib.rs:375) before atomically rewriting the store with a tempfile + rename (covenant-settlement/src/lib.rs:488-494), so all of a batch's receipts are anchored in one transaction in one block and carry one slot — divergent slot within a batch_id is out-of-band evidence of a partial or retried confirmation writer that re-anchored a subset of the batch under a different block, an import or replay tool that paired a batch's receipts with mismatched confirmation slots, or a serde/merge regression that hydrated one receipt's slot from a foreign batch while its batch_id survived; identify the on-chain transaction that anchored merkle_root and re-confirm the whole batch through mark_batch_confirmed so every receipt carries the same slot. This is the slot sibling of receipt_batch_tx_sig_diverged and is non-redundant with it (a regression can corrupt slot while tx_sig survives); it groups only canonical 64-char lowercase-hex batch_ids so malformed batch_ids stay owned by the receipt_batch_id_empty, receipt_batch_id_wrong_length, receipt_batch_id_all_zeros, and receipt_batch_id_not_lowercase_hex shape arms, and it is orthogonal to receipt_slot_zero (which owns the Some(0) value-shape), receipt_slot_without_chain (which binds slot to chain on one receipt), receipt_slot_confirmed_at_presence_diverged (which binds slot to confirmed_at within one receipt), and receipt_id_duplicate (which groups by receipt.id, where a batch legitimately holds many distinct receipt ids)".into(),
+                });
+            }
+        }
         orphans_total += confirmed_without_chain_refs
             + batch_tx_sig_diverged_refs
+            + batch_slot_diverged_refs
             + duplicate_id_receipt_refs
             + slot_without_chain_refs
             + slot_confirmed_at_presence_diverged_refs
@@ -7957,6 +8013,7 @@ impl Server {
             name: "settlement receipt integrity".into(),
             passed: confirmed_without_chain_refs == 0
                 && batch_tx_sig_diverged_refs == 0
+                && batch_slot_diverged_refs == 0
                 && duplicate_id_receipt_refs == 0
                 && slot_without_chain_refs == 0
                 && slot_confirmed_at_presence_diverged_refs == 0
@@ -7989,7 +8046,7 @@ impl Server {
                 && not_base58_onchain_sig_receipt_refs == 0
                 && wrong_byte_length_onchain_sig_receipt_refs == 0,
             message: format!(
-                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {batch_tx_sig_diverged_refs} batch-tx-sig-diverged receipt-batch(es), {slot_without_chain_refs} slot-without-chain receipt(s), {slot_confirmed_at_presence_diverged_refs} torn-confirmation-metadata receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {duplicate_id_receipt_refs} duplicate-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {not_derived_batch_id_receipt_refs} not-derived-batch-id receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {wrong_byte_length_tx_sig_receipt_refs} wrong-byte-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s), {wrong_byte_length_onchain_sig_receipt_refs} wrong-byte-length-onchain-sig receipt(s)"
+                "{confirmed_without_chain_refs} confirmed-without-chain receipt(s), {batch_tx_sig_diverged_refs} batch-tx-sig-diverged receipt-batch(es), {batch_slot_diverged_refs} batch-slot-diverged receipt-batch(es), {slot_without_chain_refs} slot-without-chain receipt(s), {slot_confirmed_at_presence_diverged_refs} torn-confirmation-metadata receipt(s), {chain_partial_refs} partial-chain-bundle receipt(s), {tx_sig_onchain_sig_diverged_refs} tx-sig/onchain-sig-diverged receipt(s), {zero_settled_at_refs} zero-settled-at receipt(s), {zero_credits_consumed_receipt_refs} zero-credits-consumed receipt(s), {zero_confirmed_at_receipt_refs} zero-confirmed-at receipt(s), {zero_slot_receipt_refs} zero-slot receipt(s), {nil_id_receipt_refs} nil-id receipt(s), {duplicate_id_receipt_refs} duplicate-id receipt(s), {zeroed_payer_receipt_refs} zeroed-payer-pubkey receipt(s), {nil_memory_record_id_receipt_refs} nil-memory-record-id receipt(s), {empty_chain_receipt_refs} empty-chain receipt(s), {not_recognized_chain_receipt_refs} not-recognized-chain receipt(s), {empty_batch_id_receipt_refs} empty-batch-id receipt(s), {wrong_length_batch_id_receipt_refs} wrong-length-batch-id receipt(s), {all_zeros_batch_id_receipt_refs} all-zeros-batch-id receipt(s), {not_lowercase_hex_batch_id_receipt_refs} not-lowercase-hex-batch-id receipt(s), {empty_merkle_root_receipt_refs} empty-merkle-root receipt(s), {wrong_length_merkle_root_receipt_refs} wrong-length-merkle-root receipt(s), {all_zeros_merkle_root_receipt_refs} all-zeros-merkle-root receipt(s), {not_lowercase_hex_merkle_root_receipt_refs} not-lowercase-hex-merkle-root receipt(s), {not_derived_batch_id_receipt_refs} not-derived-batch-id receipt(s), {empty_tx_sig_receipt_refs} empty-tx-sig receipt(s), {wrong_length_tx_sig_receipt_refs} wrong-length-tx-sig receipt(s), {not_base58_tx_sig_receipt_refs} not-base58-tx-sig receipt(s), {wrong_byte_length_tx_sig_receipt_refs} wrong-byte-length-tx-sig receipt(s), {empty_onchain_sig_receipt_refs} empty-onchain-sig receipt(s), {wrong_length_onchain_sig_receipt_refs} wrong-length-onchain-sig receipt(s), {not_base58_onchain_sig_receipt_refs} not-base58-onchain-sig receipt(s), {wrong_byte_length_onchain_sig_receipt_refs} wrong-byte-length-onchain-sig receipt(s)"
             ),
         });
 
@@ -17512,6 +17569,133 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 batch-tx-sig-diverged"),
                     "check message should count batch-tx-sig-diverged batches: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_batch_slot_diverged_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Diverged batch: two receipts share one canonical batch_id but claim
+        // different on-chain block slots — a batch is anchored in one transaction
+        // in one block, so mark_batch_confirmed cannot produce this. confirmed_at
+        // is equal across the pair so receipt_slot_confirmed_at_presence_diverged
+        // stays silent (slot and confirmed_at both Some); tx_sig is None so the
+        // sibling batch-tx-sig arm stays silent.
+        let diverged_merkle = "a".repeat(64);
+        let diverged_batch_id = derive_batch_id(&diverged_merkle);
+        for slot in [2_000_u64, 3_000_u64] {
+            s.settlement
+                .record(SettlementReceipt {
+                    id: Uuid::new_v4(),
+                    payer: me.clone(),
+                    resource: ResourceKind::Compute,
+                    memory_record_id: None,
+                    credits_consumed: 1,
+                    settled_at: 1_000,
+                    chain: Some("solana".into()),
+                    cluster: Some("devnet".into()),
+                    batch_id: Some(diverged_batch_id.clone()),
+                    merkle_root: Some(diverged_merkle.clone()),
+                    tx_sig: None,
+                    slot: Some(slot),
+                    confirmed_at: Some(2_000),
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+        // Control: a different batch whose two receipts agree on slot must not
+        // trip the arm.
+        let agreeing_merkle = "b".repeat(64);
+        let agreeing_batch_id = derive_batch_id(&agreeing_merkle);
+        for _ in 0..2 {
+            s.settlement
+                .record(SettlementReceipt {
+                    id: Uuid::new_v4(),
+                    payer: me.clone(),
+                    resource: ResourceKind::Compute,
+                    memory_record_id: None,
+                    credits_consumed: 1,
+                    settled_at: 1_000,
+                    chain: Some("solana".into()),
+                    cluster: Some("devnet".into()),
+                    batch_id: Some(agreeing_batch_id.clone()),
+                    merkle_root: Some(agreeing_merkle.clone()),
+                    tx_sig: None,
+                    slot: Some(2_000),
+                    confirmed_at: Some(2_000),
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "receipt_batch_slot_diverged"
+                            && item.id.as_deref() == Some(diverged_batch_id.as_str())
+                    })
+                    .unwrap_or_else(|| panic!("expected receipt_batch_slot_diverged: {drift:?}"));
+                assert!(
+                    row.message.contains("distinct slot")
+                        && row.message.contains("Some(2000)")
+                        && row.message.contains("Some(3000)"),
+                    "drift message should name both divergent slot values: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("receipt_batch_tx_sig_diverged")
+                        && row.repair.contains("receipt_slot_confirmed_at_presence_diverged"),
+                    "repair hint should name the sibling tx_sig arm and the intra-receipt arms it is disjoint from: {}",
+                    row.repair
+                );
+                // Control batch stays silent.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "receipt_batch_slot_diverged"
+                            || item.id.as_deref() != Some(agreeing_batch_id.as_str())
+                    }),
+                    "a batch whose receipts agree on slot must not trip the arm: {drift:?}"
+                );
+                // Disjoint from the per-receipt slot arms and the sibling tx_sig
+                // batch arm: all slots are non-zero, chain-bound, presence-paired
+                // with confirmed_at, and tx_sig is uniformly None.
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "receipt_slot_zero"
+                            || item.kind == "receipt_slot_without_chain"
+                            || item.kind == "receipt_slot_confirmed_at_presence_diverged"
+                            || item.kind == "receipt_batch_tx_sig_diverged"
+                    }),
+                    "well-formed divergent slots must trip only the batch-slot arm: {drift:?}"
+                );
+                assert!(
+                    !drift.iter().any(|item| item.kind == "receipt_id_duplicate"),
+                    "distinct receipt ids must not trip receipt_id_duplicate: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "settlement receipt integrity")
+                    .unwrap_or_else(|| panic!("expected receipt integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 batch-slot-diverged"),
+                    "check message should count batch-slot-diverged batches: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

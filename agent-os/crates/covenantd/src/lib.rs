@@ -5815,6 +5815,15 @@ impl Server {
         let memory_by_id: HashMap<Uuid, &MemoryRecord> =
             memories.iter().map(|m| (m.id, m)).collect();
         let mut dispatched_intent_counts: HashMap<Uuid, usize> = HashMap::new();
+        // Capture each intent's dispatcher identity (the IntentDispatched audit
+        // issuer) keyed by intent_id so the Check 4 memory ↔ receipts join can
+        // bind an orphaned Memory receipt's payer to the surviving audit issuer
+        // once the working-tier memory record both rows reference has been
+        // purged. This is the third edge of the dispatch triangle: Check 1 binds
+        // audit.issuer ↔ memory.owner and Check 4 binds receipt.payer ↔
+        // memory.owner, but both gate on the memory record being present, so
+        // neither covers an audit ↔ receipt pair whose memory record is gone.
+        let mut dispatched_issuer_by_intent: HashMap<Uuid, &AgentId> = HashMap::new();
         let mut result_hash_not_derived_refs = 0_u64;
         let mut issuer_not_owner_refs = 0_u64;
         let mut issuer_display_not_owner_refs = 0_u64;
@@ -5832,6 +5841,9 @@ impl Server {
             } = &event.kind
             {
                 *dispatched_intent_counts.entry(*intent_id).or_insert(0) += 1;
+                dispatched_issuer_by_intent
+                    .entry(*intent_id)
+                    .or_insert(&event.issuer);
                 // Cross-entity derivation: the matched memory record's text is
                 // the same text_out the dispatch hashed into result_hash_hex.
                 // Gate on a canonical digest so the four Check 7 shape arms own
@@ -6554,6 +6566,7 @@ impl Server {
         }
 
         let mut exact_diff = 0_u64;
+        let mut orphaned_receipt_payer_not_audit_issuer_refs = 0_u64;
         for (memory_id, matched_receipts) in &receipts_by_memory_id {
             match memory_by_id.get(memory_id) {
                 Some(memory) => {
@@ -6665,6 +6678,48 @@ impl Server {
                             ),
                             repair: "review the receipt before settlement; missing memory may require accounting reversal or provenance backfill".into(),
                         });
+                        // Third edge of the dispatch triangle (audit ↔ receipt),
+                        // the SOLE detector once the memory record both rows
+                        // reference has been purged. dispatch_intent_run's
+                        // memory-write branch binds let issuer = peer.clone()
+                        // (lib.rs:3929) and stamps it into both the
+                        // SettlementReceipt.payer (lib.rs:4206) and the
+                        // IntentDispatched AuditEvent.issuer (lib.rs:4228) in one
+                        // dispatch, so every production memory write satisfies
+                        // receipt.payer.pubkey == audit.issuer.pubkey. The Check 1
+                        // intent_dispatched_issuer_not_matching_memory_owner and
+                        // Check 4 memory_receipt_owner_mismatch arms both bind
+                        // through memory.owner but gate on the record being
+                        // present (this is the None arm: it is absent), so on an
+                        // orphaned dispatch pair — a normal state once a
+                        // working-tier record is compacted while the append-only
+                        // audit and settlement rows persist — neither fires and
+                        // this direct audit ↔ receipt binding is the only check.
+                        // Gate on the IntentDispatched audit for this intent_id
+                        // being present (so an audit-less receipt is left to the
+                        // receipt_without_memory_record arm alone) and on both
+                        // pubkeys being non-zero so the receipt_payer_pubkey_zeroed
+                        // (Check 6) and audit_event_issuer_pubkey_zeroed (Check 7)
+                        // shape arms own the all-zero sentinel.
+                        if let Some(issuer) = dispatched_issuer_by_intent.get(memory_id) {
+                            if receipt.payer.pubkey != [0u8; 32]
+                                && issuer.pubkey != [0u8; 32]
+                                && receipt.payer.pubkey != issuer.pubkey
+                            {
+                                orphaned_receipt_payer_not_audit_issuer_refs += 1;
+                                drift.push(VerifyDrift {
+                                    kind: "receipt_without_memory_record_payer_not_matching_audit_issuer".into(),
+                                    id: Some(receipt.id.to_string()),
+                                    message: format!(
+                                        "settlement receipt {} has resource = ResourceKind::Memory and memory_record_id = Some({memory_id}) referencing a memory record absent from the store, and the IntentDispatched audit row that dispatched intent_id {memory_id} has issuer.pubkey (base58 {}) which does not equal this receipt's payer.pubkey (base58 {}); the sole production writer of a Memory receipt carrying a memory_record_id is dispatch_intent_run's memory-write branch (covenantd/src/lib.rs:4185-4223), which binds let issuer = peer.clone() (lib.rs:3929) and stamps that one AgentId into both the SettlementReceipt.payer (lib.rs:4206) and the IntentDispatched AuditEvent.issuer (lib.rs:4228) in the same dispatch, so every production memory write satisfies receipt.payer.pubkey == audit.issuer.pubkey — a matched pair whose payer and issuer pubkeys disagree is a pairing no production write emits",
+                                        receipt.id,
+                                        issuer.pubkey_base58(),
+                                        receipt.payer.pubkey_base58()
+                                    ),
+                                    repair: "review the settlement JSONL row and the IntentDispatched audit row that share this intent_id/memory_record_id; production dispatch (dispatch_intent_run) clones one issuer = peer.clone() into both the Memory SettlementReceipt.payer and the IntentDispatched audit issuer in the same call, so a pair whose payer.pubkey differs from the dispatch audit's issuer.pubkey is out-of-band evidence of a JSONL edit that rewrote which identity paid for a memory write on the settlement feed (or which identity ran the intent on the /audit feed) while leaving the other intact, an import tool that paired the receipt with a foreign dispatch, or a serde regression that hydrated payer or issuer from a different row; this arm is the third edge of the dispatch triangle (the memory ↔ audit issuer binding in Check 1 and the memory ↔ receipt payer binding in Check 4 are the other two) and is the SOLE detector once the working-tier memory record both rows reference has been compacted or purged — the Check 1 intent_dispatched_issuer_not_matching_memory_owner and Check 4 memory_receipt_owner_mismatch arms both bind through memory.owner and gate on the memory record being present (if let Some(memory) = memory_by_id.get(...)), so they go silent on an orphaned dispatch pair while the append-only audit and settlement rows survive; it fires only when the memory record is absent from the store (so a present record routes to those two memory-anchored arms), only when the IntentDispatched audit for this intent_id is present (so an audit-less orphaned receipt is left to the receipt_without_memory_record arm alone), and only when both pubkeys are non-zero so it is strictly disjoint from the receipt_payer_pubkey_zeroed (Check 6) and audit_event_issuer_pubkey_zeroed (Check 7) shape arms that own the all-zero sentinel".into(),
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -6730,16 +6785,18 @@ impl Server {
         orphans_total += receipt_drift
             + resource_mismatch_refs
             + backref_payer_not_owner_refs
-            + backref_resource_not_memory_refs;
+            + backref_resource_not_memory_refs
+            + orphaned_receipt_payer_not_audit_issuer_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ receipts".into(),
             passed: exact_diff == 0
                 && pair_diff == 0
                 && resource_mismatch_refs == 0
                 && backref_payer_not_owner_refs == 0
-                && backref_resource_not_memory_refs == 0,
+                && backref_resource_not_memory_refs == 0
+                && orphaned_receipt_payer_not_audit_issuer_refs == 0,
             message: format!(
-                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}; back-reference resource mismatch = {}",
+                "{} memory record(s) vs {} receipt(s); count diff = {}; exact drift = {}; legacy fallback = {}; resource mismatch = {}; back-reference payer mismatch = {}; back-reference resource mismatch = {}; orphaned-receipt payer-vs-audit-issuer mismatch = {}",
                 memories.len(),
                 memory_receipts.len(),
                 pair_diff,
@@ -6747,7 +6804,8 @@ impl Server {
                 legacy_fallback_used,
                 resource_mismatch_refs,
                 backref_payer_not_owner_refs,
-                backref_resource_not_memory_refs
+                backref_resource_not_memory_refs,
+                orphaned_receipt_payer_not_audit_issuer_refs
             ),
         });
 
@@ -35042,6 +35100,164 @@ required = {caps:?}
                         && receipt_check.message.contains("resource mismatch = 0"),
                     "only the back-reference resource arm should fail the check: {}",
                     receipt_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_receipt_without_memory_record_payer_not_matching_audit_issuer_drift() {
+        async fn put_intent_audit(s: &Server, intent_id: Uuid, issuer: &AgentId) {
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: issuer.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id,
+                        intent_text: "orphaned dispatch".into(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(b"orphaned dispatch"),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        async fn put_memory_receipt(
+            s: &Server,
+            receipt_id: Uuid,
+            memory_record_id: Uuid,
+            payer: &AgentId,
+        ) {
+            s.settlement
+                .record(SettlementReceipt {
+                    id: receipt_id,
+                    payer: payer.clone(),
+                    resource: ResourceKind::Memory,
+                    memory_record_id: Some(memory_record_id),
+                    credits_consumed: 1,
+                    settled_at: 2_000,
+                    chain: None,
+                    cluster: None,
+                    batch_id: None,
+                    merkle_root: None,
+                    tx_sig: None,
+                    slot: None,
+                    confirmed_at: None,
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        let payer = AgentId::new("payer@local", [1u8; 32]);
+        let issuer = AgentId::new("issuer@local", [2u8; 32]);
+        let third = AgentId::new("third@local", [3u8; 32]);
+
+        // Tamper: an orphaned Memory receipt (its memory record is absent from the
+        // store) whose payer disagrees with the surviving IntentDispatched audit
+        // issuer — the only thing that can detect this once the memory record both
+        // rows reference has been purged.
+        let tamper_intent = Uuid::new_v4();
+        let tamper_receipt = Uuid::new_v4();
+        put_intent_audit(&s, tamper_intent, &issuer).await;
+        put_memory_receipt(&s, tamper_receipt, tamper_intent, &payer).await;
+
+        // Control 1 (orphaned, faithful): the same identity on both feeds, the
+        // production invariant — only receipt_without_memory_record fires for it.
+        let faithful_intent = Uuid::new_v4();
+        let faithful_receipt = Uuid::new_v4();
+        put_intent_audit(&s, faithful_intent, &payer).await;
+        put_memory_receipt(&s, faithful_receipt, faithful_intent, &payer).await;
+
+        // Control 2 (memory present, divergent): receipt.payer (third) != audit
+        // issuer (issuer), so the arm WOULD fire if evaluated — but the memory
+        // record exists, so the None arm is never taken and the memory-anchored
+        // Check 4 memory_receipt_owner_mismatch owns the divergence instead.
+        let present_intent = Uuid::new_v4();
+        let present_receipt = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id: present_intent,
+                tier: MemoryTier::Working,
+                owner: payer.clone(),
+                text: "present".into(),
+                embedding: vec![],
+                metadata: serde_json::json!({}),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        put_intent_audit(&s, present_intent, &issuer).await;
+        put_memory_receipt(&s, present_receipt, present_intent, &third).await;
+
+        let resp = s.op_respond(Request::Verify { window: 1000 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let kind = "receipt_without_memory_record_payer_not_matching_audit_issuer";
+                let row = drift
+                    .iter()
+                    .find(|item| item.kind == kind)
+                    .unwrap_or_else(|| {
+                        panic!("expected orphaned payer-vs-issuer drift: {drift:?}")
+                    });
+                assert_eq!(row.id.as_deref(), Some(tamper_receipt.to_string().as_str()));
+                assert!(
+                    row.message.contains(&issuer.pubkey_base58())
+                        && row.message.contains(&payer.pubkey_base58()),
+                    "message should name both the audit issuer and the receipt payer pubkeys: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("third edge of the dispatch triangle"),
+                    "repair should frame the binding as the third edge: {}",
+                    row.repair
+                );
+
+                // Only the tamper pair trips it: the faithful orphan (payer ==
+                // issuer) and the memory-present divergence both stay silent.
+                let firing: Vec<&str> = drift
+                    .iter()
+                    .filter(|item| item.kind == kind)
+                    .filter_map(|item| item.id.as_deref())
+                    .collect();
+                assert_eq!(
+                    firing,
+                    vec![tamper_receipt.to_string().as_str()],
+                    "only the tamper pair should fire the orphan payer arm: {drift:?}"
+                );
+
+                // Memory-present divergence is owned by the Check 4 arm, proving
+                // the new arm's memory-absent gate is disjoint from it.
+                assert!(
+                    drift.iter().any(|item| {
+                        item.kind == "memory_receipt_owner_mismatch"
+                            && item.id.as_deref() == Some(present_receipt.to_string().as_str())
+                    }),
+                    "memory-present divergence should route to memory_receipt_owner_mismatch: {drift:?}"
+                );
+
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected memory↔receipts check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check
+                        .message
+                        .contains("orphaned-receipt payer-vs-audit-issuer mismatch = 1"),
+                    "check message should count the orphan mismatch: {}",
+                    check.message
                 );
                 assert!(orphans_total >= 1);
             }

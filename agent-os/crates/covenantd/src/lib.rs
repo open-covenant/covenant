@@ -11844,6 +11844,13 @@ impl Server {
         let mut zeroed_signature_cap_refs = 0_u64;
         let mut scope_non_object_cap_refs = 0_u64;
         let mut invalid_signature_cap_refs = 0_u64;
+        let mut grantor_not_trust_root_cap_refs = 0_u64;
+        // The daemon trust root: every production capability is granted by
+        // self.identity.agent_id() (grant_capability, lib.rs:4618), and the
+        // daemon ed25519 identity is a stable key loaded from a persisted
+        // seed (covenant-identity load_or_create) that v0 never rotates, so
+        // every faithful capability is grantor-bound to this one pubkey.
+        let trust_root = self.identity.agent_id().pubkey;
         for cap in &caps {
             let signature_b58 = bs58::encode(cap.signature).into_string();
             if cap.capability.action.is_empty() {
@@ -11906,6 +11913,44 @@ impl Server {
                     repair: "review the granted.jsonl row and the writer that produced it; production capability grants always route through grant_capability, which signs the canonical capability bytes via sign_capability with the daemon's ed25519 key, and covenant_permissions::verify (the same routine the daemon uses at capability-check time) recomputes canonical_message and checks the signature against granted_by.pubkey — so a row that fails verification while passing every shape arm cannot come from a production write; revoke the grant and re-issue through grant_capability so a fresh CapabilityGranted audit row records an authentically signed replacement. This arm is the residual cryptographic check: it runs only when the capability already passes the capability_action_empty, capability_subject_pubkey_zeroed, capability_grantor_pubkey_zeroed, capability_expires_at_zero, capability_signature_zeroed, and capability_scope_non_object arms, so it fires disjointly from them and catches exactly the tamper class (a signed field changed, or the signature replaced with another well-formed 64-byte value, or a non-zero off-curve grantor pubkey) that leaves every field individually well-formed; covenant_permissions::verify is signature-only and does not check expiry, so a validly-signed but expired capability never trips this arm".into(),
                 });
             }
+            // Trust-root binding. Every production capability is granted by
+            // the daemon itself: grant_capability sets granted_by =
+            // self.identity.agent_id() (lib.rs:4618) and is the sole non-test
+            // writer to self.capabilities.record (lib.rs:4647), and the daemon
+            // identity is a stable persisted-seed ed25519 key (no v0 rotation),
+            // so every faithful cap satisfies granted_by.pubkey == trust_root.
+            // The daemon enforces this at use time: verify_with_clock_and_trust_root
+            // (covenant-permissions/src/lib.rs:1157) rejects any other grantor as
+            // UntrustedGrantor at every capability-check site. But the residual
+            // capability_signature_invalid arm above runs covenant_permissions::verify,
+            // which checks the signature against the cap's OWN granted_by.pubkey
+            // (permissions/src/lib.rs:1128) — so a capability forged and re-signed
+            // under an attacker's key (granted_by = the attacker's pubkey, signature
+            // valid under it) verifies cryptographically and slips past that arm even
+            // though the daemon would refuse to honor it. This arm owns that gap: the
+            // validly-signed-but-not-trust-rooted grantor. It gates on
+            // verify(cap).is_ok() so it is strictly disjoint from
+            // capability_signature_invalid (which owns the verify-err case — a
+            // granted_by.pubkey tampered after signing breaks the signature because it
+            // is part of canonical_message at permissions/src/lib.rs:1106), and on
+            // granted_by.pubkey != [0u8; 32] so capability_grantor_pubkey_zeroed owns
+            // the all-zero sentinel.
+            if cap.capability.granted_by.pubkey != [0u8; 32]
+                && cap.capability.granted_by.pubkey != trust_root
+                && verify(cap).is_ok()
+            {
+                grantor_not_trust_root_cap_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "capability_grantor_pubkey_not_trust_root".into(),
+                    id: Some(signature_b58.clone()),
+                    message: format!(
+                        "capability granted_by.pubkey (base58 {}) cryptographically verifies its own signature but is not the daemon trust root self.identity.agent_id().pubkey (base58 {}); every production grant routes through grant_capability, which sets granted_by = self.identity.agent_id() (covenantd/src/lib.rs:4618) and is the sole non-test writer to the capability store, and the daemon ed25519 identity is a stable key loaded from a persisted seed (covenant-identity load_or_create, never rotated in v0), so every faithful capability is grantor-bound to the trust root — a validly-signed capability whose grantor is a different key is one the daemon's own use-time verify_with_clock_and_trust_root rejects as UntrustedGrantor (covenant-permissions/src/lib.rs:1157), signed by a key the operator never delegated authority to",
+                        bs58::encode(cap.capability.granted_by.pubkey).into_string(),
+                        bs58::encode(trust_root).into_string()
+                    ),
+                    repair: "review the granted.jsonl row and the writer that produced it; production capability grants always source granted_by from self.identity.agent_id() at grant dispatch (grant_capability is the sole writer to the capability store) and the daemon identity is a stable persisted-seed key, so a capability whose granted_by.pubkey is a non-zero key other than the trust root cannot come from a production write — it is out-of-band evidence of an attacker who forged a grant and signed it under their own key (granted_by set to that key so covenant_permissions::verify passes), an import or migration tool that preserved another daemon's grantor instead of re-issuing under the local trust root, or a serde/merge regression that hydrated granted_by from a foreign identity's row; revoke the row and re-issue through grant_capability so a fresh CapabilityGranted audit row records an authentically trust-rooted replacement. This arm is the verifier-side mirror of the daemon's use-time verify_with_clock_and_trust_root UntrustedGrantor check (covenant-permissions/src/lib.rs:1157): the residual capability_signature_invalid arm runs signature-only covenant_permissions::verify (which checks the signature against the cap's own granted_by.pubkey, permissions/src/lib.rs:1128), so a self-consistent alien grant verifies and escapes it; this arm closes that gap. It fires only when verify(cap).is_ok() so it is strictly disjoint from capability_signature_invalid (which owns the verify-err case, including a granted_by.pubkey tampered after signing — granted_by.pubkey is part of canonical_message at permissions/src/lib.rs:1106 so the signature breaks), and only when granted_by.pubkey != [0u8; 32] so capability_grantor_pubkey_zeroed owns the all-zero sentinel".into(),
+                });
+            }
             if cap.capability.scope.as_object().is_none() {
                 scope_non_object_cap_refs += 1;
                 let shape = match &cap.capability.scope {
@@ -11932,7 +11977,8 @@ impl Server {
             + zero_expires_cap_refs
             + zeroed_signature_cap_refs
             + scope_non_object_cap_refs
-            + invalid_signature_cap_refs;
+            + invalid_signature_cap_refs
+            + grantor_not_trust_root_cap_refs;
         checks.push(VerifyCheck {
             name: "capability integrity".into(),
             passed: empty_action_cap_refs == 0
@@ -11941,9 +11987,10 @@ impl Server {
                 && zero_expires_cap_refs == 0
                 && zeroed_signature_cap_refs == 0
                 && scope_non_object_cap_refs == 0
-                && invalid_signature_cap_refs == 0,
+                && invalid_signature_cap_refs == 0
+                && grantor_not_trust_root_cap_refs == 0,
             message: format!(
-                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies), {scope_non_object_cap_refs} non-object-scope capabilit(ies), {invalid_signature_cap_refs} invalid-signature capabilit(ies)"
+                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies), {scope_non_object_cap_refs} non-object-scope capabilit(ies), {invalid_signature_cap_refs} invalid-signature capabilit(ies), {grantor_not_trust_root_cap_refs} grantor-not-trust-root capabilit(ies)"
             ),
         });
 
@@ -36708,6 +36755,83 @@ required = {caps:?}
                         .message
                         .contains("1 zeroed-grantor-pubkey capabilit"),
                     "check message should count zeroed-grantor caps: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_capability_grantor_pubkey_not_trust_root_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // An attacker forges a grant authorizing themselves and signs it under
+        // their OWN key, setting granted_by to that key so covenant_permissions::verify
+        // passes. The cap is self-consistent but not trust-rooted: the daemon's
+        // use-time verify_with_clock_and_trust_root would reject it as UntrustedGrantor.
+        let attacker = LocalIdentity::generate("attacker@local");
+        let cap = covenant_types::Capability {
+            subject: me.clone(),
+            action: "memory.read".into(),
+            scope: serde_json::json!({}),
+            granted_by: attacker.agent_id(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, attacker.signing_key());
+        let signature_b58 = bs58::encode(signed.signature).into_string();
+        // Precondition: the forged grant cryptographically verifies under its
+        // own alien grantor key, so it escapes capability_signature_invalid.
+        assert!(verify(&signed).is_ok());
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "capability_grantor_pubkey_not_trust_root"
+                            && item.id.as_deref() == Some(signature_b58.as_str())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected capability_grantor_pubkey_not_trust_root: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("UntrustedGrantor"),
+                    "drift message should name the use-time rejection: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("self.identity.agent_id"),
+                    "repair hint should name the trust-root source: {}",
+                    row.repair
+                );
+                // Disjoint from capability_signature_invalid: the forged cap
+                // verifies under its own grantor key, so that arm stays silent.
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.kind == "capability_signature_invalid"
+                            && item.id.as_deref() == Some(signature_b58.as_str())
+                    }),
+                    "capability_signature_invalid must not fire on a validly-signed alien grant: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "capability integrity")
+                    .unwrap_or_else(|| panic!("expected capability integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 grantor-not-trust-root capabilit"),
+                    "check message should count grantor-not-trust-root caps: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

@@ -1,6 +1,6 @@
 # Memory Drift Reports
 
-`covenant verify` is a read-only consistency check across memory, audit, capability, and settlement state. It does not mutate records. Add `--json` to emit one stable `verify_report` object for supervisors.
+`covenant verify` is a read-only consistency check across memory, audit, capability, settlement, and budget state. It does not mutate records. Add `--json` to emit one stable `verify_report` object for supervisors.
 
 The verifier returns two layers:
 
@@ -25,6 +25,8 @@ The verifier returns two layers:
 | `memory_receipt_owner_mismatch` | A receipt references a memory record owned by a different payer. |
 | `memory_receipt_resource_mismatch` | A settlement receipt carries `memory_record_id` but reports a non-Memory `resource`. |
 | `memory_receipt_settled_before_created` | A settlement receipt's `settled_at` precedes the correlated memory record's `created_at`. |
+| `budget_debit_paired_receipt_payer_mismatch` | A `BudgetDebit` joins by `paired_receipt` to a `ResourceKind::Tool` settlement receipt whose `payer` differs from the debit's `agent`. `record_paid_call` charges the debit and records the Tool receipt from one payer under a shared `receipt_id`, so a divergence misattributes a paid call's spend to the wrong agent's budget. Scoped to Tool receipts: memory-dispatch debits pair with `ResourceKind::Memory` receipts whose payer is the submitting peer rather than the debited agent, and are excluded by design. |
+| `budget_debit_paired_receipt_credits_mismatch` | A `BudgetDebit` joins by `paired_receipt` to a `ResourceKind::Tool` settlement receipt whose `credits_consumed` differs from the debit's `credits`. `record_paid_call` sources both from one `call.credits`, so a divergence is a one-sided repricing that desyncs the per-payer burn the budget bucket enforces from the credits the settlement log accounts for. |
 | `memory_empty_text` | A memory record's `text` is empty; the record cannot anchor retrieval and usually indicates a tool emitter that dropped its result body. |
 | `memory_nan_embedding` | A memory record's `embedding` contains NaN values; cosine similarity poisons every ranking the record competes in. |
 | `memory_record_id_nil` | A memory record has `id == Uuid::nil()` (the all-zero UUID). Every production memory write allocates the id via `Uuid::new_v4()` (either flowing through from `Intent.id` at IPC ingest or freshly allocated at write time), which never produces the nil UUID. A nil id is therefore evidence of a serde regression (`Uuid::default()` is nil), an import tool that constructed records without `Uuid::new_v4()`, or an operator SQLite edit that broke the `memory_record_id` back-reference settlement receipts and audit `IntentDispatched` rows correlate on. |

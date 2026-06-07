@@ -5818,10 +5818,12 @@ impl Server {
         let mut result_hash_not_derived_refs = 0_u64;
         let mut issuer_not_owner_refs = 0_u64;
         let mut issuer_display_not_owner_refs = 0_u64;
+        let mut intent_text_not_metadata_refs = 0_u64;
         for event in &audits {
             if let AuditKind::IntentDispatched {
                 intent_id,
                 result_hash_hex,
+                intent_text,
                 ..
             } = &event.kind
             {
@@ -5918,6 +5920,45 @@ impl Server {
                             repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) clones one issuer = peer.clone() AgentId into the memory record's owner and the IntentDispatched audit issuer in the same call, and record_peer_event asserts event.issuer.pubkey == peer.pubkey at write time but never the display, so a matched pair whose audit issuer.pubkey equals the memory owner.pubkey while their display labels differ is out-of-band evidence of a JSONL edit that relabeled the recorded dispatcher's display on the operator-facing /audit feed (misattributing which named identity ran an intent) while preserving the cryptographic identity, or a serde regression that hydrated event.issuer.display from a different row; the pubkey-mismatch arm intent_dispatched_issuer_not_matching_memory_owner cannot catch this (the pubkeys agree) and the display is well-formed by the AgentId Deserialize gate so no shape arm catches it, making this cross-record display binding the sole detector; it fires only when the pubkeys are equal and non-zero so it is strictly disjoint from the pubkey-mismatch arm and from the audit_event_issuer_pubkey_zeroed (Check 7) and memory_record_owner_pubkey_zeroed (Check 5) shape arms, and only on a matched intent_id present in both stores so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead".into(),
                         });
                     }
+                    // Cross-entity binding (request-text half):
+                    // dispatch_intent_run (covenantd/src/lib.rs:4185-4236)
+                    // writes the MemoryRecord with metadata =
+                    // serde_json::json!({ "intent_text": text, .. }) (lib.rs:4192)
+                    // and records the AuditEvent with intent_text = text.clone()
+                    // (lib.rs:4231) from the one `text` variable in the same
+                    // dispatch, so every production dispatch satisfies
+                    // memory.metadata["intent_text"] == audit.intent_text.
+                    // intent_text is free user text with no within-row shape arm
+                    // (SubmitIntent is ungated), and the memory metadata column
+                    // is mutated only by insert-only production paths
+                    // (BackfillProvenance inserts "provenance", compaction
+                    // stale-marking inserts "stale_context", receipt-correlation
+                    // backfill inserts "receipt_id"; each preserves sibling keys
+                    // verbatim), so the intent_text sub-key dispatch_intent_run
+                    // wrote is never rewritten by a
+                    // production path — a row edit that rewrites the recorded
+                    // request on one feed while leaving the other intact is the
+                    // sole drift this binding detects. Gate on the metadata
+                    // carrying a string intent_text so a legacy/non-object
+                    // metadata (owned by the Check 2 metadata_non_object arm) or
+                    // a dropped sub-key does not false-fire.
+                    if let Some(metadata_intent_text) =
+                        memory.metadata.get("intent_text").and_then(|v| v.as_str())
+                    {
+                        if metadata_intent_text != intent_text {
+                            intent_text_not_metadata_refs += 1;
+                            drift.push(VerifyDrift {
+                                kind: "intent_dispatched_intent_text_not_matching_memory_metadata"
+                                    .into(),
+                                id: Some(event.id.to_string()),
+                                message: format!(
+                                    "audit event {} has kind = AuditKind::IntentDispatched with intent_text = {intent_text:?} joined by intent_id to memory record {intent_id}, but that memory record's metadata.intent_text = {metadata_intent_text:?}; the sole production IntentDispatched write at dispatch_intent_run (covenantd/src/lib.rs:4185-4236) writes the MemoryRecord with metadata = serde_json::json!({{ \"intent_text\": text, .. }}) (lib.rs:4192) and records the AuditEvent with intent_text = text.clone() (lib.rs:4231) from the one `text` variable in the same dispatch, so every production dispatch satisfies memory.metadata[\"intent_text\"] == audit.intent_text — a matched pair whose two recorded request texts disagree is a pairing no production write emits",
+                                    event.id
+                                ),
+                                repair: "review the audit JSONL row and the memory record it joins by intent_id; production dispatch (dispatch_intent_run) stamps both the memory record's metadata.intent_text and the IntentDispatched audit intent_text from the same caller-supplied text in one call, so a matched pair whose two request texts differ is out-of-band evidence of a JSONL edit that rewrote the recorded request on one feed (misrepresenting on the /audit feed or in the memory store what an agent was asked to do) while leaving the other intact, an import tool that paired an audit row with a foreign memory record, or a serde regression that hydrated one copy from a different row; intent_text is free user text with no within-row shape arm (SubmitIntent is ungated) so no shape arm catches this, and the memory metadata column is mutated only by insert-only production paths (BackfillProvenance inserts \"provenance\", compaction stale-marking inserts \"stale_context\", receipt-correlation backfill inserts \"receipt_id\"; each preserves sibling keys verbatim) so a legitimate backfill or compaction never rewrites the intent_text sub-key, making this cross-record binding the sole detector; it fires only when the memory metadata carries a string intent_text (so a legacy/non-object metadata is owned by the Check 2 metadata_non_object arm and a dropped sub-key is left alone) and only on a matched intent_id present in both stores (so a windowed-out record routes to the memory_without_audit / audit_without_memory orphan arms instead)".into(),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -5970,7 +6011,8 @@ impl Server {
             + duplicate_intent_refs
             + result_hash_not_derived_refs
             + issuer_not_owner_refs
-            + issuer_display_not_owner_refs;
+            + issuer_display_not_owner_refs
+            + intent_text_not_metadata_refs;
         checks.push(VerifyCheck {
             name: "memory ↔ audit".into(),
             passed: memory_orphans == 0
@@ -5978,9 +6020,10 @@ impl Server {
                 && duplicate_intent_refs == 0
                 && result_hash_not_derived_refs == 0
                 && issuer_not_owner_refs == 0
-                && issuer_display_not_owner_refs == 0,
+                && issuer_display_not_owner_refs == 0
+                && intent_text_not_metadata_refs == 0,
             message: format!(
-                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s), {issuer_display_not_owner_refs} issuer-display-not-matching-owner intent(s)"
+                "{memory_orphans} memory orphan(s), {audit_orphans} audit orphan(s), {duplicate_intent_refs} duplicate intent(s), {result_hash_not_derived_refs} result-hash-not-derived intent(s), {issuer_not_owner_refs} issuer-not-matching-owner intent(s), {issuer_display_not_owner_refs} issuer-display-not-matching-owner intent(s), {intent_text_not_metadata_refs} intent-text-not-matching-metadata intent(s)"
             ),
         });
 
@@ -34819,6 +34862,220 @@ required = {caps:?}
                     audit_check
                         .message
                         .contains("issuer-display-not-matching-owner"),
+                    "check message should count the new arm: {}",
+                    audit_check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_intent_dispatched_intent_text_not_matching_memory_metadata_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Tamper: a memory record whose metadata.intent_text was rewritten
+        // out-of-band while the joined IntentDispatched audit row keeps the
+        // original request text. owner, text, and result_hash_hex stay
+        // faithful, so the issuer and result-hash cross-record arms cannot see
+        // it — the request-text binding is the sole detector.
+        let tamper_intent_id = Uuid::new_v4();
+        let tamper_event_id = Uuid::new_v4();
+        let audit_text = "audit request text";
+        let stored_text = "memory request text";
+        s.memory
+            .put(MemoryRecord {
+                id: tamper_intent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: audit_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({ "intent_text": stored_text }),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: tamper_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: tamper_intent_id,
+                    intent_text: audit_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(audit_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        // Control: metadata.intent_text == audit.intent_text — must stay silent,
+        // proving the arm binds the audit field to the joined metadata value and
+        // not to a constant.
+        let ok_intent_id = Uuid::new_v4();
+        let ok_event_id = Uuid::new_v4();
+        let ok_text = "faithful request text";
+        s.memory
+            .put(MemoryRecord {
+                id: ok_intent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: ok_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({ "intent_text": ok_text }),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: ok_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: ok_intent_id,
+                    intent_text: ok_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(ok_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        // Gate: an object metadata with no "intent_text" sub-key (a dropped
+        // sub-key) must stay silent — the binding fires only on a present,
+        // disagreeing value, never on absence.
+        let dropped_intent_id = Uuid::new_v4();
+        let dropped_event_id = Uuid::new_v4();
+        let dropped_text = "dropped-subkey request text";
+        s.memory
+            .put(MemoryRecord {
+                id: dropped_intent_id,
+                tier: MemoryTier::Working,
+                owner: me.clone(),
+                text: dropped_text.into(),
+                embedding: vec![],
+                metadata: serde_json::json!({ "other": "x" }),
+                created_at: 1_000,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: dropped_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: dropped_intent_id,
+                    intent_text: dropped_text.into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(dropped_text.as_bytes()),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        // Orphan: an IntentDispatched audit with no joined memory record must
+        // route to the orphan arms, not this binding.
+        let orphan_event_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: orphan_event_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id: Uuid::new_v4(),
+                    intent_text: "orphan request text".into(),
+                    matched_agent: None,
+                    result_hash_hex: hash_hex(b"orphan request text"),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "intent_dispatched_intent_text_not_matching_memory_metadata"
+                            && item.id.as_deref() == Some(&tamper_event_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected intent_dispatched_intent_text_not_matching_memory_metadata: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains(audit_text) && row.message.contains(stored_text),
+                    "message should record both the audit intent_text and the memory metadata intent_text: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("sole detector")
+                        && row.repair.contains("metadata_non_object")
+                        && row.repair.contains("SubmitIntent is ungated"),
+                    "repair hint should name the Check 2 shape arm and explain why it is the sole detector: {}",
+                    row.repair
+                );
+                // owner/text/result_hash are faithful, so the tamper must not
+                // double-report under the issuer or result-hash cross-record arms.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(&tamper_event_id.to_string())
+                            || (item.kind
+                                != "intent_dispatched_issuer_not_matching_memory_owner"
+                                && item.kind
+                                    != "intent_dispatched_issuer_display_not_matching_memory_owner"
+                                && item.kind
+                                    != "intent_dispatched_result_hash_not_derived_from_memory_text")
+                    }),
+                    "intent_text drift must be disjoint from the issuer and result-hash arms: {drift:?}"
+                );
+                // The faithful control pair must not trip the arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "intent_dispatched_intent_text_not_matching_memory_metadata"
+                            || item.id.as_deref() != Some(&ok_event_id.to_string())
+                    }),
+                    "a row whose metadata.intent_text equals audit.intent_text must not trip the arm: {drift:?}"
+                );
+                // A dropped intent_text sub-key (object metadata, no key) must
+                // not trip the arm — the gate fires only on a present value.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "intent_dispatched_intent_text_not_matching_memory_metadata"
+                            || item.id.as_deref() != Some(&dropped_event_id.to_string())
+                    }),
+                    "an object metadata lacking the intent_text sub-key must not trip the arm: {drift:?}"
+                );
+                // An audit with no joined memory record must not trip the arm.
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "intent_dispatched_intent_text_not_matching_memory_metadata"
+                            || item.id.as_deref() != Some(&orphan_event_id.to_string())
+                    }),
+                    "an audit-only orphan must not trip the arm: {drift:?}"
+                );
+                let audit_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ audit")
+                    .unwrap_or_else(|| panic!("expected memory ↔ audit check: {checks:?}"));
+                assert!(!audit_check.passed);
+                assert!(
+                    audit_check
+                        .message
+                        .contains("intent-text-not-matching-metadata"),
                     "check message should count the new arm: {}",
                     audit_check.message
                 );

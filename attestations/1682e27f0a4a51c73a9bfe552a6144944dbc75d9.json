@@ -1,0 +1,18 @@
+{
+  "audit_root_hex": "99bb9f889f6104f4305a5c69c3489acbfd6c9c0bd74935b475474fbb09b44e7b",
+  "event_count": 8,
+  "steps": [
+    "{\"id\":\"89714e95-0b94-49b6-a6f8-5ba9d5aad092\",\"timestamp_ms\":1780855013673,\"issuer\":{\"display\":\"user@local\",\"pubkey\":\"8j7TrTzv5XQGdCMTVJx2ug3oin9pwkdRN7CTtcmDaG1j\"},\"kind\":{\"type\":\"skill_installed\",\"name\":\"covenant\",\"version\":\"0.2.0\",\"digest_hex\":\"5d80941ae3790a8a895663d840dbc29fdc1e4be58a0335ebdf560b37a3b8c464\",\"source_url\":\"\",\"source_tag\":\"\",\"source_commit\":\"\"}}",
+    "{\"id\":\"537815cc-c008-4673-8543-48a009264194\",\"timestamp_ms\":1780855013685,\"issuer\":{\"display\":\"user@local\",\"pubkey\":\"8j7TrTzv5XQGdCMTVJx2ug3oin9pwkdRN7CTtcmDaG1j\"},\"kind\":{\"type\":\"capability_granted\",\"subject_display\":\"user@local\",\"action\":\"skill.use.covenant\",\"granted_by_display\":\"user@local\",\"signature_b58\":\"3Ep2ud4ZrMiTdtNc9qpJoBAUhzQKJviVgD4ujMM9MquvTC8iJocu4nKLEtvjfqmEtA3iCuDM4CkFG6goWHYcFJLU\"}}",
+    "{\"id\":\"db58ad14-89bd-471e-9a63-c7c510874534\",\"timestamp_ms\":1780855013693,\"issuer\":{\"display\":\"user@local\",\"pubkey\":\"8j7TrTzv5XQGdCMTVJx2ug3oin9pwkdRN7CTtcmDaG1j\"},\"kind\":{\"type\":\"capability_granted\",\"subject_display\":\"user@local\",\"action\":\"memory.write\",\"granted_by_display\":\"user@local\",\"signature_b58\":\"2feXrAeCCX4Du8wpeD8MWC6PuidHmRtPy6yPQxgM9PbH2g4hq4faRXRaA4AKTpGyPSE9R5A7AMhy7p48HBAEYhWJ\"}}",
+    "{\"id\":\"c7be888f-6dbb-46ea-9bf1-6ad5e7dc6937\",\"timestamp_ms\":1780855013703,\"issuer\":{\"display\":\"user@local\",\"pubkey\":\"8j7TrTzv5XQGdCMTVJx2ug3oin9pwkdRN7CTtcmDaG1j\"},\"kind\":{\"type\":\"capability_check\",\"agent_id\":\"skill-use:covenant\",\"required_actions\":[\"skill.use.covenant\"],\"missing_actions\":[],\"passed\":true}}",
+    "{\"id\":\"64cadcc4-1962-45c5-ba1a-3cb90a7bd8e7\",\"timestamp_ms\":1780855013705,\"issuer\":{\"display\":\"user@local\",\"pubkey\":\"8j7TrTzv5XQGdCMTVJx2ug3oin9pwkdRN7CTtcmDaG1j\"},\"kind\":{\"type\":\"skill_context_injected\",\"skill_name\":\"covenant\",\"skill_digest_hex\":\"5d80941ae3790a8a895663d840dbc29fdc1e4be58a0335ebdf560b37a3b8c464\",\"references\":[]}}",
+    "{\"id\":\"89f38d28-d995-4745-a39a-fcaff84b26be\",\"timestamp_ms\":1780855013706,\"issuer\":{\"display\":\"user@local\",\"pubkey\":\"8j7TrTzv5XQGdCMTVJx2ug3oin9pwkdRN7CTtcmDaG1j\"},\"kind\":{\"type\":\"capability_check\",\"agent_id\":\"memory:write\",\"required_actions\":[\"memory.write\"],\"missing_actions\":[],\"passed\":true}}",
+    "{\"id\":\"ffa90da1-2cdb-4501-9921-e8e4b5583358\",\"timestamp_ms\":1780855014274,\"issuer\":{\"display\":\"user@local\",\"pubkey\":\"8j7TrTzv5XQGdCMTVJx2ug3oin9pwkdRN7CTtcmDaG1j\"},\"kind\":{\"type\":\"intent_dispatched\",\"intent_id\":\"1db136e7-6222-4c8d-9251-0fde58bc0a0f\",\"intent_text\":\"read a devnet account and summarize it\",\"matched_agent\":null,\"result_hash_hex\":\"9d3de24d864b6b7f986fc7c70366b8068c57e9a0f8abb6e38a34d47d840cabc5\",\"status\":\"ok\"}}",
+    "{\"id\":\"02599012-9c71-46b9-be1d-49df16fcf54d\",\"timestamp_ms\":1780855014275,\"issuer\":{\"display\":\"user@local\",\"pubkey\":\"8j7TrTzv5XQGdCMTVJx2ug3oin9pwkdRN7CTtcmDaG1j\"},\"kind\":{\"type\":\"skill_invoked\",\"skill_name\":\"covenant\",\"intent_id\":\"1db136e7-6222-4c8d-9251-0fde58bc0a0f\"}}"
+  ],
+  "verdict": "pass",
+  "refutations": [],
+  "verifier_pubkey": "wL6mXVuAp60jBpM_dUGalWSuxvZKwDxKkcGwCo-M1nU",
+  "domain": "covenant.witness.v1"
+}

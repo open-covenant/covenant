@@ -12173,6 +12173,45 @@ impl Server {
                 });
             }
         }
+        // Shape (pairing key): every production BudgetDebit pairs with a
+        // freshly minted receipt_id = Uuid::new_v4() — record_paid_call mints it
+        // at covenantd/src/x402.rs:211 and passes it to try_debit at :215 for the
+        // Tool pairing, and dispatch_intent_run mints it at covenantd/src/lib.rs:3926
+        // and debits it at :4045 for the Memory pairing — and Uuid::new_v4()
+        // never produces the nil (all-zeros) UUID. compact_older_than only drops
+        // pre-cutoff Debit rows and emits Snapshot rows (never a Debit with a nil
+        // paired_receipt), so recent_debits_all cannot surface a legitimately nil
+        // paired_receipt. A nil paired_receipt is therefore a serde regression
+        // (Uuid::default() is the nil UUID), an import or replay tool that wrote a
+        // placeholder pairing, or a JSONL edit that detached the debit from the
+        // receipt it settled. This is the budget-log leg of the nil-UUID family
+        // (receipt_id_nil on the settlement log, memory_record_id_nil on the
+        // memory store) and owns the nil-paired_receipt case the rest of this
+        // check leaves unresolved: the join loop above resolves paired_receipt
+        // through budget_join_receipts.get(paired_receipt), which returns None for
+        // the nil id in a clean settlement log (receipt_id_nil owns any nil-id
+        // receipt) and falls through to the next debit, and the cardinality arm
+        // below explicitly skips the nil UUID so a defaulted all-zeros pairing is
+        // not conflated with a real receipt_id collision. Like the at_ms shape arm
+        // above it runs independent of the join loop, so a nil-paired_receipt
+        // debit is flagged regardless of receipt presence; the id field carries
+        // the nil UUID, so the message locates the row by agent, credits, and
+        // at_ms instead.
+        let mut nil_paired_receipt_debit_refs = 0_u64;
+        for debit in &debits {
+            if debit.paired_receipt.is_nil() {
+                nil_paired_receipt_debit_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "budget_debit_paired_receipt_nil".into(),
+                    id: Some(debit.paired_receipt.to_string()),
+                    message: format!(
+                        "budget debit by agent {} (credits = {}, at_ms = {}) has paired_receipt = {} (the nil UUID); every production BudgetDebit pairs with a freshly minted receipt_id = Uuid::new_v4() (record_paid_call at covenantd/src/x402.rs:211,215 for the Tool pairing, dispatch_intent_run at covenantd/src/lib.rs:3926,4045 for the Memory pairing) and Uuid::new_v4() never produces the nil UUID, so a faithful debit always carries a non-nil paired_receipt — a nil paired_receipt is a serde regression (Uuid::default() is the nil UUID), an import or replay tool that wrote a placeholder pairing, or a JSONL edit that detached the debit from the receipt it settled",
+                        debit.agent.display, debit.credits, debit.at_ms, debit.paired_receipt
+                    ),
+                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit callers mint a fresh receipt_id via Uuid::new_v4() and pass it to try_debit before recording the matching SettlementReceipt under that id (record_paid_call at x402.rs:211,215, dispatch_intent_run at lib.rs:3926,4045), and compact_older_than only drops pre-cutoff Debit rows while emitting Snapshot rows (never a Debit with a nil paired_receipt), so a nil paired_receipt is out-of-band evidence of a serde regression (Uuid::default() is the nil UUID), an import or replay tool that constructed the debit with a placeholder pairing, or a JSONL edit that detached the per-payer budget charge from the receipt it settled — leaving the burn unreconcilable against any settlement row; the budget ledger is an unsigned local JSONL with no chain-hash anchor, so this within-row shape arm is the sole detector — it is the budget-log leg of the nil-UUID family (receipt_id_nil on the settlement log, memory_record_id_nil on the memory store) and owns the nil-paired_receipt case the join arms leave unresolved (budget_join_receipts.get(nil) returns None for a clean settlement log) and the budget_debit_paired_receipt_shared_by_multiple_debits cardinality arm explicitly skips (it gates on !paired_receipt.is_nil()), so the three are strictly disjoint".into(),
+                });
+            }
+        }
         // Cardinality: the pairing between a budget debit and its settlement
         // receipt is 1:1. Both production try_debit callers mint a fresh
         // receipt_id = Uuid::new_v4() and pass it to exactly one try_debit
@@ -12223,13 +12262,14 @@ impl Server {
             + debit_memory_receipt_credits_not_flat_refs
             + zeroed_agent_debit_refs
             + zero_at_ms_debit_refs
+            + nil_paired_receipt_debit_refs
             + duplicate_paired_receipt_refs;
         orphans_total += budget_join_drift;
         checks.push(VerifyCheck {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {nil_paired_receipt_debit_refs} nil-paired-receipt debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
             ),
         });
 
@@ -22702,6 +22742,83 @@ required = {caps:?}
                     check.message.contains("0 duplicate-paired-receipt")
                         && check.message.contains("0 payer-mismatched debit"),
                     "only the zero-at_ms shape arm should fail the check: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_budget_debit_paired_receipt_nil_drift() {
+        // Every production BudgetDebit pairs with a freshly minted
+        // receipt_id = Uuid::new_v4(), which is never the nil UUID. Unlike at_ms
+        // (stamped internally from epoch_ms()), paired_receipt is a caller-provided
+        // try_debit parameter, so the real ledger writes the malformed shape
+        // directly: try_debit(&payer, c, Uuid::nil()) records a debit whose
+        // paired_receipt is the nil UUID — the serde-default / import-tool /
+        // JSONL-edit shape no production write emits. This is the budget-log leg of
+        // the nil-UUID family. No receipts are seeded, so the join arms continue
+        // past both debits; the healthy debit's distinct non-nil paired_receipt
+        // keeps the cardinality arm silent (which skips nil anyway), so only the
+        // new shape arm can fail the check.
+        let s = server_with(vec![], "");
+        let payer = AgentId::new("payer@host", [7u8; 32]);
+        s.budget.set_capacity(&payer, 100).await.unwrap();
+        s.budget.try_debit(&payer, 5, Uuid::nil()).await.unwrap();
+        let healthy_receipt = Uuid::new_v4();
+        s.budget
+            .try_debit(&payer, 5, healthy_receipt)
+            .await
+            .unwrap();
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let matches: Vec<_> = drift
+                    .iter()
+                    .filter(|item| item.kind == "budget_debit_paired_receipt_nil")
+                    .collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "exactly one nil-paired-receipt debit must surface, and the healthy debit must stay silent: {drift:?}"
+                );
+                let row = matches[0];
+                assert_eq!(row.id.as_deref(), Some(Uuid::nil().to_string().as_str()));
+                assert!(
+                    row.message.contains("the nil UUID") && row.message.contains("Uuid::new_v4()"),
+                    "message should name the nil paired_receipt and the Uuid::new_v4() invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("nil-UUID family")
+                        && row.repair.contains("receipt_id_nil")
+                        && row.repair.contains("memory_record_id_nil"),
+                    "repair hint should place it in the nil-UUID family: {}",
+                    row.repair
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 nil-paired-receipt debit"),
+                    "check message should count nil-paired-receipt debits: {}",
+                    check.message
+                );
+                // Only the new shape arm fails: the join and cardinality halves
+                // stay clean (no receipts seeded, the cardinality arm skips nil).
+                assert!(
+                    check.message.contains("0 duplicate-paired-receipt")
+                        && check.message.contains("0 payer-mismatched debit"),
+                    "only the nil-paired-receipt shape arm should fail the check: {}",
                     check.message
                 );
                 assert!(orphans_total >= 1);

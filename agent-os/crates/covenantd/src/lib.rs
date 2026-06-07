@@ -5824,6 +5824,14 @@ impl Server {
         // memory.owner, but both gate on the memory record being present, so
         // neither covers an audit ↔ receipt pair whose memory record is gone.
         let mut dispatched_issuer_by_intent: HashMap<Uuid, &AgentId> = HashMap::new();
+        // Capture each intent's dispatch audit timestamp_ms keyed by intent_id
+        // so the Check 4 memory ↔ receipts join can bind the Memory receipt's
+        // settled_at to the IntentDispatched audit timestamp of the same
+        // dispatch. dispatch_intent_run reads epoch_ms() for the receipt's
+        // settled_at (lib.rs:4210) strictly before the audit's timestamp_ms
+        // (lib.rs:4227), so settled_at <= timestamp_ms is the third ordered edge
+        // of the created_at <= settled_at <= timestamp_ms triangle.
+        let mut dispatched_timestamp_by_intent: HashMap<Uuid, u64> = HashMap::new();
         let mut result_hash_not_derived_refs = 0_u64;
         let mut issuer_not_owner_refs = 0_u64;
         let mut issuer_display_not_owner_refs = 0_u64;
@@ -5845,6 +5853,9 @@ impl Server {
                 dispatched_issuer_by_intent
                     .entry(*intent_id)
                     .or_insert(&event.issuer);
+                dispatched_timestamp_by_intent
+                    .entry(*intent_id)
+                    .or_insert(event.timestamp_ms);
                 // Cross-entity derivation: the matched memory record's text is
                 // the same text_out the dispatch hashed into result_hash_hex.
                 // Gate on a canonical digest so the four Check 7 shape arms own
@@ -6638,6 +6649,45 @@ impl Server {
                                 ),
                                 repair: "review receipt correlation: settled_at < memory.created_at indicates a backfill correlation mistake or a clock-tamper restore".into(),
                             });
+                        }
+                        // Cross-record temporal ordering (third triangle edge):
+                        // dispatch_intent_run reads epoch_ms() into the Memory
+                        // receipt's settled_at (lib.rs:4210) strictly before it
+                        // reads epoch_ms() again into the IntentDispatched audit
+                        // timestamp_ms (lib.rs:4227) — settlement.record runs
+                        // between the two reads — so every production dispatch
+                        // satisfies receipt.settled_at <= audit.timestamp_ms. The
+                        // sole production writer of a Memory receipt carrying a
+                        // memory_record_id is that branch (lib.rs:4204-4218); the
+                        // legacy owner-match receipt backfill is a read-only
+                        // dry-run planner (covenant-memory
+                        // memory_receipt_backfill_plan_json, mutation_supported =
+                        // false), so the receipt and the audit always come from one
+                        // dispatch. This completes the created_at <= settled_at <=
+                        // timestamp_ms triangle: Check 1
+                        // intent_dispatched_timestamp_before_memory_created binds
+                        // created_at <= timestamp_ms and settled_before_created
+                        // above binds created_at <= settled_at, but neither forces
+                        // settled_at <= timestamp_ms. Gate on both timestamps being
+                        // non-zero so the receipt_settled_at_zero (Check 6) and
+                        // audit_event_timestamp_zero (Check 7) shape arms own the
+                        // all-zero sentinel.
+                        if let Some(&audit_ts) = dispatched_timestamp_by_intent.get(memory_id) {
+                            if receipt.settled_at != 0
+                                && audit_ts != 0
+                                && receipt.settled_at > audit_ts
+                            {
+                                exact_diff += 1;
+                                drift.push(VerifyDrift {
+                                    kind: "memory_receipt_settled_after_dispatch_audit".into(),
+                                    id: Some(receipt.id.to_string()),
+                                    message: format!(
+                                        "receipt {} has settled_at = {} which is later than the IntentDispatched audit timestamp_ms = {audit_ts} of the dispatch that wrote memory record {memory_id}; the sole production writer of a Memory receipt carrying a memory_record_id (dispatch_intent_run's memory-write branch, covenantd/src/lib.rs:4204-4218) reads epoch_ms() into the receipt's settled_at (lib.rs:4210) strictly before it reads epoch_ms() again into the IntentDispatched AuditEvent.timestamp_ms (lib.rs:4227) — settlement.record runs between the two reads — so every production dispatch satisfies receipt.settled_at <= audit.timestamp_ms; a matched pair whose receipt settled after its own dispatch audit is an ordering no production write emits",
+                                        receipt.id, receipt.settled_at
+                                    ),
+                                    repair: "review the settlement JSONL row and the IntentDispatched audit row for this intent_id/memory_record_id; production dispatch (dispatch_intent_run) reads the wall clock into the Memory receipt's settled_at (lib.rs:4210) before reading it again for the IntentDispatched audit timestamp_ms (lib.rs:4227), so a receipt whose settled_at exceeds its dispatch audit's timestamp_ms is out-of-band evidence of a JSONL edit that forward-dated the settlement on the /settlement feed (overstating when a memory write settled, for example to push it past a budget or reconciliation window) or backdated the audit row, an import tool that paired the receipt with a foreign dispatch audit, a serde regression that hydrated settled_at or timestamp_ms from a different row, or a clock-tamper restore that rewound wall time between the receipt and audit writes; this is the third ordered edge of the created_at <= settled_at <= timestamp_ms dispatch triangle — the Check 1 intent_dispatched_timestamp_before_memory_created arm binds created_at <= timestamp_ms and the memory_receipt_settled_before_created arm above binds created_at <= settled_at, but neither forces settled_at <= timestamp_ms (created_at=10, settled_at=30, timestamp_ms=20 satisfies both yet inverts this edge), so this binding is the sole detector; the only production writer of a memory_record_id-bearing Memory receipt is dispatch_intent_run (the legacy owner-match receipt backfill is a read-only dry-run planner, covenant-memory memory_receipt_backfill_plan_json with mutation_supported = false), so the receipt and the audit always originate from one dispatch; it fires only when a matching IntentDispatched audit exists for the intent_id (so a receipt whose dispatch audit was windowed out is left to the receipt_without_memory_record / memory_without_audit arms) and only when both timestamps are non-zero so it is strictly disjoint from the receipt_settled_at_zero (Check 6) and audit_event_timestamp_zero (Check 7) shape arms that own the all-zero sentinel".into(),
+                                });
+                            }
                         }
                         let expected_credits = memory_write_credits(memory.text.len());
                         if receipt.credits_consumed != 0
@@ -34445,6 +34495,168 @@ required = {caps:?}
                     .find(|c| c.name == "memory ↔ audit")
                     .unwrap_or_else(|| panic!("expected memory ↔ audit check: {checks:?}"));
                 assert!(!audit_check.passed);
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_receipt_settled_after_dispatch_audit_drift() {
+        async fn put_triple(
+            s: &Server,
+            me: &AgentId,
+            intent_id: Uuid,
+            receipt_id: Uuid,
+            times: (u64, u64, u64),
+            text: &str,
+        ) {
+            let (created_at, audit_ts, settled_at) = times;
+            s.memory
+                .put(MemoryRecord {
+                    id: intent_id,
+                    tier: MemoryTier::Working,
+                    owner: me.clone(),
+                    text: text.into(),
+                    embedding: vec![],
+                    metadata: serde_json::json!({}),
+                    created_at,
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: audit_ts,
+                    issuer: me.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id,
+                        intent_text: text.into(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(text.as_bytes()),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+            s.settlement
+                .record(SettlementReceipt {
+                    id: receipt_id,
+                    payer: me.clone(),
+                    resource: ResourceKind::Memory,
+                    memory_record_id: Some(intent_id),
+                    credits_consumed: 1,
+                    settled_at,
+                    chain: None,
+                    cluster: None,
+                    batch_id: None,
+                    merkle_root: None,
+                    tx_sig: None,
+                    slot: None,
+                    confirmed_at: None,
+                    onchain_sig: None,
+                })
+                .await
+                .unwrap();
+        }
+
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Tamper: receipt settled_at = 3000 is later than its dispatch audit's
+        // timestamp_ms = 2000 — an ordering production never emits (settled_at is
+        // read before timestamp_ms in the same dispatch). created_at = 1000 keeps
+        // it clear of settled_before_created.
+        let tamper_intent = Uuid::new_v4();
+        let tamper_receipt = Uuid::new_v4();
+        put_triple(
+            &s,
+            &me,
+            tamper_intent,
+            tamper_receipt,
+            (1_000, 2_000, 3_000),
+            "settled after audit",
+        )
+        .await;
+
+        // Control 1 (faithful): settled_at = 2000 <= audit ts = 3000 — must not fire.
+        let faithful_intent = Uuid::new_v4();
+        let faithful_receipt = Uuid::new_v4();
+        put_triple(
+            &s,
+            &me,
+            faithful_intent,
+            faithful_receipt,
+            (1_000, 3_000, 2_000),
+            "faithful order",
+        )
+        .await;
+
+        // Control 2 (zeroed audit timestamp): audit ts = 0 is owned by the
+        // audit_event_timestamp_zero shape arm, not this ordering arm.
+        let zeroed_intent = Uuid::new_v4();
+        let zeroed_receipt = Uuid::new_v4();
+        put_triple(
+            &s,
+            &me,
+            zeroed_intent,
+            zeroed_receipt,
+            (1_000, 0, 3_000),
+            "zeroed audit",
+        )
+        .await;
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_receipt_settled_after_dispatch_audit"
+                            && item.id.as_deref() == Some(&tamper_receipt.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_receipt_settled_after_dispatch_audit: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("settled_at = 3000")
+                        && row.message.contains("timestamp_ms = 2000"),
+                    "message should record both timestamps: {}",
+                    row.message
+                );
+                assert_eq!(
+                    drift
+                        .iter()
+                        .filter(|item| {
+                            item.kind == "memory_receipt_settled_after_dispatch_audit"
+                        })
+                        .count(),
+                    1,
+                    "only the forward-dated receipt should fire, not the faithful or zeroed ones: {drift:?}"
+                );
+                assert!(
+                    drift
+                        .iter()
+                        .any(|item| item.kind == "audit_event_timestamp_zero"),
+                    "the zeroed-audit-timestamp triple must route to the shape arm: {drift:?}"
+                );
+                assert!(
+                    !drift
+                        .iter()
+                        .any(|item| item.kind == "memory_receipt_settled_before_created"),
+                    "no receipt settled before its memory was created: {drift:?}"
+                );
+                let receipt_check = checks
+                    .iter()
+                    .find(|c| c.name == "memory ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected receipts check: {checks:?}"));
+                assert!(!receipt_check.passed);
                 assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),

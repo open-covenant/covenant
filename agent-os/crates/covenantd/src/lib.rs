@@ -47,7 +47,7 @@ use covenant_permissions::{
     peer_scope_allows as permission_peer_scope_allows,
     settlement_backfill_scope_allows as permission_settlement_backfill_scope_allows,
     sign as sign_capability, tool_call_scope_allows as permission_tool_call_scope_allows,
-    validate_scope, verify_with_clock_and_trust_root, A2aScopeRequest, CapabilityStore,
+    validate_scope, verify, verify_with_clock_and_trust_root, A2aScopeRequest, CapabilityStore,
     ChainScopeRequest, MemoryCompactionScopeRequest, PeerScopeRequest,
 };
 use covenant_router::{AgentCard, Router};
@@ -10416,6 +10416,7 @@ impl Server {
         let mut zero_expires_cap_refs = 0_u64;
         let mut zeroed_signature_cap_refs = 0_u64;
         let mut scope_non_object_cap_refs = 0_u64;
+        let mut invalid_signature_cap_refs = 0_u64;
         for cap in &caps {
             let signature_b58 = bs58::encode(cap.signature).into_string();
             if cap.capability.action.is_empty() {
@@ -10463,6 +10464,21 @@ impl Server {
                     repair: "review the granted.jsonl row and the writer that produced it; production capability grants always route through sign_capability, which signs the canonical capability bytes with the daemon's ed25519 signing key, so an all-zero signature is structural evidence of a serde regression, a placeholder writer, or a JSONL edit that wiped the trust-root binding".into(),
                 });
             }
+            let shape_valid = !cap.capability.action.is_empty()
+                && cap.capability.subject.pubkey != [0u8; 32]
+                && cap.capability.granted_by.pubkey != [0u8; 32]
+                && cap.capability.expires_at != Some(0)
+                && cap.signature != [0u8; 64]
+                && cap.capability.scope.as_object().is_some();
+            if shape_valid && verify(cap).is_err() {
+                invalid_signature_cap_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "capability_signature_invalid".into(),
+                    id: Some(signature_b58.clone()),
+                    message: "capability does not cryptographically verify; covenant_permissions::verify recomputes canonical_message(capability) and checks the ed25519 signature against granted_by.pubkey, returning Err for this row even though it passes every shape arm (non-empty action, non-zero subject and grantor pubkeys, expires_at != Some(0), non-zero signature, object scope); production grants are signed by sign_capability over the canonical bytes, so every production capability verifies under its own granted_by key, making a well-formed-but-unverifiable row out-of-band evidence that a signed field (subject, action, scope, granted_by, or expires_at) was altered after signing, the signature bytes were swapped for a different 64-byte value, or granted_by.pubkey is a non-zero point off the ed25519 curve".into(),
+                    repair: "review the granted.jsonl row and the writer that produced it; production capability grants always route through grant_capability, which signs the canonical capability bytes via sign_capability with the daemon's ed25519 key, and covenant_permissions::verify (the same routine the daemon uses at capability-check time) recomputes canonical_message and checks the signature against granted_by.pubkey — so a row that fails verification while passing every shape arm cannot come from a production write; revoke the grant and re-issue through grant_capability so a fresh CapabilityGranted audit row records an authentically signed replacement. This arm is the residual cryptographic check: it runs only when the capability already passes the capability_action_empty, capability_subject_pubkey_zeroed, capability_grantor_pubkey_zeroed, capability_expires_at_zero, capability_signature_zeroed, and capability_scope_non_object arms, so it fires disjointly from them and catches exactly the tamper class (a signed field changed, or the signature replaced with another well-formed 64-byte value, or a non-zero off-curve grantor pubkey) that leaves every field individually well-formed; covenant_permissions::verify is signature-only and does not check expiry, so a validly-signed but expired capability never trips this arm".into(),
+                });
+            }
             if cap.capability.scope.as_object().is_none() {
                 scope_non_object_cap_refs += 1;
                 let shape = match &cap.capability.scope {
@@ -10488,7 +10504,8 @@ impl Server {
             + zeroed_grantor_cap_refs
             + zero_expires_cap_refs
             + zeroed_signature_cap_refs
-            + scope_non_object_cap_refs;
+            + scope_non_object_cap_refs
+            + invalid_signature_cap_refs;
         checks.push(VerifyCheck {
             name: "capability integrity".into(),
             passed: empty_action_cap_refs == 0
@@ -10496,9 +10513,10 @@ impl Server {
                 && zeroed_grantor_cap_refs == 0
                 && zero_expires_cap_refs == 0
                 && zeroed_signature_cap_refs == 0
-                && scope_non_object_cap_refs == 0,
+                && scope_non_object_cap_refs == 0
+                && invalid_signature_cap_refs == 0,
             message: format!(
-                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies), {scope_non_object_cap_refs} non-object-scope capabilit(ies)"
+                "{empty_action_cap_refs} empty-action capabilit(ies), {zeroed_subject_cap_refs} zeroed-subject-pubkey capabilit(ies), {zeroed_grantor_cap_refs} zeroed-grantor-pubkey capabilit(ies), {zero_expires_cap_refs} zero-expires-at capabilit(ies), {zeroed_signature_cap_refs} zeroed-signature capabilit(ies), {scope_non_object_cap_refs} non-object-scope capabilit(ies), {invalid_signature_cap_refs} invalid-signature capabilit(ies)"
             ),
         });
 
@@ -32537,6 +32555,101 @@ required = {caps:?}
                 assert!(
                     integrity.message.contains("1 zeroed-signature capabilit"),
                     "check message should count zeroed-signature caps: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_capability_signature_invalid_drift() {
+        use covenant_permissions::SignedCapability;
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Sign a real grant, then escalate the action after signing: every
+        // field stays individually well-formed (the shape arms all pass) but
+        // the stored signature no longer matches canonical_message.
+        let granted = covenant_types::Capability {
+            subject: me.clone(),
+            action: "memory.read".into(),
+            scope: serde_json::json!({}),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let mut tampered: SignedCapability = sign_capability(granted, s.identity.signing_key());
+        tampered.capability.action = "memory.write".into();
+        let tampered_b58 = bs58::encode(tampered.signature).into_string();
+        s.capabilities.record(tampered).await.unwrap();
+        // Control: an authentically signed grant must not trip the arm — proves
+        // the check uses the producer's own verify routine and does not
+        // false-positive on a genuine grant.
+        let valid = covenant_types::Capability {
+            subject: me.clone(),
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({}),
+            granted_by: me.clone(),
+            expires_at: None,
+        };
+        let valid_signed = sign_capability(valid, s.identity.signing_key());
+        let valid_b58 = bs58::encode(valid_signed.signature).into_string();
+        s.capabilities.record(valid_signed).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "capability_signature_invalid"
+                            && item.id.as_deref() == Some(tampered_b58.as_str())
+                    })
+                    .unwrap_or_else(|| panic!("expected capability_signature_invalid: {drift:?}"));
+                assert!(
+                    row.message.contains("does not cryptographically verify")
+                        && row.message.contains("canonical_message"),
+                    "drift message should name the cryptographic verification: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("covenant_permissions::verify")
+                        && row.repair.contains("does not check expiry"),
+                    "repair hint should name verify and the expiry exclusion: {}",
+                    row.repair
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.id.as_deref() != Some(tampered_b58.as_str())
+                            || (item.kind != "capability_action_empty"
+                                && item.kind != "capability_subject_pubkey_zeroed"
+                                && item.kind != "capability_grantor_pubkey_zeroed"
+                                && item.kind != "capability_expires_at_zero"
+                                && item.kind != "capability_signature_zeroed"
+                                && item.kind != "capability_scope_non_object")
+                    }),
+                    "signature-invalid arm must be disjoint from every shape arm: {drift:?}"
+                );
+                assert!(
+                    drift.iter().all(|item| {
+                        item.kind != "capability_signature_invalid"
+                            || item.id.as_deref() != Some(valid_b58.as_str())
+                    }),
+                    "an authentically signed capability must not trip the arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "capability integrity")
+                    .unwrap_or_else(|| panic!("expected capability integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 invalid-signature capabilit"),
+                    "check message should count invalid-signature caps: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 1);

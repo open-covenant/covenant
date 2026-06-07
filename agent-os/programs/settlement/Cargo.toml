@@ -16,8 +16,10 @@ no-log-ix-name = []
 cpi = ["no-entrypoint"]
 default = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
-# Client-funded task escrow. Off by default: release_task is client-only with no
-# provider recourse, so it is not safe to ship until the trust model is redesigned.
+# Client-funded task escrow with provider recourse: optimistic release +
+# provider-claim challenge window + arbiter dispute resolution. Kept behind a
+# feature so a deployment can ship without escrow if desired; enable with
+# `--features task-escrow`.
 task-escrow = []
 
 [dependencies]

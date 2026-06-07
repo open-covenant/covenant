@@ -145,10 +145,32 @@ pub mod settlement {
 
         ctx.accounts.credits.balance -= amount;
 
+        // The `receipt` PDA is `init`-ed on the seeds [b"receipt", owner,
+        // receipt_hash]; a replay of the same receipt fails here before any
+        // balance is touched, so consumption is idempotent per receipt.
+        let now = Clock::get()?.unix_timestamp;
+        let receipt = &mut ctx.accounts.receipt;
+        receipt.owner = ctx.accounts.owner.key();
+        receipt.receipt_hash = receipt_hash;
+        receipt.amount = amount;
+        receipt.consumed_at = now;
+        receipt.bump = ctx.bumps.receipt;
+
         emit!(CreditsConsumed {
             owner: ctx.accounts.owner.key(),
             amount,
             receipt_hash,
+        });
+        Ok(())
+    }
+
+    /// Reclaim the rent locked in a `Receipt` marker. Owner-signed. Only do
+    /// this once the receipt has been anchored in a batch on-chain — closing
+    /// it re-opens the `(owner, receipt_hash)` seed for re-consumption.
+    pub fn close_receipt(ctx: Context<CloseReceipt>) -> Result<()> {
+        emit!(ReceiptClosed {
+            owner: ctx.accounts.owner.key(),
+            receipt_hash: ctx.accounts.receipt.receipt_hash,
         });
         Ok(())
     }
@@ -285,6 +307,12 @@ pub mod settlement {
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(args.amount_covnt > 0, CovenantError::ZeroAmount);
         require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
+        require!(
+            args.challenge_window > 0 && args.challenge_window <= MAX_CHALLENGE_WINDOW,
+            CovenantError::InvalidChallengeWindow
+        );
+        let now = Clock::get()?.unix_timestamp;
+        require!(args.deadline > now, CovenantError::InvalidDeadline);
 
         token_interface::transfer_checked(
             ctx.accounts.task_fund_ctx(),
@@ -301,6 +329,8 @@ pub mod settlement {
         task.task_hash = args.task_hash;
         task.criteria_hash = args.criteria_hash;
         task.deadline = args.deadline;
+        task.submitted_at = 0;
+        task.challenge_window = args.challenge_window;
         task.status = TASK_FUNDED;
         task.bump = ctx.bumps.task;
 
@@ -324,14 +354,15 @@ pub mod settlement {
     ) -> Result<()> {
         require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        // The client may voluntarily release at any time before a terminal
+        // state — both straight from FUNDED and after the provider has
+        // SUBMITTED (paying out early instead of waiting the challenge
+        // window). Paying the provider is never harmful to the provider, so
+        // there is no deadline restriction here.
+        let status = ctx.accounts.task.status;
         require!(
-            ctx.accounts.task.status == TASK_FUNDED,
+            status == TASK_FUNDED || status == TASK_SUBMITTED,
             CovenantError::WrongTaskStatus
-        );
-        let now = Clock::get()?.unix_timestamp;
-        require!(
-            now <= ctx.accounts.task.deadline,
-            CovenantError::TaskExpired
         );
 
         let task_id = ctx.accounts.task.task_id;
@@ -390,6 +421,145 @@ pub mod settlement {
             amount_covnt: ctx.accounts.task.amount_covnt,
             deadline: ctx.accounts.task.deadline,
             refunded_at: now,
+        });
+        Ok(())
+    }
+
+    /// Provider posts a result hash for a funded task, starting the
+    /// challenge window. Only the named provider may submit, and only on or
+    /// before the task deadline.
+    pub fn submit_result(ctx: Context<SubmitResult>, result_hash: [u8; 32]) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            ctx.accounts.task.status == TASK_FUNDED,
+            CovenantError::WrongTaskStatus
+        );
+        let now = Clock::get()?.unix_timestamp;
+        require!(now <= ctx.accounts.task.deadline, CovenantError::TaskExpired);
+
+        let task = &mut ctx.accounts.task;
+        task.result_hash = result_hash;
+        task.submitted_at = now;
+        task.status = TASK_SUBMITTED;
+
+        emit!(TaskSubmitted {
+            task_id: task.task_id,
+            provider: task.provider,
+            result_hash,
+            submitted_at: now,
+            challenge_window: task.challenge_window,
+        });
+        Ok(())
+    }
+
+    /// Provider claims the escrow once the challenge window elapses with no
+    /// dispute. This is the provider's recourse against a silent client and
+    /// is the core fix for the previous client-only release design.
+    pub fn claim_task(ctx: Context<ClaimTask>) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            ctx.accounts.task.status == TASK_SUBMITTED,
+            CovenantError::WrongTaskStatus
+        );
+        let now = Clock::get()?.unix_timestamp;
+        let window_end = ctx
+            .accounts
+            .task
+            .submitted_at
+            .checked_add(ctx.accounts.task.challenge_window)
+            .ok_or(CovenantError::Overflow)?;
+        require!(now > window_end, CovenantError::ChallengeWindowOpen);
+
+        let task_id = ctx.accounts.task.task_id;
+        let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
+        token_interface::transfer_checked(
+            ctx.accounts.task_release_ctx().with_signer(&[signer_seeds]),
+            ctx.accounts.task.amount_covnt,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
+
+        ctx.accounts.task.status = TASK_RELEASED;
+
+        emit!(TaskClaimed {
+            task_id,
+            provider: ctx.accounts.task.provider,
+            amount_covnt: ctx.accounts.task.amount_covnt,
+            result_hash: ctx.accounts.task.result_hash,
+            claimed_at: now,
+        });
+        Ok(())
+    }
+
+    /// Client disputes a submitted result within the challenge window. The
+    /// escrow stays locked until `resolve_task` adjudicates — the client
+    /// cannot unilaterally refund a result that was already submitted.
+    pub fn dispute_task(ctx: Context<DisputeTask>) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            ctx.accounts.task.status == TASK_SUBMITTED,
+            CovenantError::WrongTaskStatus
+        );
+        let now = Clock::get()?.unix_timestamp;
+        let window_end = ctx
+            .accounts
+            .task
+            .submitted_at
+            .checked_add(ctx.accounts.task.challenge_window)
+            .ok_or(CovenantError::Overflow)?;
+        require!(now <= window_end, CovenantError::ChallengeWindowElapsed);
+
+        ctx.accounts.task.status = TASK_DISPUTED;
+
+        emit!(TaskDisputed {
+            task_id: ctx.accounts.task.task_id,
+            client: ctx.accounts.task.client,
+            disputed_at: now,
+        });
+        Ok(())
+    }
+
+    /// Arbiter (the protocol `authority`) resolves a disputed task, either
+    /// releasing the escrow to the provider or refunding the client.
+    pub fn resolve_task(ctx: Context<ResolveTask>, pay_provider: bool) -> Result<()> {
+        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            ctx.accounts.task.status == TASK_DISPUTED,
+            CovenantError::WrongTaskStatus
+        );
+
+        let now = Clock::get()?.unix_timestamp;
+        let task_id = ctx.accounts.task.task_id;
+        let amount = ctx.accounts.task.amount_covnt;
+        let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
+        if pay_provider {
+            token_interface::transfer_checked(
+                ctx.accounts
+                    .resolve_to_provider_ctx()
+                    .with_signer(&[signer_seeds]),
+                amount,
+                ctx.accounts.covnt_mint.decimals,
+            )?;
+            ctx.accounts.task.status = TASK_RELEASED;
+        } else {
+            token_interface::transfer_checked(
+                ctx.accounts
+                    .resolve_to_client_ctx()
+                    .with_signer(&[signer_seeds]),
+                amount,
+                ctx.accounts.covnt_mint.decimals,
+            )?;
+            ctx.accounts.task.status = TASK_REFUNDED;
+        }
+
+        emit!(TaskResolved {
+            task_id,
+            paid_provider: pay_provider,
+            amount_covnt: amount,
+            resolved_at: now,
         });
         Ok(())
     }
@@ -687,6 +857,7 @@ impl<'info> BuyCredits<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(amount: u64, receipt_hash: [u8; 32])]
 pub struct ConsumeCredits<'info> {
     #[account(
         seeds = [b"config"],
@@ -700,6 +871,30 @@ pub struct ConsumeCredits<'info> {
         bump = credits.bump,
     )]
     pub credits: Account<'info, CreditAccount>,
+    #[account(
+        init,
+        payer = owner,
+        space = 8 + Receipt::INIT_SPACE,
+        seeds = [b"receipt", owner.key().as_ref(), receipt_hash.as_ref()],
+        bump,
+    )]
+    pub receipt: Account<'info, Receipt>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CloseReceipt<'info> {
+    #[account(
+        mut,
+        has_one = owner @ CovenantError::Unauthorized,
+        seeds = [b"receipt", owner.key().as_ref(), receipt.receipt_hash.as_ref()],
+        bump = receipt.bump,
+        close = owner,
+    )]
+    pub receipt: Account<'info, Receipt>,
+    #[account(mut)]
     pub owner: Signer<'info>,
 }
 
@@ -1010,6 +1205,141 @@ impl<'info> RefundTask<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SubmitResult<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"task", task.task_id.as_ref()],
+        bump = task.bump,
+        constraint = task.provider == provider.key() @ CovenantError::ProviderMismatch,
+    )]
+    pub task: Box<Account<'info, Task>>,
+    pub provider: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimTask<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"task", task.task_id.as_ref()],
+        bump = task.bump,
+        constraint = task.provider == provider.key() @ CovenantError::ProviderMismatch,
+    )]
+    pub task: Box<Account<'info, Task>>,
+    pub provider: Signer<'info>,
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = provider_covnt.owner == task.provider @ CovenantError::Unauthorized,
+        constraint = provider_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub provider_covnt: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> ClaimTask<'info> {
+    fn task_release_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.escrow_vault.to_account_info(),
+                to: self.provider_covnt.to_account_info(),
+                authority: self.task.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct DisputeTask<'info> {
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"task", task.task_id.as_ref()],
+        bump = task.bump,
+        has_one = client @ CovenantError::Unauthorized,
+    )]
+    pub task: Box<Account<'info, Task>>,
+    pub client: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ResolveTask<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"task", task.task_id.as_ref()],
+        bump = task.bump,
+    )]
+    pub task: Box<Account<'info, Task>>,
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = provider_covnt.owner == task.provider @ CovenantError::Unauthorized,
+        constraint = provider_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub provider_covnt: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = client_covnt.owner == task.client @ CovenantError::Unauthorized,
+        constraint = client_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub client_covnt: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> ResolveTask<'info> {
+    fn resolve_to_provider_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.escrow_vault.to_account_info(),
+                to: self.provider_covnt.to_account_info(),
+                authority: self.task.to_account_info(),
+            },
+        )
+    }
+
+    fn resolve_to_client_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.escrow_vault.to_account_info(),
+                to: self.client_covnt.to_account_info(),
+                authority: self.task.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
 pub struct BurnCovnt<'info> {
     #[account(
         seeds = [b"config"],
@@ -1137,6 +1467,10 @@ pub struct CreateTaskArgs {
     pub task_hash: [u8; 32],
     pub criteria_hash: [u8; 32],
     pub deadline: i64,
+    /// Seconds the client has to dispute a submitted result before the
+    /// provider can unilaterally claim the escrow. Must be in
+    /// `(0, MAX_CHALLENGE_WINDOW]`.
+    pub challenge_window: i64,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1147,8 +1481,14 @@ pub struct AnchorReceiptBatchArgs {
 }
 
 pub const TASK_FUNDED: u8 = 1;
-pub const TASK_RELEASED: u8 = 2;
-pub const TASK_REFUNDED: u8 = 3;
+pub const TASK_SUBMITTED: u8 = 2;
+pub const TASK_RELEASED: u8 = 3;
+pub const TASK_REFUNDED: u8 = 4;
+pub const TASK_DISPUTED: u8 = 5;
+
+/// Hard ceiling on a task's challenge window (30 days), so a client cannot
+/// set an absurd value that strands a provider's claim indefinitely.
+pub const MAX_CHALLENGE_WINDOW: i64 = 30 * 24 * 60 * 60;
 
 #[account]
 #[derive(InitSpace)]
@@ -1210,7 +1550,28 @@ pub struct Task {
     pub criteria_hash: [u8; 32],
     pub result_hash: [u8; 32],
     pub deadline: i64,
+    /// Unix seconds when the provider submitted a result. `0` until
+    /// `submit_result` runs; once set, the challenge window starts here.
+    pub submitted_at: i64,
+    /// Seconds the client may dispute after `submitted_at`. Copied from
+    /// `CreateTaskArgs` at funding time.
+    pub challenge_window: i64,
     pub status: u8,
+    pub bump: u8,
+}
+
+/// Idempotency marker for `consume_credits`. Its PDA is keyed by
+/// `(owner, receipt_hash)`, so re-submitting the same receipt fails at
+/// `init` ("account already in use") — giving on-chain replay protection
+/// for credit consumption. Reclaimable via `close_receipt` once the
+/// receipt has been anchored in a batch.
+#[account]
+#[derive(InitSpace)]
+pub struct Receipt {
+    pub owner: Pubkey,
+    pub receipt_hash: [u8; 32],
+    pub amount: u64,
+    pub consumed_at: i64,
     pub bump: u8,
 }
 
@@ -1329,6 +1690,46 @@ pub struct TaskRefunded {
 }
 
 #[event]
+pub struct TaskSubmitted {
+    pub task_id: [u8; 32],
+    pub provider: Pubkey,
+    pub result_hash: [u8; 32],
+    pub submitted_at: i64,
+    pub challenge_window: i64,
+}
+
+#[event]
+pub struct TaskClaimed {
+    pub task_id: [u8; 32],
+    pub provider: Pubkey,
+    pub amount_covnt: u64,
+    pub result_hash: [u8; 32],
+    pub claimed_at: i64,
+}
+
+#[event]
+pub struct TaskDisputed {
+    pub task_id: [u8; 32],
+    pub client: Pubkey,
+    pub disputed_at: i64,
+}
+
+#[event]
+pub struct TaskResolved {
+    pub task_id: [u8; 32],
+    /// true = escrow released to provider, false = refunded to client.
+    pub paid_provider: bool,
+    pub amount_covnt: u64,
+    pub resolved_at: i64,
+}
+
+#[event]
+pub struct ReceiptClosed {
+    pub owner: Pubkey,
+    pub receipt_hash: [u8; 32],
+}
+
+#[event]
 pub struct CovntBurned {
     pub owner: Pubkey,
     pub amount: u64,
@@ -1421,4 +1822,14 @@ pub enum CovenantError {
     LockTooShort,
     #[msg("task escrow is disabled in this build")]
     TasksDisabled,
+    #[msg("challenge_window must be in (0, MAX_CHALLENGE_WINDOW]")]
+    InvalidChallengeWindow,
+    #[msg("deadline must be in the future")]
+    InvalidDeadline,
+    #[msg("challenge window is still open; provider cannot claim yet")]
+    ChallengeWindowOpen,
+    #[msg("challenge window has elapsed; client can no longer dispute")]
+    ChallengeWindowElapsed,
+    #[msg("provider mismatch")]
+    ProviderMismatch,
 }

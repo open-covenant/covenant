@@ -23,7 +23,7 @@ fn consume_more_than_balance_rejected() {
     let credits = open_credit_account(&mut env);
     let owner_covnt = funded_covnt(&mut env, 1_000);
     buy_credits(&mut env, &credits, &owner_covnt, 5).expect("buy"); // 50 credits
-    let err = consume_credits(&mut env, &credits, 51).expect_err("overspend");
+    let err = consume_credits(&mut env, &credits, 51, [5u8; 32]).expect_err("overspend");
     assert_eq!(custom_error(&err), Some(E_INSUFFICIENT_CREDITS));
     assert_eq!(credit_balance(&env, &credits), 50);
 }
@@ -75,30 +75,29 @@ fn create_task_rejected_when_escrow_disabled() {
     let task_id = [44u8; 32];
     let provider = Keypair::new().pubkey();
     let tc = task_setup(&mut env, &task_id, 1_000);
-    let err = create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc)
+    let err = create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, 3_600, &tc)
         .expect_err("create_task must be disabled without the task-escrow feature");
     assert_eq!(custom_error(&err), Some(E_TASKS_DISABLED));
     assert_eq!(token_balance(&env, &tc.client_covnt), 1_000); // no funds moved
 }
 
+// Once the provider has SUBMITTED, the client can no longer unilaterally
+// refund — the escrow is governed by the challenge-window / dispute path, so
+// a silent client cannot strand a delivered result. This is the core fix for
+// the old "provider works for free" flaw.
 #[cfg(feature = "task-escrow")]
 #[test]
-fn release_after_deadline_rejected() {
+fn refund_after_submit_rejected() {
     let mut env = boot();
     register_agent(&mut env, &AGENT);
     let task_id = [41u8; 32];
-    let provider = Keypair::new().pubkey();
-    let provider_covnt = create_token_account(
-        &mut env.svm,
-        &env.payer.insecure_clone(),
-        &env.mint,
-        &provider,
-    );
+    let provider = Keypair::new();
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider, 600, 5_000, &tc).expect("create");
-    warp_unix(&mut env, 6_000);
-    let err = release_task(&mut env, &tc, &provider_covnt).expect_err("release past deadline");
-    assert_eq!(custom_error(&err), Some(E_TASK_EXPIRED));
+    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), 600, 5_000, 3_600, &tc)
+        .expect("create");
+    submit_result(&mut env, &tc, &provider, [8u8; 32]).expect("submit");
+    let err = refund_task(&mut env, &tc).expect_err("refund after submit must fail");
+    assert_eq!(custom_error(&err), Some(E_WRONG_TASK_STATUS));
     assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
 }
 
@@ -110,7 +109,7 @@ fn refund_before_deadline_rejected() {
     let task_id = [42u8; 32];
     let provider = Keypair::new().pubkey();
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc).expect("create");
+    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, 3_600, &tc).expect("create");
     let err = refund_task(&mut env, &tc).expect_err("refund before deadline");
     assert_eq!(custom_error(&err), Some(E_TASK_NOT_EXPIRED));
 }
@@ -129,7 +128,7 @@ fn double_release_rejected() {
         &provider,
     );
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc).expect("create");
+    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, 3_600, &tc).expect("create");
     release_task(&mut env, &tc, &provider_covnt).expect("first release");
     bump_blockhash(&mut env); // distinct signature for the retry
     let err = release_task(&mut env, &tc, &provider_covnt).expect_err("second release");

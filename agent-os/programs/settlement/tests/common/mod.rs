@@ -462,9 +462,25 @@ pub const E_STAKE_LOCKED: u32 = 6013;
 pub const E_STAKE_STILL_ACTIVE: u32 = 6014;
 pub const E_LOCK_TOO_SHORT: u32 = 6015;
 pub const E_TASKS_DISABLED: u32 = 6016;
+pub const E_INVALID_CHALLENGE_WINDOW: u32 = 6017;
+pub const E_INVALID_DEADLINE: u32 = 6018;
+pub const E_CHALLENGE_WINDOW_OPEN: u32 = 6019;
+pub const E_CHALLENGE_WINDOW_ELAPSED: u32 = 6020;
+pub const E_PROVIDER_MISMATCH: u32 = 6021;
+
+// Task status constants (mirror the on-chain TASK_* consts).
+pub const ST_FUNDED: u8 = 1;
+pub const ST_SUBMITTED: u8 = 2;
+pub const ST_RELEASED: u8 = 3;
+pub const ST_REFUNDED: u8 = 4;
+pub const ST_DISPUTED: u8 = 5;
 
 pub fn task_pda(task_id: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[b"task", task_id], &ID).0
+}
+
+pub fn receipt_pda(owner: &Pubkey, receipt_hash: &[u8; 32]) -> Pubkey {
+    Pubkey::find_program_address(&[b"receipt", owner.as_ref(), receipt_hash], &ID).0
 }
 
 pub fn receipt_batch_pda(batch_id: &[u8; 32]) -> Pubkey {
@@ -647,17 +663,42 @@ pub fn consume_credits(
     env: &mut Env,
     credits: &Pubkey,
     amount: u64,
+    receipt_hash: [u8; 32],
 ) -> Result<(), TransactionError> {
     let owner = env.payer.pubkey();
+    let receipt = receipt_pda(&owner, &receipt_hash);
     let data = ix::ConsumeCredits {
         amount,
-        receipt_hash: [9u8; 32],
+        receipt_hash,
     }
     .data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(*credits, false),
-        AccountMeta::new_readonly(owner, true),
+        AccountMeta::new(receipt, false),
+        AccountMeta::new(owner, true),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+}
+
+pub fn close_receipt(env: &mut Env, receipt_hash: [u8; 32]) -> Result<(), TransactionError> {
+    let owner = env.payer.pubkey();
+    let receipt = receipt_pda(&owner, &receipt_hash);
+    let data = ix::CloseReceipt {}.data();
+    let metas = vec![
+        AccountMeta::new(receipt, false),
+        AccountMeta::new(owner, true),
     ];
     let payer = env.payer.insecure_clone();
     send(
@@ -804,6 +845,7 @@ pub fn create_task(
     provider: &Pubkey,
     amount_covnt: u64,
     deadline: i64,
+    challenge_window: i64,
     tc: &TaskCtx,
 ) -> Result<(), TransactionError> {
     let agent = agent_pda(agent_key);
@@ -816,6 +858,7 @@ pub fn create_task(
             task_hash: [4u8; 32],
             criteria_hash: [5u8; 32],
             deadline,
+            challenge_window,
         },
     }
     .data();
@@ -884,6 +927,112 @@ pub fn refund_task(env: &mut Env, tc: &TaskCtx) -> Result<(), TransactionError> 
         AccountMeta::new(tc.task, false),
         AccountMeta::new_readonly(client, true),
         AccountMeta::new(tc.escrow_vault, false),
+        AccountMeta::new(tc.client_covnt, false),
+        AccountMeta::new_readonly(env.mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+}
+
+pub fn submit_result(
+    env: &mut Env,
+    tc: &TaskCtx,
+    provider: &Keypair,
+    result_hash: [u8; 32],
+) -> Result<(), TransactionError> {
+    let data = ix::SubmitResult { result_hash }.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(tc.task, false),
+        AccountMeta::new_readonly(provider.pubkey(), true),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[provider],
+    )
+}
+
+pub fn claim_task(
+    env: &mut Env,
+    tc: &TaskCtx,
+    provider: &Keypair,
+    provider_covnt: &Pubkey,
+) -> Result<(), TransactionError> {
+    let data = ix::ClaimTask {}.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(tc.task, false),
+        AccountMeta::new_readonly(provider.pubkey(), true),
+        AccountMeta::new(tc.escrow_vault, false),
+        AccountMeta::new(*provider_covnt, false),
+        AccountMeta::new_readonly(env.mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[provider],
+    )
+}
+
+pub fn dispute_task(env: &mut Env, tc: &TaskCtx) -> Result<(), TransactionError> {
+    let client = env.payer.pubkey();
+    let data = ix::DisputeTask {}.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(tc.task, false),
+        AccountMeta::new_readonly(client, true),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+}
+
+pub fn resolve_task(
+    env: &mut Env,
+    tc: &TaskCtx,
+    provider_covnt: &Pubkey,
+    pay_provider: bool,
+) -> Result<(), TransactionError> {
+    let authority = env.payer.pubkey();
+    let data = ix::ResolveTask { pay_provider }.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new_readonly(authority, true),
+        AccountMeta::new(tc.task, false),
+        AccountMeta::new(tc.escrow_vault, false),
+        AccountMeta::new(*provider_covnt, false),
         AccountMeta::new(tc.client_covnt, false),
         AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),

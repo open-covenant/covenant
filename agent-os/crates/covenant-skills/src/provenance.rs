@@ -19,7 +19,7 @@
 //! [`SkillProvenance::validate`] checks the declaration is internally
 //! consistent; [`SkillProvenance::audit_surface`] is the catalog-CI check that
 //! flags on-chain surface present in the skill's content but **not** declared in
-//! frontmatter. None of this is wired into install or capability enforcement —
+//! frontmatter. None of this is wired into install or capability enforcement.
 //! Covenant gates on signed capabilities at use-time regardless. This module is
 //! the proposed convention plus a checker, nothing more.
 
@@ -33,7 +33,7 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SkillProvenance {
     /// Capability action strings the skill expects to run under, e.g.
-    /// `skill.use.<name>` and `chain.tx.<program>.<ix>`. Declaration only — the
+    /// `skill.use.<name>` and `chain.tx.<program>.<ix>`. Declaration only. The
     /// signed grant and its scope are still checked at use-time, never trusted
     /// from the manifest.
     #[serde(default)]
@@ -77,21 +77,21 @@ pub enum ProvenanceFinding {
     /// `onchain.programs`. A skill cannot claim signing authority over a program
     /// it did not declare it touches.
     UndeclaredProgram { capability: String, program: String },
-    /// `onchain.sends_tx` is true but no `chain.tx.*` capability is declared —
+    /// `onchain.sends_tx` is true but no `chain.tx.*` capability is declared;
     /// signing a transaction needs a capability to run under.
     SendsTxWithoutCapability,
     /// A capability string is neither `skill.use.<name>` nor
     /// `chain.tx.<program>.<ix>` with non-empty segments.
     MalformedCapability { capability: String },
-    /// A declared program is not a base58 Solana address (32–44 chars, the
-    /// bitcoin alphabet — no `0`, `O`, `I`, `l`).
+    /// A declared program is not a base58 Solana address (32 to 44 chars, the
+    /// bitcoin alphabet, no `0`, `O`, `I`, `l`).
     NonBase58Program { program: String },
     /// A declared cluster is not one of devnet/localnet/testnet/mainnet-beta.
     UnknownCluster { cluster: String },
 }
 
 /// Undeclared on-chain surface found in a skill's content by
-/// [`SkillProvenance::audit_surface`] — the catalog-CI signal that a skill
+/// [`SkillProvenance::audit_surface`]. The catalog-CI signal that a skill
 /// *does* more than its frontmatter declares.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "finding", rename_all = "snake_case")]
@@ -131,7 +131,7 @@ pub fn parse_skill_provenance(content: &str) -> Result<Option<SkillProvenance>, 
 
 impl SkillProvenance {
     /// Check the declaration is internally consistent. An empty result means the
-    /// declaration is coherent; it does **not** mean the skill is trustworthy —
+    /// declaration is coherent; it does **not** mean the skill is trustworthy;
     /// signed capabilities are still enforced at use-time.
     pub fn validate(&self) -> Vec<ProvenanceFinding> {
         let mut findings = Vec::new();
@@ -222,7 +222,7 @@ fn parse_capability(action: &str) -> Option<Capability<'_>> {
 
 /// Every base58-looking program id referenced via `chain.tx.<program>.` in
 /// free text. Placeholders like `chain.tx.<program-id>.ix` are skipped because
-/// they are not 32–44 base58 characters, keeping the catalog check low-noise.
+/// they are not 32 to 44 base58 characters, keeping the catalog check low-noise.
 fn scan_chain_tx_programs(content: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut rest = content;
@@ -240,7 +240,7 @@ fn scan_chain_tx_programs(content: &str) -> Vec<&str> {
 }
 
 /// Mirror of the SDK `assertSolanaAddress` / `SOLANA_ADDRESS_REGEX` rule:
-/// 32–44 base58 characters (the bitcoin alphabet excludes `0`, `O`, `I`, `l`).
+/// 32 to 44 base58 characters (the bitcoin alphabet excludes `0`, `O`, `I`, `l`).
 fn is_base58_program(value: &str) -> bool {
     let len = value.len();
     (32..=44).contains(&len)
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn audit_surface_ignores_placeholder_program() {
         let p = SkillProvenance::default();
-        // `<program-id>` is not 32–44 base58 chars, so the catalog check stays
+        // `<program-id>` is not 32 to 44 base58 chars, so the catalog check stays
         // quiet on documentation placeholders.
         let body = "grant chain.tx.<program-id>.<instruction> before signing";
         assert!(p.audit_surface(body).is_empty());

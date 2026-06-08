@@ -40,7 +40,7 @@ describe('MeshServer × WsTransport × Connector over real loopback sockets', ()
 
     expect(final.type).toBe('result');
     if (final.type === 'result') {
-      expect(final.status).toBe('ok');
+      expect(final.status).toBe('success');
       const proof = final.proof as { audit_root: string; events: unknown[] };
       expect(proof.audit_root).toBe('a1b2c3d4e5f60718');
       expect(proof.events).toHaveLength(4);

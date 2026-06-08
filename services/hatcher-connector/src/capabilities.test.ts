@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mapManifest, baselineGrants } from './capabilities.js';
+import { mapManifest, mapMeshGrants, baselineGrants } from './capabilities.js';
 
 const EXP = 1_900_000_000_000;
 
@@ -53,5 +53,37 @@ describe('mapManifest — consent policy (sandbox/audit governed, not token gran
   it('routes browser to policy.net.domains', () => {
     const { policy } = mapManifest([{ tool: 'browser', domains: ['docs.rs'] }], EXP);
     expect(policy.net).toEqual({ domains: ['docs.rs'] });
+  });
+});
+
+describe('mapMeshGrants — Hatcher per-dispatch grants ({scope, constraints})', () => {
+  it('token-gates github, sandbox-gates filesystem/terminal into the consent policy', () => {
+    const { grants, policy } = mapMeshGrants(
+      [
+        { scope: 'filesystem.read', constraints: { paths: ['./'] } },
+        { scope: 'filesystem.write', constraints: { paths: ['./out'] } },
+        { scope: 'terminal.exec', constraints: { approval: 'required', timeout_ms: 120000 } },
+        { scope: 'github.read', constraints: { repo: 'owner/repo' } },
+      ],
+      EXP,
+    );
+
+    expect(grants).toEqual([{ action: 'tool.call.github', scope: { version: 1, tool: 'github' }, expires_at: EXP }]);
+    expect(policy.fs).toEqual({ read: ['./'], write: ['./out'] });
+    expect(policy.exec).toEqual({ approval: 'required', timeout_ms: 120000 });
+    expect(policy.github).toEqual({ scopes: ['github.read'], repo: 'owner/repo' });
+  });
+
+  it('maps named mcp + a2a scopes to enforced grants and flags unknown scopes', () => {
+    const { grants, policy } = mapMeshGrants(
+      [
+        { scope: 'mcp.summarize' },
+        { scope: 'a2a.send', constraints: { peer: 'PKa' } },
+        { scope: 'quantum.teleport' },
+      ],
+      EXP,
+    );
+    expect(grants.map((g) => g.action)).toEqual(['tool.call.summarize', 'a2a.send.PKa']);
+    expect(policy.notes.some((n) => n.includes('quantum.teleport'))).toBe(true);
   });
 });

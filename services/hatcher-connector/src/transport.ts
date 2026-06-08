@@ -1,23 +1,39 @@
-// Hatcher mesh transport. THIS IS THE INFERRED HALF (design §2.2, build step C2,
-// HARD BLOCKER HX-00-equivalent): the Hatcher mesh frame contract is not in any
-// public repo and must be verified against the live mesh before C2 ships. The
-// connector logic (connector.ts) is written against this interface so the
-// daemon-facing half is testable today with an in-memory stub.
+// Hatcher mesh transport — the covenant.connector-mesh.v1 frame contract, confirmed
+// compatible by the Hatcher team (2026-06-04). The connector logic (connector.ts) is
+// written against this interface and stays testable with the in-memory StubTransport.
 
 import type { AgentEvent } from './daemon.js';
 
+// A per-dispatch grant from Hatcher's consent UI. The connector maps each scope to a
+// covenant capability grant (token-gated: github/mcp/a2a) or a consent-policy entry
+// (sandbox-gated + audited: filesystem/terminal/browser). See capabilities.mapMeshGrants.
+export interface MeshGrant {
+  scope: string;
+  constraints?: Record<string, unknown>;
+}
+
 // Hatcher -> connector frames.
 export type InboundFrame =
-  | { v: 1; type: 'dispatch'; dispatch_id: string; agent_id: string; intent: { text: string }; grants?: unknown[]; deadline_ms?: number; reply_to?: string }
+  | {
+      v: 1;
+      type: 'dispatch';
+      dispatch_id: string;
+      agent_id: string;
+      intent: { text: string; context?: Record<string, unknown> };
+      grants?: MeshGrant[];
+      deadline_ms?: number;
+      reply_to?: string;
+    }
   | { v: 1; type: 'cancel'; dispatch_id: string }
   | { v: 1; type: 'ping'; ts: number };
 
 // connector -> Hatcher frames.
 export type OutboundFrame =
-  // Sent first on every (re)connect: in-band auth + resume of in-flight dispatch
-  // ids (browsers/WHATWG WebSocket cannot set an Authorization header, so the
-  // bearer travels in-band over WSS rather than as a header).
-  | { v: 1; type: 'hello'; agent_id?: string; auth?: string; pairing?: string; resume?: string[] }
+  // Sent first on every (re)connect: in-band auth + resume of in-flight dispatch ids
+  // (WHATWG WebSocket cannot set an Authorization header, so the bearer travels in-band
+  // over WSS). connector_id is the stable per-daemon identity, distinct from agent_id —
+  // one local daemon may serve several Hatcher agents.
+  | { v: 1; type: 'hello'; connector_id?: string; agent_id?: string; auth?: string; pairing?: string; resume?: string[] }
   | { v: 1; type: 'accepted'; dispatch_id: string; intent_id: string }
   | { v: 1; type: 'trace'; dispatch_id: string; seq: number; event: AgentEvent }
   | { v: 1; type: 'result'; dispatch_id: string; status: string; result: unknown; proof: unknown }

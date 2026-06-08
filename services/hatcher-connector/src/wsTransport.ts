@@ -32,6 +32,7 @@ export interface WsTransportOptions {
   token: string;
   pairingCode?: string;
   agentId?: string;
+  connectorId?: string;
   reconnect?: boolean;
   backoffBaseMs?: number;
   backoffMaxMs?: number;
@@ -127,6 +128,7 @@ export class WsTransport implements HatcherTransport {
     this.rawSend({
       v: 1,
       type: 'hello',
+      connector_id: this.opts.connectorId,
       agent_id: this.opts.agentId,
       auth: this.opts.token,
       pairing: this.opts.pairingCode,

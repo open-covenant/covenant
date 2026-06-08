@@ -1131,9 +1131,11 @@ pub enum Response {
     },
     SaidFreeTier {
         address: String,
-        chain: String,
+        used: u32,
         remaining: u32,
-        resets_at: Option<i64>,
+        limit: u32,
+        paid_price: Option<String>,
+        payment_chains: Vec<String>,
     },
     SaidSent {
         message_id: String,

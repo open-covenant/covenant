@@ -5716,24 +5716,32 @@ async fn main() -> Result<()> {
                     })?;
                     write_frame(&mut stream, &Request::SaidFreeTier { address }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
-                        Response::SaidFreeTier { address, chain, remaining, resets_at } => {
+                        Response::SaidFreeTier {
+                            address,
+                            used,
+                            remaining,
+                            limit,
+                            paid_price,
+                            payment_chains,
+                        } => {
                             if as_json {
                                 let value = serde_json::json!({
                                     "kind": "said_free_tier",
                                     "address": address,
-                                    "chain": chain,
+                                    "used": used,
                                     "remaining": remaining,
-                                    "resets_at": resets_at,
+                                    "limit": limit,
+                                    "paid_price": paid_price,
+                                    "payment_chains": payment_chains,
                                 });
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("address: {address}");
-                                println!("chain: {chain}");
+                                println!("used: {used}");
                                 println!("remaining: {remaining}");
-                                println!(
-                                    "resets_at: {}",
-                                    resets_at.map(|v| v.to_string()).unwrap_or_else(|| "-".into())
-                                );
+                                println!("limit: {limit}");
+                                println!("paid_price: {}", paid_price.unwrap_or_default());
+                                println!("payment_chains: {}", payment_chains.join(","));
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),

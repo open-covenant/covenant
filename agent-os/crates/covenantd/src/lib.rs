@@ -1456,9 +1456,11 @@ impl Server {
         match bridge.xchain_free_tier(&address).await {
             Ok(ft) => Response::SaidFreeTier {
                 address: ft.address,
-                chain: ft.chain,
+                used: ft.used,
                 remaining: ft.remaining,
-                resets_at: ft.resets_at,
+                limit: ft.limit,
+                paid_price: ft.paid_price,
+                payment_chains: ft.payment_chains.into_iter().map(|c| c.name).collect(),
             },
             Err(e) => Response::Error {
                 message: format!("said free-tier: {e}"),

@@ -60,10 +60,22 @@ pub struct SendReceipt {
 #[serde(rename_all = "camelCase")]
 pub struct FreeTierStatus {
     pub address: String,
-    pub chain: String,
+    #[serde(default)]
+    pub used: u32,
     pub remaining: u32,
     #[serde(default)]
-    pub resets_at: Option<i64>,
+    pub limit: u32,
+    #[serde(default)]
+    pub paid_price: Option<String>,
+    #[serde(default)]
+    pub payment_chains: Vec<PaymentChain>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentChain {
+    pub name: String,
+    pub network: String,
 }
 
 impl SaidBridge {

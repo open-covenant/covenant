@@ -27,8 +27,10 @@
 #![deny(unsafe_code)]
 
 pub mod agent_card;
+pub mod anchor;
 pub mod client;
 pub mod config;
+pub mod cursor;
 pub mod rest;
 pub mod worker;
 

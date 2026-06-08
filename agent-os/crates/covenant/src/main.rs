@@ -2177,6 +2177,12 @@ fn print_usage() {
     eprintln!(
         "  covenant said lookup --wallet <addr> [--json]            fetch an agent's SAID identity + verification + reputation"
     );
+    eprintln!(
+        "  covenant said anchor --start <seq> --end <seq> --root <hex64> [--live] [--json]  anchor an audit slice (fixture by default; --live needs the paid gate)"
+    );
+    eprintln!(
+        "  covenant said anchor-status [--recent <n>] [--json]      cursor snapshot: next index, last confirmed, recent rows"
+    );
 }
 
 struct MemoryReadJsonArgs {
@@ -5264,6 +5270,165 @@ async fn main() -> Result<()> {
                                 println!("stake_amount: {stake_amount}");
                                 println!("reputation_score: {reputation_score}");
                                 println!("total_interactions: {total_interactions}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "anchor" => {
+                    let mut start: Option<u64> = None;
+                    let mut end: Option<u64> = None;
+                    let mut root: Option<String> = None;
+                    let mut live = false;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--start" => {
+                                i += 1;
+                                start = Some(
+                                    args.get(i)
+                                        .ok_or_else(|| anyhow::anyhow!("--start needs a value"))?
+                                        .parse()
+                                        .context("--start parse")?,
+                                );
+                            }
+                            "--end" => {
+                                i += 1;
+                                end = Some(
+                                    args.get(i)
+                                        .ok_or_else(|| anyhow::anyhow!("--end needs a value"))?
+                                        .parse()
+                                        .context("--end parse")?,
+                                );
+                            }
+                            "--root" => {
+                                i += 1;
+                                root = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--root needs a 64-char hex value")
+                                })?);
+                            }
+                            "--live" => live = true,
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let start = start
+                        .ok_or_else(|| anyhow::anyhow!("covenant said anchor requires --start"))?;
+                    let end = end
+                        .ok_or_else(|| anyhow::anyhow!("covenant said anchor requires --end"))?;
+                    let root = root.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said anchor requires --root <HEX64>")
+                    })?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SaidAnchor {
+                            start_audit_index: start,
+                            end_audit_index: end,
+                            merkle_root_hex: root,
+                            live,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidAnchored {
+                            anchor_index,
+                            start_seq,
+                            end_seq,
+                            merkle_root_hex,
+                            tx_sig,
+                            slot,
+                            fixture,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_anchored",
+                                    "anchor_index": anchor_index,
+                                    "start_seq": start_seq,
+                                    "end_seq": end_seq,
+                                    "merkle_root_hex": merkle_root_hex,
+                                    "tx_sig": tx_sig,
+                                    "slot": slot,
+                                    "fixture": fixture,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("anchor_index: {anchor_index}");
+                                println!("start_seq: {start_seq}");
+                                println!("end_seq: {end_seq}");
+                                println!("merkle_root_hex: {merkle_root_hex}");
+                                println!("tx_sig: {tx_sig}");
+                                println!("slot: {slot}");
+                                println!("fixture: {fixture}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "anchor-status" => {
+                    let mut recent_limit: usize = 10;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--recent" => {
+                                i += 1;
+                                recent_limit = args
+                                    .get(i)
+                                    .ok_or_else(|| anyhow::anyhow!("--recent needs a value"))?
+                                    .parse()
+                                    .context("--recent parse")?;
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    write_frame(
+                        &mut stream,
+                        &Request::SaidAnchorStatus { recent_limit },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidAnchorStatus {
+                            next_index,
+                            last_confirmed_index,
+                            pending,
+                            recent,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_anchor_status",
+                                    "next_index": next_index,
+                                    "last_confirmed_index": last_confirmed_index,
+                                    "pending": pending,
+                                    "recent": recent,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("next_index: {next_index}");
+                                println!(
+                                    "last_confirmed_index: {}",
+                                    last_confirmed_index
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "-".into())
+                                );
+                                println!("pending: {pending}");
+                                for r in &recent {
+                                    println!(
+                                        "  #{} seq[{}..{}] root={} sig={} slot={} at={}ms",
+                                        r.anchor_index,
+                                        r.start_seq,
+                                        r.end_seq,
+                                        r.merkle_root_hex,
+                                        r.tx_sig,
+                                        r.slot,
+                                        r.submitted_at_ms,
+                                    );
+                                }
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),

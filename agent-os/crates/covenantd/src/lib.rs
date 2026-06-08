@@ -1294,6 +1294,129 @@ impl Server {
         }
     }
 
+    fn said_paths(&self) -> std::result::Result<(std::path::PathBuf, std::path::PathBuf), String> {
+        let home = self
+            .home
+            .as_ref()
+            .ok_or_else(|| "daemon home is not set; cannot resolve $COVENANT_HOME/said".to_string())?;
+        let dir = home.join("said");
+        Ok((dir.join("cursor.db"), dir.join("anchor_pending.jsonl")))
+    }
+
+    pub(crate) async fn said_anchor(
+        &self,
+        start_audit_index: u64,
+        end_audit_index: u64,
+        merkle_root_hex: String,
+        live: bool,
+    ) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let (cursor_path, fixture_path) = match self.said_paths() {
+            Ok(p) => p,
+            Err(e) => return Response::Error { message: e },
+        };
+        let cursor = match covenant_said_bridge::cursor::AnchorCursor::open(&cursor_path) {
+            Ok(c) => c,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said anchor cursor open: {e}"),
+                }
+            }
+        };
+        let request = covenant_said_bridge::anchor::AnchorRequest {
+            start_audit_index,
+            end_audit_index,
+            merkle_root_hex,
+        };
+        let mode = if live {
+            covenant_said_bridge::anchor::AnchorMode::Live
+        } else {
+            covenant_said_bridge::anchor::AnchorMode::Fixture
+        };
+        match bridge.anchor(&cursor, &fixture_path, mode, request).await {
+            Ok(s) => Response::SaidAnchored {
+                anchor_index: s.anchor_index,
+                start_seq: s.start_seq,
+                end_seq: s.end_seq,
+                merkle_root_hex: s.merkle_root_hex,
+                tx_sig: s.tx_sig,
+                slot: s.slot,
+                fixture: matches!(mode, covenant_said_bridge::anchor::AnchorMode::Fixture),
+            },
+            Err(e) => Response::Error {
+                message: format!("said anchor: {e}"),
+            },
+        }
+    }
+
+    pub(crate) fn said_anchor_status(&self, recent_limit: usize) -> Response {
+        let (cursor_path, _) = match self.said_paths() {
+            Ok(p) => p,
+            Err(e) => return Response::Error { message: e },
+        };
+        let cursor = match covenant_said_bridge::cursor::AnchorCursor::open(&cursor_path) {
+            Ok(c) => c,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said anchor cursor open: {e}"),
+                }
+            }
+        };
+        let next_index = match cursor.next_index() {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said cursor: {e}"),
+                }
+            }
+        };
+        let last_confirmed_index = match cursor.last_confirmed_index() {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said cursor: {e}"),
+                }
+            }
+        };
+        let pending = match cursor.pending() {
+            Ok(v) => v.len() as u64,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said cursor: {e}"),
+                }
+            }
+        };
+        let recent = match cursor.recent(recent_limit) {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| covenant_ipc::SaidAnchorRow {
+                    anchor_index: r.anchor_index,
+                    start_seq: r.start_audit_index,
+                    end_seq: r.end_audit_index,
+                    merkle_root_hex: r.merkle_root_hex,
+                    tx_sig: r.tx_sig,
+                    slot: r.slot,
+                    submitted_at_ms: r.submitted_at_ms,
+                })
+                .collect(),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said cursor: {e}"),
+                }
+            }
+        };
+        Response::SaidAnchorStatus {
+            next_index,
+            last_confirmed_index,
+            pending,
+            recent,
+        }
+    }
+
     pub(crate) async fn said_lookup(&self, wallet: String) -> Response {
         let Some(bridge) = self.said_bridge.as_ref() else {
             return Response::Error {
@@ -2195,6 +2318,16 @@ impl Server {
                 self.said_register_off_chain(card_json).await
             }
             Request::SaidLookup { wallet } => self.said_lookup(wallet).await,
+            Request::SaidAnchor {
+                start_audit_index,
+                end_audit_index,
+                merkle_root_hex,
+                live,
+            } => {
+                self.said_anchor(start_audit_index, end_audit_index, merkle_root_hex, live)
+                    .await
+            }
+            Request::SaidAnchorStatus { recent_limit } => self.said_anchor_status(recent_limit),
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
             Request::PayX402 {

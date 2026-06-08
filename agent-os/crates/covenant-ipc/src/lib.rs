@@ -774,6 +774,23 @@ pub enum Request {
     SaidLookup {
         wallet: String,
     },
+    /// Anchor a Merkle-rooted audit slice into SAID. In `live = false`
+    /// (default) mode the payload is written to `said/anchor_pending.jsonl`
+    /// under `$COVENANT_HOME` and no SOL is spent. In live mode the
+    /// `COVENANT_SAID_ALLOW_PAID_ANCHOR` gate must be open and the worker
+    /// must have a signer.
+    SaidAnchor {
+        start_audit_index: u64,
+        end_audit_index: u64,
+        merkle_root_hex: String,
+        #[serde(default)]
+        live: bool,
+    },
+    /// Cursor snapshot: next anchor index + last confirmed index + recent rows.
+    SaidAnchorStatus {
+        #[serde(default = "default_recent_limit")]
+        recent_limit: usize,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -1050,9 +1067,35 @@ pub enum Response {
         reputation_score: u16,
         total_interactions: u64,
     },
+    SaidAnchored {
+        anchor_index: u64,
+        start_seq: u64,
+        end_seq: u64,
+        merkle_root_hex: String,
+        tx_sig: String,
+        slot: u64,
+        fixture: bool,
+    },
+    SaidAnchorStatus {
+        next_index: u64,
+        last_confirmed_index: Option<u64>,
+        pending: u64,
+        recent: Vec<SaidAnchorRow>,
+    },
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SaidAnchorRow {
+    pub anchor_index: u64,
+    pub start_seq: u64,
+    pub end_seq: u64,
+    pub merkle_root_hex: String,
+    pub tx_sig: String,
+    pub slot: u64,
+    pub submitted_at_ms: i64,
 }
 
 #[derive(Debug, thiserror::Error)]

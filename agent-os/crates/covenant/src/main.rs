@@ -2192,6 +2192,21 @@ fn print_usage() {
     eprintln!(
         "  covenant said send --source-address <addr> --target-chain <c> --target-address <a> --payload <json> [--json]   send an xchain message"
     );
+    eprintln!(
+        "  covenant said register --on-chain --metadata-uri <url> [--json]   call SAID register_agent (paid gate REGISTER must be open)"
+    );
+    eprintln!(
+        "  covenant said verify [--json]                            buy the SAID verification badge (paid gate VERIFY)"
+    );
+    eprintln!(
+        "  covenant said validate-work --agent <pda> --task-hash <hex64> {{--passed|--failed}} --evidence <uri> [--json]   post a SAID validate_work record (paid gate VALIDATE)"
+    );
+    eprintln!(
+        "  covenant said sponsor-register --owner <wallet> --metadata-uri <url> [--json]   sponsor an external agent's SAID register (paid gate SPONSOR)"
+    );
+    eprintln!(
+        "  covenant said sponsor-verify --owner <wallet> [--json]   sponsor an external agent's SAID verify (paid gate SPONSOR)"
+    );
 }
 
 struct MemoryReadJsonArgs {
@@ -5187,7 +5202,38 @@ async fn main() -> Result<()> {
                         bail!("covenant said register requires exactly one of --off-chain or --on-chain");
                     }
                     if on_chain {
-                        bail!("covenant said register --on-chain is not wired yet (P3)");
+                        let metadata_uri = metadata_uri.ok_or_else(|| {
+                            anyhow::anyhow!("covenant said register --on-chain requires --metadata-uri")
+                        })?;
+                        write_frame(
+                            &mut stream,
+                            &Request::SaidRegisterOnChain { metadata_uri },
+                        )
+                        .await?;
+                        match read_frame::<_, Response>(&mut stream).await? {
+                            Response::SaidOnChainRegistered {
+                                agent_pda,
+                                owner,
+                                signature,
+                            } => {
+                                if as_json {
+                                    let value = serde_json::json!({
+                                        "kind": "said_on_chain_registered",
+                                        "agent_pda": agent_pda,
+                                        "owner": owner,
+                                        "signature": signature,
+                                    });
+                                    println!("{}", serde_json::to_string(&value)?);
+                                } else {
+                                    println!("agent_pda: {agent_pda}");
+                                    println!("owner: {owner}");
+                                    println!("signature: {signature}");
+                                }
+                            }
+                            Response::Error { message } => bail!("daemon error: {message}"),
+                            other => bail!("unexpected response: {other:?}"),
+                        }
+                        return Ok(());
                     }
                     let wallet = wallet.ok_or_else(|| {
                         anyhow::anyhow!("covenant said register requires --wallet <ADDR>")
@@ -5222,6 +5268,218 @@ async fn main() -> Result<()> {
                             } else {
                                 println!("wallet: {wallet}");
                                 println!("off_chain: {off_chain}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "verify" => {
+                    let mut as_json = false;
+                    for arg in &args[2..] {
+                        match arg.as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                    }
+                    write_frame(&mut stream, &Request::SaidGetVerified).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidVerified { signature, slot } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_verified",
+                                    "signature": signature,
+                                    "slot": slot,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("signature: {signature}");
+                                println!("slot: {slot}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "validate-work" => {
+                    let mut agent: Option<String> = None;
+                    let mut task_hash_hex: Option<String> = None;
+                    let mut passed: Option<bool> = None;
+                    let mut evidence_uri: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--agent" => {
+                                i += 1;
+                                agent = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--agent needs a SAID agent PDA")
+                                })?);
+                            }
+                            "--task-hash" => {
+                                i += 1;
+                                task_hash_hex = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--task-hash needs 64 hex chars")
+                                })?);
+                            }
+                            "--passed" => passed = Some(true),
+                            "--failed" => passed = Some(false),
+                            "--evidence" => {
+                                i += 1;
+                                evidence_uri = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--evidence needs a URI")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let agent = agent.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said validate-work requires --agent")
+                    })?;
+                    let task_hash_hex = task_hash_hex.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said validate-work requires --task-hash")
+                    })?;
+                    let passed = passed.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said validate-work requires --passed or --failed")
+                    })?;
+                    let evidence_uri = evidence_uri.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said validate-work requires --evidence")
+                    })?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SaidValidateWork {
+                            agent,
+                            task_hash_hex,
+                            passed,
+                            evidence_uri,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidValidationPosted {
+                            validation_pda,
+                            validator,
+                            signature,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_validation_posted",
+                                    "validation_pda": validation_pda,
+                                    "validator": validator,
+                                    "signature": signature,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("validation_pda: {validation_pda}");
+                                println!("validator: {validator}");
+                                println!("signature: {signature}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "sponsor-register" => {
+                    let mut sponsored_owner: Option<String> = None;
+                    let mut metadata_uri: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--owner" => {
+                                i += 1;
+                                sponsored_owner = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--owner needs a wallet")
+                                })?);
+                            }
+                            "--metadata-uri" => {
+                                i += 1;
+                                metadata_uri = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--metadata-uri needs a URL")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let sponsored_owner = sponsored_owner.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said sponsor-register requires --owner")
+                    })?;
+                    let metadata_uri = metadata_uri.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said sponsor-register requires --metadata-uri")
+                    })?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SaidSponsorRegister {
+                            sponsored_owner,
+                            metadata_uri,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidOnChainRegistered {
+                            agent_pda,
+                            owner,
+                            signature,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_sponsored_register",
+                                    "agent_pda": agent_pda,
+                                    "owner": owner,
+                                    "signature": signature,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("agent_pda: {agent_pda}");
+                                println!("owner: {owner}");
+                                println!("signature: {signature}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "sponsor-verify" => {
+                    let mut sponsored_owner: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--owner" => {
+                                i += 1;
+                                sponsored_owner = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--owner needs a wallet")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let sponsored_owner = sponsored_owner.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said sponsor-verify requires --owner")
+                    })?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SaidSponsorVerify { sponsored_owner },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidVerified { signature, slot } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_sponsored_verify",
+                                    "signature": signature,
+                                    "slot": slot,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("signature: {signature}");
+                                println!("slot: {slot}");
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),

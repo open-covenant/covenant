@@ -811,6 +811,28 @@ pub enum Request {
         target_address: String,
         payload_json: String,
     },
+    /// Register the agent on SAID's program. Behind COVENANT_SAID_ALLOW_PAID_REGISTER.
+    SaidRegisterOnChain {
+        metadata_uri: String,
+    },
+    /// Pay 0.01 SOL for the verification badge. Behind COVENANT_SAID_ALLOW_PAID_VERIFY.
+    SaidGetVerified,
+    /// Post a work-validation record. Behind COVENANT_SAID_ALLOW_PAID_VALIDATE.
+    SaidValidateWork {
+        agent: String,
+        task_hash_hex: String,
+        passed: bool,
+        evidence_uri: String,
+    },
+    /// Sponsor an external owner's `register_agent`. Behind COVENANT_SAID_ALLOW_PAID_SPONSOR.
+    SaidSponsorRegister {
+        sponsored_owner: String,
+        metadata_uri: String,
+    },
+    /// Sponsor an external owner's `get_verified`. Behind COVENANT_SAID_ALLOW_PAID_SPONSOR.
+    SaidSponsorVerify {
+        sponsored_owner: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -1117,6 +1139,20 @@ pub enum Response {
         message_id: String,
         free_tier_remaining: Option<u32>,
         delivered_at: Option<i64>,
+    },
+    SaidOnChainRegistered {
+        agent_pda: String,
+        owner: String,
+        signature: String,
+    },
+    SaidVerified {
+        signature: String,
+        slot: u64,
+    },
+    SaidValidationPosted {
+        validation_pda: String,
+        validator: String,
+        signature: String,
     },
     Error {
         message: String,

@@ -31,6 +31,7 @@ pub mod anchor;
 pub mod client;
 pub mod config;
 pub mod cursor;
+pub mod instructions;
 pub mod rest;
 pub mod worker;
 pub mod xchain;

@@ -1506,6 +1506,116 @@ impl Server {
         }
     }
 
+    pub(crate) async fn said_register_on_chain(&self, metadata_uri: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let input = covenant_said_bridge::instructions::RegisterAgentInput { metadata_uri };
+        match bridge.register_on_chain(&input).await {
+            Ok(r) => Response::SaidOnChainRegistered {
+                agent_pda: r.agent_pda,
+                owner: r.owner,
+                signature: r.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("said register on-chain: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_get_verified(&self) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        match bridge.get_verified().await {
+            Ok(r) => Response::SaidVerified {
+                signature: r.signature,
+                slot: r.slot,
+            },
+            Err(e) => Response::Error {
+                message: format!("said get_verified: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_validate_work(
+        &self,
+        agent: String,
+        task_hash_hex: String,
+        passed: bool,
+        evidence_uri: String,
+    ) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let input = covenant_said_bridge::instructions::ValidateWorkInput {
+            agent,
+            task_hash_hex,
+            passed,
+            evidence_uri,
+        };
+        match bridge.validate_work(&input).await {
+            Ok(r) => Response::SaidValidationPosted {
+                validation_pda: r.validation_pda,
+                validator: r.validator,
+                signature: r.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("said validate_work: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_sponsor_register(
+        &self,
+        sponsored_owner: String,
+        metadata_uri: String,
+    ) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let input = covenant_said_bridge::instructions::SponsorRegisterInput {
+            sponsored_owner,
+            metadata_uri,
+        };
+        match bridge.sponsor_register(&input).await {
+            Ok(r) => Response::SaidOnChainRegistered {
+                agent_pda: r.agent_pda,
+                owner: r.owner,
+                signature: r.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("said sponsor_register: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_sponsor_verify(&self, sponsored_owner: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let input = covenant_said_bridge::instructions::SponsorVerifyInput { sponsored_owner };
+        match bridge.sponsor_verify(&input).await {
+            Ok(r) => Response::SaidVerified {
+                signature: r.signature,
+                slot: r.slot,
+            },
+            Err(e) => Response::Error {
+                message: format!("said sponsor_verify: {e}"),
+            },
+        }
+    }
+
     pub(crate) async fn said_lookup(&self, wallet: String) -> Response {
         let Some(bridge) = self.said_bridge.as_ref() else {
             return Response::Error {
@@ -2434,6 +2544,26 @@ impl Server {
                     payload_json,
                 )
                 .await
+            }
+            Request::SaidRegisterOnChain { metadata_uri } => {
+                self.said_register_on_chain(metadata_uri).await
+            }
+            Request::SaidGetVerified => self.said_get_verified().await,
+            Request::SaidValidateWork {
+                agent,
+                task_hash_hex,
+                passed,
+                evidence_uri,
+            } => {
+                self.said_validate_work(agent, task_hash_hex, passed, evidence_uri)
+                    .await
+            }
+            Request::SaidSponsorRegister {
+                sponsored_owner,
+                metadata_uri,
+            } => self.said_sponsor_register(sponsored_owner, metadata_uri).await,
+            Request::SaidSponsorVerify { sponsored_owner } => {
+                self.said_sponsor_verify(sponsored_owner).await
             }
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,

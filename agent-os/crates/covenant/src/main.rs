@@ -2169,37 +2169,34 @@ fn print_usage() {
         "  covenant sap attest-agent --agent-pda <pda> --root <hex> [--type --expires] [--json]  cross-party attestation via the verifier"
     );
     eprintln!(
-        "  covenant said status [--json]            resolved SAID bridge status (cluster, program, api, paid gates)"
+        "  covenant said status [--json]                          resolved SAID bridge config and paid gates"
     );
     eprintln!(
-        "  covenant said register --off-chain --wallet <addr> --name <name> [--description --metadata-uri --homepage --capability* --tag*] [--json]  register an AgentCard on SAID's public REST registry"
+        "  covenant said lookup --wallet <addr> [--json]          fetch a SAID agent's identity, verification, reputation"
     );
     eprintln!(
-        "  covenant said lookup --wallet <addr> [--json]            fetch an agent's SAID identity + verification + reputation"
+        "  covenant said anchor --start <seq> --end <seq> --root <hex64> [--live] [--json]  anchor an audit slice (fixture by default)"
     );
     eprintln!(
-        "  covenant said anchor --start <seq> --end <seq> --root <hex64> [--live] [--json]  anchor an audit slice (fixture by default; --live needs the paid gate)"
+        "  covenant said anchor-status [--recent <n>] [--json]    cursor snapshot: next index, last confirmed, recent rows"
     );
     eprintln!(
-        "  covenant said anchor-status [--recent <n>] [--json]      cursor snapshot: next index, last confirmed, recent rows"
+        "  covenant said inbox --address <addr> [--chain solana] [--json]  poll pending xchain messages"
     );
     eprintln!(
-        "  covenant said inbox --address <addr> [--chain solana] [--json]   poll pending xchain messages on SAID"
+        "  covenant said free-tier --address <addr> [--json]      check remaining free-tier xchain quota"
     );
     eprintln!(
-        "  covenant said free-tier --address <addr> [--json]        check remaining free-tier xchain quota"
+        "  covenant said send --source-address <addr> --target-chain <c> --target-address <a> --payload <json> [--json]  send an xchain message"
     );
     eprintln!(
-        "  covenant said send --source-address <addr> --target-chain <c> --target-address <a> --payload <json> [--json]   send an xchain message"
+        "  covenant said register --metadata-uri <url> [--json]   call SAID register_agent (paid gate REGISTER)"
     );
     eprintln!(
-        "  covenant said register --on-chain --metadata-uri <url> [--json]   call SAID register_agent (paid gate REGISTER must be open)"
+        "  covenant said verify [--json]                          buy the SAID verification badge (paid gate VERIFY)"
     );
     eprintln!(
-        "  covenant said verify [--json]                            buy the SAID verification badge (paid gate VERIFY)"
-    );
-    eprintln!(
-        "  covenant said validate-work --agent <pda> --task-hash <hex64> {{--passed|--failed}} --evidence <uri> [--json]   post a SAID validate_work record (paid gate VALIDATE)"
+        "  covenant said validate-work --agent <pda> --task-hash <hex64> {{--passed|--failed}} --evidence <uri> [--json]  post a SAID validate_work record (paid gate VALIDATE)"
     );
 }
 
@@ -5130,61 +5127,15 @@ async fn main() -> Result<()> {
                     }
                 }
                 "register" => {
-                    let mut off_chain = false;
-                    let mut on_chain = false;
-                    let mut wallet: Option<String> = None;
-                    let mut name: Option<String> = None;
-                    let mut description: Option<String> = None;
                     let mut metadata_uri: Option<String> = None;
-                    let mut homepage: Option<String> = None;
-                    let mut capabilities: Vec<String> = Vec::new();
-                    let mut tags: Vec<String> = Vec::new();
                     let mut as_json = false;
                     let mut i = 2;
                     while i < args.len() {
                         match args[i].as_str() {
-                            "--off-chain" => off_chain = true,
-                            "--on-chain" => on_chain = true,
-                            "--wallet" => {
-                                i += 1;
-                                wallet = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--wallet needs an address")
-                                })?);
-                            }
-                            "--name" => {
-                                i += 1;
-                                name = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--name needs a value")
-                                })?);
-                            }
-                            "--description" => {
-                                i += 1;
-                                description = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--description needs a value")
-                                })?);
-                            }
                             "--metadata-uri" => {
                                 i += 1;
                                 metadata_uri = Some(args.get(i).cloned().ok_or_else(|| {
                                     anyhow::anyhow!("--metadata-uri needs a URL")
-                                })?);
-                            }
-                            "--homepage" => {
-                                i += 1;
-                                homepage = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--homepage needs a URL")
-                                })?);
-                            }
-                            "--capability" => {
-                                i += 1;
-                                capabilities.push(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--capability needs a value")
-                                })?);
-                            }
-                            "--tag" => {
-                                i += 1;
-                                tags.push(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--tag needs a value")
                                 })?);
                             }
                             "--json" => as_json = true,
@@ -5192,76 +5143,32 @@ async fn main() -> Result<()> {
                         }
                         i += 1;
                     }
-                    if off_chain == on_chain {
-                        bail!("covenant said register requires exactly one of --off-chain or --on-chain");
-                    }
-                    if on_chain {
-                        let metadata_uri = metadata_uri.ok_or_else(|| {
-                            anyhow::anyhow!("covenant said register --on-chain requires --metadata-uri")
-                        })?;
-                        write_frame(
-                            &mut stream,
-                            &Request::SaidRegisterOnChain { metadata_uri },
-                        )
-                        .await?;
-                        match read_frame::<_, Response>(&mut stream).await? {
-                            Response::SaidOnChainRegistered {
-                                agent_pda,
-                                owner,
-                                signature,
-                            } => {
-                                if as_json {
-                                    let value = serde_json::json!({
-                                        "kind": "said_on_chain_registered",
-                                        "agent_pda": agent_pda,
-                                        "owner": owner,
-                                        "signature": signature,
-                                    });
-                                    println!("{}", serde_json::to_string(&value)?);
-                                } else {
-                                    println!("agent_pda: {agent_pda}");
-                                    println!("owner: {owner}");
-                                    println!("signature: {signature}");
-                                }
-                            }
-                            Response::Error { message } => bail!("daemon error: {message}"),
-                            other => bail!("unexpected response: {other:?}"),
-                        }
-                        return Ok(());
-                    }
-                    let wallet = wallet.ok_or_else(|| {
-                        anyhow::anyhow!("covenant said register requires --wallet <ADDR>")
+                    let metadata_uri = metadata_uri.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said register requires --metadata-uri <URL>")
                     })?;
-                    let name = name.ok_or_else(|| {
-                        anyhow::anyhow!("covenant said register requires --name <NAME>")
-                    })?;
-                    let card = serde_json::json!({
-                        "wallet": wallet,
-                        "name": name,
-                        "description": description,
-                        "metadataUri": metadata_uri,
-                        "homepage": homepage,
-                        "capabilities": capabilities,
-                        "tags": tags,
-                    });
-                    let card_json = serde_json::to_string(&card)?;
                     write_frame(
                         &mut stream,
-                        &Request::SaidRegisterOffChain { card_json },
+                        &Request::SaidRegisterOnChain { metadata_uri },
                     )
                     .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
-                        Response::SaidRegistered { wallet, off_chain } => {
+                        Response::SaidOnChainRegistered {
+                            agent_pda,
+                            owner,
+                            signature,
+                        } => {
                             if as_json {
                                 let value = serde_json::json!({
                                     "kind": "said_registered",
-                                    "wallet": wallet,
-                                    "off_chain": off_chain,
+                                    "agent_pda": agent_pda,
+                                    "owner": owner,
+                                    "signature": signature,
                                 });
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
-                                println!("wallet: {wallet}");
-                                println!("off_chain: {off_chain}");
+                                println!("agent_pda: {agent_pda}");
+                                println!("owner: {owner}");
+                                println!("signature: {signature}");
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
@@ -5399,33 +5306,48 @@ async fn main() -> Result<()> {
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::SaidAgent {
                             wallet,
+                            pda,
+                            owner,
                             name,
+                            description,
+                            metadata_uri,
                             is_verified,
-                            verification_tier,
-                            stake_amount,
+                            sponsored,
                             reputation_score,
-                            total_interactions,
+                            feedback_count,
+                            activity_count,
+                            registered_at,
                         } => {
                             if as_json {
                                 let value = serde_json::json!({
                                     "kind": "said_agent",
                                     "wallet": wallet,
+                                    "pda": pda,
+                                    "owner": owner,
                                     "name": name,
+                                    "description": description,
+                                    "metadata_uri": metadata_uri,
                                     "is_verified": is_verified,
-                                    "verification_tier": verification_tier,
-                                    "stake_amount": stake_amount,
+                                    "sponsored": sponsored,
                                     "reputation_score": reputation_score,
-                                    "total_interactions": total_interactions,
+                                    "feedback_count": feedback_count,
+                                    "activity_count": activity_count,
+                                    "registered_at": registered_at,
                                 });
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("wallet: {wallet}");
+                                println!("pda: {}", pda.unwrap_or_default());
+                                println!("owner: {}", owner.unwrap_or_default());
                                 println!("name: {}", name.unwrap_or_default());
+                                println!("description: {}", description.unwrap_or_default());
+                                println!("metadata_uri: {}", metadata_uri.unwrap_or_default());
                                 println!("is_verified: {is_verified}");
-                                println!("verification_tier: {verification_tier}");
-                                println!("stake_amount: {stake_amount}");
+                                println!("sponsored: {sponsored}");
                                 println!("reputation_score: {reputation_score}");
-                                println!("total_interactions: {total_interactions}");
+                                println!("feedback_count: {feedback_count}");
+                                println!("activity_count: {activity_count}");
+                                println!("registered_at: {}", registered_at.unwrap_or_default());
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),

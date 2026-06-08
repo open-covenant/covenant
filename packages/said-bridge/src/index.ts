@@ -1,9 +1,6 @@
-// @covenant/said-bridge
-//
-// Thin wrapper over the `said-sdk` npm package. The SDK and
-// @solana/web3.js are peer dependencies and loaded lazily so consumers
-// that only need `status()` / `resolveSaidConfig()` do not pay for the
-// dependency tree.
+// @covenant/said-bridge. Thin wrapper over said-sdk. The SDK and
+// @solana/web3.js are peer deps loaded lazily so consumers that only
+// need status() or resolveSaidConfig() skip the dependency tree.
 
 import { createRequire } from 'node:module';
 

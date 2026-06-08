@@ -1,6 +1,6 @@
 // Resolves the SAID bridge config from environment variables. Mirrors
-// `Config::from_env` in the Rust `covenant-said-bridge` crate — the
-// daemon and worker must read the same variables to stay consistent.
+// `Config::from_env` in `covenant-said-bridge` so the daemon and worker
+// read the same variables.
 
 export type Cluster = 'devnet' | 'localnet' | 'mainnet';
 

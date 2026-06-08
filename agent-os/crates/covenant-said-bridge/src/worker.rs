@@ -1,14 +1,11 @@
-//! Subprocess transport to the SAID bridge worker (`@covenant/said-bridge`).
-//!
-//! Mirrors the JSON envelope contract used by `covenant-sap-bridge`:
+//! Subprocess transport to `@covenant/said-bridge`. JSON envelope:
 //!
 //! ```json
 //! { "ok": true,  "data":  <result> }
 //! { "ok": false, "error": "<message>", "name": "<ErrorName>" }
 //! ```
 //!
-//! The worker resolves its own cluster, RPC, program id, and signer from
-//! the inherited environment. The SAID owner keypair lives at
+//! Worker config comes from the inherited env. Signer:
 //! `COVENANT_SAID_KEYPAIR`.
 
 #![allow(dead_code)]

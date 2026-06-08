@@ -762,23 +762,10 @@ pub enum Request {
         #[serde(default)]
         expires_at_unix: Option<u64>,
     },
-    /// Resolved SAID bridge status. Read-only; no signer or RPC needed.
     SaidStatus,
-    /// Register an agent off-chain via SAID's REST API. Free, no SOL.
-    /// The card travels as a JSON string to keep the IPC surface decoupled
-    /// from the said-bridge crate's types.
-    SaidRegisterOffChain {
-        card_json: String,
-    },
-    /// Look up a SAID agent by wallet (identity + verification + reputation).
     SaidLookup {
         wallet: String,
     },
-    /// Anchor a Merkle-rooted audit slice into SAID. In `live = false`
-    /// (default) mode the payload is written to `said/anchor_pending.jsonl`
-    /// under `$COVENANT_HOME` and no SOL is spent. In live mode the
-    /// `COVENANT_SAID_ALLOW_PAID_ANCHOR` gate must be open and the worker
-    /// must have a signer.
     SaidAnchor {
         start_audit_index: u64,
         end_audit_index: u64,
@@ -786,24 +773,17 @@ pub enum Request {
         #[serde(default)]
         live: bool,
     },
-    /// Cursor snapshot: next anchor index + last confirmed index + recent rows.
     SaidAnchorStatus {
         #[serde(default = "default_recent_limit")]
         recent_limit: usize,
     },
-    /// Poll the SAID xchain inbox for pending messages addressed to this
-    /// agent's wallet on the given chain.
     SaidInbox {
         chain: String,
         address: String,
     },
-    /// Read the free-tier message quota for the given address.
     SaidFreeTier {
         address: String,
     },
-    /// Send a cross-chain message through SAID's `/xchain/message`. Free
-    /// tier covers 10/day; beyond that SAID returns 402 and the daemon
-    /// surfaces the upstream error verbatim (paid path is x402 follow-up).
     SaidSend {
         source_chain: String,
         source_address: String,
@@ -811,13 +791,10 @@ pub enum Request {
         target_address: String,
         payload_json: String,
     },
-    /// Register the agent on SAID's program. Behind COVENANT_SAID_ALLOW_PAID_REGISTER.
     SaidRegisterOnChain {
         metadata_uri: String,
     },
-    /// Pay 0.01 SOL for the verification badge. Behind COVENANT_SAID_ALLOW_PAID_VERIFY.
     SaidGetVerified,
-    /// Post a work-validation record. Behind COVENANT_SAID_ALLOW_PAID_VALIDATE.
     SaidValidateWork {
         agent: String,
         task_hash_hex: String,
@@ -1087,18 +1064,19 @@ pub enum Response {
         paid_gates: String,
         has_signer: bool,
     },
-    SaidRegistered {
-        wallet: String,
-        off_chain: bool,
-    },
     SaidAgent {
         wallet: String,
+        pda: Option<String>,
+        owner: Option<String>,
         name: Option<String>,
+        description: Option<String>,
+        metadata_uri: Option<String>,
         is_verified: bool,
-        verification_tier: u8,
-        stake_amount: u64,
-        reputation_score: u16,
-        total_interactions: u64,
+        sponsored: bool,
+        reputation_score: f64,
+        feedback_count: u64,
+        activity_count: u64,
+        registered_at: Option<String>,
     },
     SaidAnchored {
         anchor_index: u64,

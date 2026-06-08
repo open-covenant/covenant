@@ -1,10 +1,6 @@
-//! SQLite-backed anchor cursor.
-//!
-//! SAID's `submit_anchor` rejects any `anchor_index` that is not exactly
-//! `AgentIdentity.last_anchor_index + 1`. The cursor durably tracks
-//! every claimed slot so a daemon crash mid-submit doesn't lose the
-//! position, and so two daemons can't claim the same slot under
-//! ordinary single-host operation.
+//! SQLite-backed anchor cursor. `submit_anchor` requires
+//! `anchor_index = AgentIdentity.last_anchor_index + 1`, so the cursor
+//! persists every claim before submit and the confirmation after.
 
 use std::path::{Path, PathBuf};
 

@@ -1,10 +1,5 @@
-//! Worker-driven SAID instructions.
-//!
-//! Every method here invokes `covenant-said-worker` over the JSON
-//! envelope contract in [`crate::worker`]. The worker owns the SDK and
-//! the funding key; this module owns the gating and the input
-//! validation. Each instruction is behind its own paid-tx gate so an
-//! operator can fund anchor cadence without unlocking sponsorship.
+//! Worker-driven SAID instructions. The worker owns the SDK and the
+//! funding key; this module owns the gating and input validation.
 
 use serde::{Deserialize, Serialize};
 

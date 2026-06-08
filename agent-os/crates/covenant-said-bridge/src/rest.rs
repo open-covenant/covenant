@@ -1,8 +1,5 @@
-//! REST client for `api.saidprotocol.com`.
-//!
-//! Owns the free/off-chain surface (`POST /api/agents`, `GET /api/agents/:wallet`)
-//! and the cross-chain pipes (`/xchain/inbox`, `/xchain/message`). On-chain
-//! instructions go through the TS worker (`worker` module), not here.
+//! REST client for `api.saidprotocol.com`. Off-chain and xchain only;
+//! on-chain instructions go through the worker module.
 
 use std::time::Duration;
 

@@ -1,9 +1,6 @@
-//! Cross-chain inbox + outbound messaging via SAID's `/xchain` hub.
-//!
-//! The free tier covers 10 messages per agent per day at no cost. Beyond
-//! that SAID returns 402 with an x402 challenge that the caller settles
-//! via `covenant-x402-signer`. This module covers the unpaid surface;
-//! the paid send is plumbed in P8.
+//! Cross-chain inbox poll, free-tier check, and message send. Free tier
+//! is 10/day per agent. Past that SAID returns 402; the caller settles
+//! via `covenant-x402-signer`.
 
 use serde::{Deserialize, Serialize};
 
@@ -93,9 +90,6 @@ impl SaidBridge {
         rest::get_json(&client, &self.config().api_base_url, &path).await
     }
 
-    /// Send a free-tier message. If SAID returns 402 (free tier exhausted)
-    /// the caller is responsible for settling via the x402 path; we surface
-    /// the 402 verbatim so the outer signer can pick it up.
     pub async fn xchain_send(&self, req: &SendRequest) -> Result<SendReceipt> {
         self.require_enabled()?;
         let client = rest::build_client(self.config().rest_timeout)?;
@@ -111,13 +105,13 @@ mod tests {
     fn send_request_serializes_camel_case() {
         let req = SendRequest {
             source_chain: "solana".into(),
-            source_address: "AdChc…".into(),
+            source_address: "AdChc".into(),
             target_chain: "base".into(),
-            target_address: "0xabc…".into(),
+            target_address: "0xabc".into(),
             payload: serde_json::json!({ "hello": "world" }),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["sourceChain"], "solana");
-        assert_eq!(json["targetAddress"], "0xabc…");
+        assert_eq!(json["targetAddress"], "0xabc");
     }
 }

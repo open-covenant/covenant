@@ -1,14 +1,11 @@
 //! Anchor pipeline.
 //!
-//! Submits sequential Merkle-rooted audit slices to SAID's `submit_anchor`.
-//! Fixture mode writes the payload to a JSONL file and never spends SOL —
-//! the default for any environment that hasn't opened
-//! `COVENANT_SAID_ALLOW_PAID_ANCHOR=1`.
+//! `Fixture` mode appends the payload to `anchor_pending.jsonl` and
+//! never spends SOL. `Live` mode invokes the worker's `submit-anchor`
+//! command and requires `COVENANT_SAID_ALLOW_PAID_ANCHOR=1`.
 //!
-//! The submitted payload mirrors SAID's instruction:
-//!     submit_anchor(anchor_index, start_seq, end_seq, merkle_root)
-//! where `(start_seq, end_seq)` are derived from `AuditChainEntry.index`
-//! (a sequential, hash-chained position) rather than settlement batch IDs.
+//! `start_seq` and `end_seq` are audit-chain indices, not settlement
+//! batch IDs.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -80,9 +77,6 @@ fn validate_range(req: &AnchorRequest) -> Result<()> {
 }
 
 impl SaidBridge {
-    /// Anchor a Merkle-rooted audit slice. In `Fixture` mode the call is
-    /// free; in `Live` mode the bridge must be enabled AND the anchor
-    /// paid-tx gate must be on, otherwise [`BridgeError::PaidGateClosed`].
     pub async fn anchor(
         &self,
         cursor: &AnchorCursor,

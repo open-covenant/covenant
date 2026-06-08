@@ -1,25 +1,19 @@
 #!/usr/bin/env node
-// Covenant SAID bridge worker.
+// covenant-said-worker. Run as a subprocess by the Rust bridge; also
+// usable from the shell.
 //
-// The daemon (covenant-said-bridge crate) holds no JS runtime and no
-// SDK, so it shells out to this worker for every on-chain operation.
-// The worker is also a usable CLI on its own.
-//
-// Protocol: argv[2] is the command. A JSON payload may be supplied on
-// stdin. Exactly one JSON object is written to stdout:
+// argv[2] is the command. Payload on stdin. Exactly one envelope on stdout:
 //   { "ok": true, "data": <result> }
 //   { "ok": false, "error": "<message>", "name": "<ErrorName>" }
-// A non-zero exit code accompanies any { ok: false }.
 //
-// Config: COVENANT_SAID_* env vars (see resolveSaidConfig). Signer:
-// COVENANT_SAID_KEYPAIR points at a Solana CLI keypair JSON file.
+// Config: COVENANT_SAID_*. Signer: COVENANT_SAID_KEYPAIR (Solana CLI JSON).
 //
 // Commands:
-//   status            — resolved config snapshot + signer presence (no network)
-//   register-agent    — stdin: { metadataUri }
-//   get-verified      — stdin: {}
-//   submit-anchor     — stdin: { anchorIndex, startSeq, endSeq, merkleRootHex }
-//   validate-work     — stdin: { agent, taskHashHex, passed, evidenceUri }
+//   status            no payload. Resolved config + signer presence.
+//   register-agent    { metadataUri }
+//   get-verified      {}
+//   submit-anchor     { anchorIndex, startSeq, endSeq, merkleRootHex }
+//   validate-work     { agent, taskHashHex, passed, evidenceUri }
 
 import { SaidBridge, resolveSaidConfig } from './index.js';
 import { loadKeypairFromFile } from './keypair.js';

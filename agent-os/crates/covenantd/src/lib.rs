@@ -211,9 +211,6 @@ pub fn sap_bridge_config_from_env() -> SapBridgeConfig {
     SapBridgeConfig::from_env(std::env::vars())
 }
 
-/// Resolve the SAID Protocol bridge config from `COVENANT_SAID_*` env.
-/// Default `enabled: false`. Each paid on-chain instruction is gated by
-/// its own `COVENANT_SAID_ALLOW_PAID_*` flag.
 pub fn said_bridge_config_from_env() -> SaidBridgeConfig {
     SaidBridgeConfig::from_env(std::env::vars())
 }
@@ -1227,10 +1224,6 @@ impl Server {
         self.sap_bridge.as_ref()
     }
 
-    /// Attach the SAID Protocol bridge. Symmetric to `with_sap_bridge`:
-    /// daemon `main` calls this once at boot with the bridge resolved
-    /// from `said_bridge_config_from_env`. A disabled-config bridge is
-    /// still attached; the `enabled` flag governs behavior.
     pub fn with_said_bridge(mut self, bridge: SaidBridge) -> Self {
         self.said_bridge = Some(bridge);
         self
@@ -1264,32 +1257,6 @@ impl Server {
                 api_base_url: String::new(),
                 paid_gates: "none".into(),
                 has_signer: false,
-            },
-        }
-    }
-
-    pub(crate) async fn said_register_off_chain(&self, card_json: String) -> Response {
-        let Some(bridge) = self.said_bridge.as_ref() else {
-            return Response::Error {
-                message: "said bridge is not wired into this daemon".into(),
-            };
-        };
-        let card: covenant_said_bridge::agent_card::AgentCard =
-            match serde_json::from_str(&card_json) {
-                Ok(c) => c,
-                Err(e) => {
-                    return Response::Error {
-                        message: format!("invalid agent card JSON: {e}"),
-                    }
-                }
-            };
-        match bridge.register_off_chain(&card).await {
-            Ok(reg) => Response::SaidRegistered {
-                wallet: reg.wallet,
-                off_chain: reg.off_chain,
-            },
-            Err(e) => Response::Error {
-                message: format!("said register_off_chain: {e}"),
             },
         }
     }
@@ -1522,7 +1489,7 @@ impl Server {
                 signature: r.signature,
             },
             Err(e) => Response::Error {
-                message: format!("said register on-chain: {e}"),
+                message: format!("said register: {e}"),
             },
         }
     }
@@ -1583,12 +1550,17 @@ impl Server {
         match bridge.lookup(&wallet).await {
             Ok(a) => Response::SaidAgent {
                 wallet: a.wallet,
+                pda: a.pda,
+                owner: a.owner,
                 name: a.name,
+                description: a.description,
+                metadata_uri: a.metadata_uri,
                 is_verified: a.is_verified,
-                verification_tier: a.verification_tier,
-                stake_amount: a.stake_amount,
+                sponsored: a.sponsored,
                 reputation_score: a.reputation_score,
-                total_interactions: a.total_interactions,
+                feedback_count: a.feedback_count,
+                activity_count: a.activity_count,
+                registered_at: a.registered_at,
             },
             Err(e) => Response::Error {
                 message: format!("said lookup: {e}"),
@@ -2471,9 +2443,6 @@ impl Server {
                 .await
             }
             Request::SaidStatus => self.said_status(),
-            Request::SaidRegisterOffChain { card_json } => {
-                self.said_register_off_chain(card_json).await
-            }
             Request::SaidLookup { wallet } => self.said_lookup(wallet).await,
             Request::SaidAnchor {
                 start_audit_index,

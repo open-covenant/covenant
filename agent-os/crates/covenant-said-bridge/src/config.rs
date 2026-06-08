@@ -74,8 +74,6 @@ fn default_worker_command() -> Vec<String> {
     vec!["covenant-said-worker".to_owned()]
 }
 
-/// Per-instruction paid-tx gates. Each one defaults off so the bridge
-/// can ship and run REST-only without ever spending SOL.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct PaidGates {
     pub register: bool,

@@ -64,6 +64,44 @@ impl GitlawbClient {
         self.signed_post("/api/register", &body).await
     }
 
+    /// Push a git smart-HTTP `receive-pack` request to
+    /// `/{owner}/{repo}/git-receive-pack`, signed per RFC 9421. `body` is the
+    /// raw request body: pkt-line ref-update commands followed by a packfile,
+    /// exactly what `git` would send. Returns the raw git report-status bytes.
+    ///
+    /// `owner` is a `did:key`, so the path carries ':'. We sign the exact URL
+    /// path the request will travel on, keeping the signed `@path` byte-for-byte
+    /// identical to what the node reconstructs from `uri.path_and_query()` — or
+    /// the signature verification on this required-signature route fails.
+    pub async fn receive_pack(&self, owner: &str, repo: &str, body: Vec<u8>) -> Result<Vec<u8>> {
+        self.ensure_enabled()?;
+        let mut url = self.config.node_url.clone();
+        url.set_path(&format!("/{owner}/{repo}/git-receive-pack"));
+        let signed_path = url.path().to_string();
+
+        let headers = sign_request(&self.signer, Method::POST.as_str(), &signed_path, &body);
+        let resp = self
+            .http
+            .post(url)
+            .header("content-type", "application/x-git-receive-pack-request")
+            .header(CONTENT_DIGEST_HEADER, &headers.content_digest)
+            .header(SIG_INPUT_HEADER, &headers.signature_input)
+            .header(SIGNATURE_HEADER, &headers.signature)
+            .body(body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let bytes = resp.bytes().await?;
+        if !status.is_success() {
+            return Err(GitlawbError::Rpc {
+                status: status.as_u16(),
+                body: String::from_utf8_lossy(&bytes).into_owned(),
+            });
+        }
+        Ok(bytes.to_vec())
+    }
+
     /// Generic signed POST. Body is JSON-encoded, signed per RFC 9421, then
     /// sent. Response is parsed as JSON into `R`.
     pub async fn signed_post<B: Serialize, R: DeserializeOwned>(

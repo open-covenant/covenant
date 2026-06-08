@@ -7163,6 +7163,8 @@ impl Server {
         let mut zero_created_at_memory_refs = 0_u64;
         let mut zeroed_owner_memory_refs = 0_u64;
         let mut metadata_non_object_memory_refs = 0_u64;
+        let mut empty_status_memory_refs = 0_u64;
+        let mut not_ok_status_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -7253,6 +7255,33 @@ impl Server {
                     repair: "review the memory store row and the writer that produced it; running an apply_provenance repair through covenant-memory wraps the non-object value under previous_metadata so the metadata.receipt_id back-reference contract holds again".into(),
                 });
             }
+            if let Some(serde_json::Value::String(status)) =
+                record.metadata.as_object().and_then(|m| m.get("status"))
+            {
+                if status.is_empty() {
+                    empty_status_memory_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "memory_record_metadata_status_empty".into(),
+                        id: Some(record.id.to_string()),
+                        message: format!(
+                            "memory record {} has metadata.status = \"\"; the sole production memory write-site (dispatch_intent_run, covenantd/src/lib.rs:4191-4195) stamps the metadata \"status\" sub-key from the hardcoded &'static str literal \"ok\" via serde_json::json!, the field is never sourced from caller input, and no production metadata mutation (covenant-memory's receipt-correlation backfill, stale-marking compaction, or provenance repair) ever rewrites the \"status\" sub-key — each only INSERTs receipt_id/stale_context/provenance keys, preserving existing ones — so no reachable production arm assigns an empty status",
+                            record.id
+                        ),
+                        repair: "review the memory store row and the writer that produced it; the sole production memory write (dispatch_intent_run, lib.rs:4191-4195) stamps metadata.status from the hardcoded \"ok\" literal in the same serde_json::json! that sets intent_text and agent_id, and no production metadata mutation rewrites the sub-key, so an empty metadata.status is out-of-band evidence of a serde regression that defaulted the value to String::new() at hydration or a JSONL/DB edit that blanked the success classifier the dispatch row and its IntentDispatched audit twin both carry as \"ok\" — detaching the memory record from the kind+status discriminator the intent_dispatched_status_not_matching_memory_metadata cross-record arm joins on; this within-row arm is the memory-side mirror of audit_intent_dispatched_status_empty, fires only when metadata is an object carrying a string \"status\" sub-key (so the Check 5 memory_record_metadata_non_object arm owns the non-object case and a dropped or non-string status sub-key is left alone), and is strictly disjoint from the cross-record arm which fires only on a matched intent_id present in both stores so a windowed-out record whose audit twin aged past the verify window is caught here alone".into(),
+                    });
+                } else if status != "ok" {
+                    not_ok_status_memory_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "memory_record_metadata_status_not_ok".into(),
+                        id: Some(record.id.to_string()),
+                        message: format!(
+                            "memory record {} has metadata.status = {status:?}; the sole production memory write-site (dispatch_intent_run, covenantd/src/lib.rs:4191-4195) stamps the metadata \"status\" sub-key from the hardcoded &'static str literal \"ok\" via serde_json::json!, the field is never sourced from caller input, and no production metadata mutation (covenant-memory's receipt-correlation backfill, stale-marking compaction, or provenance repair) ever rewrites the \"status\" sub-key — each only INSERTs keys, preserving existing ones — so no reachable production arm assigns a non-\"ok\" status",
+                            record.id
+                        ),
+                        repair: "review the memory store row and the writer that produced it; the sole production memory write (dispatch_intent_run, lib.rs:4191-4195) stamps metadata.status from the hardcoded \"ok\" literal and no production metadata mutation rewrites the sub-key, so a non-\"ok\" status is out-of-band evidence of a JSONL/DB edit that relabeled a completed dispatch's outcome on the memory feed (misrepresenting in the memory store whether an intent completed) or a serde regression that hydrated the sub-key from a different row, detaching the record from the success classifier its IntentDispatched audit twin carries as \"ok\"; this within-row arm is the memory-side mirror of audit_intent_dispatched_status_not_ok, fires only when metadata is an object carrying a string \"status\" sub-key (so memory_record_metadata_non_object owns the non-object case and a dropped or non-string sub-key is left alone), fires independently of the memory_record_metadata_status_empty arm (the empty string is owned by that arm via the else-if), and is strictly disjoint from the intent_dispatched_status_not_matching_memory_metadata cross-record arm which requires a matched intent_id present in both stores so a windowed-out record is caught here alone".into(),
+                    });
+                }
+            }
         }
         orphans_total += empty_text_refs
             + nan_embedding_refs
@@ -7260,7 +7289,9 @@ impl Server {
             + nil_id_memory_refs
             + zero_created_at_memory_refs
             + zeroed_owner_memory_refs
-            + metadata_non_object_memory_refs;
+            + metadata_non_object_memory_refs
+            + empty_status_memory_refs
+            + not_ok_status_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
@@ -7269,9 +7300,11 @@ impl Server {
                 && nil_id_memory_refs == 0
                 && zero_created_at_memory_refs == 0
                 && zeroed_owner_memory_refs == 0
-                && metadata_non_object_memory_refs == 0,
+                && metadata_non_object_memory_refs == 0
+                && empty_status_memory_refs == 0
+                && not_ok_status_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s)"
             ),
         });
 
@@ -17088,6 +17121,94 @@ required = {caps:?}
                     integrity.message
                 );
                 assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_metadata_status_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let record_with_status = |status: serde_json::Value| MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: me.clone(),
+            text: "status fixture".into(),
+            embedding: vec![0.5; 8],
+            created_at: epoch_ms(),
+            metadata: serde_json::json!({
+                "intent_text": "status fixture",
+                "agent_id": "research",
+                "status": status,
+            }),
+            parent: None,
+        };
+        let empty = record_with_status(serde_json::json!(""));
+        let not_ok = record_with_status(serde_json::json!("degraded"));
+        let ok = record_with_status(serde_json::json!("ok"));
+        let (empty_id, not_ok_id, ok_id) = (empty.id, not_ok.id, ok.id);
+        s.memory.put(empty).await.unwrap();
+        s.memory.put(not_ok).await.unwrap();
+        s.memory.put(ok).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let empty = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_status_empty"
+                            && item.id.as_deref() == Some(&empty_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_metadata_status_empty: {drift:?}")
+                    });
+                assert!(
+                    empty.message.contains("metadata.status = \"\""),
+                    "empty status message should name the blank value: {}",
+                    empty.message
+                );
+                let not_ok = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_status_not_ok"
+                            && item.id.as_deref() == Some(&not_ok_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_metadata_status_not_ok: {drift:?}")
+                    });
+                assert!(
+                    not_ok.message.contains("degraded"),
+                    "not-ok status message should name the off-contract value: {}",
+                    not_ok.message
+                );
+                assert!(
+                    !drift.iter().any(|item| item.id.as_deref()
+                        == Some(&ok_id.to_string())
+                        && (item.kind == "memory_record_metadata_status_empty"
+                            || item.kind == "memory_record_metadata_status_not_ok")),
+                    "the canonical \"ok\" control record must not trip either status arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity.message.contains("1 empty-metadata-status record")
+                        && integrity
+                            .message
+                            .contains("1 not-ok-metadata-status record"),
+                    "check message should count both status records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 2);
             }
             other => panic!("unexpected: {other:?}"),
         }

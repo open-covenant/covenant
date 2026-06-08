@@ -7,9 +7,10 @@
 //! one-shot loopback listener so both the success decode and the
 //! verb-prefixed `http <status>` error mapping are exercised without
 //! the public SAID API. Paid on-chain verbs are covered at the
-//! closed-gate rejection only; the real worker subprocess and live
-//! REST against api.saidprotocol.com stay operator-gated and live in
-//! the `covenant-said-bridge` crate tests.
+//! closed-gate rejection and, via a shell-stub worker, the success
+//! field-copy onto each `Response::Said*` variant; the real worker
+//! subprocess and live REST against api.saidprotocol.com stay
+//! operator-gated and live in the `covenant-said-bridge` crate tests.
 
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{Request, Response};
@@ -17,7 +18,11 @@ use covenant_llm::MockEmbedder;
 use covenant_memory::InMemoryStore;
 use covenant_router::Router;
 use covenant_runtime::MockRunner;
-use covenant_said_bridge::{Config, SaidBridge};
+use covenant_said_bridge::config::{DEFAULT_REST_TIMEOUT, DEFAULT_WORKER_TIMEOUT};
+use covenant_said_bridge::{
+    Cluster, Config, PaidGates, SaidBridge, DEFAULT_SAID_API_BASE_URL,
+    DEFAULT_SAID_DEVNET_PROGRAM_ID,
+};
 use covenant_settlement::InMemorySettlement;
 use covenant_types::AgentId;
 use std::path::PathBuf;
@@ -79,6 +84,35 @@ fn devnet_bridge(enabled: bool) -> SaidBridge {
         env.push(("COVENANT_SAID_ENABLED", "1"));
     }
     SaidBridge::new(Config::from_env(env)).unwrap()
+}
+
+/// Enabled bridge with every paid gate open and the worker subprocess
+/// replaced by a shell stub that drains stdin and prints `envelope_json`
+/// verbatim — the success shape `worker::invoke` parses. Mirrors the
+/// crate's `worker_roundtrip` stub so the paid on-chain success arms are
+/// exercised at the covenantd dispatch boundary without a real worker,
+/// signer, or paid transaction. `Config::from_env` can't carry the
+/// space-laden `sh -c` command (it splits `COVENANT_SAID_WORKER_CMD` on
+/// whitespace), so the config is built as a literal.
+fn worker_stub_bridge(envelope_json: &str) -> SaidBridge {
+    let script = format!("cat >/dev/null; printf '%s' '{envelope_json}'");
+    let config = Config {
+        enabled: true,
+        cluster: Cluster::Devnet,
+        program_id: DEFAULT_SAID_DEVNET_PROGRAM_ID.into(),
+        rpc_url: "https://api.devnet.solana.com".into(),
+        api_base_url: DEFAULT_SAID_API_BASE_URL.into(),
+        paid: PaidGates {
+            register: true,
+            verify: true,
+            anchor: true,
+            validate_work: true,
+        },
+        worker_command: vec!["sh".into(), "-c".into(), script],
+        worker_timeout: DEFAULT_WORKER_TIMEOUT,
+        rest_timeout: DEFAULT_REST_TIMEOUT,
+    };
+    SaidBridge::new(config).unwrap()
 }
 
 const NOT_WIRED: &str = "said bridge is not wired into this daemon";
@@ -722,4 +756,69 @@ async fn paid_verbs_with_closed_gate_report_gated_error() {
             }
         );
     }
+}
+
+#[tokio::test]
+async fn said_register_on_chain_maps_success_onto_response() {
+    let bridge = worker_stub_bridge(
+        r#"{"ok":true,"data":{"agentPda":"Agent111","owner":"Own222","signature":"sig333"}}"#,
+    );
+    let server = server(None, Some(bridge));
+    let resp = server
+        .respond(
+            Request::SaidRegisterOnChain {
+                metadata_uri: "ipfs://card".into(),
+            },
+            &peer(),
+        )
+        .await;
+    assert_eq!(
+        resp,
+        Response::SaidOnChainRegistered {
+            agent_pda: "Agent111".into(),
+            owner: "Own222".into(),
+            signature: "sig333".into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn said_get_verified_maps_success_onto_response() {
+    let bridge = worker_stub_bridge(r#"{"ok":true,"data":{"signature":"sigV","slot":42}}"#);
+    let server = server(None, Some(bridge));
+    let resp = server.respond(Request::SaidGetVerified, &peer()).await;
+    assert_eq!(
+        resp,
+        Response::SaidVerified {
+            signature: "sigV".into(),
+            slot: 42,
+        }
+    );
+}
+
+#[tokio::test]
+async fn said_validate_work_maps_success_onto_response() {
+    let bridge = worker_stub_bridge(
+        r#"{"ok":true,"data":{"validationPda":"Val111","validator":"Ver222","signature":"sigW"}}"#,
+    );
+    let server = server(None, Some(bridge));
+    let resp = server
+        .respond(
+            Request::SaidValidateWork {
+                agent: "AgentPda".into(),
+                task_hash_hex: "ab".repeat(32),
+                passed: true,
+                evidence_uri: "ipfs://evidence".into(),
+            },
+            &peer(),
+        )
+        .await;
+    assert_eq!(
+        resp,
+        Response::SaidValidationPosted {
+            validation_pda: "Val111".into(),
+            validator: "Ver222".into(),
+            signature: "sigW".into(),
+        }
+    );
 }

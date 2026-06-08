@@ -7165,6 +7165,8 @@ impl Server {
         let mut metadata_non_object_memory_refs = 0_u64;
         let mut empty_status_memory_refs = 0_u64;
         let mut not_ok_status_memory_refs = 0_u64;
+        let mut empty_metadata_agent_id_memory_refs = 0_u64;
+        let mut not_manifest_id_charset_metadata_agent_id_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -7282,6 +7284,36 @@ impl Server {
                     });
                 }
             }
+            if let Some(serde_json::Value::String(agent_id)) =
+                record.metadata.as_object().and_then(|m| m.get("agent_id"))
+            {
+                if agent_id.is_empty() {
+                    empty_metadata_agent_id_memory_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "memory_record_metadata_agent_id_empty".into(),
+                        id: Some(record.id.to_string()),
+                        message: format!(
+                            "memory record {} has metadata.agent_id = \"\"; the sole production memory write-site (dispatch_intent_run, covenantd/src/lib.rs:4191-4195) stamps the metadata \"agent_id\" sub-key from card.map(|c| c.id.clone()) — a JSON string only when an agent matched, JSON null otherwise — where the inner AgentCard.id is sourced from manifest.agent.id, which covenant-manifest Manifest::validate (covenant-manifest/src/lib.rs:228-244) rejects empty for as a required-fields gate before any AgentCard reaches the Router, and no production metadata mutation (covenant-memory's receipt-correlation backfill, stale-marking compaction, or provenance repair) ever rewrites the \"agent_id\" sub-key — each only INSERTs receipt_id/stale_context/provenance keys, preserving existing ones — so no reachable production arm assigns an empty agent_id string",
+                            record.id
+                        ),
+                        repair: "review the memory store row and the writer that produced it; the sole production memory write (dispatch_intent_run, lib.rs:4191-4195) stamps metadata.agent_id from card.map(|c| c.id.clone()) in the same serde_json::json! that sets intent_text and status, where the matched AgentCard.id is bound to manifest.agent.id that Manifest::validate (covenant-manifest/src/lib.rs:228-244) rejects empty for at manifest load time, and no production metadata mutation rewrites the sub-key, so an empty metadata.agent_id is out-of-band evidence of a serde regression that defaulted the value to String::new() at hydration or a JSONL/DB edit that blanked which named agent handled the dispatch — detaching the memory record from the per-agent attribution the dispatch row and its IntentDispatched audit twin both carry as the matched manifest id, which the intent_dispatched_matched_agent_not_matching_memory_metadata cross-record arm joins on; this within-row arm is the memory-side mirror of audit_intent_dispatched_matched_agent_empty, fires only when metadata is an object carrying a string \"agent_id\" sub-key (so the Check 5 memory_record_metadata_non_object arm owns the non-object case, a JSON-null agent_id — the no-agent-matched shape card.map serializes to — is correctly skipped, and a dropped or non-string sub-key is left alone), and is strictly disjoint from the cross-record arm which fires only on a matched intent_id present in both stores so a windowed-out record whose audit twin aged past the verify window is caught here alone".into(),
+                    });
+                } else if !agent_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+                {
+                    not_manifest_id_charset_metadata_agent_id_memory_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "memory_record_metadata_agent_id_not_manifest_id_charset".into(),
+                        id: Some(record.id.to_string()),
+                        message: format!(
+                            "memory record {} has metadata.agent_id = {agent_id:?}, which contains a byte outside the manifest agent.id charset [A-Za-z0-9_.-]; the sole production memory write-site (dispatch_intent_run, covenantd/src/lib.rs:4191-4195) stamps the metadata \"agent_id\" sub-key from card.map(|c| c.id.clone()) where AgentCard.id is sourced from manifest.agent.id (covenant-router/src/lib.rs:50), and covenant-manifest Manifest::validate (covenant-manifest/src/lib.rs:252-262) rejects any agent.id with a byte outside ASCII [A-Za-z0-9_.-]+ before any AgentCard reaches the Router, so no reachable production arm emits an out-of-charset agent_id",
+                            record.id
+                        ),
+                        repair: "review the memory store row and the writer that produced it; the sole production memory write (dispatch_intent_run, lib.rs:4191-4195) sources metadata.agent_id from card.map(|c| c.id.clone()) bound to manifest.agent.id, which Manifest::validate (covenant-manifest/src/lib.rs:252-262) gates behind the ASCII [A-Za-z0-9_.-]+ filter at manifest load time — the same charset AgentId's serde re-applies on JSONL replay — so an agent_id carrying a space, '@', slash, or non-ASCII byte is out-of-band evidence of a serde regression, an import/replay tool that wrote an unvalidated id, or a JSONL/DB edit that relabeled which named agent handled the dispatch, breaking the per-agent attribution the memory record and its IntentDispatched audit twin both carry as the matched manifest id; this within-row arm is the memory-side mirror of audit_intent_dispatched_matched_agent_not_manifest_id_charset, fires only when metadata is an object carrying a non-empty string \"agent_id\" sub-key (so memory_record_metadata_non_object owns the non-object case, a JSON-null agent_id is skipped, and the empty string is owned by the memory_record_metadata_agent_id_empty arm via the else-if), and is strictly disjoint from the intent_dispatched_matched_agent_not_matching_memory_metadata cross-record arm which requires a matched intent_id present in both stores so a windowed-out record is caught here alone".into(),
+                    });
+                }
+            }
         }
         orphans_total += empty_text_refs
             + nan_embedding_refs
@@ -7291,7 +7323,9 @@ impl Server {
             + zeroed_owner_memory_refs
             + metadata_non_object_memory_refs
             + empty_status_memory_refs
-            + not_ok_status_memory_refs;
+            + not_ok_status_memory_refs
+            + empty_metadata_agent_id_memory_refs
+            + not_manifest_id_charset_metadata_agent_id_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
@@ -7302,9 +7336,11 @@ impl Server {
                 && zeroed_owner_memory_refs == 0
                 && metadata_non_object_memory_refs == 0
                 && empty_status_memory_refs == 0
-                && not_ok_status_memory_refs == 0,
+                && not_ok_status_memory_refs == 0
+                && empty_metadata_agent_id_memory_refs == 0
+                && not_manifest_id_charset_metadata_agent_id_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s)"
             ),
         });
 
@@ -17206,6 +17242,103 @@ required = {caps:?}
                             .message
                             .contains("1 not-ok-metadata-status record"),
                     "check message should count both status records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_metadata_agent_id_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let record_with_agent_id = |agent_id: serde_json::Value| MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: me.clone(),
+            text: "agent_id fixture".into(),
+            embedding: vec![0.5; 8],
+            created_at: epoch_ms(),
+            metadata: serde_json::json!({
+                "intent_text": "agent_id fixture",
+                "agent_id": agent_id,
+                "status": "ok",
+            }),
+            parent: None,
+        };
+        let empty = record_with_agent_id(serde_json::json!(""));
+        let bad_charset = record_with_agent_id(serde_json::json!("research agent!"));
+        let valid = record_with_agent_id(serde_json::json!("research"));
+        let null = record_with_agent_id(serde_json::Value::Null);
+        let (empty_id, bad_id, valid_id, null_id) = (empty.id, bad_charset.id, valid.id, null.id);
+        s.memory.put(empty).await.unwrap();
+        s.memory.put(bad_charset).await.unwrap();
+        s.memory.put(valid).await.unwrap();
+        s.memory.put(null).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let empty = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_agent_id_empty"
+                            && item.id.as_deref() == Some(&empty_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_metadata_agent_id_empty: {drift:?}")
+                    });
+                assert!(
+                    empty.message.contains("metadata.agent_id = \"\""),
+                    "empty agent_id message should name the blank value: {}",
+                    empty.message
+                );
+                let bad = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_agent_id_not_manifest_id_charset"
+                            && item.id.as_deref() == Some(&bad_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "expected memory_record_metadata_agent_id_not_manifest_id_charset: {drift:?}"
+                        )
+                    });
+                assert!(
+                    bad.message.contains("research agent!"),
+                    "charset message should name the off-charset value: {}",
+                    bad.message
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        (item.id.as_deref() == Some(&valid_id.to_string())
+                            || item.id.as_deref() == Some(&null_id.to_string()))
+                            && (item.kind == "memory_record_metadata_agent_id_empty"
+                                || item.kind
+                                    == "memory_record_metadata_agent_id_not_manifest_id_charset")
+                    }),
+                    "a valid manifest id and a JSON-null agent_id must not trip either arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 empty-metadata-agent-id record")
+                        && integrity
+                            .message
+                            .contains("1 non-charset-metadata-agent-id record"),
+                    "check message should count both agent_id records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 2);

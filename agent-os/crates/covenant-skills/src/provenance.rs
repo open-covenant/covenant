@@ -8,7 +8,7 @@
 //!   - skill.use.covenant
 //!   - chain.tx.11111111111111111111111111111111.transfer
 //! onchain:                            # the on-chain surface it declares it touches
-//!   programs: [11111111111111111111111111111111]
+//!   programs: ["11111111111111111111111111111111"]
 //!   sends_tx: true
 //!   clusters: [devnet]
 //! provenance:                         # how a verifier pins + checks it

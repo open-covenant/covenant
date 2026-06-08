@@ -1,0 +1,9 @@
+{
+  "id": "smoke-readme-marker",
+  "description": "harness smoke test (no cargo): candidate must add a SMOKE-OK marker to README.md",
+  "base": "69b41d40",
+  "graderStages": [
+    { "name": "marker", "cmd": ["bash", "-lc", "grep -q SMOKE-OK README.md"], "gate": true, "metric": "marker" }
+  ],
+  "weights": { "marker": 1 }
+}

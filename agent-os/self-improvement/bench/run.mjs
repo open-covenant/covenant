@@ -1,66 +1,145 @@
 #!/usr/bin/env node
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, rmSync, cpSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runStage, testFraction } from "./lib/grade.mjs";
+import { sh, runStage, testFraction, round } from "./lib.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
 const tasksDir = join(here, "tasks");
+const wtRoot = resolve(repoRoot, "..", ".covenant-bench-wt");
 
 const argv = process.argv.slice(2);
-const flags = { json: argv.includes("--json"), list: argv.includes("--list") };
-const only = (() => {
-  const i = argv.indexOf("--task");
-  return i >= 0 ? argv[i + 1] : null;
-})();
-
-const round = (n) => Math.round(n * 1000) / 1000;
+const has = (f) => argv.includes(f);
+const opt = (f, d = null) => {
+  const i = argv.indexOf(f);
+  return i >= 0 ? argv[i + 1] : d;
+};
+const flags = {
+  json: has("--json"),
+  list: has("--list"),
+  keep: has("--keep"),
+  solver: opt("--solver", "none"),
+  only: opt("--task"),
+};
 
 function loadTasks() {
   if (!existsSync(tasksDir)) return [];
   return readdirSync(tasksDir)
     .filter((d) => existsSync(join(tasksDir, d, "task.json")))
-    .map((d) => JSON.parse(readFileSync(join(tasksDir, d, "task.json"), "utf8")))
-    .filter((t) => !only || t.id === only)
+    .map((d) => ({ dir: join(tasksDir, d), ...JSON.parse(readFileSync(join(tasksDir, d, "task.json"), "utf8")) }))
+    .filter((t) => !flags.only || t.id === flags.only)
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function gradeTask(task) {
+function addWorktree(base) {
+  const path = join(wtRoot, `wt-${base.replace(/[^a-z0-9]/gi, "").slice(0, 12)}-${process.pid}`);
+  rmSync(path, { recursive: true, force: true });
+  const r = sh("git", ["worktree", "add", "--detach", "--force", path, base], { cwd: repoRoot });
+  if (!r.ok) throw new Error(`worktree add failed: ${r.out.trim()}`);
+  return path;
+}
+
+function dropWorktree(path) {
+  sh("git", ["worktree", "remove", "--force", path], { cwd: repoRoot });
+  rmSync(path, { recursive: true, force: true });
+}
+
+function solve(solver, wt, task) {
+  if (solver === "none") return;
+  if (solver === "replay") {
+    if (!task.solutionCommit) throw new Error("replay solver needs task.solutionCommit");
+    const r = sh("git", ["-C", wt, "cherry-pick", "--no-commit", task.solutionCommit]);
+    if (!r.ok) throw new Error(`replay failed: ${r.out.trim()}`);
+    return;
+  }
+  if (solver.startsWith("cmd:")) {
+    const r = sh("bash", ["-lc", solver.slice(4)], { cwd: wt });
+    if (!r.ok) throw new Error(`solver cmd failed: ${r.out.trim()}`);
+    return;
+  }
+  throw new Error(`unknown solver: ${solver}`);
+}
+
+// A candidate must not pass by weakening the suite: no removed tests, no added #[ignore].
+function gamingViolations(wt, base) {
+  const diff = sh("git", ["-C", wt, "diff", base]).out;
+  const v = [];
+  if (/^\+\s*#\[\s*ignore/m.test(diff)) v.push("added #[ignore]");
+  const changedTests = sh("git", ["-C", wt, "diff", "--name-only", base]).out
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((f) => /(^|\/)tests?\//.test(f) || /_tests?\.rs$/.test(f));
+  for (const f of changedTests) {
+    const d = sh("git", ["-C", wt, "diff", base, "--", f]).out;
+    if (/^-\s*#\[\s*test/m.test(d) || /^-\s*fn\s+\w/m.test(d)) v.push(`weakened tests in ${f}`);
+  }
+  return v;
+}
+
+function gradeStages(task, cwd) {
+  if (existsSync(join(task.dir, "grade"))) {
+    cpSync(join(task.dir, "grade"), join(cwd, task.gradeDest ?? "."), { recursive: true });
+  }
   const metrics = {};
   let correctness = 1;
   let ms = 0;
-  for (const stage of task.stages) {
-    const r = runStage(stage, repoRoot);
+  for (const stage of task.graderStages ?? []) {
+    const r = runStage(stage, cwd);
     ms += r.ms;
     if (stage.gate && !r.ok) {
       correctness = 0;
       break;
     }
     if (stage.metric === "tests") metrics.tests = round(testFraction(r.out).fraction);
-    if (stage.metric === "clippy") metrics.clippy = r.ok ? 1 : 0;
+    else if (stage.metric === "clippy") metrics.clippy = r.ok ? 1 : 0;
+    else if (stage.metric) metrics[stage.metric] = r.ok ? 1 : 0;
   }
-  const weights = task.weights ?? {};
-  const quality = Object.entries(weights).reduce((s, [k, w]) => s + w * (metrics[k] ?? 0), 0);
-  return { id: task.id, correctness, metrics, score: round(correctness * quality), ms };
+  return { metrics, correctness, ms };
+}
+
+function score(task, metrics, correctness) {
+  const w = task.weights ?? {};
+  const quality = Object.entries(w).reduce((s, [k, weight]) => s + weight * (metrics[k] ?? 0), 0);
+  return round(correctness * quality);
+}
+
+function grade(task) {
+  if (!task.base) {
+    const g = gradeStages(task, repoRoot);
+    return { id: task.id, correctness: g.correctness, metrics: g.metrics, score: score(task, g.metrics, g.correctness), ms: g.ms };
+  }
+  let wt;
+  try {
+    wt = addWorktree(task.base);
+    solve(flags.solver, wt, task);
+    const gaming = gamingViolations(wt, task.base);
+    if (gaming.length) return { id: task.id, correctness: 0, score: 0, metrics: {}, gaming, ms: 0 };
+    const g = gradeStages(task, wt);
+    return { id: task.id, correctness: g.correctness, metrics: g.metrics, score: score(task, g.metrics, g.correctness), ms: g.ms };
+  } catch (e) {
+    return { id: task.id, correctness: 0, score: 0, metrics: {}, error: String(e.message ?? e), ms: 0 };
+  } finally {
+    if (wt && !flags.keep) dropWorktree(wt);
+  }
 }
 
 const tasks = loadTasks();
-
 if (flags.list) {
   console.log(tasks.map((t) => `${t.id}: ${t.description}`).join("\n") || "(no tasks)");
   process.exit(0);
 }
 
-const results = tasks.map(gradeTask);
+const results = tasks.map(grade);
 const meanScore = results.length ? round(results.reduce((s, r) => s + r.score, 0) / results.length) : 0;
-const report = { schema: "covenant.bench.v1", tasks: results.length, meanScore, results };
+const report = { schema: "covenant.bench.v2", solver: flags.solver, tasks: results.length, meanScore, results };
 
 if (flags.json) {
   console.log(JSON.stringify(report, null, 2));
 } else {
-  console.log(`# Capability Benchmark\n\n- tasks: ${report.tasks}\n- mean score: ${report.meanScore}\n`);
+  console.log(`# Capability Benchmark (solver=${flags.solver})\n\n- tasks: ${report.tasks}\n- mean score: ${report.meanScore}\n`);
   for (const r of results) {
-    console.log(`- ${r.id}: ${r.score} (correctness ${r.correctness}, ${JSON.stringify(r.metrics)}, ${Math.round(r.ms / 1000)}s)`);
+    const tail = r.error ? ` ERROR ${r.error}` : r.gaming?.length ? ` GAMING ${r.gaming.join("; ")}` : "";
+    console.log(`- ${r.id}: ${r.score} (correctness ${r.correctness}, ${JSON.stringify(r.metrics)}, ${Math.round(r.ms / 1000)}s)${tail}`);
   }
 }

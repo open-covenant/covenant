@@ -1,0 +1,48 @@
+{
+  "schema": "covenant.immutable-core.v1",
+  "note": "Files/globs the autonomous loop may not self-edit. Enforced by hooks/pre-commit for autonomous sessions only (COVENANT_SESSION_ID set); operator commits are unaffected. Integrity = sha256 of protectedFiles vs baseline (catches on-disk tampering of gitignored governance files, not just staged diffs); protectedGlobs block staging matching paths. Operator re-baselines after a legitimate change: node agent-os/scripts/validate-immutable-core.mjs --update. Residual gap for Track A: the manifest holds its own baseline, so on-disk tampering of this file is not self-detected — move the baseline out-of-band before the loop can edit its own scaffold.",
+  "protectedFiles": [
+    "agent-os/scripts/validate-immutable-core.mjs",
+    "agent-os/scripts/autonomy-metrics.mjs",
+    "agent-os/scripts/autonomy-continue.mjs",
+    "agent-os/scripts/autonomy-next.mjs",
+    "agent-os/scripts/autonomy-seed-next.mjs",
+    "agent-os/scripts/autonomy-status-gaps.mjs",
+    "agent-os/scripts/validate-autonomy.mjs",
+    "agent-os/scripts/identity-policy.mjs",
+    "agent-os/scripts/identity-rotation.mjs",
+    "agent-os/scripts/configure-git-identity.mjs",
+    "agent-os/scripts/validate-current-git-identity.mjs",
+    "agent-os/autonomy/commit-rotation.json",
+    "agent-os/autonomy/workflow.json",
+    "hooks/pre-commit",
+    "hooks/pre-push",
+    "docs/internal/loop-prompt.md"
+  ],
+  "protectedGlobs": [
+    "agent-os/autonomy/immutable-core.json",
+    "agent-os/autonomy/bench/**",
+    "deploy/**",
+    "target/deploy/**",
+    "**/*-keypair.json",
+    "**/id_ed25519*"
+  ],
+  "baseline": {
+    "agent-os/scripts/validate-immutable-core.mjs": "e0e20176b4d0f5c2f82dffd80872b1c466712bd583c4b55562639a1a277b2b9c",
+    "agent-os/scripts/autonomy-metrics.mjs": "9f952eddf0dd9cfc3c41842fb18dee33c59571fc415dbcf2d54f6d5b80ca7834",
+    "agent-os/scripts/autonomy-continue.mjs": "cdbd0197b05f17ae821aacce9c6eb4319078dae8f1cdc9e8a39a1278de0d080a",
+    "agent-os/scripts/autonomy-next.mjs": "ed75ebf3487e7d368e73b5e02ded27f9a568f396fceea03a42e6d707b445004c",
+    "agent-os/scripts/autonomy-seed-next.mjs": "431407d7eabfef96809605afec9e3715ddc9f0d1dc23c3519ff2a0927642859a",
+    "agent-os/scripts/autonomy-status-gaps.mjs": "b31c70524796c04d95d61949feec06695b695f68edc4ae973f63693162eca4a5",
+    "agent-os/scripts/validate-autonomy.mjs": "e1da53bab94a9c4bf6efee1372ed96bc5a76683810842afaca40fd223d4dc09b",
+    "agent-os/scripts/identity-policy.mjs": "749caf90031e37ebbc190868d3461b273f109968c32420a8387b005de1d695a9",
+    "agent-os/scripts/identity-rotation.mjs": "8a09b639d01a31faff225d4def94f51e6033ae94b8126f619ec68d3924e988c5",
+    "agent-os/scripts/configure-git-identity.mjs": "01d3dce6dd29efe04a8432575e211b55af85b8fff6bd21c3ef558a075a3e3bc7",
+    "agent-os/scripts/validate-current-git-identity.mjs": "090fa373ad9910cb382308a3eace459c5ddc1eabcfae268210931dff1dabe36c",
+    "agent-os/autonomy/commit-rotation.json": "a260b760acc16c7ed130a1563536edcba54abbadfdae0f3510fa5061220d1cb2",
+    "agent-os/autonomy/workflow.json": "7a0d5063128bf04f7ec4bad1f7aa6f2aa5a558cf156dbe4c2c7e92748c1c132b",
+    "hooks/pre-commit": "c535ba994e0b100bbfbaafa081a752427d7ec02c202dbee73d30888d60e2e101",
+    "hooks/pre-push": "19e95f22afdaee33fb5e675053c007663a31f3f5f75b277e42a3b6cad098044f",
+    "docs/internal/loop-prompt.md": "99255b64de27c24c14cebcb5c3a8fc91dee315ce246b88178354ea81a44a66eb"
+  }
+}

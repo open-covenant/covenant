@@ -1,7 +1,7 @@
 {
   "id": "covenantd-builds-clean",
-  "description": "covenantd compiles, lib tests pass, clippy is clean",
-  "stages": [
+  "description": "repo-health (no base, graded in place): covenantd compiles, lib tests pass, clippy clean",
+  "graderStages": [
     { "name": "check", "cmd": ["cargo", "check", "-p", "covenantd"], "cwd": "agent-os", "gate": true },
     { "name": "test", "cmd": ["cargo", "test", "-p", "covenantd", "--lib"], "cwd": "agent-os", "metric": "tests" },
     { "name": "clippy", "cmd": ["cargo", "clippy", "-p", "covenantd", "--", "-D", "warnings"], "cwd": "agent-os", "metric": "clippy" }

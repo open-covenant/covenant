@@ -1,21 +1,23 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-export function runStage(stage, repoRoot) {
-  const cwd = stage.cwd ? resolve(repoRoot, stage.cwd) : repoRoot;
+export const round = (n) => Math.round(n * 1000) / 1000;
+
+export function sh(cmd, args, opts = {}) {
+  const r = spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...opts });
+  return { ok: r.status === 0, status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+export function runStage(stage, cwd) {
+  const dir = stage.cwd ? resolve(cwd, stage.cwd) : cwd;
   const start = Date.now();
   const r = spawnSync(stage.cmd[0], stage.cmd.slice(1), {
-    cwd,
+    cwd: dir,
     encoding: "utf8",
     timeout: stage.timeoutMs ?? 600000,
     maxBuffer: 64 * 1024 * 1024,
   });
-  return {
-    ok: r.status === 0,
-    status: r.status,
-    ms: Date.now() - start,
-    out: `${r.stdout ?? ""}${r.stderr ?? ""}`,
-  };
+  return { ok: r.status === 0, status: r.status, ms: Date.now() - start, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
 export function testFraction(out) {

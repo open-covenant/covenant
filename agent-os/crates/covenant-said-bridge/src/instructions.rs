@@ -52,7 +52,10 @@ fn validate_hex32(label: &str, hex: &str) -> Result<()> {
             hex.len()
         )));
     }
-    if !hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+    if !hex
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
         return Err(BridgeError::Invalid(format!(
             "{label} must be lowercase ASCII hex"
         )));
@@ -67,7 +70,9 @@ impl SaidBridge {
     ) -> Result<RegisterAgentResult> {
         self.require_paid("register_agent", self.config().paid.register)?;
         if input.metadata_uri.trim().is_empty() {
-            return Err(BridgeError::Invalid("metadata_uri must not be empty".into()));
+            return Err(BridgeError::Invalid(
+                "metadata_uri must not be empty".into(),
+            ));
         }
         worker::invoke(self.config(), "register-agent", input).await
     }
@@ -81,7 +86,9 @@ impl SaidBridge {
         self.require_paid("validate_work", self.config().paid.validate_work)?;
         validate_hex32("task_hash_hex", &input.task_hash_hex)?;
         if input.evidence_uri.trim().is_empty() {
-            return Err(BridgeError::Invalid("evidence_uri must not be empty".into()));
+            return Err(BridgeError::Invalid(
+                "evidence_uri must not be empty".into(),
+            ));
         }
         worker::invoke(self.config(), "validate-work", input).await
     }
@@ -108,13 +115,20 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(matches!(err, BridgeError::PaidGateClosed { instruction: "register_agent" }));
+        assert!(matches!(
+            err,
+            BridgeError::PaidGateClosed {
+                instruction: "register_agent"
+            }
+        ));
     }
 
     #[tokio::test]
     async fn validate_work_rejects_bad_hex() {
-        let mut paid = crate::config::PaidGates::default();
-        paid.validate_work = true;
+        let paid = crate::config::PaidGates {
+            validate_work: true,
+            ..Default::default()
+        };
         let b = bridge_with(paid);
         let err = b
             .validate_work(&ValidateWorkInput {

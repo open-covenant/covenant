@@ -58,7 +58,10 @@ fn validate_root_hex(hex: &str) -> Result<()> {
             hex.len()
         )));
     }
-    if !hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+    if !hex
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
         return Err(BridgeError::Invalid(
             "merkle_root_hex must be lowercase ASCII hex".into(),
         ));
@@ -134,18 +137,16 @@ impl SaidBridge {
             .append(true)
             .open(fixture_path)
             .await
-            .map_err(|e| {
-                BridgeError::Invalid(format!("open {}: {e}", fixture_path.display()))
-            })?;
-        file.write_all(line.as_bytes()).await.map_err(|e| {
-            BridgeError::Invalid(format!("write {}: {e}", fixture_path.display()))
-        })?;
-        file.write_all(b"\n").await.map_err(|e| {
-            BridgeError::Invalid(format!("write {}: {e}", fixture_path.display()))
-        })?;
-        file.flush().await.map_err(|e| {
-            BridgeError::Invalid(format!("flush {}: {e}", fixture_path.display()))
-        })?;
+            .map_err(|e| BridgeError::Invalid(format!("open {}: {e}", fixture_path.display())))?;
+        file.write_all(line.as_bytes())
+            .await
+            .map_err(|e| BridgeError::Invalid(format!("write {}: {e}", fixture_path.display())))?;
+        file.write_all(b"\n")
+            .await
+            .map_err(|e| BridgeError::Invalid(format!("write {}: {e}", fixture_path.display())))?;
+        file.flush()
+            .await
+            .map_err(|e| BridgeError::Invalid(format!("flush {}: {e}", fixture_path.display())))?;
 
         let tx_sig = format!("fixture:{anchor_index}");
         cursor.confirm(anchor_index, &tx_sig, 0, now_ms())?;
@@ -270,7 +271,12 @@ mod tests {
             .anchor(&cursor, &fixture_path, AnchorMode::Live, request)
             .await
             .unwrap_err();
-        assert!(matches!(err, BridgeError::PaidGateClosed { instruction: "submit_anchor" }));
+        assert!(matches!(
+            err,
+            BridgeError::PaidGateClosed {
+                instruction: "submit_anchor"
+            }
+        ));
     }
 
     #[test]
@@ -287,6 +293,9 @@ mod tests {
             end_audit_index: 5,
             merkle_root_hex: "zz".repeat(32),
         };
-        assert!(matches!(validate_range(&bad_hex), Err(BridgeError::Invalid(_))));
+        assert!(matches!(
+            validate_range(&bad_hex),
+            Err(BridgeError::Invalid(_))
+        ));
     }
 }

@@ -23,7 +23,10 @@ pub mod worker;
 pub mod xchain;
 
 pub use client::SaidBridge;
-pub use config::{Cluster, Config, PaidGates, DEFAULT_SAID_MAINNET_PROGRAM_ID, DEFAULT_SAID_DEVNET_PROGRAM_ID, DEFAULT_SAID_API_BASE_URL};
+pub use config::{
+    Cluster, Config, PaidGates, DEFAULT_SAID_API_BASE_URL, DEFAULT_SAID_DEVNET_PROGRAM_ID,
+    DEFAULT_SAID_MAINNET_PROGRAM_ID,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeError {

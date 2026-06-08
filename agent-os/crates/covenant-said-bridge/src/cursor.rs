@@ -36,8 +36,9 @@ impl AnchorCursor {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         if let Some(parent) = path.as_ref().parent() {
             if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| BridgeError::Invalid(format!("mkdir {}: {e}", parent.display())))?;
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    BridgeError::Invalid(format!("mkdir {}: {e}", parent.display()))
+                })?;
             }
         }
         let conn = Connection::open(path.as_ref())
@@ -54,7 +55,9 @@ impl AnchorCursor {
             );",
         )
         .map_err(|e| BridgeError::Invalid(format!("init schema: {e}")))?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn in_memory() -> Result<Self> {
@@ -103,7 +106,13 @@ impl AnchorCursor {
             .map_err(|e| BridgeError::Invalid(format!("claim slot {}: {e}", anchor.anchor_index)))
     }
 
-    pub fn confirm(&self, anchor_index: u64, tx_sig: &str, slot: u64, submitted_at_ms: i64) -> Result<()> {
+    pub fn confirm(
+        &self,
+        anchor_index: u64,
+        tx_sig: &str,
+        slot: u64,
+        submitted_at_ms: i64,
+    ) -> Result<()> {
         let rows = self
             .conn
             .lock()

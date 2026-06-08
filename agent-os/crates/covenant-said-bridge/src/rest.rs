@@ -20,7 +20,8 @@ pub(crate) fn build_client(timeout: Duration) -> Result<reqwest::Client> {
 
 fn join(base: &str, path: &str) -> Result<Url> {
     let base = Url::parse(base).map_err(|e| BridgeError::Invalid(format!("bad api base: {e}")))?;
-    base.join(path).map_err(|e| BridgeError::Invalid(format!("bad path {path}: {e}")))
+    base.join(path)
+        .map_err(|e| BridgeError::Invalid(format!("bad path {path}: {e}")))
 }
 
 pub(crate) async fn post_json<P, T>(

@@ -89,11 +89,23 @@ impl PaidGates {
 
     pub fn summary(&self) -> String {
         let mut on = Vec::new();
-        if self.register { on.push("register"); }
-        if self.verify { on.push("verify"); }
-        if self.anchor { on.push("anchor"); }
-        if self.validate_work { on.push("validate_work"); }
-        if on.is_empty() { "none".into() } else { on.join(",") }
+        if self.register {
+            on.push("register");
+        }
+        if self.verify {
+            on.push("verify");
+        }
+        if self.anchor {
+            on.push("anchor");
+        }
+        if self.validate_work {
+            on.push("validate_work");
+        }
+        if on.is_empty() {
+            "none".into()
+        } else {
+            on.join(",")
+        }
     }
 }
 
@@ -203,7 +215,10 @@ mod tests {
     use super::*;
 
     fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
     }
 
     #[test]

@@ -135,6 +135,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let suffix = &agent_did[agent_did.len() - 8..];
     let client = GitlawbClient::new(Config::enabled(url), agent_sk.clone());
 
+    // Preflight: a clear message if no node is reachable (the common first mistake).
+    if !client.health().await.unwrap_or(false) {
+        eprintln!(
+            "Couldn't reach a healthy gitlawb node at {node_url}.\n\
+             Start one (see the README — e.g. `docker compose up` in a Gitlawb/node\n\
+             checkout) and set GITLAWB_NODE_URL, then re-run."
+        );
+        std::process::exit(1);
+    }
+
     // 1. Register the agent and create a repo (both RFC 9421 signed).
     client
         .register(

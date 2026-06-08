@@ -49,14 +49,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent_did = did_key_from_verifying_key(&agent_sk.verifying_key());
     let client = GitlawbClient::new(Config::enabled(url), agent_sk.clone());
 
-    // 1. Health (unsigned read).
-    let healthy = client.health().await?;
+    // 1. Health (unsigned read). Fail with a clear hint if no node is reachable.
+    let healthy = client.health().await.unwrap_or(false);
     println!(
         "[1] GET  /health                       -> {}",
-        if healthy { "ok" } else { "DOWN" }
+        if healthy { "ok" } else { "unreachable" }
     );
     if !healthy {
-        return Err("node is not healthy".into());
+        eprintln!(
+            "\nCouldn't reach a healthy gitlawb node at {node_url}.\n\
+             Start one (see the README) and set GITLAWB_NODE_URL, then re-run."
+        );
+        std::process::exit(1);
     }
 
     // 2. Register the agent. This is the load-bearing interop proof: the node

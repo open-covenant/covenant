@@ -225,6 +225,17 @@ mod tests {
         SaidBridge::new(cfg).unwrap()
     }
 
+    /// Enabled bridge with the anchor paid gate open and a shell-stub
+    /// worker that drains stdin and prints `envelope_json` verbatim.
+    fn bridge_with_anchor_worker(envelope_json: &str) -> SaidBridge {
+        let mut cfg = Config::disabled(Cluster::Devnet);
+        cfg.enabled = true;
+        cfg.paid.anchor = true;
+        let script = format!("cat >/dev/null; printf '%s' '{envelope_json}'");
+        cfg.worker_command = vec!["sh".into(), "-c".into(), script];
+        SaidBridge::new(cfg).unwrap()
+    }
+
     #[tokio::test]
     async fn fixture_anchor_advances_cursor_and_writes_file() {
         let dir = tempdir().unwrap();
@@ -257,7 +268,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_mode_requires_paid_gate() {
+    async fn anchor_live_requires_paid_gate() {
         let dir = tempdir().unwrap();
         let fixture_path = dir.path().join("ignored.jsonl");
         let cursor = AnchorCursor::in_memory().unwrap();
@@ -277,6 +288,68 @@ mod tests {
                 instruction: "submit_anchor"
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn anchor_live_maps_worker_success_and_confirms_cursor() {
+        let dir = tempdir().unwrap();
+        let fixture_path = dir.path().join("ignored.jsonl");
+        let cursor = AnchorCursor::in_memory().unwrap();
+        let bridge =
+            bridge_with_anchor_worker(r#"{"ok":true,"data":{"txSig":"livesig","slot":777}}"#);
+        let request = AnchorRequest {
+            start_audit_index: 3,
+            end_audit_index: 9,
+            merkle_root_hex: "ab".repeat(32),
+        };
+
+        let result = bridge
+            .anchor(&cursor, &fixture_path, AnchorMode::Live, request)
+            .await
+            .unwrap();
+        assert_eq!(result.anchor_index, 0);
+        assert_eq!(result.start_seq, 3);
+        assert_eq!(result.end_seq, 9);
+        assert_eq!(result.tx_sig, "livesig");
+        assert_eq!(result.slot, 777);
+
+        // The worker-success path must persist the confirmation, not just
+        // return it: the slot leaves pending and the cursor advances.
+        assert_eq!(cursor.last_confirmed_index().unwrap(), Some(0));
+        assert!(cursor.pending().unwrap().is_empty());
+        assert_eq!(cursor.next_index().unwrap(), 1);
+        let recent = cursor.recent(10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].tx_sig, "livesig");
+        assert_eq!(recent[0].slot, 777);
+    }
+
+    #[tokio::test]
+    async fn anchor_live_worker_failure_leaves_claim_pending() {
+        let dir = tempdir().unwrap();
+        let fixture_path = dir.path().join("ignored.jsonl");
+        let cursor = AnchorCursor::in_memory().unwrap();
+        let bridge =
+            bridge_with_anchor_worker(r#"{"ok":false,"error":"rpc down","name":"SendError"}"#);
+        let request = AnchorRequest {
+            start_audit_index: 0,
+            end_audit_index: 4,
+            merkle_root_hex: "ab".repeat(32),
+        };
+
+        let err = bridge
+            .anchor(&cursor, &fixture_path, AnchorMode::Live, request)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BridgeError::Upstream { .. }));
+
+        // Claim-before-submit means a failed submit keeps the index
+        // reserved (pending, unconfirmed) so a retry cannot silently
+        // reuse it against a stale on-chain last_anchor_index.
+        assert_eq!(cursor.last_confirmed_index().unwrap(), None);
+        let pending = cursor.pending().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].anchor_index, 0);
     }
 
     #[test]

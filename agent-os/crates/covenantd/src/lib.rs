@@ -12691,10 +12691,40 @@ impl Server {
         // windowed-out or purged receipt is left to the orphan-free join.
         let budget_join_receipts: HashMap<Uuid, &SettlementReceipt> =
             receipts.iter().map(|r| (r.id, r)).collect();
+        // Map each dispatched intent's matched agent id (well-formed Some values
+        // only) so the Memory-pairing identity join below can bind a budget
+        // debit's synthesized agent display to the agent the dispatch actually
+        // ran. Keyed by intent_id, which equals the Memory receipt's
+        // memory_record_id (both are the one memory record id dispatch_intent_run
+        // mints per dispatch). Mirrors the well-formed-manifest-id gate the
+        // Check 1 intent_dispatched_matched_agent_not_matching_memory_metadata arm
+        // applies, so a None or malformed matched_agent stays owned by the
+        // audit_intent_dispatched_matched_agent_{empty,not_manifest_id_charset}
+        // shape arms rather than tripping this cross-store binding.
+        let mut dispatched_matched_agent_by_intent: HashMap<Uuid, &str> = HashMap::new();
+        for event in &audits {
+            if let AuditKind::IntentDispatched {
+                intent_id,
+                matched_agent: Some(agent),
+                ..
+            } = &event.kind
+            {
+                if !agent.is_empty()
+                    && agent
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+                {
+                    dispatched_matched_agent_by_intent
+                        .entry(*intent_id)
+                        .or_insert(agent.as_str());
+                }
+            }
+        }
         let mut debit_receipt_payer_mismatch_refs = 0_u64;
         let mut debit_receipt_payer_display_mismatch_refs = 0_u64;
         let mut debit_receipt_credits_mismatch_refs = 0_u64;
         let mut debit_memory_receipt_credits_not_flat_refs = 0_u64;
+        let mut debit_memory_receipt_agent_not_matched_refs = 0_u64;
         let mut debit_receipt_resource_not_tool_or_memory_refs = 0_u64;
         for debit in &debits {
             let Some(receipt) = budget_join_receipts.get(&debit.paired_receipt) else {
@@ -12725,6 +12755,52 @@ impl Server {
                         ),
                         repair: "review the budget-ledger JSONL row and the settlement JSONL Memory receipt it joins by paired_receipt == receipt.id; dispatch_intent_run charges the flat intent_dispatch_credits() per intent regardless of the memory write size, so a memory-dispatch debit whose credits is not that constant is out-of-band evidence of a JSONL edit that repriced the per-intent budget burn (breaking the flat-rate model the budget bucket and the BudgetPauseCheckpoint resume sizing rely on), an import tool that paired the debit with a foreign receipt, or a serde regression that hydrated credits from a different row; the budget ledger has no within-row shape arm of its own, so this cross-store join is the sole detector; it fires only on a debit whose paired_receipt resolves to a Memory receipt (the Tool-receipt pairing from record_paid_call is checked for payer and credits parity by the budget_debit_paired_receipt_payer_mismatch and budget_debit_paired_receipt_credits_mismatch arms instead, since a paid call's debit.credits = call.credits is not the flat per-intent cost)".into(),
                     });
+                }
+                // Identity binding for the Memory pairing. dispatch_intent_run
+                // debits agent_id_for_card(card) — whose display is the
+                // synthesized format!("{card.id}@agent") (agent_id_for_card_id) —
+                // paired with the same receipt_id it writes the Memory receipt
+                // under (try_debit at covenantd/src/lib.rs:4045, SettlementReceipt
+                // at lib.rs:4205), and stamps the IntentDispatched audit's
+                // matched_agent = card.id (lib.rs:4232) for that same intent_id,
+                // which is exactly the receipt's memory_record_id (the one memory
+                // record id the dispatch mints), so every production memory
+                // dispatch satisfies debit.agent.display ==
+                // format!("{matched_agent}@agent"). Unlike the Tool pairing
+                // (record_paid_call), whose debit.agent IS the receipt.payer and
+                // is bound by budget_debit_paired_receipt_payer_mismatch below, the
+                // Memory pairing's debit.agent is the matched agent's synthesized
+                // id — NOT the receipt.payer, which is the submitting peer — so it
+                // carries no identity check today, only the flat-credits arm above;
+                // this cross-store budget↔audit join is the sole detector of a
+                // Memory-dispatch debit that charges the wrong agent. The
+                // dispatched_matched_agent_by_intent map holds only well-formed
+                // Some matched_agents, so a None or malformed audit value stays
+                // owned by the audit_intent_dispatched_matched_agent_{empty,
+                // not_manifest_id_charset} shape arms, and the gate on
+                // debit.agent.pubkey != [0u8; 32] leaves the all-zero identity to
+                // budget_debit_agent_pubkey_zeroed, keeping all three disjoint.
+                if let Some(memory_record_id) = receipt.memory_record_id {
+                    if let Some(&matched_agent) =
+                        dispatched_matched_agent_by_intent.get(&memory_record_id)
+                    {
+                        let expected_display = format!("{matched_agent}@agent");
+                        if debit.agent.pubkey != [0u8; 32]
+                            && debit.agent.display != expected_display
+                        {
+                            debit_memory_receipt_agent_not_matched_refs += 1;
+                            drift.push(VerifyDrift {
+                                kind: "budget_debit_paired_memory_receipt_agent_not_matched_dispatch"
+                                    .into(),
+                                id: Some(debit.paired_receipt.to_string()),
+                                message: format!(
+                                    "budget debit paired_receipt = {} resolves to a ResourceKind::Memory SettlementReceipt whose memory_record_id {memory_record_id} matches an IntentDispatched audit with matched_agent = {matched_agent:?}, but the debit's agent.display = {:?} is not the expected synthesized form {expected_display:?}; the sole production writer of a (BudgetDebit, Memory receipt) pair is dispatch_intent_run, which debits agent_id_for_card(card) — whose display is the synthesized format!(\"{{card_id}}@agent\") — paired with the same receipt_id it writes the Memory receipt under (covenantd/src/lib.rs:4045 and lib.rs:4205) and stamps the IntentDispatched matched_agent = card.id (lib.rs:4232) for that same intent_id, which equals the receipt's memory_record_id, so every production memory dispatch satisfies debit.agent.display == format!(\"{{matched_agent}}@agent\") — a debit whose agent is not the dispatched agent is a charge no production write emits",
+                                    debit.paired_receipt, debit.agent.display
+                                ),
+                                repair: "review the budget-ledger JSONL row, the settlement JSONL Memory receipt it joins by paired_receipt == receipt.id, and the IntentDispatched audit row for that receipt's memory_record_id; dispatch_intent_run debits agent_id_for_card(card) (display \"{card.id}@agent\") against the same receipt_id it records the Memory receipt under and stamps the IntentDispatched matched_agent = card.id in one dispatch, so a Memory-paired debit whose agent.display is not format!(\"{matched_agent}@agent\") is out-of-band evidence of a JSONL edit that reassigned which agent a memory dispatch charged (misattributing the per-agent budget burn on the operator's reconciliation view), an import or replay tool that paired the debit with a foreign dispatch, or a serde regression that hydrated agent.display from a different row; unlike the Tool pairing, whose debit.agent is the receipt.payer and is bound by budget_debit_paired_receipt_payer_mismatch, the Memory pairing's debit.agent is the matched agent's synthesized id (not the receipt.payer, which is the submitting peer), so no payer arm covers it and this cross-store budget↔audit join is the sole identity detector for Memory-dispatch debits; it fires only when the joined IntentDispatched audit carries a well-formed Some matched_agent (a None or malformed audit value is owned by the audit_intent_dispatched_matched_agent_empty and audit_intent_dispatched_matched_agent_not_manifest_id_charset shape arms) and only when debit.agent.pubkey is non-zero so budget_debit_agent_pubkey_zeroed owns the all-zero identity, and it is disjoint from the budget_debit_paired_memory_receipt_credits_not_intent_dispatch arm above, which checks the debit's credits rather than its agent identity".into(),
+                            });
+                        }
+                    }
                 }
                 continue;
             }
@@ -13023,6 +13099,7 @@ impl Server {
             + debit_receipt_payer_display_mismatch_refs
             + debit_receipt_credits_mismatch_refs
             + debit_memory_receipt_credits_not_flat_refs
+            + debit_memory_receipt_agent_not_matched_refs
             + debit_receipt_resource_not_tool_or_memory_refs
             + zeroed_agent_debit_refs
             + zero_at_ms_debit_refs
@@ -13034,7 +13111,7 @@ impl Server {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {debit_receipt_resource_not_tool_or_memory_refs} non-tool-or-memory-resource paired-receipt debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {zero_credits_debit_refs} zero-credits debit(s), {nil_paired_receipt_debit_refs} nil-paired-receipt debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {debit_memory_receipt_agent_not_matched_refs} agent-not-matched memory-dispatch debit(s), {debit_receipt_resource_not_tool_or_memory_refs} non-tool-or-memory-resource paired-receipt debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {zero_credits_debit_refs} zero-credits debit(s), {nil_paired_receipt_debit_refs} nil-paired-receipt debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
             ),
         });
 
@@ -24319,6 +24396,178 @@ required = {caps:?}
                     check.message
                 );
                 assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_dispatch_debit_agent_not_matched_drift() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        // dispatch_intent_run debits agent_id_for_card(card) (display
+        // "{card.id}@agent") against the same receipt_id it writes the Memory
+        // receipt under, and stamps the IntentDispatched matched_agent = card.id
+        // for that intent_id (== the receipt's memory_record_id). Here the
+        // paired debit charges a different agent than the dispatch recorded --
+        // the misattribution a JSONL edit would make -- so the new identity arm
+        // fires while the flat-credits and Tool-only payer arms stay silent.
+        let receipt_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let submitter = AgentId::new("submitter@host", [8u8; 32]);
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: submitter.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(intent_id),
+                credits_consumed: 1,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: submitter.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id,
+                    intent_text: "do research".into(),
+                    matched_agent: Some("researcher".into()),
+                    result_hash_hex: "a".repeat(64),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        // The dispatch recorded matched_agent = "researcher" (expected debit
+        // display "researcher@agent"), but the debit charges "intruder@agent".
+        let intruder = AgentId::new("intruder@agent", [7u8; 32]);
+        s.budget.set_capacity(&intruder, 100).await.unwrap();
+        s.budget.try_debit(&intruder, 1, receipt_id).await.unwrap();
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let row = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "budget_debit_paired_memory_receipt_agent_not_matched_dispatch"
+                            && item.id.as_deref() == Some(&receipt_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory-dispatch agent-not-matched drift: {drift:?}")
+                    });
+                assert!(
+                    row.message.contains("matched_agent = \"researcher\"")
+                        && row.message.contains("intruder@agent")
+                        && row.message.contains("researcher@agent"),
+                    "message should name the dispatched agent and the mismatched debit display: {}",
+                    row.message
+                );
+                assert!(
+                    !drift.iter().any(|i| {
+                        i.kind == "budget_debit_paired_memory_receipt_credits_not_intent_dispatch"
+                            || i.kind == "budget_debit_paired_receipt_payer_mismatch"
+                            || i.kind == "budget_debit_agent_pubkey_zeroed"
+                    }),
+                    "the credits, Tool-payer, and zeroed-pubkey arms must stay silent: {drift:?}"
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 agent-not-matched"),
+                    "check message should count agent-not-matched memory-dispatch debits: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_does_not_flag_memory_dispatch_debit_agent_matching_dispatch() {
+        use covenant_audit::{AuditEvent, AuditKind};
+        let s = server_with(vec![], "");
+        // A clean memory dispatch: the debit's agent display is exactly
+        // "{matched_agent}@agent", the synthesized form agent_id_for_card
+        // produces, so the new identity arm must stay silent and the budget join
+        // check must pass.
+        let receipt_id = Uuid::new_v4();
+        let intent_id = Uuid::new_v4();
+        let submitter = AgentId::new("submitter@host", [8u8; 32]);
+        s.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: submitter.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(intent_id),
+                credits_consumed: 1,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        s.audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: submitter.clone(),
+                kind: AuditKind::IntentDispatched {
+                    intent_id,
+                    intent_text: "do research".into(),
+                    matched_agent: Some("researcher".into()),
+                    result_hash_hex: "a".repeat(64),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+        let matched = AgentId::new("researcher@agent", [5u8; 32]);
+        s.budget.set_capacity(&matched, 100).await.unwrap();
+        s.budget.try_debit(&matched, 1, receipt_id).await.unwrap();
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport { drift, checks, .. } => {
+                assert!(
+                    !drift.iter().any(|i| {
+                        i.kind == "budget_debit_paired_memory_receipt_agent_not_matched_dispatch"
+                    }),
+                    "a debit whose agent matches the dispatch must not trip the arm: {drift:?}"
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(
+                    check.passed,
+                    "budget join check should pass for an agent-matched memory dispatch: {}",
+                    check.message
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }

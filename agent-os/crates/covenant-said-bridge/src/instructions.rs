@@ -124,6 +124,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_verified_requires_paid_gate() {
+        let b = bridge_with(crate::config::PaidGates::default());
+        let err = b.get_verified().await.unwrap_err();
+        assert!(matches!(
+            err,
+            BridgeError::PaidGateClosed {
+                instruction: "get_verified"
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn validate_work_requires_paid_gate() {
+        let b = bridge_with(crate::config::PaidGates::default());
+        let err = b
+            .validate_work(&ValidateWorkInput {
+                agent: "pda".into(),
+                task_hash_hex: "ab".repeat(32),
+                passed: true,
+                evidence_uri: "https://x".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            BridgeError::PaidGateClosed {
+                instruction: "validate_work"
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn validate_work_rejects_bad_hex() {
         let paid = crate::config::PaidGates {
             validate_work: true,

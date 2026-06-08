@@ -2,7 +2,7 @@
 //!
 //! DAS is Metaplex's unified JSON-RPC read interface over MPL Core,
 //! Token Metadata, and compressed (Bubblegum) assets — the same surface
-//! Helius / QuickNode / Triton / Aura expose. Reads are stateless and
+//! Helius / Triton / QuickNode expose. Reads are stateless and
 //! key-free: this client only ever POSTs a JSON-RPC envelope and returns
 //! the `result` value. No signing, no funds, nothing leaves the host but
 //! a query.
@@ -21,7 +21,7 @@ pub enum DasError {
 }
 
 /// The read surface the daemon's tools call. A trait so tests (and a
-/// future Aura-native client) can stand in without HTTP.
+/// future native indexer client) can stand in without HTTP.
 #[async_trait]
 pub trait DasClient: Send + Sync {
     /// `getAsset` — one asset (NFT / cNFT / fungible) by id.

@@ -7173,6 +7173,8 @@ impl Server {
         let mut empty_reason_metadata_stale_context_memory_refs = 0_u64;
         let mut missing_marked_at_ms_metadata_stale_context_memory_refs = 0_u64;
         let mut non_integer_marked_at_ms_metadata_stale_context_memory_refs = 0_u64;
+        let mut missing_reason_metadata_stale_context_memory_refs = 0_u64;
+        let mut non_string_reason_metadata_stale_context_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -7428,6 +7430,33 @@ impl Server {
                     }
                     _ => {}
                 }
+                match stale_context.get("reason") {
+                    None => {
+                        missing_reason_metadata_stale_context_memory_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "memory_record_metadata_stale_context_reason_missing".into(),
+                            id: Some(record.id.to_string()),
+                            message: format!(
+                                "memory record {} has a metadata.stale_context object with no reason sub-key; the sole production writer of metadata.stale_context is covenant-memory's stale-marking compaction (plan_compaction, covenant-memory/src/lib.rs:343-358), which inserts serde_json::json!({{\"marked_at_ms\": marked_at_ms, \"reason\": request.reason}}) — always carrying both sub-keys — so a stale_context object missing reason is a value no production compaction emits",
+                                record.id
+                            ),
+                            repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory plan_compaction, covenant-memory/src/lib.rs:343-358) inserts metadata.stale_context as a two-field object carrying marked_at_ms and reason in one serde_json::json!, so a stale_context object lacking reason is out-of-band evidence of a JSONL/DB edit that dropped the sub-key or a serde regression that hydrated a partial object — losing the operator-supplied justification for why the long-term record was marked stale; this within-row arm fires only when metadata is an object carrying a stale_context object (so memory_record_metadata_stale_context_non_object owns the non-object stale_context case and a missing stale_context sub-key is left alone), and is independent of memory_record_metadata_stale_context_reason_empty (which owns the present-but-empty string case via the Check 5 Block-1 else-if) and memory_record_metadata_stale_context_reason_non_string (which owns the present-but-non-string case via this match)".into(),
+                        });
+                    }
+                    Some(value) if !value.is_string() => {
+                        non_string_reason_metadata_stale_context_memory_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "memory_record_metadata_stale_context_reason_non_string".into(),
+                            id: Some(record.id.to_string()),
+                            message: format!(
+                                "memory record {} has metadata.stale_context.reason = {value}, which is not a JSON string; the sole production writer of metadata.stale_context is covenant-memory's stale-marking compaction (plan_compaction, covenant-memory/src/lib.rs:343-358), which copies request.reason — a String (covenant-types MemoryCompactionRequest.reason, covenant-types/src/lib.rs:346) — verbatim into the sub-key, so a non-string reason is a value no production compaction emits",
+                                record.id
+                            ),
+                            repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory plan_compaction, covenant-memory/src/lib.rs:343-358) copies request.reason (a String) verbatim into stale_context.reason, so a number/bool/null/object/array reason is out-of-band evidence of a JSONL/DB edit that re-encoded the staleness justification or a serde regression — making the why of the stale-marking structurally uninterpretable; this within-row arm fires only when metadata is an object carrying a stale_context object whose reason sub-key is present and fails is_string() (so memory_record_metadata_stale_context_non_object owns the non-object stale_context case, memory_record_metadata_stale_context_reason_missing owns the absent-sub-key case via the match, and a faithful string reason routes to memory_record_metadata_stale_context_reason_empty when it trims empty or to the no-op arm otherwise)".into(),
+                        });
+                    }
+                    _ => {}
+                }
             }
         }
         orphans_total += empty_text_refs
@@ -7446,7 +7475,9 @@ impl Server {
             + non_object_metadata_stale_context_memory_refs
             + empty_reason_metadata_stale_context_memory_refs
             + missing_marked_at_ms_metadata_stale_context_memory_refs
-            + non_integer_marked_at_ms_metadata_stale_context_memory_refs;
+            + non_integer_marked_at_ms_metadata_stale_context_memory_refs
+            + missing_reason_metadata_stale_context_memory_refs
+            + non_string_reason_metadata_stale_context_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
@@ -7465,9 +7496,11 @@ impl Server {
                 && non_object_metadata_stale_context_memory_refs == 0
                 && empty_reason_metadata_stale_context_memory_refs == 0
                 && missing_marked_at_ms_metadata_stale_context_memory_refs == 0
-                && non_integer_marked_at_ms_metadata_stale_context_memory_refs == 0,
+                && non_integer_marked_at_ms_metadata_stale_context_memory_refs == 0
+                && missing_reason_metadata_stale_context_memory_refs == 0
+                && non_string_reason_metadata_stale_context_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s), {non_object_metadata_stale_context_memory_refs} non-object-stale-context record(s), {empty_reason_metadata_stale_context_memory_refs} empty-reason-stale-context record(s), {missing_marked_at_ms_metadata_stale_context_memory_refs} missing-marked-at-ms-stale-context record(s), {non_integer_marked_at_ms_metadata_stale_context_memory_refs} non-integer-marked-at-ms-stale-context record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s), {non_object_metadata_stale_context_memory_refs} non-object-stale-context record(s), {empty_reason_metadata_stale_context_memory_refs} empty-reason-stale-context record(s), {missing_marked_at_ms_metadata_stale_context_memory_refs} missing-marked-at-ms-stale-context record(s), {non_integer_marked_at_ms_metadata_stale_context_memory_refs} non-integer-marked-at-ms-stale-context record(s), {missing_reason_metadata_stale_context_memory_refs} missing-reason-stale-context record(s), {non_string_reason_metadata_stale_context_memory_refs} non-string-reason-stale-context record(s)"
             ),
         });
 
@@ -17755,6 +17788,101 @@ required = {caps:?}
                             .message
                             .contains("1 non-integer-marked-at-ms-stale-context record"),
                     "check message should count both marked_at_ms records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_metadata_stale_context_reason_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let record_with_stale_context = |stale_context: serde_json::Value| MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::LongTerm,
+            owner: me.clone(),
+            text: "reason fixture".into(),
+            embedding: vec![0.5; 8],
+            created_at: epoch_ms(),
+            metadata: serde_json::json!({
+                "status": "ok",
+                "stale_context": stale_context,
+            }),
+            parent: None,
+        };
+        let missing = record_with_stale_context(serde_json::json!({
+            "marked_at_ms": 1_700_000_000_000_u64,
+        }));
+        let non_string = record_with_stale_context(serde_json::json!({
+            "marked_at_ms": 1_700_000_000_000_u64,
+            "reason": 42,
+        }));
+        let valid = record_with_stale_context(serde_json::json!({
+            "marked_at_ms": 1_700_000_000_000_u64,
+            "reason": "long-term staleness sweep",
+        }));
+        let (missing_id, non_string_id, valid_id) = (missing.id, non_string.id, valid.id);
+        s.memory.put(missing).await.unwrap();
+        s.memory.put(non_string).await.unwrap();
+        s.memory.put(valid).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let missing = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_stale_context_reason_missing"
+                            && item.id.as_deref() == Some(&missing_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected reason_missing: {drift:?}"));
+                assert!(
+                    missing.message.contains("no reason sub-key"),
+                    "missing message should describe the gap: {}",
+                    missing.message
+                );
+                let non_string = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_stale_context_reason_non_string"
+                            && item.id.as_deref() == Some(&non_string_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected reason_non_string: {drift:?}"));
+                assert!(
+                    non_string.message.contains("not a JSON string"),
+                    "non-string message should describe the invariant: {}",
+                    non_string.message
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.id.as_deref() == Some(&valid_id.to_string())
+                            && item
+                                .kind
+                                .starts_with("memory_record_metadata_stale_context_reason")
+                    }),
+                    "a string reason must not trip any reason arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 missing-reason-stale-context record")
+                        && integrity
+                            .message
+                            .contains("1 non-string-reason-stale-context record"),
+                    "check message should count both reason records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 2);

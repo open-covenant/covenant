@@ -64,6 +64,7 @@ agent-os/scripts/alpha-release-validate-bundle.mjs
 agent-os/scripts/autonomy-continue.mjs
 agent-os/scripts/autonomy-dirty-report.mjs
 agent-os/scripts/autonomy-handoff-bundle.mjs
+agent-os/scripts/autonomy-metrics.mjs
 agent-os/scripts/autonomy-next.mjs
 agent-os/scripts/autonomy-plan-handoff-restore.mjs
 agent-os/scripts/autonomy-preflight.mjs
@@ -120,6 +121,7 @@ agent-os/scripts/validate-github-push-identity.mjs
 agent-os/scripts/validate-gvisor-host-readiness.mjs
 agent-os/scripts/validate-gvisor-runner-promotion-readiness.mjs
 agent-os/scripts/validate-identity-provenance.mjs
+agent-os/scripts/validate-immutable-core.mjs
 agent-os/scripts/validate-ipc-http-gateway-v2-fixture-contract.mjs
 agent-os/scripts/validate-live-coverage.mjs
 agent-os/scripts/validate-mcp-fixture-selection-policy.mjs

@@ -49,6 +49,15 @@ if [ -n "${COVENANT_SESSION_ID:-}" ]; then
   fi
 fi
 
+# --- Immutable core (autonomous sessions only) ---
+#
+# The loop may not self-edit the files that govern its fitness, selection,
+# identity, or security. Operator commits (no COVENANT_SESSION_ID) are exempt.
+
+if [ -n "${COVENANT_SESSION_ID:-}" ] && [ -f agent-os/scripts/validate-immutable-core.mjs ]; then
+  node agent-os/scripts/validate-immutable-core.mjs --staged
+fi
+
 # --- Staged local-leak scan ---
 #
 # Discovers identifying tokens (USER, HOME, hostname variants, global git

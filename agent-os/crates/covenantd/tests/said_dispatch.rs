@@ -1,11 +1,15 @@
-//! Covenantd-level dispatch coverage for the SAID bridge verbs that do
-//! not touch the network: the unconfigured status snapshot, the
-//! "bridge not wired" guard shared by every bridge-backed verb, the
-//! anchor-status cursor read, and the fixture-mode anchor round-trip
-//! (claim, JSONL write, confirm, status reflection). The live
-//! REST/worker/on-chain arms stay out of scope here — they are
-//! operator-gated behind the paid flags and covered in the
-//! `covenant-said-bridge` crate tests.
+//! Covenantd-level dispatch coverage for the SAID bridge verbs. The
+//! offline arms — the unconfigured status snapshot, the "bridge not
+//! wired" guard shared by every bridge-backed verb, the anchor-status
+//! cursor read, and the fixture-mode anchor round-trip (claim, JSONL
+//! write, confirm, status reflection) — run without any socket. The
+//! REST envelope mappings (lookup, inbox, free-tier, send) drive a
+//! one-shot loopback listener so both the success decode and the
+//! verb-prefixed `http <status>` error mapping are exercised without
+//! the public SAID API. Paid on-chain verbs are covered at the
+//! closed-gate rejection only; the real worker subprocess and live
+//! REST against api.saidprotocol.com stay operator-gated and live in
+//! the `covenant-said-bridge` crate tests.
 
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{Request, Response};
@@ -578,5 +582,144 @@ async fn said_send_invalid_payload_json_is_rejected_before_network() {
             assert!(message.starts_with("invalid payload JSON:"), "{message}");
         }
         other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn said_lookup_http_error_maps_to_verb_prefixed_error() {
+    let (base, http) = serve_once("404 Not Found", r#"{"error":"no such agent"}"#).await;
+    let server = server(None, Some(bridge_at(&base)));
+    let resp = server
+        .respond(
+            Request::SaidLookup {
+                wallet: "Missing111".into(),
+            },
+            &peer(),
+        )
+        .await;
+    let req = http.await.expect("server");
+
+    assert_eq!(req.method, "GET");
+    assert_eq!(req.path, "/api/agents/Missing111");
+    assert_eq!(
+        resp,
+        Response::Error {
+            message: r#"said lookup: http 404: {"error":"no such agent"}"#.into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn said_inbox_http_error_maps_to_verb_prefixed_error() {
+    let (base, http) = serve_once("404 Not Found", r#"{"error":"unknown chain"}"#).await;
+    let server = server(None, Some(bridge_at(&base)));
+    let resp = server
+        .respond(
+            Request::SaidInbox {
+                chain: "dogecoin".into(),
+                address: "Addr1".into(),
+            },
+            &peer(),
+        )
+        .await;
+    let req = http.await.expect("server");
+
+    assert_eq!(req.method, "GET");
+    assert_eq!(req.path, "/xchain/inbox/dogecoin/Addr1");
+    assert_eq!(
+        resp,
+        Response::Error {
+            message: r#"said inbox: http 404: {"error":"unknown chain"}"#.into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn said_free_tier_payment_required_maps_to_verb_prefixed_error() {
+    let (base, http) =
+        serve_once("402 Payment Required", r#"{"error":"free tier exhausted"}"#).await;
+    let server = server(None, Some(bridge_at(&base)));
+    let resp = server
+        .respond(
+            Request::SaidFreeTier {
+                address: "Addr1".into(),
+            },
+            &peer(),
+        )
+        .await;
+    let req = http.await.expect("server");
+
+    assert_eq!(req.method, "GET");
+    assert_eq!(req.path, "/xchain/free-tier/Addr1");
+    assert_eq!(
+        resp,
+        Response::Error {
+            message: r#"said free-tier: http 402: {"error":"free tier exhausted"}"#.into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn said_send_http_error_maps_to_verb_prefixed_error() {
+    let (base, http) = serve_once("500 Internal Server Error", r#"{"error":"relay down"}"#).await;
+    let server = server(None, Some(bridge_at(&base)));
+    let resp = server
+        .respond(
+            Request::SaidSend {
+                source_chain: "solana".into(),
+                source_address: "Addr1".into(),
+                target_chain: "base".into(),
+                target_address: "0xabc".into(),
+                payload_json: r#"{"ping":1}"#.into(),
+            },
+            &peer(),
+        )
+        .await;
+    let req = http.await.expect("server");
+
+    assert_eq!(req.method, "POST");
+    assert_eq!(req.path, "/xchain/message");
+    assert_eq!(
+        resp,
+        Response::Error {
+            message: r#"said send: http 500: {"error":"relay down"}"#.into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn paid_verbs_with_closed_gate_report_gated_error() {
+    let server = server(None, Some(devnet_bridge(true)));
+    let peer = peer();
+    let cases = [
+        (
+            Request::SaidRegisterOnChain {
+                metadata_uri: "ipfs://card".into(),
+            },
+            "said register: paid instruction register_agent is gated off",
+        ),
+        (
+            Request::SaidGetVerified,
+            "said get_verified: paid instruction get_verified is gated off",
+        ),
+        (
+            Request::SaidValidateWork {
+                agent: "agent".into(),
+                task_hash_hex: "00".repeat(32),
+                passed: true,
+                evidence_uri: "ipfs://evidence".into(),
+            },
+            "said validate_work: paid instruction validate_work is gated off",
+        ),
+    ];
+
+    for (req, expected) in cases {
+        let resp = server.respond(req, &peer).await;
+        assert_eq!(
+            resp,
+            Response::Error {
+                message: expected.into(),
+            }
+        );
     }
 }

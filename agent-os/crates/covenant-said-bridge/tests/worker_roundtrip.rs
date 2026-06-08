@@ -171,3 +171,35 @@ async fn worker_silent_exit_surfaces_worker_error() {
         "expected Worker(no output), got {err:?}"
     );
 }
+
+#[tokio::test]
+async fn worker_non_json_output_surfaces_decode() {
+    // A misbuilt worker that prints a plain-text line (a stack trace or a
+    // log message) where an envelope is expected must surface as Decode,
+    // not panic or mis-route to another error class.
+    let bridge = bridge_with_stub("worker crashed: TypeError");
+    let err = bridge
+        .get_verified()
+        .await
+        .expect_err("should fail to decode");
+    assert!(
+        matches!(err, BridgeError::Decode(_)),
+        "expected Decode, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn worker_ok_envelope_with_wrong_data_shape_surfaces_decode() {
+    // ok:true but the data does not match the typed result — here a numeric
+    // signature where a string is required — must surface as Decode rather
+    // than a silent default or a panic.
+    let bridge = bridge_with_stub(r#"{"ok":true,"data":{"signature":123}}"#);
+    let err = bridge
+        .get_verified()
+        .await
+        .expect_err("should fail to decode");
+    assert!(
+        matches!(err, BridgeError::Decode(_)),
+        "expected Decode, got {err:?}"
+    );
+}

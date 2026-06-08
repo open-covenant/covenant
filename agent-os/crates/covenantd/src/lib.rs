@@ -7171,6 +7171,8 @@ impl Server {
         let mut nil_metadata_receipt_id_memory_refs = 0_u64;
         let mut non_object_metadata_stale_context_memory_refs = 0_u64;
         let mut empty_reason_metadata_stale_context_memory_refs = 0_u64;
+        let mut missing_marked_at_ms_metadata_stale_context_memory_refs = 0_u64;
+        let mut non_integer_marked_at_ms_metadata_stale_context_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -7392,6 +7394,41 @@ impl Server {
                     }
                 }
             }
+            if let Some(serde_json::Value::Object(stale_context)) = record
+                .metadata
+                .as_object()
+                .and_then(|m| m.get("stale_context"))
+            {
+                match stale_context.get("marked_at_ms") {
+                    None => {
+                        missing_marked_at_ms_metadata_stale_context_memory_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "memory_record_metadata_stale_context_marked_at_ms_missing"
+                                .into(),
+                            id: Some(record.id.to_string()),
+                            message: format!(
+                                "memory record {} has a metadata.stale_context object with no marked_at_ms sub-key; the sole production writer of metadata.stale_context is covenant-memory's stale-marking compaction (plan_compaction, covenant-memory/src/lib.rs:343-358), which inserts serde_json::json!({{\"marked_at_ms\": marked_at_ms, \"reason\": request.reason}}) — always carrying both sub-keys — so a stale_context object missing marked_at_ms is a value no production compaction emits",
+                                record.id
+                            ),
+                            repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory plan_compaction, covenant-memory/src/lib.rs:343-358) inserts metadata.stale_context as a two-field object carrying marked_at_ms and reason in one serde_json::json!, so a stale_context object lacking marked_at_ms is out-of-band evidence of a JSONL/DB edit that dropped the sub-key or a serde regression that hydrated a partial object — losing the record of when the long-term record was marked stale; this within-row arm fires only when metadata is an object carrying a stale_context object (so memory_record_metadata_stale_context_non_object owns the non-object stale_context case and a missing stale_context sub-key is left alone), and is independent of memory_record_metadata_stale_context_reason_empty (a different sub-key) and memory_record_metadata_stale_context_marked_at_ms_non_integer (which owns the present-but-non-integer case via the match)".into(),
+                        });
+                    }
+                    Some(value) if !value.is_u64() => {
+                        non_integer_marked_at_ms_metadata_stale_context_memory_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "memory_record_metadata_stale_context_marked_at_ms_non_integer"
+                                .into(),
+                            id: Some(record.id.to_string()),
+                            message: format!(
+                                "memory record {} has metadata.stale_context.marked_at_ms = {value}, which is not a JSON unsigned integer; the sole production writer of metadata.stale_context is covenant-memory's stale-marking compaction (plan_compaction, covenant-memory/src/lib.rs:343-358), which stores marked_at_ms as a u64 (request.policy.marked_at_ms.unwrap_or(before_ms)) that always serializes as a JSON value satisfying is_u64(), so a non-integer marked_at_ms is a value no production compaction emits",
+                                record.id
+                            ),
+                            repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory plan_compaction, covenant-memory/src/lib.rs:343-358) stores stale_context.marked_at_ms from a u64 (the unwrapped marked_at_ms cutoff), which serde always serializes as a non-negative JSON integer, so a string/float/bool/null/negative/oversized marked_at_ms is out-of-band evidence of a JSONL/DB edit that re-encoded the staleness timestamp or a serde regression — making the when of the stale-marking uninterpretable; this within-row arm fires only when metadata is an object carrying a stale_context object whose marked_at_ms sub-key is present and fails is_u64() (so memory_record_metadata_stale_context_non_object owns the non-object stale_context case, memory_record_metadata_stale_context_marked_at_ms_missing owns the absent-sub-key case via the match, and a faithful u64 routes to the no-op arm)".into(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
         }
         orphans_total += empty_text_refs
             + nan_embedding_refs
@@ -7407,7 +7444,9 @@ impl Server {
             + unparseable_metadata_receipt_id_memory_refs
             + nil_metadata_receipt_id_memory_refs
             + non_object_metadata_stale_context_memory_refs
-            + empty_reason_metadata_stale_context_memory_refs;
+            + empty_reason_metadata_stale_context_memory_refs
+            + missing_marked_at_ms_metadata_stale_context_memory_refs
+            + non_integer_marked_at_ms_metadata_stale_context_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
@@ -7424,9 +7463,11 @@ impl Server {
                 && unparseable_metadata_receipt_id_memory_refs == 0
                 && nil_metadata_receipt_id_memory_refs == 0
                 && non_object_metadata_stale_context_memory_refs == 0
-                && empty_reason_metadata_stale_context_memory_refs == 0,
+                && empty_reason_metadata_stale_context_memory_refs == 0
+                && missing_marked_at_ms_metadata_stale_context_memory_refs == 0
+                && non_integer_marked_at_ms_metadata_stale_context_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s), {non_object_metadata_stale_context_memory_refs} non-object-stale-context record(s), {empty_reason_metadata_stale_context_memory_refs} empty-reason-stale-context record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s), {non_object_metadata_stale_context_memory_refs} non-object-stale-context record(s), {empty_reason_metadata_stale_context_memory_refs} empty-reason-stale-context record(s), {missing_marked_at_ms_metadata_stale_context_memory_refs} missing-marked-at-ms-stale-context record(s), {non_integer_marked_at_ms_metadata_stale_context_memory_refs} non-integer-marked-at-ms-stale-context record(s)"
             ),
         });
 
@@ -17619,6 +17660,101 @@ required = {caps:?}
                             .message
                             .contains("1 empty-reason-stale-context record"),
                     "check message should count both stale_context records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_metadata_stale_context_marked_at_ms_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let record_with_stale_context = |stale_context: serde_json::Value| MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::LongTerm,
+            owner: me.clone(),
+            text: "marked_at_ms fixture".into(),
+            embedding: vec![0.5; 8],
+            created_at: epoch_ms(),
+            metadata: serde_json::json!({
+                "status": "ok",
+                "stale_context": stale_context,
+            }),
+            parent: None,
+        };
+        let missing = record_with_stale_context(serde_json::json!({
+            "reason": "long-term staleness sweep",
+        }));
+        let non_integer = record_with_stale_context(serde_json::json!({
+            "marked_at_ms": "1700000000000",
+            "reason": "long-term staleness sweep",
+        }));
+        let valid = record_with_stale_context(serde_json::json!({
+            "marked_at_ms": 1_700_000_000_000_u64,
+            "reason": "long-term staleness sweep",
+        }));
+        let (missing_id, non_integer_id, valid_id) = (missing.id, non_integer.id, valid.id);
+        s.memory.put(missing).await.unwrap();
+        s.memory.put(non_integer).await.unwrap();
+        s.memory.put(valid).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let missing = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_stale_context_marked_at_ms_missing"
+                            && item.id.as_deref() == Some(&missing_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected marked_at_ms_missing: {drift:?}"));
+                assert!(
+                    missing.message.contains("no marked_at_ms sub-key"),
+                    "missing message should describe the gap: {}",
+                    missing.message
+                );
+                let non_integer = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_stale_context_marked_at_ms_non_integer"
+                            && item.id.as_deref() == Some(&non_integer_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected marked_at_ms_non_integer: {drift:?}"));
+                assert!(
+                    non_integer.message.contains("not a JSON unsigned integer"),
+                    "non-integer message should describe the invariant: {}",
+                    non_integer.message
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.id.as_deref() == Some(&valid_id.to_string())
+                            && item
+                                .kind
+                                .starts_with("memory_record_metadata_stale_context_marked_at_ms")
+                    }),
+                    "a u64 marked_at_ms must not trip either arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 missing-marked-at-ms-stale-context record")
+                        && integrity
+                            .message
+                            .contains("1 non-integer-marked-at-ms-stale-context record"),
+                    "check message should count both marked_at_ms records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 2);

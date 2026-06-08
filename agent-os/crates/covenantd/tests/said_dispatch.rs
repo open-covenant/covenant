@@ -1,9 +1,11 @@
 //! Covenantd-level dispatch coverage for the SAID bridge verbs that do
 //! not touch the network: the unconfigured status snapshot, the
-//! "bridge not wired" guard shared by every bridge-backed verb, and the
-//! anchor-status cursor read. The live REST/worker/on-chain arms stay
-//! out of scope here — they are operator-gated behind the paid flags and
-//! covered in the `covenant-said-bridge` crate tests.
+//! "bridge not wired" guard shared by every bridge-backed verb, the
+//! anchor-status cursor read, and the fixture-mode anchor round-trip
+//! (claim, JSONL write, confirm, status reflection). The live
+//! REST/worker/on-chain arms stay out of scope here — they are
+//! operator-gated behind the paid flags and covered in the
+//! `covenant-said-bridge` crate tests.
 
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{Request, Response};
@@ -62,6 +64,14 @@ fn server(home: Option<PathBuf>, bridge: Option<SaidBridge>) -> covenantd::Serve
 fn peer() -> AgentId {
     let id = LocalIdentity::generate("peer@local");
     AgentId::new(id.display(), id.pubkey_bytes())
+}
+
+fn devnet_bridge(enabled: bool) -> SaidBridge {
+    let mut env = vec![("COVENANT_SOLANA_CLUSTER", "devnet")];
+    if enabled {
+        env.push(("COVENANT_SAID_ENABLED", "1"));
+    }
+    SaidBridge::new(Config::from_env(env)).unwrap()
 }
 
 const NOT_WIRED: &str = "said bridge is not wired into this daemon";
@@ -204,5 +214,115 @@ async fn said_status_with_bridge_reflects_config() {
             assert_eq!(paid_gates, "anchor");
         }
         other => panic!("expected SaidStatus, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn said_anchor_fixture_mode_confirms_and_reports() {
+    let dir = tempdir().unwrap();
+    let server = server(Some(dir.path().to_path_buf()), Some(devnet_bridge(true)));
+    let peer = peer();
+
+    let resp = server
+        .respond(
+            Request::SaidAnchor {
+                start_audit_index: 0,
+                end_audit_index: 7,
+                merkle_root_hex: "ab".repeat(32),
+                live: false,
+            },
+            &peer,
+        )
+        .await;
+    assert_eq!(
+        resp,
+        Response::SaidAnchored {
+            anchor_index: 0,
+            start_seq: 0,
+            end_seq: 7,
+            merkle_root_hex: "ab".repeat(32),
+            tx_sig: "fixture:0".into(),
+            slot: 0,
+            fixture: true,
+        }
+    );
+
+    let pending = dir.path().join("said").join("anchor_pending.jsonl");
+    let lines = std::fs::read_to_string(&pending).unwrap();
+    assert_eq!(lines.lines().count(), 1);
+
+    match server
+        .respond(Request::SaidAnchorStatus { recent_limit: 10 }, &peer)
+        .await
+    {
+        Response::SaidAnchorStatus {
+            next_index,
+            last_confirmed_index,
+            pending,
+            recent,
+        } => {
+            assert_eq!(next_index, 1);
+            assert_eq!(last_confirmed_index, Some(0));
+            assert_eq!(pending, 0);
+            assert_eq!(recent.len(), 1);
+            let row = &recent[0];
+            assert_eq!(row.anchor_index, 0);
+            assert_eq!(row.start_seq, 0);
+            assert_eq!(row.end_seq, 7);
+            assert_eq!(row.merkle_root_hex, "ab".repeat(32));
+            assert_eq!(row.tx_sig, "fixture:0");
+            assert_eq!(row.slot, 0);
+        }
+        other => panic!("expected SaidAnchorStatus, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn said_anchor_disabled_bridge_reports_disabled() {
+    let dir = tempdir().unwrap();
+    let server = server(Some(dir.path().to_path_buf()), Some(devnet_bridge(false)));
+    let resp = server
+        .respond(
+            Request::SaidAnchor {
+                start_audit_index: 0,
+                end_audit_index: 7,
+                merkle_root_hex: "ab".repeat(32),
+                live: false,
+            },
+            &peer(),
+        )
+        .await;
+    assert_eq!(
+        resp,
+        Response::Error {
+            message: "said anchor: said bridge is disabled".into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn said_anchor_inverted_range_is_rejected() {
+    let dir = tempdir().unwrap();
+    let server = server(Some(dir.path().to_path_buf()), Some(devnet_bridge(true)));
+    let resp = server
+        .respond(
+            Request::SaidAnchor {
+                start_audit_index: 5,
+                end_audit_index: 1,
+                merkle_root_hex: "ab".repeat(32),
+                live: false,
+            },
+            &peer(),
+        )
+        .await;
+    match resp {
+        Response::Error { message } => {
+            assert!(
+                message.starts_with("said anchor: invalid input:"),
+                "{message}"
+            );
+            assert!(message.contains("start_audit_index"), "{message}");
+        }
+        other => panic!("expected Error, got {other:?}"),
     }
 }

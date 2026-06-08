@@ -7169,6 +7169,7 @@ impl Server {
         let mut not_manifest_id_charset_metadata_agent_id_memory_refs = 0_u64;
         let mut unparseable_metadata_receipt_id_memory_refs = 0_u64;
         let mut nil_metadata_receipt_id_memory_refs = 0_u64;
+        let mut non_string_metadata_receipt_id_memory_refs = 0_u64;
         let mut non_object_metadata_stale_context_memory_refs = 0_u64;
         let mut empty_reason_metadata_stale_context_memory_refs = 0_u64;
         let mut missing_marked_at_ms_metadata_stale_context_memory_refs = 0_u64;
@@ -7356,6 +7357,32 @@ impl Server {
                     Ok(_) => {}
                 }
             }
+            if let Some(value) = record
+                .metadata
+                .as_object()
+                .and_then(|m| m.get("receipt_id"))
+            {
+                if !value.is_string() {
+                    non_string_metadata_receipt_id_memory_refs += 1;
+                    let shape = match value {
+                        serde_json::Value::Null => "null",
+                        serde_json::Value::Bool(_) => "bool",
+                        serde_json::Value::Number(_) => "number",
+                        serde_json::Value::String(_) => "string",
+                        serde_json::Value::Array(_) => "array",
+                        serde_json::Value::Object(_) => "object",
+                    };
+                    drift.push(VerifyDrift {
+                        kind: "memory_record_metadata_receipt_id_non_string".into(),
+                        id: Some(record.id.to_string()),
+                        message: format!(
+                            "memory record {} has metadata.receipt_id of JSON type {shape}; the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id, covenant-memory/src/lib.rs:1239-1250), which unconditionally stores serde_json::Value::String(receipt_id.to_string()) from a Memory settlement receipt's Uuid::new_v4()-allocated id, so every production receipt_id back-reference is a JSON string — a non-string value is one no production backfill emits",
+                            record.id
+                        ),
+                        repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory merge_receipt_id, covenant-memory/src/lib.rs:1239-1250) stores metadata.receipt_id as serde_json::Value::String(receipt_id.to_string()), so a null/bool/number/array/object receipt_id is out-of-band evidence of a JSONL/DB edit that re-encoded the back-reference, an import tool that copied the sub-key from a foreign schema, or a serde regression that hydrated it from a non-string source — detaching the legacy memory-to-receipt correlation the Check 4 back-reference arms (memory_record_receipt_id_backref_resource_not_memory, memory_record_receipt_id_backref_payer_not_matching_owner, and the receipt_id cardinality arm) join on, all of which gate on Some(serde_json::Value::String(receipt_id_str)) and so silently skip a non-string value; this within-row arm is the receipt_id analog of memory_record_metadata_stale_context_non_object and fires only when metadata is an object carrying a receipt_id sub-key that fails is_string() (so memory_record_metadata_non_object owns the non-object top-level metadata case and a missing receipt_id sub-key is left alone), and is strictly disjoint from memory_record_metadata_receipt_id_unparseable and memory_record_metadata_receipt_id_nil which both gate on a string receipt_id and so own every string-valued case (the parse-failure and nil-UUID values respectively)".into(),
+                    });
+                }
+            }
             if let Some(stale_context) = record
                 .metadata
                 .as_object()
@@ -7490,6 +7517,7 @@ impl Server {
             + not_manifest_id_charset_metadata_agent_id_memory_refs
             + unparseable_metadata_receipt_id_memory_refs
             + nil_metadata_receipt_id_memory_refs
+            + non_string_metadata_receipt_id_memory_refs
             + non_object_metadata_stale_context_memory_refs
             + empty_reason_metadata_stale_context_memory_refs
             + missing_marked_at_ms_metadata_stale_context_memory_refs
@@ -7512,6 +7540,7 @@ impl Server {
                 && not_manifest_id_charset_metadata_agent_id_memory_refs == 0
                 && unparseable_metadata_receipt_id_memory_refs == 0
                 && nil_metadata_receipt_id_memory_refs == 0
+                && non_string_metadata_receipt_id_memory_refs == 0
                 && non_object_metadata_stale_context_memory_refs == 0
                 && empty_reason_metadata_stale_context_memory_refs == 0
                 && missing_marked_at_ms_metadata_stale_context_memory_refs == 0
@@ -7520,7 +7549,7 @@ impl Server {
                 && non_string_reason_metadata_stale_context_memory_refs == 0
                 && unexpected_key_metadata_stale_context_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s), {non_object_metadata_stale_context_memory_refs} non-object-stale-context record(s), {empty_reason_metadata_stale_context_memory_refs} empty-reason-stale-context record(s), {missing_marked_at_ms_metadata_stale_context_memory_refs} missing-marked-at-ms-stale-context record(s), {non_integer_marked_at_ms_metadata_stale_context_memory_refs} non-integer-marked-at-ms-stale-context record(s), {missing_reason_metadata_stale_context_memory_refs} missing-reason-stale-context record(s), {non_string_reason_metadata_stale_context_memory_refs} non-string-reason-stale-context record(s), {unexpected_key_metadata_stale_context_memory_refs} unexpected-key-stale-context record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s), {non_string_metadata_receipt_id_memory_refs} non-string-metadata-receipt-id record(s), {non_object_metadata_stale_context_memory_refs} non-object-stale-context record(s), {empty_reason_metadata_stale_context_memory_refs} empty-reason-stale-context record(s), {missing_marked_at_ms_metadata_stale_context_memory_refs} missing-marked-at-ms-stale-context record(s), {non_integer_marked_at_ms_metadata_stale_context_memory_refs} non-integer-marked-at-ms-stale-context record(s), {missing_reason_metadata_stale_context_memory_refs} missing-reason-stale-context record(s), {non_string_reason_metadata_stale_context_memory_refs} non-string-reason-stale-context record(s), {unexpected_key_metadata_stale_context_memory_refs} unexpected-key-stale-context record(s)"
             ),
         });
 
@@ -17614,6 +17643,96 @@ required = {caps:?}
                     integrity.message
                 );
                 assert!(orphans_total >= 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_metadata_receipt_id_non_string_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let record_with_receipt_id = |receipt_id: serde_json::Value| MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: me.clone(),
+            text: "receipt_id non-string fixture".into(),
+            embedding: vec![0.5; 8],
+            created_at: epoch_ms(),
+            metadata: serde_json::json!({
+                "intent_text": "receipt_id non-string fixture",
+                "agent_id": "research",
+                "status": "ok",
+                "receipt_id": receipt_id,
+            }),
+            parent: None,
+        };
+        let number = record_with_receipt_id(serde_json::json!(12345));
+        let null = record_with_receipt_id(serde_json::Value::Null);
+        let object = record_with_receipt_id(serde_json::json!({ "id": "x" }));
+        let valid = record_with_receipt_id(serde_json::json!(Uuid::new_v4().to_string()));
+        let (number_id, null_id, object_id, valid_id) = (number.id, null.id, object.id, valid.id);
+        s.memory.put(number).await.unwrap();
+        s.memory.put(null).await.unwrap();
+        s.memory.put(object).await.unwrap();
+        s.memory.put(valid).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                for (id, shape) in [
+                    (number_id, "number"),
+                    (null_id, "null"),
+                    (object_id, "object"),
+                ] {
+                    let item = drift
+                        .iter()
+                        .find(|item| {
+                            item.kind == "memory_record_metadata_receipt_id_non_string"
+                                && item.id.as_deref() == Some(&id.to_string())
+                        })
+                        .unwrap_or_else(|| {
+                            panic!("expected non-string drift for {shape} receipt_id: {drift:?}")
+                        });
+                    assert!(
+                        item.message.contains(&format!("JSON type {shape}")),
+                        "message should name the JSON shape {shape}: {}",
+                        item.message
+                    );
+                }
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.id.as_deref() == Some(&valid_id.to_string())
+                            && item.kind == "memory_record_metadata_receipt_id_non_string"
+                    }),
+                    "a valid string receipt_id must not trip the non-string arm: {drift:?}"
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.id.as_deref() == Some(&number_id.to_string())
+                            && (item.kind == "memory_record_metadata_receipt_id_unparseable"
+                                || item.kind == "memory_record_metadata_receipt_id_nil")
+                    }),
+                    "the string-gated unparseable/nil arms must not fire on a non-string receipt_id: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("3 non-string-metadata-receipt-id record"),
+                    "check message should count the three non-string receipt_id records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 3);
             }
             other => panic!("unexpected: {other:?}"),
         }

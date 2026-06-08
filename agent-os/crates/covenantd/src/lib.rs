@@ -7175,6 +7175,7 @@ impl Server {
         let mut non_integer_marked_at_ms_metadata_stale_context_memory_refs = 0_u64;
         let mut missing_reason_metadata_stale_context_memory_refs = 0_u64;
         let mut non_string_reason_metadata_stale_context_memory_refs = 0_u64;
+        let mut unexpected_key_metadata_stale_context_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -7457,6 +7458,23 @@ impl Server {
                     }
                     _ => {}
                 }
+                let unexpected_keys: Vec<&str> = stale_context
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|key| !matches!(*key, "marked_at_ms" | "reason"))
+                    .collect();
+                if !unexpected_keys.is_empty() {
+                    unexpected_key_metadata_stale_context_memory_refs += 1;
+                    drift.push(VerifyDrift {
+                        kind: "memory_record_metadata_stale_context_unexpected_key".into(),
+                        id: Some(record.id.to_string()),
+                        message: format!(
+                            "memory record {} has a metadata.stale_context object carrying unexpected sub-key(s) {unexpected_keys:?}; the sole production writer of metadata.stale_context is covenant-memory's stale-marking compaction (plan_compaction, covenant-memory/src/lib.rs:343-358), which OVERWRITES the whole sub-key with serde_json::json!({{\"marked_at_ms\": marked_at_ms, \"reason\": request.reason}}) — a closed two-field object — every time it marks a record stale, and no production path merges further keys into an existing stale_context, so a stale_context carrying any key other than marked_at_ms or reason is a value no production compaction emits",
+                            record.id
+                        ),
+                        repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory plan_compaction, covenant-memory/src/lib.rs:343-358) builds metadata.stale_context as serde_json::json!({...}) carrying exactly marked_at_ms and reason and inserts it whole — replacing any prior value rather than merging — so a foreign sub-key is out-of-band evidence of a JSONL/DB edit that bolted on a field, an import tool that merged a wider object, or a serde regression that hydrated extra keys, widening the closed two-field staleness contract that downstream consumers read as exactly {marked_at_ms, reason}; this arm is orthogonal to the missing/non-integer/non-string/empty arms (which each inspect only the marked_at_ms and reason sub-keys and never look at additional keys) and is distinct from top-level metadata extensibility — covenant-memory's provenance/receipt_id and dispatch's status/agent_id each insert their own top-level metadata key while preserving siblings, but stale_context's internal shape is closed because its sole writer replaces the whole sub-key value, so an unexpected key inside stale_context is drift even though an unexpected top-level metadata key is not".into(),
+                    });
+                }
             }
         }
         orphans_total += empty_text_refs
@@ -7477,7 +7495,8 @@ impl Server {
             + missing_marked_at_ms_metadata_stale_context_memory_refs
             + non_integer_marked_at_ms_metadata_stale_context_memory_refs
             + missing_reason_metadata_stale_context_memory_refs
-            + non_string_reason_metadata_stale_context_memory_refs;
+            + non_string_reason_metadata_stale_context_memory_refs
+            + unexpected_key_metadata_stale_context_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
@@ -7498,9 +7517,10 @@ impl Server {
                 && missing_marked_at_ms_metadata_stale_context_memory_refs == 0
                 && non_integer_marked_at_ms_metadata_stale_context_memory_refs == 0
                 && missing_reason_metadata_stale_context_memory_refs == 0
-                && non_string_reason_metadata_stale_context_memory_refs == 0,
+                && non_string_reason_metadata_stale_context_memory_refs == 0
+                && unexpected_key_metadata_stale_context_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s), {non_object_metadata_stale_context_memory_refs} non-object-stale-context record(s), {empty_reason_metadata_stale_context_memory_refs} empty-reason-stale-context record(s), {missing_marked_at_ms_metadata_stale_context_memory_refs} missing-marked-at-ms-stale-context record(s), {non_integer_marked_at_ms_metadata_stale_context_memory_refs} non-integer-marked-at-ms-stale-context record(s), {missing_reason_metadata_stale_context_memory_refs} missing-reason-stale-context record(s), {non_string_reason_metadata_stale_context_memory_refs} non-string-reason-stale-context record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s), {non_object_metadata_stale_context_memory_refs} non-object-stale-context record(s), {empty_reason_metadata_stale_context_memory_refs} empty-reason-stale-context record(s), {missing_marked_at_ms_metadata_stale_context_memory_refs} missing-marked-at-ms-stale-context record(s), {non_integer_marked_at_ms_metadata_stale_context_memory_refs} non-integer-marked-at-ms-stale-context record(s), {missing_reason_metadata_stale_context_memory_refs} missing-reason-stale-context record(s), {non_string_reason_metadata_stale_context_memory_refs} non-string-reason-stale-context record(s), {unexpected_key_metadata_stale_context_memory_refs} unexpected-key-stale-context record(s)"
             ),
         });
 
@@ -17886,6 +17906,89 @@ required = {caps:?}
                     integrity.message
                 );
                 assert!(orphans_total >= 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_metadata_stale_context_unexpected_key_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let record_with_stale_context = |stale_context: serde_json::Value| MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::LongTerm,
+            owner: me.clone(),
+            text: "unexpected-key fixture".into(),
+            embedding: vec![0.5; 8],
+            created_at: epoch_ms(),
+            metadata: serde_json::json!({
+                "status": "ok",
+                "stale_context": stale_context,
+            }),
+            parent: None,
+        };
+        let unexpected = record_with_stale_context(serde_json::json!({
+            "marked_at_ms": 1_700_000_000_000_u64,
+            "reason": "long-term staleness sweep",
+            "injected": "out-of-band",
+        }));
+        let valid = record_with_stale_context(serde_json::json!({
+            "marked_at_ms": 1_700_000_000_000_u64,
+            "reason": "long-term staleness sweep",
+        }));
+        let (unexpected_id, valid_id) = (unexpected.id, valid.id);
+        s.memory.put(unexpected).await.unwrap();
+        s.memory.put(valid).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let unexpected = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_stale_context_unexpected_key"
+                            && item.id.as_deref() == Some(&unexpected_id.to_string())
+                    })
+                    .unwrap_or_else(|| panic!("expected unexpected_key: {drift:?}"));
+                assert!(
+                    unexpected.message.contains("injected"),
+                    "unexpected-key message should name the foreign key: {}",
+                    unexpected.message
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.id.as_deref() == Some(&unexpected_id.to_string())
+                            && item.kind != "memory_record_metadata_stale_context_unexpected_key"
+                            && item.kind.starts_with("memory_record_metadata_stale_context")
+                    }),
+                    "both valid keys plus a foreign key must trip only the unexpected_key arm: {drift:?}"
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.id.as_deref() == Some(&valid_id.to_string())
+                            && item.kind.starts_with("memory_record_metadata_stale_context")
+                    }),
+                    "a closed two-field stale_context must not trip any stale_context arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 unexpected-key-stale-context record"),
+                    "check message should count the unexpected-key record: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 1);
             }
             other => panic!("unexpected: {other:?}"),
         }

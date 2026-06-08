@@ -762,6 +762,18 @@ pub enum Request {
         #[serde(default)]
         expires_at_unix: Option<u64>,
     },
+    /// Resolved SAID bridge status. Read-only; no signer or RPC needed.
+    SaidStatus,
+    /// Register an agent off-chain via SAID's REST API. Free, no SOL.
+    /// The card travels as a JSON string to keep the IPC surface decoupled
+    /// from the said-bridge crate's types.
+    SaidRegisterOffChain {
+        card_json: String,
+    },
+    /// Look up a SAID agent by wallet (identity + verification + reputation).
+    SaidLookup {
+        wallet: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -1015,6 +1027,28 @@ pub enum Response {
         attester: String,
         agent_pda: String,
         signature: String,
+    },
+    SaidStatus {
+        enabled: bool,
+        cluster: String,
+        program_id: String,
+        rpc_url: String,
+        api_base_url: String,
+        paid_gates: String,
+        has_signer: bool,
+    },
+    SaidRegistered {
+        wallet: String,
+        off_chain: bool,
+    },
+    SaidAgent {
+        wallet: String,
+        name: Option<String>,
+        is_verified: bool,
+        verification_tier: u8,
+        stake_amount: u64,
+        reputation_score: u16,
+        total_interactions: u64,
     },
     Error {
         message: String,

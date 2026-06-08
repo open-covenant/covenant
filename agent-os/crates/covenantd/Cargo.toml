@@ -27,6 +27,7 @@ covenant-permissions = { path = "../covenant-permissions" }
 covenant-router = { path = "../covenant-router" }
 covenant-runtime = { path = "../covenant-runtime" }
 covenant-sap-bridge = { path = "../covenant-sap-bridge" }
+covenant-said-bridge = { path = "../covenant-said-bridge" }
 covenant-settlement = { path = "../covenant-settlement" }
 # Default features only — the solana signer + its dep tree stay out of
 # the daemon build until the funding-key path lands behind its own

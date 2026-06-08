@@ -2168,6 +2168,15 @@ fn print_usage() {
     eprintln!(
         "  covenant sap attest-agent --agent-pda <pda> --root <hex> [--type --expires] [--json]  cross-party attestation via the verifier"
     );
+    eprintln!(
+        "  covenant said status [--json]            resolved SAID bridge status (cluster, program, api, paid gates)"
+    );
+    eprintln!(
+        "  covenant said register --off-chain --wallet <addr> --name <name> [--description --metadata-uri --homepage --capability* --tag*] [--json]  register an AgentCard on SAID's public REST registry"
+    );
+    eprintln!(
+        "  covenant said lookup --wallet <addr> [--json]            fetch an agent's SAID identity + verification + reputation"
+    );
 }
 
 struct MemoryReadJsonArgs {
@@ -5040,6 +5049,229 @@ async fn main() -> Result<()> {
                 }
                 other => {
                     eprintln!("covenant sap: unknown subcommand '{other}'");
+                    print_usage();
+                    std::process::exit(2);
+                }
+            }
+        }
+        "said" => {
+            if args.len() < 2 {
+                print_usage();
+                std::process::exit(2);
+            }
+            match args[1].as_str() {
+                "status" => {
+                    let mut as_json = false;
+                    for arg in &args[2..] {
+                        match arg.as_str() {
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                    }
+                    write_frame(&mut stream, &Request::SaidStatus).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidStatus {
+                            enabled,
+                            cluster,
+                            program_id,
+                            rpc_url,
+                            api_base_url,
+                            paid_gates,
+                            has_signer,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_status",
+                                    "enabled": enabled,
+                                    "cluster": cluster,
+                                    "program_id": program_id,
+                                    "rpc_url": rpc_url,
+                                    "api_base_url": api_base_url,
+                                    "paid_gates": paid_gates,
+                                    "has_signer": has_signer,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("enabled: {enabled}");
+                                println!("cluster: {cluster}");
+                                println!("program_id: {program_id}");
+                                println!("rpc_url: {rpc_url}");
+                                println!("api_base_url: {api_base_url}");
+                                println!("paid_gates: {paid_gates}");
+                                println!("has_signer: {has_signer}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "register" => {
+                    let mut off_chain = false;
+                    let mut on_chain = false;
+                    let mut wallet: Option<String> = None;
+                    let mut name: Option<String> = None;
+                    let mut description: Option<String> = None;
+                    let mut metadata_uri: Option<String> = None;
+                    let mut homepage: Option<String> = None;
+                    let mut capabilities: Vec<String> = Vec::new();
+                    let mut tags: Vec<String> = Vec::new();
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--off-chain" => off_chain = true,
+                            "--on-chain" => on_chain = true,
+                            "--wallet" => {
+                                i += 1;
+                                wallet = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--wallet needs an address")
+                                })?);
+                            }
+                            "--name" => {
+                                i += 1;
+                                name = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--name needs a value")
+                                })?);
+                            }
+                            "--description" => {
+                                i += 1;
+                                description = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--description needs a value")
+                                })?);
+                            }
+                            "--metadata-uri" => {
+                                i += 1;
+                                metadata_uri = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--metadata-uri needs a URL")
+                                })?);
+                            }
+                            "--homepage" => {
+                                i += 1;
+                                homepage = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--homepage needs a URL")
+                                })?);
+                            }
+                            "--capability" => {
+                                i += 1;
+                                capabilities.push(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--capability needs a value")
+                                })?);
+                            }
+                            "--tag" => {
+                                i += 1;
+                                tags.push(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--tag needs a value")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    if off_chain == on_chain {
+                        bail!("covenant said register requires exactly one of --off-chain or --on-chain");
+                    }
+                    if on_chain {
+                        bail!("covenant said register --on-chain is not wired yet (P3)");
+                    }
+                    let wallet = wallet.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said register requires --wallet <ADDR>")
+                    })?;
+                    let name = name.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said register requires --name <NAME>")
+                    })?;
+                    let card = serde_json::json!({
+                        "wallet": wallet,
+                        "name": name,
+                        "description": description,
+                        "metadataUri": metadata_uri,
+                        "homepage": homepage,
+                        "capabilities": capabilities,
+                        "tags": tags,
+                    });
+                    let card_json = serde_json::to_string(&card)?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SaidRegisterOffChain { card_json },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidRegistered { wallet, off_chain } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_registered",
+                                    "wallet": wallet,
+                                    "off_chain": off_chain,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("wallet: {wallet}");
+                                println!("off_chain: {off_chain}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "lookup" => {
+                    let mut wallet: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--wallet" => {
+                                i += 1;
+                                wallet = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--wallet needs an address")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let wallet = wallet.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said lookup requires --wallet <ADDR>")
+                    })?;
+                    write_frame(&mut stream, &Request::SaidLookup { wallet }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidAgent {
+                            wallet,
+                            name,
+                            is_verified,
+                            verification_tier,
+                            stake_amount,
+                            reputation_score,
+                            total_interactions,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_agent",
+                                    "wallet": wallet,
+                                    "name": name,
+                                    "is_verified": is_verified,
+                                    "verification_tier": verification_tier,
+                                    "stake_amount": stake_amount,
+                                    "reputation_score": reputation_score,
+                                    "total_interactions": total_interactions,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("wallet: {wallet}");
+                                println!("name: {}", name.unwrap_or_default());
+                                println!("is_verified: {is_verified}");
+                                println!("verification_tier: {verification_tier}");
+                                println!("stake_amount: {stake_amount}");
+                                println!("reputation_score: {reputation_score}");
+                                println!("total_interactions: {total_interactions}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                other => {
+                    eprintln!("covenant said: unknown subcommand '{other}'");
                     print_usage();
                     std::process::exit(2);
                 }

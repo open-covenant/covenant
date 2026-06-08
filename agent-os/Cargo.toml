@@ -20,6 +20,7 @@ members = [
     "crates/covenant-x402",
     "crates/covenant-hyre",
     "crates/covenant-sap-bridge",
+    "crates/covenant-said-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenantd",
     "crates/covenant",

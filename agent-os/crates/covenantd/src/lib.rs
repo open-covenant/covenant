@@ -53,6 +53,7 @@ use covenant_permissions::{
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::{AgentResult, Runner};
 use covenant_sap_bridge::{Config as SapBridgeConfig, SapBridge};
+use covenant_said_bridge::{Config as SaidBridgeConfig, SaidBridge};
 use covenant_settlement::{
     build_receipt_batch, derive_batch_id, intent_dispatch_credits, memory_write_credits,
     ChainConfirmation, Settlement,
@@ -208,6 +209,13 @@ pub fn hermes_gateway_config_from_env() -> Option<HermesGatewayConfig> {
 /// touching the network.
 pub fn sap_bridge_config_from_env() -> SapBridgeConfig {
     SapBridgeConfig::from_env(std::env::vars())
+}
+
+/// Resolve the SAID Protocol bridge config from `COVENANT_SAID_*` env.
+/// Default `enabled: false`. Each paid on-chain instruction is gated by
+/// its own `COVENANT_SAID_ALLOW_PAID_*` flag.
+pub fn said_bridge_config_from_env() -> SaidBridgeConfig {
+    SaidBridgeConfig::from_env(std::env::vars())
 }
 
 /// Config for the autonomous SAP audit-root anchoring driver.
@@ -1067,6 +1075,7 @@ pub struct Server {
     /// surface `BridgeDisabledError` when it's absent or
     /// `enabled = false`.
     sap_bridge: Option<SapBridge>,
+    said_bridge: Option<SaidBridge>,
     /// Outcomes of in-flight async (hermes) dispatches, keyed by intent id.
     /// `std::sync::Mutex` (not the tokio one used elsewhere) because the
     /// critical section is a trivial map mutation never held across `.await`.
@@ -1112,6 +1121,7 @@ impl Server {
             x402_dispatch: None,
             hyre: None,
             sap_bridge: None,
+            said_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
     }
@@ -1215,6 +1225,95 @@ impl Server {
     /// `BridgeDisabledError` to the caller.
     pub fn sap_bridge(&self) -> Option<&SapBridge> {
         self.sap_bridge.as_ref()
+    }
+
+    /// Attach the SAID Protocol bridge. Symmetric to `with_sap_bridge`:
+    /// daemon `main` calls this once at boot with the bridge resolved
+    /// from `said_bridge_config_from_env`. A disabled-config bridge is
+    /// still attached; the `enabled` flag governs behavior.
+    pub fn with_said_bridge(mut self, bridge: SaidBridge) -> Self {
+        self.said_bridge = Some(bridge);
+        self
+    }
+
+    pub fn said_bridge(&self) -> Option<&SaidBridge> {
+        self.said_bridge.as_ref()
+    }
+
+    pub(crate) fn said_status(&self) -> Response {
+        match self.said_bridge.as_ref() {
+            Some(bridge) => {
+                let cfg = bridge.config();
+                Response::SaidStatus {
+                    enabled: cfg.enabled,
+                    cluster: cfg.cluster.as_str().to_owned(),
+                    program_id: cfg.program_id.clone(),
+                    rpc_url: cfg.rpc_url.clone(),
+                    api_base_url: cfg.api_base_url.clone(),
+                    paid_gates: cfg.paid.summary(),
+                    has_signer: std::env::var("COVENANT_SAID_KEYPAIR")
+                        .map(|v| !v.trim().is_empty())
+                        .unwrap_or(false),
+                }
+            }
+            None => Response::SaidStatus {
+                enabled: false,
+                cluster: String::new(),
+                program_id: String::new(),
+                rpc_url: String::new(),
+                api_base_url: String::new(),
+                paid_gates: "none".into(),
+                has_signer: false,
+            },
+        }
+    }
+
+    pub(crate) async fn said_register_off_chain(&self, card_json: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let card: covenant_said_bridge::agent_card::AgentCard =
+            match serde_json::from_str(&card_json) {
+                Ok(c) => c,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("invalid agent card JSON: {e}"),
+                    }
+                }
+            };
+        match bridge.register_off_chain(&card).await {
+            Ok(reg) => Response::SaidRegistered {
+                wallet: reg.wallet,
+                off_chain: reg.off_chain,
+            },
+            Err(e) => Response::Error {
+                message: format!("said register_off_chain: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_lookup(&self, wallet: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        match bridge.lookup(&wallet).await {
+            Ok(a) => Response::SaidAgent {
+                wallet: a.wallet,
+                name: a.name,
+                is_verified: a.is_verified,
+                verification_tier: a.verification_tier,
+                stake_amount: a.stake_amount,
+                reputation_score: a.reputation_score,
+                total_interactions: a.total_interactions,
+            },
+            Err(e) => Response::Error {
+                message: format!("said lookup: {e}"),
+            },
+        }
     }
 
     /// Resolve the SAP bridge status. Returns a disabled snapshot when
@@ -2091,6 +2190,11 @@ impl Server {
                 )
                 .await
             }
+            Request::SaidStatus => self.said_status(),
+            Request::SaidRegisterOffChain { card_json } => {
+                self.said_register_off_chain(card_json).await
+            }
+            Request::SaidLookup { wallet } => self.said_lookup(wallet).await,
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
             Request::PayX402 {

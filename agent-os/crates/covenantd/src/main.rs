@@ -289,6 +289,19 @@ async fn main() -> Result<()> {
         "sap bridge ready"
     );
 
+    let said_config = covenantd::said_bridge_config_from_env();
+    let said_bridge = covenant_said_bridge::SaidBridge::new(said_config.clone())
+        .context("build SAID bridge")?;
+    info!(
+        enabled = said_config.enabled,
+        cluster = said_config.cluster.as_str(),
+        program_id = %said_config.program_id,
+        rpc_url = %redact_url(&said_config.rpc_url),
+        api_base_url = %said_config.api_base_url,
+        paid_gates = %said_config.paid.summary(),
+        "said bridge ready"
+    );
+
     let server = covenantd::Server::new(
         router,
         runner,
@@ -307,7 +320,8 @@ async fn main() -> Result<()> {
     .with_home(home.clone())
     .with_budget_checkpoints(budget_checkpoints)
     .with_subprocess_tracker(subprocess_tracker)
-    .with_sap_bridge(sap_bridge);
+    .with_sap_bridge(sap_bridge)
+    .with_said_bridge(said_bridge);
 
     let server = match x402_dispatch_config_from_env() {
         Some(cfg) => {

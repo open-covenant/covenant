@@ -12864,6 +12864,48 @@ impl Server {
                 });
             }
         }
+        // Shape (credits): both production try_debit callers charge a positive
+        // amount — dispatch_intent_run debits the flat intent_dispatch_credits()
+        // = covenant_settlement::INTENT_DISPATCH_CREDITS = 1 (a constant) and
+        // record_paid_call debits call.credits (covenantd/src/x402.rs:215), the
+        // same value it stamps into the paired Tool receipt's credits_consumed
+        // (x402.rs:225) — whose zero case the receipt_credits_consumed_zero arm
+        // already treats as drift. call.credits is caller-supplied with no
+        // enforced positive floor; a genuinely free call takes the non-402 path
+        // that records no debit or receipt at all (x402.rs:283-284), so a 0-credit
+        // debit is a paid call that charged nothing, which no faithful production
+        // write records. try_debit(.., 0, ..) does not reject or no-op
+        // the row — 0 < tokens_remaining is false so no Exhausted error, the
+        // subtraction is a no-op, and it still pushes BudgetDebit { credits: 0 }
+        // (covenant-budget/src/lib.rs:403-416) — so a defaulted (u64::default() is
+        // 0) or tampered zero survives to the ledger. This is the budget-log leg
+        // of the zero-credits family whose settlement-log leg is the
+        // receipt_credits_consumed_zero arm; the two values are formally bound for
+        // Tool pairs by budget_debit_paired_receipt_credits_mismatch (which
+        // requires debit.credits == receipt.credits_consumed). Like the at_ms and
+        // agent-pubkey shape arms it runs independent of the join loop above
+        // (which skips a debit whose paired_receipt is windowed out), so a
+        // zero-credit debit is flagged regardless of receipt presence — the
+        // cross-store budget_debit_paired_receipt_credits_mismatch (Tool) and
+        // budget_debit_paired_memory_receipt_credits_not_intent_dispatch (Memory)
+        // arms both gate on the paired receipt being present and go silent once it
+        // ages out or is compacted, making this within-row arm the sole detector
+        // then.
+        let mut zero_credits_debit_refs = 0_u64;
+        for debit in &debits {
+            if debit.credits == 0 {
+                zero_credits_debit_refs += 1;
+                drift.push(VerifyDrift {
+                    kind: "budget_debit_credits_zero".into(),
+                    id: Some(debit.paired_receipt.to_string()),
+                    message: format!(
+                        "budget debit paired_receipt = {} has credits = 0; both production try_debit callers charge a positive amount — dispatch_intent_run debits the flat intent_dispatch_credits() = covenant_settlement::INTENT_DISPATCH_CREDITS = 1 and record_paid_call debits call.credits (covenantd/src/x402.rs:215), the same value it stamps into the paired Tool receipt's credits_consumed (x402.rs:225) whose zero case the receipt_credits_consumed_zero arm already treats as drift; call.credits is caller-supplied with no enforced positive floor, and a genuinely free call takes the non-402 path that records no debit or receipt (x402.rs:283-284), so a 0-credit debit is a paid call that charged nothing, which no faithful production write records; try_debit(.., 0, ..) does not reject the row (0 < tokens_remaining is false, the subtraction is a no-op) and still pushes BudgetDebit {{ credits: 0 }} (covenant-budget/src/lib.rs:403-416), so a zero is a serde regression (u64::default() is 0), an import or replay tool that defaulted an unrecoverable credit count, or a JSONL edit that zeroed how much a debit charged",
+                        debit.paired_receipt
+                    ),
+                    repair: "review the budget-ledger JSONL row and the writer that produced it; both production try_debit callers charge a positive amount — dispatch_intent_run debits the flat intent_dispatch_credits() = covenant_settlement::INTENT_DISPATCH_CREDITS (the constant 1) and record_paid_call debits call.credits (x402.rs:215), the same value the paired Tool receipt's credits_consumed carries (x402.rs:225) whose zero case receipt_credits_consumed_zero already treats as drift; call.credits is caller-supplied with no enforced positive floor, and a genuinely free call takes the non-402 path that records no debit or receipt (x402.rs:283-284) — so a 0-credit debit is a paid call that charged nothing, out-of-band evidence of a serde regression (u64::default() is 0), an import or replay tool that defaulted an unrecoverable credit count, or a JSONL edit that zeroed how much the per-payer budget was charged (collapsing the burn the token-bucket gate enforces while the debit still occupies the 1:1 receipt pairing); the budget ledger is an unsigned local JSONL with no chain-hash anchor, so this within-row shape arm is the sole detector — it is the budget-log leg of the zero-credits family (the settlement-log leg is receipt_credits_consumed_zero, to which it is formally bound for Tool pairs by budget_debit_paired_receipt_credits_mismatch's debit.credits == receipt.credits_consumed invariant) and the credits sibling of budget_debit_at_ms_zero and budget_debit_agent_pubkey_zeroed; it runs independent of the join loop (which skips a debit whose paired_receipt is windowed out) so a zero-credit debit is flagged regardless of receipt presence — the cross-store budget_debit_paired_receipt_credits_mismatch and budget_debit_paired_memory_receipt_credits_not_intent_dispatch arms both gate on the paired receipt being present and go silent once it ages out or is compacted".into(),
+                });
+            }
+        }
         // Shape (pairing key): every production BudgetDebit pairs with a
         // freshly minted receipt_id = Uuid::new_v4() — record_paid_call mints it
         // at covenantd/src/x402.rs:211 and passes it to try_debit at :215 for the
@@ -12954,6 +12996,7 @@ impl Server {
             + debit_receipt_resource_not_tool_or_memory_refs
             + zeroed_agent_debit_refs
             + zero_at_ms_debit_refs
+            + zero_credits_debit_refs
             + nil_paired_receipt_debit_refs
             + duplicate_paired_receipt_refs;
         orphans_total += budget_join_drift;
@@ -12961,7 +13004,7 @@ impl Server {
             name: "budget ↔ receipts".into(),
             passed: budget_join_drift == 0,
             message: format!(
-                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {debit_receipt_resource_not_tool_or_memory_refs} non-tool-or-memory-resource paired-receipt debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {nil_paired_receipt_debit_refs} nil-paired-receipt debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
+                "{debit_receipt_payer_mismatch_refs} payer-mismatched debit(s), {debit_receipt_payer_display_mismatch_refs} payer-display-mismatched debit(s), {debit_receipt_credits_mismatch_refs} credits-mismatched debit(s), {debit_memory_receipt_credits_not_flat_refs} non-flat-credits memory-dispatch debit(s), {debit_receipt_resource_not_tool_or_memory_refs} non-tool-or-memory-resource paired-receipt debit(s), {zeroed_agent_debit_refs} zeroed-agent-pubkey debit(s), {zero_at_ms_debit_refs} zero-at_ms debit(s), {zero_credits_debit_refs} zero-credits debit(s), {nil_paired_receipt_debit_refs} nil-paired-receipt debit(s), {duplicate_paired_receipt_refs} duplicate-paired-receipt(s)"
             ),
         });
 
@@ -24304,6 +24347,97 @@ required = {caps:?}
                     check.message.contains("0 duplicate-paired-receipt")
                         && check.message.contains("0 payer-mismatched debit"),
                     "only the zero-at_ms shape arm should fail the check: {}",
+                    check.message
+                );
+                assert!(orphans_total >= 1);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_budget_debit_credits_zero_drift() {
+        // Both production try_debit callers charge a positive amount —
+        // dispatch_intent_run debits the flat intent_dispatch_credits() = 1 and
+        // record_paid_call debits call.credits, the value the paired Tool receipt's
+        // credits_consumed carries; a paid call priced at 0 is a free call the
+        // non-402 path returns without any debit. credits is a caller-provided
+        // try_debit parameter, so the real ledger writes the malformed shape
+        // directly: try_debit(&payer, 0, receipt) records a BudgetDebit whose
+        // credits is 0 — the serde-default / import-tool / JSONL-edit shape no
+        // production write emits. This is the budget-log leg of the zero-credits
+        // family (settlement-log leg receipt_credits_consumed_zero). No receipts are
+        // seeded, so the cross-store credits arms (which gate on the paired receipt
+        // being present) cannot fire and this within-row arm is the sole detector;
+        // the healthy debit's positive credits and distinct non-nil paired_receipt
+        // keep every other arm silent.
+        let s = server_with(vec![], "");
+        let payer = AgentId::new("payer@host", [7u8; 32]);
+        s.budget.set_capacity(&payer, 100).await.unwrap();
+        let zeroed_receipt = Uuid::new_v4();
+        s.budget.try_debit(&payer, 0, zeroed_receipt).await.unwrap();
+        let healthy_receipt = Uuid::new_v4();
+        s.budget
+            .try_debit(&payer, 5, healthy_receipt)
+            .await
+            .unwrap();
+
+        match s.op_respond(Request::Verify { window: 100 }).await {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let matches: Vec<_> = drift
+                    .iter()
+                    .filter(|item| item.kind == "budget_debit_credits_zero")
+                    .collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "exactly one zero-credits debit must surface, and the healthy debit must stay silent: {drift:?}"
+                );
+                let row = matches[0];
+                assert_eq!(row.id.as_deref(), Some(zeroed_receipt.to_string().as_str()));
+                assert!(
+                    row.message.contains("credits = 0")
+                        && row.message.contains("intent_dispatch_credits()"),
+                    "message should name the zero value and the positive-credits invariant: {}",
+                    row.message
+                );
+                assert!(
+                    row.repair.contains("zero-credits family")
+                        && row.repair.contains("receipt_credits_consumed_zero"),
+                    "repair hint should place it in the zero-credits family: {}",
+                    row.repair
+                );
+                // Disjoint from the other within-row budget shape arms: the debit's
+                // at_ms is stamped from epoch_ms() and its agent pubkey is non-zero.
+                assert!(
+                    !drift.iter().any(|item| {
+                        (item.kind == "budget_debit_at_ms_zero"
+                            || item.kind == "budget_debit_agent_pubkey_zeroed")
+                            && item.id.as_deref() == Some(zeroed_receipt.to_string().as_str())
+                    }),
+                    "a well-formed at_ms and agent must not trip the sibling shape arms: {drift:?}"
+                );
+                let check = checks
+                    .iter()
+                    .find(|c| c.name == "budget ↔ receipts")
+                    .unwrap_or_else(|| panic!("expected budget join check: {checks:?}"));
+                assert!(!check.passed);
+                assert!(
+                    check.message.contains("1 zero-credits debit"),
+                    "check message should count zero-credits debits: {}",
+                    check.message
+                );
+                // Only the new shape arm fails: the join and cardinality halves
+                // stay clean (no receipts seeded, distinct paired_receipts).
+                assert!(
+                    check.message.contains("0 duplicate-paired-receipt")
+                        && check.message.contains("0 payer-mismatched debit"),
+                    "only the zero-credits shape arm should fail the check: {}",
                     check.message
                 );
                 assert!(orphans_total >= 1);

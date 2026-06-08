@@ -7167,6 +7167,8 @@ impl Server {
         let mut not_ok_status_memory_refs = 0_u64;
         let mut empty_metadata_agent_id_memory_refs = 0_u64;
         let mut not_manifest_id_charset_metadata_agent_id_memory_refs = 0_u64;
+        let mut unparseable_metadata_receipt_id_memory_refs = 0_u64;
+        let mut nil_metadata_receipt_id_memory_refs = 0_u64;
         for record in &memories {
             if record.text.is_empty() {
                 empty_text_refs += 1;
@@ -7314,6 +7316,39 @@ impl Server {
                     });
                 }
             }
+            if let Some(serde_json::Value::String(receipt_id_str)) = record
+                .metadata
+                .as_object()
+                .and_then(|m| m.get("receipt_id"))
+            {
+                match receipt_id_str.parse::<Uuid>() {
+                    Err(_) => {
+                        unparseable_metadata_receipt_id_memory_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "memory_record_metadata_receipt_id_unparseable".into(),
+                            id: Some(record.id.to_string()),
+                            message: format!(
+                                "memory record {} has metadata.receipt_id = {receipt_id_str:?}, which does not parse as a UUID; the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id, covenant-memory/src/lib.rs:1239-1250), which stores serde_json::Value::String(receipt_id.to_string()) from a Memory settlement receipt's Uuid::new_v4()-allocated id, so every production receipt_id back-reference is a hyphenated UUID string that round-trips through Uuid::parse — an unparseable value is one no production backfill emits",
+                                record.id
+                            ),
+                            repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory merge_receipt_id, covenant-memory/src/lib.rs:1239-1250) stores metadata.receipt_id as Value::String(receipt_id.to_string()) for a real Memory receipt id, so an unparseable receipt_id is out-of-band evidence of a JSONL/DB edit that truncated or re-encoded the back-reference, an import/serde regression that hydrated the sub-key from a non-UUID source, or a partial overwrite — detaching the legacy memory-to-receipt correlation the Check 4 back-reference arms (memory_record_receipt_id_backref_resource_not_memory, memory_record_receipt_id_backref_payer_not_matching_owner, and the receipt_id cardinality arm) join on, all of which `let Ok(..) = receipt_id_str.parse::<Uuid>() else { continue }` and so silently skip this value; this within-row arm fires only when metadata is an object carrying a string receipt_id sub-key (so memory_record_metadata_non_object owns the non-object case and a missing or non-string sub-key is left alone), and is strictly disjoint from the memory_record_metadata_receipt_id_nil arm (a nil UUID parses successfully so it routes to the match's Ok arm) and from the Check 4 cross-record back-reference arms (which all require a parseable non-nil receipt_id resolving to a receipt present in the store)".into(),
+                        });
+                    }
+                    Ok(parsed) if parsed.is_nil() => {
+                        nil_metadata_receipt_id_memory_refs += 1;
+                        drift.push(VerifyDrift {
+                            kind: "memory_record_metadata_receipt_id_nil".into(),
+                            id: Some(record.id.to_string()),
+                            message: format!(
+                                "memory record {} has metadata.receipt_id = {receipt_id_str:?} (the nil all-zero UUID); the sole production writer of metadata.receipt_id is covenant-memory's receipt-correlation backfill (merge_receipt_id, covenant-memory/src/lib.rs:1239-1250), which stores the to_string() of a Memory settlement receipt's Uuid::new_v4()-allocated id, and Uuid::new_v4 never produces the nil UUID, so a nil receipt_id back-reference is a value no production backfill emits",
+                                record.id
+                            ),
+                            repair: "review the memory store row and the writer that produced it; the sole production writer (covenant-memory merge_receipt_id, covenant-memory/src/lib.rs:1239-1250) stores the to_string() of a real Memory receipt id allocated by Uuid::new_v4(), which never yields the nil UUID, so a nil metadata.receipt_id is out-of-band evidence of a serde/default regression (Uuid::default() is nil) or a JSONL/DB edit that zeroed the back-reference — detaching the legacy memory-to-receipt correlation while the Check 4 back-reference arms leave it uncaught (the per-row backref arms resolve receipt_by_id.get(nil_uuid), which never matches in production because receipt ids are Uuid::new_v4, and the cardinality arm explicitly skips the nil UUID); this within-row arm fires only when metadata is an object carrying a string receipt_id that parses as the nil UUID (so memory_record_metadata_non_object owns the non-object case, a missing or non-string sub-key is left alone, and the unparseable arm owns the parse-failure case via the match), and is strictly disjoint from the Check 4 cross-record back-reference arms which gate on a non-nil receipt_id resolving to a present receipt".into(),
+                        });
+                    }
+                    Ok(_) => {}
+                }
+            }
         }
         orphans_total += empty_text_refs
             + nan_embedding_refs
@@ -7325,7 +7360,9 @@ impl Server {
             + empty_status_memory_refs
             + not_ok_status_memory_refs
             + empty_metadata_agent_id_memory_refs
-            + not_manifest_id_charset_metadata_agent_id_memory_refs;
+            + not_manifest_id_charset_metadata_agent_id_memory_refs
+            + unparseable_metadata_receipt_id_memory_refs
+            + nil_metadata_receipt_id_memory_refs;
         checks.push(VerifyCheck {
             name: "memory record integrity".into(),
             passed: empty_text_refs == 0
@@ -7338,9 +7375,11 @@ impl Server {
                 && empty_status_memory_refs == 0
                 && not_ok_status_memory_refs == 0
                 && empty_metadata_agent_id_memory_refs == 0
-                && not_manifest_id_charset_metadata_agent_id_memory_refs == 0,
+                && not_manifest_id_charset_metadata_agent_id_memory_refs == 0
+                && unparseable_metadata_receipt_id_memory_refs == 0
+                && nil_metadata_receipt_id_memory_refs == 0,
             message: format!(
-                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s)"
+                "{empty_text_refs} empty-text record(s), {nan_embedding_refs} NaN-embedding record(s), {infinite_embedding_refs} infinite-embedding record(s), {nil_id_memory_refs} nil-id record(s), {zero_created_at_memory_refs} zero-created-at record(s), {zeroed_owner_memory_refs} zeroed-owner-pubkey record(s), {metadata_non_object_memory_refs} non-object-metadata record(s), {empty_status_memory_refs} empty-metadata-status record(s), {not_ok_status_memory_refs} not-ok-metadata-status record(s), {empty_metadata_agent_id_memory_refs} empty-metadata-agent-id record(s), {not_manifest_id_charset_metadata_agent_id_memory_refs} non-charset-metadata-agent-id record(s), {unparseable_metadata_receipt_id_memory_refs} unparseable-metadata-receipt-id record(s), {nil_metadata_receipt_id_memory_refs} nil-metadata-receipt-id record(s)"
             ),
         });
 
@@ -17339,6 +17378,98 @@ required = {caps:?}
                             .message
                             .contains("1 non-charset-metadata-agent-id record"),
                     "check message should count both agent_id records: {}",
+                    integrity.message
+                );
+                assert!(orphans_total >= 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_reports_memory_record_metadata_receipt_id_drift() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let record_with_receipt_id = |receipt_id: serde_json::Value| MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: me.clone(),
+            text: "receipt_id fixture".into(),
+            embedding: vec![0.5; 8],
+            created_at: epoch_ms(),
+            metadata: serde_json::json!({
+                "intent_text": "receipt_id fixture",
+                "agent_id": "research",
+                "status": "ok",
+                "receipt_id": receipt_id,
+            }),
+            parent: None,
+        };
+        let unparseable = record_with_receipt_id(serde_json::json!("not-a-uuid"));
+        let nil = record_with_receipt_id(serde_json::json!(Uuid::nil().to_string()));
+        let valid = record_with_receipt_id(serde_json::json!(Uuid::new_v4().to_string()));
+        let (unparseable_id, nil_id, valid_id) = (unparseable.id, nil.id, valid.id);
+        s.memory.put(unparseable).await.unwrap();
+        s.memory.put(nil).await.unwrap();
+        s.memory.put(valid).await.unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport {
+                drift,
+                orphans_total,
+                checks,
+                ..
+            } => {
+                let unparseable = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_receipt_id_unparseable"
+                            && item.id.as_deref() == Some(&unparseable_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_metadata_receipt_id_unparseable: {drift:?}")
+                    });
+                assert!(
+                    unparseable.message.contains("not-a-uuid"),
+                    "unparseable message should name the value: {}",
+                    unparseable.message
+                );
+                let nil = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_record_metadata_receipt_id_nil"
+                            && item.id.as_deref() == Some(&nil_id.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected memory_record_metadata_receipt_id_nil: {drift:?}")
+                    });
+                assert!(
+                    nil.message.contains("nil all-zero UUID"),
+                    "nil message should describe the sentinel: {}",
+                    nil.message
+                );
+                assert!(
+                    !drift.iter().any(|item| {
+                        item.id.as_deref() == Some(&valid_id.to_string())
+                            && (item.kind == "memory_record_metadata_receipt_id_unparseable"
+                                || item.kind == "memory_record_metadata_receipt_id_nil")
+                    }),
+                    "a valid non-nil receipt_id must not trip either arm: {drift:?}"
+                );
+                let integrity = checks
+                    .iter()
+                    .find(|c| c.name == "memory record integrity")
+                    .unwrap_or_else(|| panic!("expected integrity check: {checks:?}"));
+                assert!(!integrity.passed);
+                assert!(
+                    integrity
+                        .message
+                        .contains("1 unparseable-metadata-receipt-id record")
+                        && integrity
+                            .message
+                            .contains("1 nil-metadata-receipt-id record"),
+                    "check message should count both receipt_id records: {}",
                     integrity.message
                 );
                 assert!(orphans_total >= 2);

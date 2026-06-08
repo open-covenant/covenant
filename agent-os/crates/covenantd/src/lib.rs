@@ -1417,6 +1417,95 @@ impl Server {
         }
     }
 
+    pub(crate) async fn said_inbox(&self, chain: String, address: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        match bridge.xchain_inbox(&chain, &address).await {
+            Ok(inbox) => Response::SaidInbox {
+                chain: inbox.chain.unwrap_or(chain),
+                address: inbox.address.unwrap_or(address),
+                messages: inbox
+                    .messages
+                    .into_iter()
+                    .map(|m| covenant_ipc::SaidInboxMessage {
+                        id: m.id,
+                        source_chain: m.source_chain,
+                        source_address: m.source_address,
+                        target_chain: m.target_chain,
+                        target_address: m.target_address,
+                        payload: m.payload,
+                        created_at: m.created_at,
+                    })
+                    .collect(),
+            },
+            Err(e) => Response::Error {
+                message: format!("said inbox: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_free_tier(&self, address: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        match bridge.xchain_free_tier(&address).await {
+            Ok(ft) => Response::SaidFreeTier {
+                address: ft.address,
+                chain: ft.chain,
+                remaining: ft.remaining,
+                resets_at: ft.resets_at,
+            },
+            Err(e) => Response::Error {
+                message: format!("said free-tier: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_send(
+        &self,
+        source_chain: String,
+        source_address: String,
+        target_chain: String,
+        target_address: String,
+        payload_json: String,
+    ) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let payload: serde_json::Value = match serde_json::from_str(&payload_json) {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("invalid payload JSON: {e}"),
+                }
+            }
+        };
+        let req = covenant_said_bridge::xchain::SendRequest {
+            source_chain,
+            source_address,
+            target_chain,
+            target_address,
+            payload,
+        };
+        match bridge.xchain_send(&req).await {
+            Ok(r) => Response::SaidSent {
+                message_id: r.message_id,
+                free_tier_remaining: r.free_tier_remaining,
+                delivered_at: r.delivered_at,
+            },
+            Err(e) => Response::Error {
+                message: format!("said send: {e}"),
+            },
+        }
+    }
+
     pub(crate) async fn said_lookup(&self, wallet: String) -> Response {
         let Some(bridge) = self.said_bridge.as_ref() else {
             return Response::Error {
@@ -2328,6 +2417,24 @@ impl Server {
                     .await
             }
             Request::SaidAnchorStatus { recent_limit } => self.said_anchor_status(recent_limit),
+            Request::SaidInbox { chain, address } => self.said_inbox(chain, address).await,
+            Request::SaidFreeTier { address } => self.said_free_tier(address).await,
+            Request::SaidSend {
+                source_chain,
+                source_address,
+                target_chain,
+                target_address,
+                payload_json,
+            } => {
+                self.said_send(
+                    source_chain,
+                    source_address,
+                    target_chain,
+                    target_address,
+                    payload_json,
+                )
+                .await
+            }
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,
             Request::PayX402 {

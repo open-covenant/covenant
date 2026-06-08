@@ -2183,6 +2183,15 @@ fn print_usage() {
     eprintln!(
         "  covenant said anchor-status [--recent <n>] [--json]      cursor snapshot: next index, last confirmed, recent rows"
     );
+    eprintln!(
+        "  covenant said inbox --address <addr> [--chain solana] [--json]   poll pending xchain messages on SAID"
+    );
+    eprintln!(
+        "  covenant said free-tier --address <addr> [--json]        check remaining free-tier xchain quota"
+    );
+    eprintln!(
+        "  covenant said send --source-address <addr> --target-chain <c> --target-address <a> --payload <json> [--json]   send an xchain message"
+    );
 }
 
 struct MemoryReadJsonArgs {
@@ -5362,6 +5371,222 @@ async fn main() -> Result<()> {
                                 println!("tx_sig: {tx_sig}");
                                 println!("slot: {slot}");
                                 println!("fixture: {fixture}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "inbox" => {
+                    let mut chain = "solana".to_string();
+                    let mut address: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--chain" => {
+                                i += 1;
+                                chain = args
+                                    .get(i)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("--chain needs a value"))?;
+                            }
+                            "--address" | "--wallet" => {
+                                i += 1;
+                                address = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--address needs a value")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let address = address.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said inbox requires --address <ADDR>")
+                    })?;
+                    write_frame(&mut stream, &Request::SaidInbox { chain, address }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidInbox { chain, address, messages } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_inbox",
+                                    "chain": chain,
+                                    "address": address,
+                                    "messages": messages,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("chain: {chain}");
+                                println!("address: {address}");
+                                println!("messages: {}", messages.len());
+                                for m in &messages {
+                                    println!(
+                                        "  {} from {}:{} -> {}:{}",
+                                        m.id,
+                                        m.source_chain,
+                                        m.source_address,
+                                        m.target_chain,
+                                        m.target_address
+                                    );
+                                }
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "free-tier" => {
+                    let mut address: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--address" | "--wallet" => {
+                                i += 1;
+                                address = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--address needs a value")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let address = address.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said free-tier requires --address <ADDR>")
+                    })?;
+                    write_frame(&mut stream, &Request::SaidFreeTier { address }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidFreeTier { address, chain, remaining, resets_at } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_free_tier",
+                                    "address": address,
+                                    "chain": chain,
+                                    "remaining": remaining,
+                                    "resets_at": resets_at,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("address: {address}");
+                                println!("chain: {chain}");
+                                println!("remaining: {remaining}");
+                                println!(
+                                    "resets_at: {}",
+                                    resets_at.map(|v| v.to_string()).unwrap_or_else(|| "-".into())
+                                );
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "send" => {
+                    let mut source_chain = "solana".to_string();
+                    let mut source_address: Option<String> = None;
+                    let mut target_chain: Option<String> = None;
+                    let mut target_address: Option<String> = None;
+                    let mut payload_json: Option<String> = None;
+                    let mut payload_file: Option<String> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--source-chain" => {
+                                i += 1;
+                                source_chain = args
+                                    .get(i)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("--source-chain needs a value"))?;
+                            }
+                            "--source-address" | "--from" => {
+                                i += 1;
+                                source_address = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--source-address needs a value")
+                                })?);
+                            }
+                            "--target-chain" | "--to-chain" => {
+                                i += 1;
+                                target_chain = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--target-chain needs a value")
+                                })?);
+                            }
+                            "--target-address" | "--to" => {
+                                i += 1;
+                                target_address = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--target-address needs a value")
+                                })?);
+                            }
+                            "--payload" => {
+                                i += 1;
+                                payload_json = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--payload needs a JSON string")
+                                })?);
+                            }
+                            "--payload-file" => {
+                                i += 1;
+                                payload_file = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--payload-file needs a path")
+                                })?);
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let source_address = source_address.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said send requires --source-address")
+                    })?;
+                    let target_chain = target_chain.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said send requires --target-chain")
+                    })?;
+                    let target_address = target_address.ok_or_else(|| {
+                        anyhow::anyhow!("covenant said send requires --target-address")
+                    })?;
+                    let payload_json = match (payload_json, payload_file) {
+                        (Some(s), _) => s,
+                        (None, Some(path)) => std::fs::read_to_string(&path)
+                            .with_context(|| format!("read payload from {path}"))?,
+                        (None, None) => bail!("covenant said send requires --payload or --payload-file"),
+                    };
+                    let _: serde_json::Value = serde_json::from_str(&payload_json)
+                        .context("payload must be valid JSON")?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SaidSend {
+                            source_chain,
+                            source_address,
+                            target_chain,
+                            target_address,
+                            payload_json,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SaidSent { message_id, free_tier_remaining, delivered_at } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "said_sent",
+                                    "message_id": message_id,
+                                    "free_tier_remaining": free_tier_remaining,
+                                    "delivered_at": delivered_at,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("message_id: {message_id}");
+                                println!(
+                                    "free_tier_remaining: {}",
+                                    free_tier_remaining
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "-".into())
+                                );
+                                println!(
+                                    "delivered_at: {}",
+                                    delivered_at
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "-".into())
+                                );
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),

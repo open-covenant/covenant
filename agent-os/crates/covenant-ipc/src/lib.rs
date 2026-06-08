@@ -791,6 +791,26 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         recent_limit: usize,
     },
+    /// Poll the SAID xchain inbox for pending messages addressed to this
+    /// agent's wallet on the given chain.
+    SaidInbox {
+        chain: String,
+        address: String,
+    },
+    /// Read the free-tier message quota for the given address.
+    SaidFreeTier {
+        address: String,
+    },
+    /// Send a cross-chain message through SAID's `/xchain/message`. Free
+    /// tier covers 10/day; beyond that SAID returns 402 and the daemon
+    /// surfaces the upstream error verbatim (paid path is x402 follow-up).
+    SaidSend {
+        source_chain: String,
+        source_address: String,
+        target_chain: String,
+        target_address: String,
+        payload_json: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -1082,9 +1102,36 @@ pub enum Response {
         pending: u64,
         recent: Vec<SaidAnchorRow>,
     },
+    SaidInbox {
+        chain: String,
+        address: String,
+        messages: Vec<SaidInboxMessage>,
+    },
+    SaidFreeTier {
+        address: String,
+        chain: String,
+        remaining: u32,
+        resets_at: Option<i64>,
+    },
+    SaidSent {
+        message_id: String,
+        free_tier_remaining: Option<u32>,
+        delivered_at: Option<i64>,
+    },
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SaidInboxMessage {
+    pub id: String,
+    pub source_chain: String,
+    pub source_address: String,
+    pub target_chain: String,
+    pub target_address: String,
+    pub payload: Option<serde_json::Value>,
+    pub created_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

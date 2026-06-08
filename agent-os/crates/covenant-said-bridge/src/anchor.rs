@@ -371,4 +371,17 @@ mod tests {
             Err(BridgeError::Invalid(_))
         ));
     }
+
+    #[test]
+    fn validate_range_rejects_wrong_length_hex() {
+        let short = AnchorRequest {
+            start_audit_index: 0,
+            end_audit_index: 5,
+            merkle_root_hex: "ab".repeat(16),
+        };
+        assert!(matches!(
+            validate_range(&short),
+            Err(BridgeError::Invalid(m)) if m.contains("64 chars")
+        ));
+    }
 }

@@ -141,4 +141,58 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, BridgeError::Invalid(m) if m.contains("lowercase ASCII hex")));
     }
+
+    #[tokio::test]
+    async fn validate_work_rejects_short_hex() {
+        let paid = crate::config::PaidGates {
+            validate_work: true,
+            ..Default::default()
+        };
+        let b = bridge_with(paid);
+        let err = b
+            .validate_work(&ValidateWorkInput {
+                agent: "pda".into(),
+                task_hash_hex: "ab".repeat(16),
+                passed: true,
+                evidence_uri: "https://x".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BridgeError::Invalid(m) if m.contains("64 hex chars")));
+    }
+
+    #[tokio::test]
+    async fn validate_work_rejects_empty_evidence_uri() {
+        let paid = crate::config::PaidGates {
+            validate_work: true,
+            ..Default::default()
+        };
+        let b = bridge_with(paid);
+        let err = b
+            .validate_work(&ValidateWorkInput {
+                agent: "pda".into(),
+                task_hash_hex: "ab".repeat(32),
+                passed: true,
+                evidence_uri: "   ".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BridgeError::Invalid(m) if m.contains("evidence_uri")));
+    }
+
+    #[tokio::test]
+    async fn register_rejects_empty_metadata_uri() {
+        let paid = crate::config::PaidGates {
+            register: true,
+            ..Default::default()
+        };
+        let b = bridge_with(paid);
+        let err = b
+            .register_on_chain(&RegisterAgentInput {
+                metadata_uri: "   ".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BridgeError::Invalid(m) if m.contains("metadata_uri")));
+    }
 }

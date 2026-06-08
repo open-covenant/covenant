@@ -128,8 +128,28 @@ impl MetaplexSigner for SubprocessMetaplexSigner {
 
         let stdout = String::from_utf8(output.stdout)
             .map_err(|e| format!("signer stdout not utf-8: {e}"))?;
-        serde_json::from_str::<SignerResponse>(stdout.trim())
-            .map_err(|e| format!("decode signer response: {e}"))
+        let response = serde_json::from_str::<SignerResponse>(stdout.trim())
+            .map_err(|e| format!("decode signer response: {e}"))?;
+
+        // The capability check already chained an audit row for this tool
+        // call; this surfaces the on-chain result (asset + signature) for
+        // operators. A dedicated AuditKind row that links the two is a
+        // tracked follow-up (it touches the core audit enum).
+        tracing::info!(
+            action = action_label(&request),
+            asset = %response.asset,
+            signature = %response.signature,
+            cluster = %response.cluster,
+            "metaplex on-chain write confirmed"
+        );
+        Ok(response)
+    }
+}
+
+fn action_label(request: &SignerRequest) -> &'static str {
+    match request {
+        SignerRequest::AttestAuditRoot { .. } => "attest.audit_root",
+        SignerRequest::RegisterIdentity { .. } => "identity.register",
     }
 }
 

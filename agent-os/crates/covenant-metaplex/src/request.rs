@@ -12,6 +12,29 @@ use serde::{Deserialize, Serialize};
 /// decode the AppData payload. Bump the version if the field set changes.
 pub const ATTESTATION_SCHEMA: &str = "covenant.audit-root.appdata.v1";
 
+/// Validate a 32-byte audit/merkle root in its on-chain wire form: exactly
+/// 64 lowercase ASCII hex characters.
+///
+/// Mirrors the SAP anchor's check so the two anchors agree on the
+/// canonical form, and so a typo or truncated digest is rejected before
+/// any subprocess spawn or on-chain write rather than being silently
+/// inscribed. Used by both the daemon-side tool and the signer sidecar.
+pub fn validate_root_hash_hex(s: &str) -> Result<(), String> {
+    if s.len() != 64 {
+        return Err(format!(
+            "rootHashHex must be 64 hex characters, got {}",
+            s.len()
+        ));
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
+        return Err("rootHashHex must be lowercase ASCII hex only".to_string());
+    }
+    Ok(())
+}
+
 /// JSON payload written into an MPL Core AppData plugin as a Covenant
 /// attestation. Mirrors the daemon's audit-root attestation envelope:
 /// identifiers and the 32-byte root only, never audit-log contents.
@@ -93,7 +116,7 @@ mod tests {
     #[test]
     fn attest_request_round_trips_tagged() {
         let req = SignerRequest::AttestAuditRoot {
-            payload: AttestationPayload::new(&"a".repeat(64), "v0.1.0", "covenant", "audit", 1_700_000_000),
+            payload: AttestationPayload::new("a".repeat(64), "v0.1.0", "covenant", "audit", 1_700_000_000),
             asset: None,
             collection: Some("Coll1111111111111111111111111111111111111111".into()),
         };
@@ -102,6 +125,16 @@ mod tests {
         assert_eq!(wire["payload"]["schema"], ATTESTATION_SCHEMA);
         let back: SignerRequest = serde_json::from_value(wire).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn root_hash_validation_matches_the_on_chain_wire_form() {
+        validate_root_hash_hex(&"a".repeat(64)).expect("64 lowercase hex");
+        validate_root_hash_hex(&"abcdef0123456789".repeat(4)).expect("mixed lowercase hex");
+        assert!(validate_root_hash_hex("deadbeef").is_err(), "too short");
+        assert!(validate_root_hash_hex(&"A".repeat(64)).is_err(), "uppercase");
+        assert!(validate_root_hash_hex(&"g".repeat(64)).is_err(), "non-hex");
+        assert!(validate_root_hash_hex(&"a".repeat(65)).is_err(), "too long");
     }
 
     #[test]

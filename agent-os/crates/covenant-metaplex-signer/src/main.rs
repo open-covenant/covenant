@@ -122,7 +122,7 @@ async fn run() -> Result<SignerResponse> {
     let request: SignerRequest = serde_json::from_str(input.trim())
         .map_err(|e| anyhow!("decode SignerRequest from stdin: {e}"))?;
 
-    let plan = plan_write(&request, &payer.pubkey())?;
+    let plan = plan_write(&request)?;
 
     // Per-action cost guard before we touch the key or the network.
     let estimate = ASSET_BASE_LAMPORTS
@@ -175,6 +175,11 @@ async fn run() -> Result<SignerResponse> {
     );
 
     let signature = send_transaction(&http, &rpc_url, &tx).await?;
+    // Confirm before reporting success: sendTransaction returns as soon
+    // as the tx is submitted, so an optimistic return could claim an
+    // attestation that never landed. The daemon only sees success once
+    // the write is confirmed on-chain.
+    confirm_signature(&http, &rpc_url, &signature).await?;
 
     Ok(SignerResponse {
         signature,
@@ -192,14 +197,19 @@ struct WritePlan {
     collection: Option<Pubkey>,
 }
 
-fn plan_write(request: &SignerRequest, _authority: &Pubkey) -> Result<WritePlan> {
+fn plan_write(request: &SignerRequest) -> Result<WritePlan> {
     let collection = collection_from_env()?;
     match request {
         SignerRequest::AttestAuditRoot {
             payload,
             collection: req_collection,
-            ..
+            asset,
         } => {
+            if asset.is_some() {
+                bail!("append-to-existing-asset is not supported yet; omit `asset`");
+            }
+            covenant_metaplex::validate_root_hash_hex(&payload.root_hash_hex)
+                .map_err(|e| anyhow!("{e}"))?;
             let collection = match req_collection {
                 Some(c) => Some(parse_pubkey(c).context("request collection")?),
                 None => collection,
@@ -215,8 +225,11 @@ fn plan_write(request: &SignerRequest, _authority: &Pubkey) -> Result<WritePlan>
         SignerRequest::RegisterIdentity {
             agent_label,
             agent_pubkey,
-            ..
+            asset,
         } => {
+            if asset.is_some() {
+                bail!("append-to-existing-asset is not supported yet; omit `asset`");
+            }
             let data = serde_json::to_vec(&serde_json::json!({
                 "schema": IDENTITY_SCHEMA,
                 "agentLabel": agent_label,
@@ -308,4 +321,38 @@ async fn send_transaction(http: &reqwest::Client, url: &str, tx: &Transaction) -
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| anyhow!("sendTransaction: result was not a signature string"))
+}
+
+/// Poll `getSignatureStatuses` until the tx is confirmed/finalized or the
+/// window elapses. An on-chain error returns `Err` with the program
+/// error; a timeout returns `Err` naming the signature so the operator
+/// can check it. Recent blockhash validity (~60-90s) bounds the wait.
+async fn confirm_signature(http: &reqwest::Client, url: &str, signature: &str) -> Result<()> {
+    const MAX_POLLS: u32 = 40;
+    for _ in 0..MAX_POLLS {
+        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+        let result = rpc(
+            http,
+            url,
+            "getSignatureStatuses",
+            serde_json::json!([[signature], { "searchTransactionHistory": true }]),
+        )
+        .await?;
+        let status = result.get("value").and_then(|v| v.get(0));
+        let Some(status) = status.filter(|s| !s.is_null()) else {
+            continue; // not yet seen by the cluster
+        };
+        if let Some(err) = status.get("err").filter(|e| !e.is_null()) {
+            bail!("transaction {signature} failed on-chain: {err}");
+        }
+        let confirmed = status
+            .get("confirmationStatus")
+            .and_then(|c| c.as_str())
+            .map(|c| c == "confirmed" || c == "finalized")
+            .unwrap_or(false);
+        if confirmed {
+            return Ok(());
+        }
+    }
+    bail!("transaction {signature} not confirmed within timeout; check it on-chain")
 }

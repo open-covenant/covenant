@@ -99,7 +99,7 @@ fn input_schema(slug: &str) -> Value {
                 "releaseSubject": { "type": "string" },
                 "releaseScope": { "type": "string" },
                 "recordedAt": { "type": "integer", "minimum": 0 },
-                "asset": { "type": "string", "description": "Existing attestation asset to append to (optional)" }
+                "collection": { "type": "string", "description": "MPL Core collection to mint into (optional; overridden by COVENANT_METAPLEX_COLLECTION)" }
             },
             "required": ["rootHashHex", "releaseTarget", "releaseSubject", "releaseScope", "recordedAt"],
             "additionalProperties": false,
@@ -108,8 +108,7 @@ fn input_schema(slug: &str) -> Value {
             "type": "object",
             "properties": {
                 "agentLabel": { "type": "string" },
-                "agentPubkey": { "type": "string" },
-                "asset": { "type": "string", "description": "Existing Core asset to bind (optional)" }
+                "agentPubkey": { "type": "string" }
             },
             "required": ["agentLabel", "agentPubkey"],
             "additionalProperties": false,
@@ -254,8 +253,11 @@ impl WriteTool {
     fn build_request(&self, args: &Value) -> Result<SignerRequest, ToolError> {
         match self.slug {
             "attest.audit_root" => {
+                let root = str_arg(args, "rootHashHex")?;
+                crate::request::validate_root_hash_hex(root)
+                    .map_err(ToolError::InvalidArguments)?;
                 let payload = AttestationPayload::new(
-                    str_arg(args, "rootHashHex")?,
+                    root,
                     str_arg(args, "releaseTarget")?,
                     str_arg(args, "releaseSubject")?,
                     str_arg(args, "releaseScope")?,
@@ -263,9 +265,12 @@ impl WriteTool {
                         ToolError::InvalidArguments("recordedAt (integer) is required".into())
                     })?,
                 );
+                // `asset` (append to an existing attestation asset) is not
+                // wired yet — v1 always mints a fresh asset, so we never
+                // pass one and never advertise the arg.
                 Ok(SignerRequest::AttestAuditRoot {
                     payload,
-                    asset: opt_str_arg(args, "asset"),
+                    asset: None,
                     collection: if self.collection.is_empty() {
                         opt_str_arg(args, "collection")
                     } else {
@@ -276,7 +281,7 @@ impl WriteTool {
             "identity.register" => Ok(SignerRequest::RegisterIdentity {
                 agent_label: str_arg(args, "agentLabel")?.to_string(),
                 agent_pubkey: str_arg(args, "agentPubkey")?.to_string(),
-                asset: opt_str_arg(args, "asset"),
+                asset: None,
             }),
             other => Err(ToolError::NotFound(format!("{TOOL_PREFIX}{other}"))),
         }
@@ -436,8 +441,18 @@ mod tests {
             Some(Arc::new(CapturingSigner)),
         )
         .unwrap();
-        let err = tool.call(json!({ "rootHashHex": "deadbeef" })).await.expect_err("missing fields");
-        assert!(matches!(err, ToolError::InvalidArguments(_)));
+        // Short hash is rejected before any subprocess/on-chain round-trip.
+        let err = tool
+            .call(json!({
+                "rootHashHex": "deadbeef",
+                "releaseTarget": "v0.1.0",
+                "releaseSubject": "covenant",
+                "releaseScope": "audit",
+                "recordedAt": 1_700_000_000u64,
+            }))
+            .await
+            .expect_err("short root hash");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("64 hex")));
         let ok = tool
             .call(json!({
                 "rootHashHex": "a".repeat(64),

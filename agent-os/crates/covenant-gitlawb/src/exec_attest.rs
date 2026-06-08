@@ -1,9 +1,11 @@
 //! `covenant/exec/v1` attestation payload and verifier.
 //!
 //! A signed claim that a commit was produced inside a known sandbox, under a
-//! specific capability grant, against an auditable execution trail. Every
-//! hash field is 64 lowercase hex chars. `issued_at` is the time the runtime
-//! emitted the attestation, not when the commit was authored.
+//! specific capability grant, against an auditable execution trail. The
+//! capability, sandbox, and audit roots are 64-lowercase-hex SHA-256; `commit`
+//! is the git commit object id (40-hex SHA-1, or 64-hex under git's SHA-256
+//! object format). `issued_at` is when the runtime emitted the attestation,
+//! not when the commit was authored.
 
 use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
@@ -31,8 +33,10 @@ pub struct CovenantExecPayload {
     /// Merkle root of the agent's audit log up to and including the commit.
     pub audit_root: String,
 
-    /// SHA-256 hex of the git commit this attestation is for. Cross-checked
-    /// against the cert's `to` field by callers that want stronger binding.
+    /// The git commit object id this attestation is for — the ref's new target.
+    /// Lowercase hex, 40 chars (SHA-1) or 64 (git's SHA-256 object format).
+    /// Cross-checked against the cert's `to`/`new_sha` by callers that want a
+    /// stronger binding.
     pub commit: String,
 
     /// RFC 3339 timestamp the Covenant runtime emitted this attestation.
@@ -65,13 +69,17 @@ impl AttestationVerifier for CovenantVerifier {
             ("capability_root", &p.capability_root),
             ("sandbox_digest", &p.sandbox_digest),
             ("audit_root", &p.audit_root),
-            ("commit", &p.commit),
         ] {
             if !is_lower_hex_sha256(hash) {
                 return Err(gitlawb_attest::AttestError::Payload(format!(
                     "{name} must be 64 lowercase hex chars"
                 )));
             }
+        }
+        if !is_git_object_id(&p.commit) {
+            return Err(gitlawb_attest::AttestError::Payload(
+                "commit must be a git object id (40 or 64 lowercase hex chars)".into(),
+            ));
         }
         if !p.agent_did.starts_with("did:key:") {
             return Err(gitlawb_attest::AttestError::Payload(
@@ -89,6 +97,14 @@ impl AttestationVerifier for CovenantVerifier {
 
 fn is_lower_hex_sha256(s: &str) -> bool {
     s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
+/// A git commit object id: lowercase hex, 40 chars (SHA-1) or 64 (git's
+/// SHA-256 object format).
+fn is_git_object_id(s: &str) -> bool {
+    (s.len() == 40 || s.len() == 64)
         && s.chars()
             .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
@@ -211,6 +227,24 @@ mod tests {
         let hash = envelope.cert_hash().unwrap();
         let err = reg.verify_all(&envelope.attestations, hash).unwrap_err();
         assert!(matches!(err, gitlawb_attest::AttestError::Payload(_)));
+    }
+
+    #[test]
+    fn sha1_git_commit_is_accepted() {
+        // gitlawb/git commit ids are SHA-1 (40 hex), not SHA-256 (64).
+        let agent_sk = fresh();
+        let agent_did = did_key_from_verifying_key(&agent_sk.verifying_key());
+        let cert = sample_cert(&fresh());
+
+        let mut payload = sample_payload(&agent_did);
+        payload.commit = "a".repeat(40);
+        let envelope = attach_covenant_attestation(&cert, payload, &agent_sk).unwrap();
+
+        let mut reg = Registry::new();
+        reg.register(Box::new(CovenantVerifier));
+        let hash = envelope.cert_hash().unwrap();
+        let verified = reg.verify_all(&envelope.attestations, hash).unwrap();
+        assert!(verified[0].fully_verified);
     }
 
     #[test]

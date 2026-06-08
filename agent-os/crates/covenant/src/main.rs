@@ -2201,12 +2201,6 @@ fn print_usage() {
     eprintln!(
         "  covenant said validate-work --agent <pda> --task-hash <hex64> {{--passed|--failed}} --evidence <uri> [--json]   post a SAID validate_work record (paid gate VALIDATE)"
     );
-    eprintln!(
-        "  covenant said sponsor-register --owner <wallet> --metadata-uri <url> [--json]   sponsor an external agent's SAID register (paid gate SPONSOR)"
-    );
-    eprintln!(
-        "  covenant said sponsor-verify --owner <wallet> [--json]   sponsor an external agent's SAID verify (paid gate SPONSOR)"
-    );
 }
 
 struct MemoryReadJsonArgs {
@@ -5375,111 +5369,6 @@ async fn main() -> Result<()> {
                                 println!("validation_pda: {validation_pda}");
                                 println!("validator: {validator}");
                                 println!("signature: {signature}");
-                            }
-                        }
-                        Response::Error { message } => bail!("daemon error: {message}"),
-                        other => bail!("unexpected response: {other:?}"),
-                    }
-                }
-                "sponsor-register" => {
-                    let mut sponsored_owner: Option<String> = None;
-                    let mut metadata_uri: Option<String> = None;
-                    let mut as_json = false;
-                    let mut i = 2;
-                    while i < args.len() {
-                        match args[i].as_str() {
-                            "--owner" => {
-                                i += 1;
-                                sponsored_owner = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--owner needs a wallet")
-                                })?);
-                            }
-                            "--metadata-uri" => {
-                                i += 1;
-                                metadata_uri = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--metadata-uri needs a URL")
-                                })?);
-                            }
-                            "--json" => as_json = true,
-                            other => bail!("unknown flag '{other}'"),
-                        }
-                        i += 1;
-                    }
-                    let sponsored_owner = sponsored_owner.ok_or_else(|| {
-                        anyhow::anyhow!("covenant said sponsor-register requires --owner")
-                    })?;
-                    let metadata_uri = metadata_uri.ok_or_else(|| {
-                        anyhow::anyhow!("covenant said sponsor-register requires --metadata-uri")
-                    })?;
-                    write_frame(
-                        &mut stream,
-                        &Request::SaidSponsorRegister {
-                            sponsored_owner,
-                            metadata_uri,
-                        },
-                    )
-                    .await?;
-                    match read_frame::<_, Response>(&mut stream).await? {
-                        Response::SaidOnChainRegistered {
-                            agent_pda,
-                            owner,
-                            signature,
-                        } => {
-                            if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "said_sponsored_register",
-                                    "agent_pda": agent_pda,
-                                    "owner": owner,
-                                    "signature": signature,
-                                });
-                                println!("{}", serde_json::to_string(&value)?);
-                            } else {
-                                println!("agent_pda: {agent_pda}");
-                                println!("owner: {owner}");
-                                println!("signature: {signature}");
-                            }
-                        }
-                        Response::Error { message } => bail!("daemon error: {message}"),
-                        other => bail!("unexpected response: {other:?}"),
-                    }
-                }
-                "sponsor-verify" => {
-                    let mut sponsored_owner: Option<String> = None;
-                    let mut as_json = false;
-                    let mut i = 2;
-                    while i < args.len() {
-                        match args[i].as_str() {
-                            "--owner" => {
-                                i += 1;
-                                sponsored_owner = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--owner needs a wallet")
-                                })?);
-                            }
-                            "--json" => as_json = true,
-                            other => bail!("unknown flag '{other}'"),
-                        }
-                        i += 1;
-                    }
-                    let sponsored_owner = sponsored_owner.ok_or_else(|| {
-                        anyhow::anyhow!("covenant said sponsor-verify requires --owner")
-                    })?;
-                    write_frame(
-                        &mut stream,
-                        &Request::SaidSponsorVerify { sponsored_owner },
-                    )
-                    .await?;
-                    match read_frame::<_, Response>(&mut stream).await? {
-                        Response::SaidVerified { signature, slot } => {
-                            if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "said_sponsored_verify",
-                                    "signature": signature,
-                                    "slot": slot,
-                                });
-                                println!("{}", serde_json::to_string(&value)?);
-                            } else {
-                                println!("signature: {signature}");
-                                println!("slot: {slot}");
                             }
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),

@@ -82,12 +82,11 @@ pub struct PaidGates {
     pub verify: bool,
     pub anchor: bool,
     pub validate_work: bool,
-    pub sponsor: bool,
 }
 
 impl PaidGates {
     pub fn any(&self) -> bool {
-        self.register || self.verify || self.anchor || self.validate_work || self.sponsor
+        self.register || self.verify || self.anchor || self.validate_work
     }
 
     pub fn summary(&self) -> String {
@@ -96,7 +95,6 @@ impl PaidGates {
         if self.verify { on.push("verify"); }
         if self.anchor { on.push("anchor"); }
         if self.validate_work { on.push("validate_work"); }
-        if self.sponsor { on.push("sponsor"); }
         if on.is_empty() { "none".into() } else { on.join(",") }
     }
 }
@@ -169,7 +167,6 @@ impl Config {
             verify: parse_bool(get("COVENANT_SAID_ALLOW_PAID_VERIFY")),
             anchor: parse_bool(get("COVENANT_SAID_ALLOW_PAID_ANCHOR")),
             validate_work: parse_bool(get("COVENANT_SAID_ALLOW_PAID_VALIDATE")),
-            sponsor: parse_bool(get("COVENANT_SAID_ALLOW_PAID_SPONSOR")),
         };
 
         let worker_command = get("COVENANT_SAID_WORKER_CMD")
@@ -248,7 +245,6 @@ mod tests {
         assert!(cfg.paid.verify);
         assert!(!cfg.paid.register);
         assert!(!cfg.paid.validate_work);
-        assert!(!cfg.paid.sponsor);
         assert_eq!(cfg.paid.summary(), "verify,anchor");
     }
 

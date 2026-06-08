@@ -15,7 +15,6 @@ export interface SaidConfig {
     verify: boolean;
     anchor: boolean;
     validateWork: boolean;
-    sponsor: boolean;
   };
 }
 
@@ -86,7 +85,6 @@ export function resolveSaidConfig(env: NodeJS.ProcessEnv): SaidConfig {
       verify: parseBool(env.COVENANT_SAID_ALLOW_PAID_VERIFY),
       anchor: parseBool(env.COVENANT_SAID_ALLOW_PAID_ANCHOR),
       validateWork: parseBool(env.COVENANT_SAID_ALLOW_PAID_VALIDATE),
-      sponsor: parseBool(env.COVENANT_SAID_ALLOW_PAID_SPONSOR),
     },
   };
 }

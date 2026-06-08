@@ -20,8 +20,6 @@
 //   get-verified      — stdin: {}
 //   submit-anchor     — stdin: { anchorIndex, startSeq, endSeq, merkleRootHex }
 //   validate-work     — stdin: { agent, taskHashHex, passed, evidenceUri }
-//   sponsor-register  — stdin: { sponsoredOwner, metadataUri }
-//   sponsor-verify    — stdin: { sponsoredOwner }
 
 import { SaidBridge, resolveSaidConfig } from './index.js';
 import { loadKeypairFromFile } from './keypair.js';
@@ -72,14 +70,10 @@ async function dispatch(bridge: SaidBridge, command: string): Promise<unknown> {
       return bridge.submitAnchor(await parsePayload());
     case 'validate-work':
       return bridge.validateWork(await parsePayload());
-    case 'sponsor-register':
-      return bridge.sponsorRegister(await parsePayload());
-    case 'sponsor-verify':
-      return bridge.sponsorVerify(await parsePayload());
     default:
       throw new Error(
         `unknown command '${command}'. Expected: status | register-agent | get-verified | ` +
-          'submit-anchor | validate-work | sponsor-register | sponsor-verify',
+          'submit-anchor | validate-work',
       );
   }
 }

@@ -68,11 +68,6 @@ interface SaidAgentLike {
     passed: boolean;
     evidenceUri: string;
   }): Promise<{ validationPda: string; signature: string }>;
-  sponsorRegister(args: {
-    sponsoredOwner: string;
-    metadataUri: string;
-  }): Promise<{ agentPda: string; signature: string }>;
-  sponsorVerify(args: { sponsoredOwner: string }): Promise<{ signature: string; slot?: number }>;
 }
 
 function loadSdk(): SaidSdkLike {
@@ -177,29 +172,5 @@ export class SaidBridge {
       validator: signer.publicKey.toBase58(),
       signature: result.signature,
     };
-  }
-
-  async sponsorRegister(args: { sponsoredOwner: string; metadataUri: string }): Promise<{
-    agentPda: string;
-    owner: string;
-    signature: string;
-  }> {
-    this.requirePaid('sponsor', 'sponsor-register');
-    const agent = this.agent();
-    const result = await agent.sponsorRegister(args);
-    return {
-      agentPda: result.agentPda,
-      owner: args.sponsoredOwner,
-      signature: result.signature,
-    };
-  }
-
-  async sponsorVerify(args: {
-    sponsoredOwner: string;
-  }): Promise<{ signature: string; slot: number }> {
-    this.requirePaid('sponsor', 'sponsor-verify');
-    const agent = this.agent();
-    const result = await agent.sponsorVerify(args);
-    return { signature: result.signature, slot: result.slot ?? 0 };
   }
 }

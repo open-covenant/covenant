@@ -50,19 +50,6 @@ pub struct ValidationResult {
     pub signature: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SponsorRegisterInput {
-    pub sponsored_owner: String,
-    pub metadata_uri: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SponsorVerifyInput {
-    pub sponsored_owner: String,
-}
-
 fn validate_hex32(label: &str, hex: &str) -> Result<()> {
     if hex.len() != 64 {
         return Err(BridgeError::Invalid(format!(
@@ -102,28 +89,6 @@ impl SaidBridge {
             return Err(BridgeError::Invalid("evidence_uri must not be empty".into()));
         }
         worker::invoke(self.config(), "validate-work", input).await
-    }
-
-    pub async fn sponsor_register(
-        &self,
-        input: &SponsorRegisterInput,
-    ) -> Result<RegisterAgentResult> {
-        self.require_paid("sponsor_register", self.config().paid.sponsor)?;
-        if input.metadata_uri.trim().is_empty() {
-            return Err(BridgeError::Invalid("metadata_uri must not be empty".into()));
-        }
-        if input.sponsored_owner.trim().is_empty() {
-            return Err(BridgeError::Invalid("sponsored_owner must not be empty".into()));
-        }
-        worker::invoke(self.config(), "sponsor-register", input).await
-    }
-
-    pub async fn sponsor_verify(&self, input: &SponsorVerifyInput) -> Result<SignatureResult> {
-        self.require_paid("sponsor_verify", self.config().paid.sponsor)?;
-        if input.sponsored_owner.trim().is_empty() {
-            return Err(BridgeError::Invalid("sponsored_owner must not be empty".into()));
-        }
-        worker::invoke(self.config(), "sponsor-verify", input).await
     }
 }
 
@@ -166,20 +131,5 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, BridgeError::Invalid(m) if m.contains("lowercase ASCII hex")));
-    }
-
-    #[tokio::test]
-    async fn sponsor_register_rejects_empty_owner() {
-        let mut paid = crate::config::PaidGates::default();
-        paid.sponsor = true;
-        let b = bridge_with(paid);
-        let err = b
-            .sponsor_register(&SponsorRegisterInput {
-                sponsored_owner: "".into(),
-                metadata_uri: "https://example.test".into(),
-            })
-            .await
-            .unwrap_err();
-        assert!(matches!(err, BridgeError::Invalid(m) if m.contains("sponsored_owner")));
     }
 }

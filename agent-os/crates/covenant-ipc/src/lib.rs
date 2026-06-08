@@ -824,15 +824,6 @@ pub enum Request {
         passed: bool,
         evidence_uri: String,
     },
-    /// Sponsor an external owner's `register_agent`. Behind COVENANT_SAID_ALLOW_PAID_SPONSOR.
-    SaidSponsorRegister {
-        sponsored_owner: String,
-        metadata_uri: String,
-    },
-    /// Sponsor an external owner's `get_verified`. Behind COVENANT_SAID_ALLOW_PAID_SPONSOR.
-    SaidSponsorVerify {
-        sponsored_owner: String,
-    },
 }
 
 fn default_recent_limit() -> usize {

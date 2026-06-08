@@ -355,6 +355,35 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = {
+        let cfg = covenant_metaplex::MetaplexConfig::from_env();
+        if !cfg.enabled {
+            server
+        } else if cfg.reads_enabled() || cfg.writes_enabled() {
+            info!(
+                cluster = %cfg.cluster,
+                reads = cfg.reads_enabled(),
+                writes = cfg.writes_enabled(),
+                "metaplex profile enabled"
+            );
+            if cfg.writes_enabled() && std::env::var("COVENANT_METAPLEX_KEYPAIR").is_err() {
+                tracing::warn!(
+                    "metaplex writes are configured but COVENANT_METAPLEX_KEYPAIR is unset; \
+                     write tools will fail until the minting keypair path is provided"
+                );
+            }
+            server.with_metaplex(covenantd::metaplex::MetaplexState::new(cfg))
+        } else {
+            tracing::warn!(
+                "COVENANT_METAPLEX_ENABLED is set but neither reads \
+                 (COVENANT_METAPLEX_DAS_URL) nor writes \
+                 (COVENANT_METAPLEX_SIGNER_BIN + COVENANT_METAPLEX_RPC_URL) are \
+                 configured; metaplex profile disabled"
+            );
+            server
+        }
+    };
+
     server
         .register_agent_budgets()
         .await

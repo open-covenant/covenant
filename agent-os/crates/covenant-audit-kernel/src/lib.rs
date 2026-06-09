@@ -73,17 +73,6 @@ mod imp {
     use serde::Deserialize;
     use std::borrow::Cow;
 
-    const HEX_PAIRS: [[u8; 2]; 256] = {
-        let mut table = [[0u8; 2]; 256];
-        let digits = *b"0123456789abcdef";
-        let mut i = 0;
-        while i < 256 {
-            table[i] = [digits[i >> 4], digits[i & 15]];
-            i += 1;
-        }
-        table
-    };
-
     #[derive(Deserialize)]
     struct EventFields<'a> {
         #[serde(borrow)]
@@ -288,6 +277,9 @@ mod imp {
         state[7] = state[7].wrapping_add(h);
     }
 
+    /// Inlined so the block loop in `digest_state` carries the state in
+    /// locals instead of spilling eight words to memory per block.
+    #[inline(always)]
     fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
         let w = [
             u32::from_be_bytes([block[0], block[1], block[2], block[3]]),
@@ -310,17 +302,7 @@ mod imp {
         compress_w(state, w);
     }
 
-    fn state_bytes(state: &[u32; 8]) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        let mut i = 0;
-        while i < 8 {
-            out[4 * i..4 * i + 4].copy_from_slice(&state[i].to_be_bytes());
-            i += 1;
-        }
-        out
-    }
-
-    fn digest32(bytes: &[u8]) -> [u8; 32] {
+    fn digest_state(bytes: &[u8]) -> [u32; 8] {
         let mut state = H0;
         let mut chunks = bytes.chunks_exact(64);
         for block in &mut chunks {
@@ -336,38 +318,58 @@ mod imp {
         }
         tail[56..].copy_from_slice(&((bytes.len() as u64).wrapping_mul(8)).to_be_bytes());
         compress(&mut state, &tail);
-        state_bytes(&state)
+        state
     }
 
-    fn hex64(digest: &[u8; 32]) -> [u8; 64] {
+    /// Eight lowercase hex chars from one state word via SWAR: spread the
+    /// nibbles into one byte each (already in output order, so no byte swap),
+    /// then map nibble -> char branchlessly. The `+6` carry flags nibbles
+    /// above 9; per-byte sums stay below 0x100 and the 0x27 multiply cannot
+    /// carry across bytes because each flag byte is 0 or 1.
+    #[inline(always)]
+    fn hex8(word: u32) -> u64 {
+        const LO: u64 = 0x0101010101010101;
+        let x = u64::from(word);
+        let v = ((x & 0xFFFF_0000) >> 16) | ((x & 0xFFFF) << 32);
+        let v = ((v >> 8) & 0x0000_00FF_0000_00FF) | ((v & 0x0000_00FF_0000_00FF) << 16);
+        let v = ((v >> 4) & 0x000F_000F_000F_000F) | ((v & 0x000F_000F_000F_000F) << 8);
+        let gap = (v.wrapping_add(LO * 0x06) & (LO * 0x10)) >> 4;
+        v.wrapping_add(LO * 0x30).wrapping_add(gap.wrapping_mul(0x27))
+    }
+
+    fn hex_state(state: &[u32; 8]) -> [u8; 64] {
         let mut out = [0u8; 64];
         let mut i = 0;
-        while i < 32 {
-            let pair = HEX_PAIRS[digest[i] as usize];
-            out[2 * i] = pair[0];
-            out[2 * i + 1] = pair[1];
+        while i < 8 {
+            out[8 * i..8 * i + 8].copy_from_slice(&hex8(state[i]).to_le_bytes());
             i += 1;
         }
         out
     }
 
-    /// sha256 of the 129-byte `previous \n event` hex composition, fed to the
-    /// compressor block-by-block: `previous` is already a 64-byte block, and
-    /// the final padding block is constant except for the last hex char of
-    /// `event`, so its schedule folds at compile time (length 129 * 8 = 1032
-    /// bits).
+    /// sha256 of the 129-byte `previous \n event` hex composition. The middle
+    /// block's schedule is built directly from `event` words shifted through
+    /// a one-byte carry (no 64-byte staging buffer), and the final padding
+    /// block is constant except for the carried last hex char, so its
+    /// schedule folds at compile time (length 129 * 8 = 1032 bits).
     fn chain_hex(previous: &[u8; 64], event: &[u8; 64]) -> [u8; 64] {
         let mut state = H0;
         compress(&mut state, previous);
-        let mut block = [0u8; 64];
-        block[0] = b'\n';
-        block[1..].copy_from_slice(&event[..63]);
-        compress(&mut state, &block);
         let mut w = [0u32; 16];
-        w[0] = (u32::from(event[63]) << 24) | 0x0080_0000;
+        let mut carry = u32::from(b'\n');
+        let mut i = 0;
+        while i < 16 {
+            let v = u32::from_be_bytes(event[4 * i..4 * i + 4].try_into().expect("4-byte chunk"));
+            w[i] = (carry << 24) | (v >> 8);
+            carry = v & 0xFF;
+            i += 1;
+        }
+        compress_w(&mut state, w);
+        let mut w = [0u32; 16];
+        w[0] = (carry << 24) | 0x0080_0000;
         w[15] = 1032;
         compress_w(&mut state, w);
-        hex64(&state_bytes(&state))
+        hex_state(&state)
     }
 
     fn hex_string(hex: &[u8; 64]) -> String {
@@ -455,13 +457,40 @@ mod imp {
     }
 
     impl<'a> Scan<'a> {
-        /// Const-size literal match so the compare unrolls into word ops
-        /// instead of a byte-loop memcmp call.
+        /// Const-size literal match decomposed into 8/4/2/1-byte loads, so
+        /// short prefixes like `{"id":"` cost a couple of wide compares
+        /// against folded constants instead of a per-byte tail loop.
+        #[inline(always)]
         fn lit<const N: usize>(&mut self, s: &[u8; N]) -> bool {
             let end = self.pos + N;
-            if self.buf.len() >= end
-                && bytes_eq(&self.buf[self.pos..end], s)
-            {
+            let Some(a) = self.buf.get(self.pos..end) else {
+                return false;
+            };
+            let mut acc = 0u64;
+            let mut i = 0;
+            while i + 8 <= N {
+                acc |= u64::from_le_bytes(a[i..i + 8].try_into().expect("8-byte chunk"))
+                    ^ u64::from_le_bytes(s[i..i + 8].try_into().expect("8-byte chunk"));
+                i += 8;
+            }
+            if i + 4 <= N {
+                acc |= u64::from(
+                    u32::from_le_bytes(a[i..i + 4].try_into().expect("4-byte chunk"))
+                        ^ u32::from_le_bytes(s[i..i + 4].try_into().expect("4-byte chunk")),
+                );
+                i += 4;
+            }
+            if i + 2 <= N {
+                acc |= u64::from(
+                    u16::from_le_bytes(a[i..i + 2].try_into().expect("2-byte chunk"))
+                        ^ u16::from_le_bytes(s[i..i + 2].try_into().expect("2-byte chunk")),
+                );
+                i += 2;
+            }
+            if i < N {
+                acc |= u64::from(a[i] ^ s[i]);
+            }
+            if acc == 0 {
                 self.pos = end;
                 true
             } else {
@@ -470,10 +499,13 @@ mod imp {
         }
 
         /// String body after the opening quote: printable ASCII, no escapes.
-        /// Leaves pos past the closing quote. Word-at-a-time scan flags any
-        /// quote, backslash, or non-printable byte; the lowest flagged byte is
-        /// always a true hit (borrow corruption in the less-than detector only
-        /// propagates upward), so it is re-checked exactly by the scalar arm.
+        /// Leaves pos past the closing quote. The detector drops the usual
+        /// `& !x` zero-test masking: every spurious flag it can raise either
+        /// sits on a byte with the high bit set (a true hit via the `| x`
+        /// term) or lands strictly above a true hit through borrow/carry
+        /// propagation, so the lowest flagged byte is always a genuine
+        /// quote/backslash/non-printable and is re-checked exactly by the
+        /// scalar arm.
         fn string_body(&mut self) -> Option<&'a [u8]> {
             const LO: u64 = 0x0101010101010101;
             const HI: u64 = 0x8080808080808080;
@@ -482,15 +514,10 @@ mod imp {
             let mut i = self.pos;
             while i + 8 <= buf.len() {
                 let x = u64::from_le_bytes(buf[i..i + 8].try_into().expect("8-byte chunk"));
-                let quote = x ^ (LO * 0x22);
-                let slash = x ^ (LO * 0x5c);
-                let del = x ^ (LO * 0x7f);
-                let hit = (quote.wrapping_sub(LO) & !quote)
-                    | (slash.wrapping_sub(LO) & !slash)
-                    | (del.wrapping_sub(LO) & !del)
-                    | (x.wrapping_sub(LO * 0x20) & !x)
-                    | x;
-                let hit = hit & HI;
+                let quote = (x ^ (LO * 0x22)).wrapping_sub(LO);
+                let slash = (x ^ (LO * 0x5c)).wrapping_sub(LO);
+                let hit =
+                    (quote | slash | x.wrapping_sub(LO * 0x20) | x.wrapping_add(LO) | x) & HI;
                 if hit != 0 {
                     i += (hit.trailing_zeros() >> 3) as usize;
                     let c = buf[i];
@@ -731,7 +758,7 @@ mod imp {
 
         let mut previous = zero_hash();
         for (index, line) in event_lines.iter().enumerate() {
-            let event_hex = hex64(&digest32(line));
+            let event_hex = hex_state(&digest_state(line));
             let chain = chain_hex(&previous, &event_hex);
             match parse_event(line) {
                 Ok((id, timestamp_ms)) => match anchors.get(index) {
@@ -790,7 +817,7 @@ mod imp {
         let mut previous = zero_hash();
         let mut entries = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
-            let event_hex = hex64(&digest32(line));
+            let event_hex = hex_state(&digest_state(line));
             let chain = chain_hex(&previous, &event_hex);
             let (event_id, timestamp_ms) = match parse_event(line) {
                 Ok((id, ts)) => (id.into_owned(), ts),

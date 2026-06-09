@@ -155,3 +155,4 @@ test-results/
 !.vscode/settings.json
 
 *.tsbuildinfo
+agent-os/self-improvement/scaffold/archive/

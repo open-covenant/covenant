@@ -50,6 +50,28 @@ pub struct ChainStatus {
     pub missing: Vec<String>,
 }
 
+/// One x402 provider endpoint surfaced by `Request::DiscoverProviders`.
+/// A flat projection of `covenant_x402::RegistryEntry` plus its first
+/// pricing option — enough for an agent to decide whether to pay the
+/// endpoint without re-fetching the registry. `price_atomic_usdc` is the
+/// atomic amount as a decimal string (mirrors `PayX402::per_call_cap`) to
+/// avoid JSON's 53-bit integer limit; `network` + `asset` name the rail.
+/// All three pricing fields are absent when the endpoint is free (the
+/// registry entry carried no pricing).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveredProvider {
+    pub server_title: String,
+    pub endpoint: String,
+    pub slug: String,
+    pub method: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_atomic_usdc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReceiptBatchSummary {
     pub batch_id: String,
@@ -762,6 +784,17 @@ pub enum Request {
         #[serde(default)]
         expires_at_unix: Option<u64>,
     },
+    /// Enumerate available x402 providers from the orbit-x402 registry.
+    /// Capability-gated by `x402.discover` and opt-in via env; when the
+    /// daemon was started without discovery wired in, the handler returns
+    /// [`Response::Error`]. The cached catalog is served (refreshed when
+    /// stale), filtered to `server_title` when set and to any operator
+    /// allowlist, and projected to [`DiscoveredProvider`]. Read-only — no
+    /// payment, no signer.
+    DiscoverProviders {
+        #[serde(default)]
+        server_title: Option<String>,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -1015,6 +1048,13 @@ pub enum Response {
         attester: String,
         agent_pda: String,
         signature: String,
+    },
+    /// Successful response to [`Request::DiscoverProviders`]. Carries the
+    /// projected, filtered provider list from the cached orbit-x402
+    /// catalog. An empty list is a valid answer (no providers matched, or
+    /// the registry returned none).
+    ProvidersDiscovered {
+        providers: Vec<DiscoveredProvider>,
     },
     Error {
         message: String,
@@ -11570,5 +11610,71 @@ mod tests {
             }
             other => panic!("expected Ipc(Io(UnexpectedEof)), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn request_discover_providers_serde_round_trips_with_and_without_filter() {
+        // Request::DiscoverProviders is the agent-facing verb that
+        // enumerates orbit-x402 providers. The discriminator slug is
+        // 'discover_providers'; server_title is #[serde(default)] so a
+        // stale CLI that omits it deserialises as None (no filter).
+        let unfiltered = Request::DiscoverProviders { server_title: None };
+        let wire = serde_json::to_value(&unfiltered).unwrap();
+        assert_eq!(wire["kind"], serde_json::json!("discover_providers"));
+        let back: Request =
+            serde_json::from_value(serde_json::json!({ "kind": "discover_providers" })).unwrap();
+        assert_eq!(
+            back, unfiltered,
+            "a DiscoverProviders frame without server_title must deserialise as the unfiltered request"
+        );
+
+        let filtered = Request::DiscoverProviders {
+            server_title: Some("Xona".into()),
+        };
+        let wire = serde_json::to_value(&filtered).unwrap();
+        assert_eq!(wire["server_title"], serde_json::json!("Xona"));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, filtered);
+    }
+
+    #[test]
+    fn response_providers_discovered_serde_round_trips_priced_and_free() {
+        // The priced fields are Option + skip_serializing_if so a free
+        // endpoint (no pricing) drops price/network/asset from the wire
+        // entirely; a consumer distinguishes free from paid by absence.
+        let priced = DiscoveredProvider {
+            server_title: "Xona".into(),
+            endpoint: "https://api.xona-agent.com/image/creative-director".into(),
+            slug: "image/creative-director".into(),
+            method: "POST".into(),
+            price_atomic_usdc: Some("30000".into()),
+            network: Some("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".into()),
+            asset: Some("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".into()),
+        };
+        let free = DiscoveredProvider {
+            server_title: "Xona".into(),
+            endpoint: "https://api.xona-agent.com/free/ping".into(),
+            slug: "free/ping".into(),
+            method: "GET".into(),
+            price_atomic_usdc: None,
+            network: None,
+            asset: None,
+        };
+        let resp = Response::ProvidersDiscovered {
+            providers: vec![priced.clone(), free.clone()],
+        };
+
+        let wire = serde_json::to_value(&resp).unwrap();
+        assert_eq!(wire["kind"], serde_json::json!("providers_discovered"));
+        let free_wire = &wire["providers"][1];
+        assert!(
+            free_wire.get("price_atomic_usdc").is_none()
+                && free_wire.get("network").is_none()
+                && free_wire.get("asset").is_none(),
+            "a free provider must drop the pricing fields from the wire"
+        );
+
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
     }
 }

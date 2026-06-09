@@ -355,6 +355,76 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match xona_config_from_env() {
+        Some(cfg) => {
+            // Prefer the live orbit-x402 registry so a restart picks up
+            // Xona's current endpoints; fall back to the vendored snapshot
+            // offline or if the crawl is slow.
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+            let orbit = covenant_x402::OrbitClient::with(
+                http,
+                covenant_x402::orbit::DEFAULT_BASE_URL.to_string(),
+                covenant_x402::orbit::DEFAULT_PAGE_SIZE,
+            );
+            let refreshed = tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                covenant_xona::XonaCatalog::refresh(&orbit, &cfg),
+            )
+            .await;
+            let catalog = match refreshed {
+                Ok(Ok(c)) if !c.is_empty() => {
+                    info!(
+                        source = "registry",
+                        endpoints = c.endpoints().len(),
+                        "xona catalog loaded"
+                    );
+                    Some(c)
+                }
+                Ok(Ok(_)) => {
+                    tracing::warn!(
+                        "xona registry returned no endpoints on rail; using vendored snapshot"
+                    );
+                    covenant_xona::XonaCatalog::from_vendored(&cfg).ok()
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "xona registry refresh failed; using vendored snapshot");
+                    covenant_xona::XonaCatalog::from_vendored(&cfg).ok()
+                }
+                Err(_) => {
+                    tracing::warn!("xona registry refresh timed out; using vendored snapshot");
+                    covenant_xona::XonaCatalog::from_vendored(&cfg).ok()
+                }
+            };
+            match catalog {
+                Some(catalog) if !catalog.is_empty() => {
+                    info!(
+                        endpoints = catalog.endpoints().len(),
+                        "xona provider enabled"
+                    );
+                    server.with_xona(covenantd::xona::XonaState::new(catalog, cfg))
+                }
+                _ => {
+                    tracing::warn!("xona catalog unavailable; provider disabled");
+                    server
+                }
+            }
+        }
+        None => server,
+    };
+
+    let server = match discovery_config_from_env() {
+        Some(state) => {
+            // No fetch here — the catalog loads on the first
+            // DiscoverProviders call, keeping startup offline-safe.
+            info!("x402 provider discovery enabled");
+            server.with_discovery(state)
+        }
+        None => server,
+    };
+
     server
         .register_agent_budgets()
         .await
@@ -735,6 +805,119 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
         }
     }
     Some(cfg)
+}
+
+/// Build the Xona provider config from env, or None when the operator
+/// hasn't opted in. The catalog itself loads from the live orbit-x402
+/// registry (vendored snapshot fallback); these vars only tune the rail
+/// and the spend policy.
+///
+/// - `COVENANT_XONA_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_XONA_NETWORK` / `COVENANT_XONA_ASSET` — override the
+///   settlement rail (optional; defaults to Solana mainnet + USDC)
+/// - `COVENANT_XONA_PER_CALL_CAP` — atomic-USDC per-call ceiling (optional)
+/// - `COVENANT_XONA_ALLOW` — comma-separated endpoint slug allowlist (optional)
+/// - `COVENANT_XONA_SERVER_TITLE_PREFIX` — registry serverTitle prefix
+///   that identifies Xona's entries (optional)
+/// - `COVENANT_XONA_MARKUP_BPS` — resale markup in basis points (optional)
+fn xona_config_from_env() -> Option<covenant_xona::XonaConfig> {
+    let enabled = std::env::var("COVENANT_XONA_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let mut cfg = covenant_xona::XonaConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(network) = std::env::var("COVENANT_XONA_NETWORK") {
+        cfg.network = network;
+    }
+    if let Ok(asset) = std::env::var("COVENANT_XONA_ASSET") {
+        cfg.asset = asset;
+    }
+    if let Ok(prefix) = std::env::var("COVENANT_XONA_SERVER_TITLE_PREFIX") {
+        cfg.server_title_prefix = prefix;
+    }
+    if let Ok(cap) = std::env::var("COVENANT_XONA_PER_CALL_CAP") {
+        match cap.trim().parse() {
+            Ok(n) => cfg.per_call_cap = n,
+            Err(_) => {
+                tracing::warn!(value = %cap, "ignoring non-numeric COVENANT_XONA_PER_CALL_CAP")
+            }
+        }
+    }
+    if let Ok(list) = std::env::var("COVENANT_XONA_ALLOW") {
+        cfg.allow = Some(
+            list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
+    }
+    if let Ok(bps) = std::env::var("COVENANT_XONA_MARKUP_BPS") {
+        match bps.trim().parse() {
+            Ok(n) => cfg.markup_bps = n,
+            Err(_) => tracing::warn!(value = %bps, "ignoring non-numeric COVENANT_XONA_MARKUP_BPS"),
+        }
+    }
+    Some(cfg)
+}
+
+/// Build the x402 provider-discovery state from env, or None when the
+/// operator hasn't opted in. Construction is offline (it only builds an
+/// `OrbitClient`); the registry is fetched lazily on the first
+/// `DiscoverProviders` call, so this keeps daemon startup network-free.
+///
+/// - `COVENANT_X402_DISCOVERY_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_X402_DISCOVERY_ORBIT_URL` — registry base URL
+///   (default `covenant_x402::orbit::DEFAULT_BASE_URL`)
+/// - `COVENANT_X402_DISCOVERY_REFRESH_SECS` — cache TTL in seconds
+///   (default 300; a non-numeric value is ignored)
+/// - `COVENANT_X402_DISCOVERY_ALLOW` — comma-separated `server_title`
+///   allowlist; only listed providers are ever returned (optional)
+fn discovery_config_from_env() -> Option<Arc<covenantd::discovery::DiscoveryState>> {
+    let enabled = std::env::var("COVENANT_X402_DISCOVERY_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let base_url = std::env::var("COVENANT_X402_DISCOVERY_ORBIT_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| covenant_x402::orbit::DEFAULT_BASE_URL.to_string());
+    let refresh_secs = match std::env::var("COVENANT_X402_DISCOVERY_REFRESH_SECS") {
+        Ok(v) => match v.trim().parse::<u64>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                tracing::warn!(value = %v, "ignoring invalid COVENANT_X402_DISCOVERY_REFRESH_SECS; using default");
+                300
+            }
+        },
+        Err(_) => 300,
+    };
+    let allow = std::env::var("COVENANT_X402_DISCOVERY_ALLOW")
+        .ok()
+        .map(|list| {
+            list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        });
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let client =
+        covenant_x402::OrbitClient::with(http, base_url, covenant_x402::orbit::DEFAULT_PAGE_SIZE);
+    Some(Arc::new(covenantd::discovery::DiscoveryState::new(
+        client,
+        std::time::Duration::from_secs(refresh_secs),
+        allow,
+    )))
 }
 
 /// Mask secret query params (api keys, tokens) in a URL before logging it,

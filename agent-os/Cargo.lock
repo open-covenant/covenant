@@ -1510,6 +1510,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-xona"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "covenant-mcp",
+ "covenant-x402",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-zauth"
 version = "0.0.0"
 dependencies = [
@@ -1551,6 +1567,7 @@ dependencies = [
  "covenant-settlement",
  "covenant-types",
  "covenant-x402",
+ "covenant-xona",
  "dotenvy",
  "futures",
  "reqwest 0.12.28",

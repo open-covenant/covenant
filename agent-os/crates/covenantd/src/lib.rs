@@ -8,12 +8,15 @@
 
 #![deny(unsafe_code)]
 
+pub mod discovery;
 pub mod http;
 pub mod hyre;
+pub mod smart_layer;
 pub mod sse;
 pub mod stream_dispatch;
 pub mod stream_tracker;
 pub mod x402;
+pub mod xona;
 
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
@@ -1060,6 +1063,14 @@ pub struct Server {
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
     hyre: Option<Arc<hyre::HyreState>>,
+    /// Opt-in Xona Agent provider profile: the materialised catalog +
+    /// config. None when the operator has not enabled Xona; in that state
+    /// no `xona.*` tool is advertised or callable.
+    xona: Option<Arc<xona::XonaState>>,
+    /// Opt-in x402 provider discovery over the orbit-x402 registry. None
+    /// when the operator has not enabled discovery; in that state every
+    /// `Request::DiscoverProviders` returns a "not configured" error.
+    discovery: Option<Arc<discovery::DiscoveryState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1111,6 +1122,8 @@ impl Server {
             home: None,
             x402_dispatch: None,
             hyre: None,
+            xona: None,
+            discovery: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1193,6 +1206,25 @@ impl Server {
     /// "not configured" error.
     pub fn with_hyre(mut self, state: hyre::HyreState) -> Self {
         self.hyre = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable the Xona Agent provider profile. Advertises one `xona.*`
+    /// MCP tool per catalog endpoint and routes their calls through the
+    /// outbound x402 path. Requires [`Self::with_x402_dispatch`] for the
+    /// funding-key sidecar; without it a `xona.*` call returns a
+    /// "not configured" error.
+    pub fn with_xona(mut self, state: xona::XonaState) -> Self {
+        self.xona = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable x402 provider discovery over the orbit-x402 registry.
+    /// Without this, every `Request::DiscoverProviders` returns a "not
+    /// configured" error. The catalog loads lazily on the first
+    /// discovery call, so wiring this at boot adds no startup fetch.
+    pub fn with_discovery(mut self, state: Arc<discovery::DiscoveryState>) -> Self {
+        self.discovery = Some(state);
         self
     }
 
@@ -2214,6 +2246,45 @@ impl Server {
                 self.revoke_peer(token_prefix, force, match_limit, peer)
                     .await
             }
+            Request::DiscoverProviders { server_title } => {
+                self.discover_providers(server_title, peer).await
+            }
+        }
+    }
+
+    /// Enumerate x402 providers from the cached orbit-x402 registry.
+    ///
+    /// Gated by the `x402.discover` capability; the gate also records the
+    /// `CapabilityCheck` audit row (pass or fail), so a rejection is
+    /// audited like every other gated verb. Returns `Error` when
+    /// discovery was not wired in at boot. Otherwise serves the cached
+    /// catalog (refreshing when stale), filtered by `server_title` and
+    /// the operator allowlist, projected to `DiscoveredProvider`.
+    async fn discover_providers(&self, server_title: Option<String>, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities("x402:discover".into(), vec!["x402.discover".into()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "provider discovery requires capability \"x402.discover\". \
+                          Grant it with `covenant capabilities grant x402.discover`."
+                    .into(),
+            };
+        }
+
+        let Some(discovery) = self.discovery.clone() else {
+            return Response::Error {
+                message: "provider discovery is not configured on this daemon. \
+                          Enable it via COVENANT_X402_DISCOVERY_ENABLED and restart."
+                    .into(),
+            };
+        };
+
+        match discovery.providers(server_title.as_deref()).await {
+            Ok(providers) => Response::ProvidersDiscovered { providers },
+            Err(e) => Response::Error {
+                message: format!("provider discovery failed: {e}"),
+            },
         }
     }
 
@@ -3699,6 +3770,9 @@ impl Server {
         if let Some(state) = &self.hyre {
             tools.extend(covenant_hyre::hyre_specs(&state.catalog, &state.config));
         }
+        if let Some(state) = &self.xona {
+            tools.extend(covenant_xona::xona_specs(&state.catalog, &state.config));
+        }
         Response::ToolList { tools }
     }
 
@@ -3764,6 +3838,9 @@ impl Server {
         if name.starts_with("hyre.") {
             return self.hyre_tool_call(name, arguments, peer).await;
         }
+        if name.starts_with("xona.") {
+            return self.xona_tool_call(name, arguments, peer).await;
+        }
 
         match self.tools.call(&name, arguments).await {
             Ok(r) => Response::ToolResult {
@@ -3812,6 +3889,55 @@ impl Server {
         else {
             return Response::Error {
                 message: format!("unknown hyre tool: {name}"),
+            };
+        };
+        match tool.call(arguments).await {
+            Ok(r) => Response::ToolResult {
+                content: r.content,
+                is_error: r.is_error,
+            },
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Execute a Xona tool on the caller's behalf. The `tool.call.<name>`
+    /// capability and scope are already enforced by [`Self::call_tool`];
+    /// this binds the caller as payer and runs the resolved call through
+    /// the outbound x402 path, so the budget debit, settlement receipt,
+    /// and audit event land against the agent that invoked the tool.
+    async fn xona_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
+        let Some(state) = self.xona.clone() else {
+            return Response::Error {
+                message: "xona provider is not enabled on this daemon.".into(),
+            };
+        };
+        let Some(x402) = self.x402_dispatch.clone() else {
+            return Response::Error {
+                message: "xona requires the x402 funding-key sidecar. \
+                          Wire it via Server::with_x402_dispatch and restart."
+                    .into(),
+            };
+        };
+
+        let executor = Arc::new(xona::DaemonXonaExecutor::new(
+            self.settlement.clone(),
+            self.audit.clone(),
+            self.budget.clone(),
+            x402,
+            self.identity.agent_id(),
+            peer.clone(),
+        ));
+        let Some(tool) = covenant_xona::xona_tool(&state.catalog, &state.config, &name, executor)
+        else {
+            return Response::Error {
+                message: format!("unknown xona tool: {name}"),
             };
         };
         match tool.call(arguments).await {
@@ -46000,6 +46126,272 @@ required = {caps:?}
             999,
             "1 credit debited from the caller"
         );
+    }
+
+    /// Full Xona path: capability gate → executor → 402-then-pay loop
+    /// (against Xona's self-paid challenge shape, no feePayer) → budget
+    /// debit + settlement receipt + audit event. The signer is a shell
+    /// script standing in for the funding-key sidecar, so no real USDC
+    /// moves. The catalog is built from a snapshot pointed at the mock
+    /// upstream.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn xona_tool_call_pays_and_records_end_to_end() {
+        use std::os::unix::fs::PermissionsExt;
+        use wiremock::matchers::{header_exists, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let upstream = MockServer::start().await;
+        // Xona's self-paid 402: bare array, no extra.feePayer.
+        let challenge = serde_json::json!([{
+            "scheme": "exact",
+            "network": covenant_xona::config::SOLANA_NETWORK,
+            "asset": covenant_xona::config::USDC_MINT,
+            "amount": "30000",
+            "amountUsdc": 0.03,
+            "payTo": covenant_xona::config::PAY_TO,
+        }])
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/image/creative-director"))
+            .respond_with(ResponseTemplate::new(402).set_body_string(challenge))
+            .up_to_n_times(1)
+            .mount(&upstream)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/image/creative-director"))
+            .and(header_exists("x-payment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "image_url": "https://x/y.png"
+            })))
+            .mount(&upstream)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let signer = dir.path().join("signer.sh");
+        std::fs::write(
+            &signer,
+            "#!/bin/sh\ncat >/dev/null\nprintf 'x402-mock-header'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+
+        let cfg = covenant_xona::XonaConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        // Snapshot points the endpoint at the mock upstream.
+        let snapshot = serde_json::json!([{
+            "serverUrl": "https://api.xona-agent.com",
+            "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+            "endpoint": format!("{}/image/creative-director", upstream.uri()),
+            "slug": "image/creative-director",
+            "method": "POST",
+            "description": "creative director",
+            "pricing": [{
+                "network": covenant_xona::config::SOLANA_NETWORK,
+                "asset": covenant_xona::config::USDC_MINT,
+                "amount": "30000", "amountUsdc": 0.03,
+                "payTo": covenant_xona::config::PAY_TO, "scheme": "exact"
+            }]
+        }])
+        .to_string();
+        let catalog = covenant_xona::XonaCatalog::from_snapshot(&snapshot, &cfg).unwrap();
+
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement.clone(),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_x402_dispatch(x402::X402Config {
+            enabled: true,
+            signer_binary: signer,
+            signer_env: vec![],
+        })
+        .with_xona(xona::XonaState::new(catalog, cfg));
+
+        let peer = identity.agent_id();
+        budget.set_capacity(&peer, 1000).await.unwrap();
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.xona.image.creative-director".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "xona.image.creative-director".into(),
+                arguments: serde_json::json!({ "prompt": "a neon koi" }),
+            })
+            .await;
+
+        match resp {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                let data = content
+                    .iter()
+                    .find_map(|c| match c {
+                        covenant_mcp::Content::Json { value } => Some(value.clone()),
+                        _ => None,
+                    })
+                    .expect("json content");
+                assert_eq!(data["image_url"], "https://x/y.png");
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+
+        let receipts = settlement.recent(10).await.unwrap();
+        assert_eq!(receipts.len(), 1, "one settlement receipt");
+        assert_eq!(receipts[0].resource, covenant_types::ResourceKind::Tool);
+        assert_eq!(receipts[0].credits_consumed, 3, "$0.03 → 3 credits");
+
+        let events = audit.recent(20).await.unwrap();
+        let settled = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ExternalPaymentSettled {
+                    provider, amount, ..
+                } => Some((provider.clone(), amount.clone())),
+                _ => None,
+            })
+            .expect("ExternalPaymentSettled audit event");
+        assert_eq!(settled.0, "xona");
+        assert_eq!(settled.1, "30000", "records the live atomic amount");
+
+        assert_eq!(
+            budget.tokens_remaining(&peer).await.unwrap(),
+            997,
+            "3 credits debited from the caller"
+        );
+    }
+
+    fn discovery_entry(server: &str, slug: &str) -> covenant_x402::RegistryEntry {
+        covenant_x402::RegistryEntry {
+            server_url: format!("https://api.{}.test", server.to_lowercase()),
+            server_title: server.into(),
+            endpoint: format!("https://api.{}.test/{slug}", server.to_lowercase()),
+            slug: slug.into(),
+            method: "POST".into(),
+            description: "test endpoint".into(),
+            pricing: vec![covenant_x402::PaymentRequirements {
+                network: "solana:mainnet".into(),
+                asset: "usdc-sol".into(),
+                amount: "80000".into(),
+                amount_usdc: 0.08,
+                pay_to: "pay-to-addr".into(),
+                scheme: "exact".into(),
+                extra: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn discover_providers_rejects_when_capability_missing() {
+        // No x402.discover grant: the daemon must refuse before touching
+        // the registry, and the gate records the CapabilityCheck audit
+        // row like every other gated verb.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone()).with_discovery(discovery::seeded(
+            vec![discovery_entry("Xona", "image/creative-director")],
+            None,
+        ));
+        let resp = s
+            .op_respond(Request::DiscoverProviders { server_title: None })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("x402.discover"),
+                "error must name the missing capability so the operator can grant it: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+        let events = audit.recent(10).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::CapabilityCheck { passed, .. } if !passed)),
+            "a rejected discovery must leave a failed CapabilityCheck audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_providers_rejects_when_not_configured() {
+        // Capability granted, but discovery was never wired in — the
+        // daemon must say "not configured" rather than return an empty
+        // list (which would look like "no providers exist").
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "x402.discover").await;
+        let resp = s
+            .op_respond(Request::DiscoverProviders { server_title: None })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured' so the operator knows to enable discovery: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn discover_providers_returns_seeded_catalog_with_capability() {
+        // Capability granted + a seeded (no live fetch) catalog: the
+        // daemon projects and returns every provider, and the
+        // server_title filter narrows to one.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_discovery(discovery::seeded(
+                vec![
+                    discovery_entry("Xona", "image/creative-director"),
+                    discovery_entry("Hyre", "defi/tvl"),
+                ],
+                None,
+            ));
+        grant_action(&s, "x402.discover").await;
+
+        let resp = s
+            .op_respond(Request::DiscoverProviders { server_title: None })
+            .await;
+        match resp {
+            Response::ProvidersDiscovered { providers } => {
+                assert_eq!(providers.len(), 2);
+                let xona = providers
+                    .iter()
+                    .find(|p| p.server_title == "Xona")
+                    .expect("xona present");
+                assert_eq!(xona.slug, "image/creative-director");
+                assert_eq!(xona.price_atomic_usdc.as_deref(), Some("80000"));
+            }
+            other => panic!("expected ProvidersDiscovered, got: {other:?}"),
+        }
+
+        let resp = s
+            .op_respond(Request::DiscoverProviders {
+                server_title: Some("Hyre".into()),
+            })
+            .await;
+        match resp {
+            Response::ProvidersDiscovered { providers } => {
+                assert_eq!(providers.len(), 1);
+                assert_eq!(providers[0].server_title, "Hyre");
+            }
+            other => panic!("expected ProvidersDiscovered, got: {other:?}"),
+        }
     }
 
     #[tokio::test]

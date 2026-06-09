@@ -1,0 +1,1901 @@
+[
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/ai/x-news",
+    "slug": "ai/x-news",
+    "method": "POST",
+    "description": "Extract latest news from X (Twitter) username, generate draft tweet and banner with Xona.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "500000",
+        "amountUsdc": 0.5,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/ai/x-persona",
+    "slug": "ai/x-persona",
+    "method": "POST",
+    "description": "Extract structured persona from X (Twitter) username. Analyzes posts, profile, and communication style to generate persona, style profile, content patterns, and avatar prompt.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/audio/elevenlabs-music",
+    "slug": "audio/elevenlabs-music",
+    "method": "POST",
+    "description": "AI music generation using ElevenLabs Music (Replicate). Dynamic pricing: $1 per 120 seconds, max 3 minutes.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "250000",
+        "amountUsdc": 0.25,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/audio/speech-to-text",
+    "slug": "audio/speech-to-text",
+    "method": "POST",
+    "description": "Speech-to-text: transcribe audio from a URL using OpenAI GPT-4o Transcribe (Replicate).",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "20000",
+        "amountUsdc": 0.02,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/audio/x-text-to-speech",
+    "slug": "audio/x-text-to-speech",
+    "method": "POST",
+    "description": "X.AI text-to-speech: convert text to speech (MP3).",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/ai/x-news",
+    "slug": "base-main/ai/x-news",
+    "method": "POST",
+    "description": "Extract latest news from X (Twitter) username, generate draft tweet and banner with Xona. (Base Mainnet)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "500000",
+        "amountUsdc": 0.5,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/ai/x-persona",
+    "slug": "base-main/ai/x-persona",
+    "method": "POST",
+    "description": "Extract structured persona from X (Twitter) username. Analyzes posts, profile, and communication style to generate persona, style profile, content patterns, and avatar prompt. (Base Mainnet)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/audio/elevenlabs-music",
+    "slug": "base-main/audio/elevenlabs-music",
+    "method": "POST",
+    "description": "AI music generation using ElevenLabs Music (Replicate). Dynamic pricing: $1 per 120 seconds, max 3 minutes (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "250000",
+        "amountUsdc": 0.25,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/audio/speech-to-text",
+    "slug": "base-main/audio/speech-to-text",
+    "method": "POST",
+    "description": "Speech-to-text: transcribe audio from a URL using OpenAI GPT-4o Transcribe (Replicate) (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "20000",
+        "amountUsdc": 0.02,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/audio/x-text-to-speech",
+    "slug": "base-main/audio/x-text-to-speech",
+    "method": "POST",
+    "description": "X.AI text-to-speech: convert text to speech (MP3) (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image-model/flux-2-flex",
+    "slug": "base-main/image-model/flux-2-flex",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image-model/flux-2-max",
+    "slug": "base-main/image-model/flux-2-max",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image-model/flux-2-pro",
+    "slug": "base-main/image-model/flux-2-pro",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image-model/qwen-image",
+    "slug": "base-main/image-model/qwen-image",
+    "method": "POST",
+    "description": "Generate image using qwen/qwen-image model (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image-model/seedream-4.5",
+    "slug": "base-main/image-model/seedream-4.5",
+    "method": "POST",
+    "description": "Generate image using ByteDance Seedream-4.5 model (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "80000",
+        "amountUsdc": 0.08,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image/creative-director",
+    "slug": "base-main/image/creative-director",
+    "method": "POST",
+    "description": "AI-powered creative research and prompt refinement using X and Google (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "30000",
+        "amountUsdc": 0.03,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image/designer",
+    "slug": "base-main/image/designer",
+    "method": "POST",
+    "description": "AI image generation with intelligent style blending (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "60000",
+        "amountUsdc": 0.06,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image/flux-2-flex",
+    "slug": "base-main/image/flux-2-flex",
+    "method": "POST",
+    "description": "Max-quality image generation and editing with support for ten reference images (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "60000",
+        "amountUsdc": 0.06,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image/flux-2-max",
+    "slug": "base-main/image/flux-2-max",
+    "method": "POST",
+    "description": "The highest fidelity image model from Black Forest Labs (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "80000",
+        "amountUsdc": 0.08,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image/flux-2-pro",
+    "slug": "base-main/image/flux-2-pro",
+    "method": "POST",
+    "description": "High-quality image generation and editing with support for eight reference images (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image/grok-imagine",
+    "slug": "base-main/image/grok-imagine",
+    "method": "POST",
+    "description": "AI image generation using Grok Imagine model (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "40000",
+        "amountUsdc": 0.04,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image/nano-banana",
+    "slug": "base-main/image/nano-banana",
+    "method": "POST",
+    "description": "AI image generation using nano-banana model (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/image/nano-banana-pro",
+    "slug": "base-main/image/nano-banana-pro",
+    "method": "POST",
+    "description": "AI image generation using nano-banana-pro model (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "150000",
+        "amountUsdc": 0.15,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/token/news",
+    "slug": "base-main/token/news",
+    "method": "POST",
+    "description": "Fetch token information from Jupiter via Corbits, get curated news from Syra, and generate banner and social content with Xona. (Base Mainnet)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "500000",
+        "amountUsdc": 0.5,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/token/pumpfun-movers",
+    "slug": "base-main/token/pumpfun-movers",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/token/pumpfun-trending",
+    "slug": "base-main/token/pumpfun-trending",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/token/solana-discovery",
+    "slug": "base-main/token/solana-discovery",
+    "method": "POST",
+    "description": "Solana token discovery via Onchain OS (Base Mainnet)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/token/solana-market",
+    "slug": "base-main/token/solana-market",
+    "method": "POST",
+    "description": "Solana token market data via Onchain OS (Base Mainnet)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/token/starter-kit",
+    "slug": "base-main/token/starter-kit",
+    "method": "POST",
+    "description": "Generate token logo and banner automatically from a prompt. Extracts token information, generates logo, then creates a matching banner. (Base Mainnet)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "200000",
+        "amountUsdc": 0.2,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/token/xlayer-discovery",
+    "slug": "base-main/token/xlayer-discovery",
+    "method": "POST",
+    "description": "X Layer token discovery via Onchain OS (Base Mainnet)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/token/xlayer-market",
+    "slug": "base-main/token/xlayer-market",
+    "method": "POST",
+    "description": "X Layer token market data via Onchain OS (Base Mainnet)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-description",
+    "slug": "base-main/tokens-api/asset-description",
+    "method": "POST",
+    "description": "Mint description via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-detail",
+    "slug": "base-main/tokens-api/asset-detail",
+    "method": "POST",
+    "description": "Full asset detail via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-markets",
+    "slug": "base-main/tokens-api/asset-markets",
+    "method": "POST",
+    "description": "DEX markets via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-ohlcv",
+    "slug": "base-main/tokens-api/asset-ohlcv",
+    "method": "POST",
+    "description": "OHLCV candle data via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-price-chart",
+    "slug": "base-main/tokens-api/asset-price-chart",
+    "method": "POST",
+    "description": "Price chart via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-profile",
+    "slug": "base-main/tokens-api/asset-profile",
+    "method": "POST",
+    "description": "Asset profile via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-risk-details",
+    "slug": "base-main/tokens-api/asset-risk-details",
+    "method": "POST",
+    "description": "Detailed risk analysis via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-risk-summary",
+    "slug": "base-main/tokens-api/asset-risk-summary",
+    "method": "POST",
+    "description": "Asset risk summary via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-tickers",
+    "slug": "base-main/tokens-api/asset-tickers",
+    "method": "POST",
+    "description": "Exchange tickers via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-variant-market",
+    "slug": "base-main/tokens-api/asset-variant-market",
+    "method": "POST",
+    "description": "Single variant market via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/asset-variants",
+    "slug": "base-main/tokens-api/asset-variants",
+    "method": "POST",
+    "description": "Asset variants via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/curated",
+    "slug": "base-main/tokens-api/curated",
+    "method": "POST",
+    "description": "Curated asset collections via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/market-snapshots",
+    "slug": "base-main/tokens-api/market-snapshots",
+    "method": "POST",
+    "description": "Bulk market snapshots via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/resolve",
+    "slug": "base-main/tokens-api/resolve",
+    "method": "POST",
+    "description": "Resolve mint/ref to canonical asset via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/risk-summary",
+    "slug": "base-main/tokens-api/risk-summary",
+    "method": "POST",
+    "description": "Quick risk assessment via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/search",
+    "slug": "base-main/tokens-api/search",
+    "method": "POST",
+    "description": "Search assets by query via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/tokens-api/variant-markets",
+    "slug": "base-main/tokens-api/variant-markets",
+    "method": "POST",
+    "description": "Batch variant market snapshots via Tokens API (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base-main/video/short-generation",
+    "slug": "base-main/video/short-generation",
+    "method": "POST",
+    "description": "AI short video generation using Grok Imagine Video model (Base Mainnet).",
+    "pricing": [
+      {
+        "network": "eip155:8453",
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "amount": "500000",
+        "amountUsdc": 0.5,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/ai/x-news",
+    "slug": "base/ai/x-news",
+    "method": "POST",
+    "description": "Extract latest news from X (Twitter) username, generate draft tweet and banner with Xona. (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "500000",
+        "amountUsdc": 0.5,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/ai/x-persona",
+    "slug": "base/ai/x-persona",
+    "method": "POST",
+    "description": "Extract structured persona from X (Twitter) username. Analyzes posts, profile, and communication style to generate persona, style profile, content patterns, and avatar prompt. (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/audio/elevenlabs-music",
+    "slug": "base/audio/elevenlabs-music",
+    "method": "POST",
+    "description": "AI music generation using ElevenLabs Music (Replicate). Dynamic pricing: $1 per 120 seconds, max 3 minutes (Base/EVM).",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "250000",
+        "amountUsdc": 0.25,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/audio/speech-to-text",
+    "slug": "base/audio/speech-to-text",
+    "method": "POST",
+    "description": "Speech-to-text: transcribe audio from a URL using OpenAI GPT-4o Transcribe (Replicate) (Base/EVM).",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "20000",
+        "amountUsdc": 0.02,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/audio/x-text-to-speech",
+    "slug": "base/audio/x-text-to-speech",
+    "method": "POST",
+    "description": "X.AI text-to-speech: convert text to speech (MP3) (Base/EVM).",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image-model/flux-2-flex",
+    "slug": "base/image-model/flux-2-flex",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image-model/flux-2-max",
+    "slug": "base/image-model/flux-2-max",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image-model/flux-2-pro",
+    "slug": "base/image-model/flux-2-pro",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image-model/qwen-image",
+    "slug": "base/image-model/qwen-image",
+    "method": "POST",
+    "description": "Generate image using qwen/qwen-image model (Base/EVM). Takes your prompt and generates a high-quality image with advanced AI capabilities.",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image-model/seedream-4.5",
+    "slug": "base/image-model/seedream-4.5",
+    "method": "POST",
+    "description": "Generate image using ByteDance Seedream-4.5 model (Base/EVM). Takes your prompt and generates a high-quality image with advanced AI capabilities.",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "80000",
+        "amountUsdc": 0.08,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image/creative-director",
+    "slug": "base/image/creative-director",
+    "method": "POST",
+    "description": "AI-powered creative research and prompt refinement using X and Google (Base/EVM). Analyzes trends, and transforms your idea into an optimized generation plan.",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "30000",
+        "amountUsdc": 0.03,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image/designer",
+    "slug": "base/image/designer",
+    "method": "POST",
+    "description": "AI image generation with intelligent style blending (Base/EVM). Takes your prompt and style keywords, refines them together, and generates a high-quality image.",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "60000",
+        "amountUsdc": 0.06,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image/flux-2-flex",
+    "slug": "base/image/flux-2-flex",
+    "method": "POST",
+    "description": "Max-quality image generation and editing with support for ten reference images (Base/SKALE).",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "60000",
+        "amountUsdc": 0.06,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image/flux-2-max",
+    "slug": "base/image/flux-2-max",
+    "method": "POST",
+    "description": "The highest fidelity image model from Black Forest Labs (Base/SKALE).",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "80000",
+        "amountUsdc": 0.08,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image/flux-2-pro",
+    "slug": "base/image/flux-2-pro",
+    "method": "POST",
+    "description": "High-quality image generation and editing with support for eight reference images (Base/SKALE).",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image/grok-imagine",
+    "slug": "base/image/grok-imagine",
+    "method": "POST",
+    "description": "AI image generation using Grok Imagine model (Base/EVM). Takes your prompt and generates a high-quality image using xAI's Grok Imagine API.",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "40000",
+        "amountUsdc": 0.04,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image/nano-banana",
+    "slug": "base/image/nano-banana",
+    "method": "POST",
+    "description": "AI image generation using nano-banana model (Base/EVM). Takes your prompt and generates a high-quality image directly without style blending.",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/image/nano-banana-pro",
+    "slug": "base/image/nano-banana-pro",
+    "method": "POST",
+    "description": "AI image generation using nano-banana-pro model (Base/EVM). Takes your prompt and generates a high-quality image directly without style blending.",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "150000",
+        "amountUsdc": 0.15,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/token/news",
+    "slug": "base/token/news",
+    "method": "POST",
+    "description": "Fetch token information from Jupiter via Corbits, get curated news from Syra, and generate banner and social content with Xona. (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "500000",
+        "amountUsdc": 0.5,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/token/pumpfun-movers",
+    "slug": "base/token/pumpfun-movers",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/token/pumpfun-trending",
+    "slug": "base/token/pumpfun-trending",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/token/solana-discovery",
+    "slug": "base/token/solana-discovery",
+    "method": "POST",
+    "description": "Solana token discovery via Onchain OS (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/token/solana-market",
+    "slug": "base/token/solana-market",
+    "method": "POST",
+    "description": "Solana token market data via Onchain OS (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/token/starter-kit",
+    "slug": "base/token/starter-kit",
+    "method": "POST",
+    "description": "Generate token logo and banner automatically from a prompt. Extracts token information, generates logo, then creates a matching banner. (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "200000",
+        "amountUsdc": 0.2,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/token/xlayer-discovery",
+    "slug": "base/token/xlayer-discovery",
+    "method": "POST",
+    "description": "X Layer token discovery via Onchain OS (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/token/xlayer-market",
+    "slug": "base/token/xlayer-market",
+    "method": "POST",
+    "description": "X Layer token market data via Onchain OS (Base/EVM)",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/base/video/short-generation",
+    "slug": "base/video/short-generation",
+    "method": "POST",
+    "description": "AI short video generation using Grok Imagine Video model (Base/EVM). Takes your prompt and generates a 10-second high-quality video using xAI's Grok Video API.",
+    "pricing": [
+      {
+        "network": "eip155:1187947933",
+        "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "amount": "500000",
+        "amountUsdc": 0.5,
+        "payTo": "0x515e7Bce44Baa5F6e42D16d4B5f27768E7f2F8cC",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image-model/flux-2-flex",
+    "slug": "image-model/flux-2-flex",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image-model/flux-2-max",
+    "slug": "image-model/flux-2-max",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image-model/flux-2-pro",
+    "slug": "image-model/flux-2-pro",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image-model/qwen-image",
+    "slug": "image-model/qwen-image",
+    "method": "POST",
+    "description": "Generate image using qwen/qwen-image model",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image-model/seedream-4.5",
+    "slug": "image-model/seedream-4.5",
+    "method": "POST",
+    "description": "Generate image using ByteDance Seedream-4.5 model",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "80000",
+        "amountUsdc": 0.08,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image/creative-director",
+    "slug": "image/creative-director",
+    "method": "POST",
+    "description": "AI-powered creative research and prompt refinement using X and Google. Analyzes trends, and transforms your idea into an optimized generation plan.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "30000",
+        "amountUsdc": 0.03,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image/designer",
+    "slug": "image/designer",
+    "method": "POST",
+    "description": "AI image generation with intelligent style blending. Takes your prompt and style keywords, refines them together, and generates a high-quality image.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "60000",
+        "amountUsdc": 0.06,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image/flux-2-flex",
+    "slug": "image/flux-2-flex",
+    "method": "POST",
+    "description": "Max-quality image generation and editing with support for ten reference images",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "60000",
+        "amountUsdc": 0.06,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image/flux-2-max",
+    "slug": "image/flux-2-max",
+    "method": "POST",
+    "description": "The highest fidelity image model from Black Forest Labs",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "80000",
+        "amountUsdc": 0.08,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image/flux-2-pro",
+    "slug": "image/flux-2-pro",
+    "method": "POST",
+    "description": "High-quality image generation and editing with support for eight reference images",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image/nano-banana",
+    "slug": "image/nano-banana",
+    "method": "POST",
+    "description": "AI image generation using nano-banana model. Takes your prompt and generates a high-quality image directly without style blending.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "50000",
+        "amountUsdc": 0.05,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/image/nano-banana-pro",
+    "slug": "image/nano-banana-pro",
+    "method": "POST",
+    "description": "AI image generation using nano-banana-pro model. Takes your prompt and generates a high-quality image directly without style blending.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "150000",
+        "amountUsdc": 0.15,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/token/news",
+    "slug": "token/news",
+    "method": "POST",
+    "description": "Fetch token information from Jupiter via Corbits, get curated news from Syra, and generate banner and social content with Xona.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "500000",
+        "amountUsdc": 0.5,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/token/pumpfun-movers",
+    "slug": "token/pumpfun-movers",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/token/pumpfun-trending",
+    "slug": "token/pumpfun-trending",
+    "method": "POST",
+    "description": "",
+    "pricing": []
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/token/solana-discovery",
+    "slug": "token/solana-discovery",
+    "method": "POST",
+    "description": "Solana token discovery via Onchain OS",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/token/solana-market",
+    "slug": "token/solana-market",
+    "method": "POST",
+    "description": "Solana token market data via Onchain OS",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/token/starter-kit",
+    "slug": "token/starter-kit",
+    "method": "POST",
+    "description": "Generate token logo and banner automatically from a prompt. Extracts token information, generates logo, then creates a matching banner.",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "200000",
+        "amountUsdc": 0.2,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/token/xlayer-discovery",
+    "slug": "token/xlayer-discovery",
+    "method": "POST",
+    "description": "X Layer token discovery via Onchain OS",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/token/xlayer-market",
+    "slug": "token/xlayer-market",
+    "method": "POST",
+    "description": "X Layer token market data via Onchain OS",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-description",
+    "slug": "tokens-api/asset-description",
+    "method": "POST",
+    "description": "Mint description via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-detail",
+    "slug": "tokens-api/asset-detail",
+    "method": "POST",
+    "description": "Full asset detail via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-markets",
+    "slug": "tokens-api/asset-markets",
+    "method": "POST",
+    "description": "DEX markets via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-ohlcv",
+    "slug": "tokens-api/asset-ohlcv",
+    "method": "POST",
+    "description": "OHLCV candle data via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-price-chart",
+    "slug": "tokens-api/asset-price-chart",
+    "method": "POST",
+    "description": "Price chart via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-profile",
+    "slug": "tokens-api/asset-profile",
+    "method": "POST",
+    "description": "Asset profile via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-risk-details",
+    "slug": "tokens-api/asset-risk-details",
+    "method": "POST",
+    "description": "Detailed risk analysis via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-risk-summary",
+    "slug": "tokens-api/asset-risk-summary",
+    "method": "POST",
+    "description": "Asset risk summary via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-tickers",
+    "slug": "tokens-api/asset-tickers",
+    "method": "POST",
+    "description": "Exchange tickers via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-variant-market",
+    "slug": "tokens-api/asset-variant-market",
+    "method": "POST",
+    "description": "Single variant market via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/asset-variants",
+    "slug": "tokens-api/asset-variants",
+    "method": "POST",
+    "description": "Asset variants via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/curated",
+    "slug": "tokens-api/curated",
+    "method": "POST",
+    "description": "Curated asset collections via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/market-snapshots",
+    "slug": "tokens-api/market-snapshots",
+    "method": "POST",
+    "description": "Bulk market snapshots via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/resolve",
+    "slug": "tokens-api/resolve",
+    "method": "POST",
+    "description": "Resolve mint/ref to canonical asset via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/risk-summary",
+    "slug": "tokens-api/risk-summary",
+    "method": "POST",
+    "description": "Quick risk assessment via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/search",
+    "slug": "tokens-api/search",
+    "method": "POST",
+    "description": "Search assets by query via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  },
+  {
+    "serverUrl": "https://api.xona-agent.com",
+    "serverTitle": "Xona Agent | Infrastructure for Agentic Commerce",
+    "endpoint": "https://api.xona-agent.com/tokens-api/variant-markets",
+    "slug": "tokens-api/variant-markets",
+    "method": "POST",
+    "description": "Batch variant market snapshots via Tokens API",
+    "pricing": [
+      {
+        "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "10000",
+        "amountUsdc": 0.01,
+        "payTo": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+        "scheme": "exact"
+      }
+    ]
+  }
+]

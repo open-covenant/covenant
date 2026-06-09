@@ -20,6 +20,8 @@ const flags = {
   list: has("--list"),
   keep: has("--keep"),
   solver: opt("--solver", "none"),
+  scaffold: opt("--scaffold", resolve(here, "..", "scaffold", "coder.md")),
+  scaffoldModel: opt("--scaffold-model", "claude-opus-4-8"),
   only: opt("--task"),
 };
 
@@ -56,6 +58,15 @@ function solve(solver, wt, task) {
   if (solver.startsWith("cmd:")) {
     const r = sh("bash", ["-lc", solver.slice(4)], { cwd: wt });
     if (!r.ok) throw new Error(`solver cmd failed: ${r.out.trim()}`);
+    return;
+  }
+  if (solver === "scaffold") {
+    const scaffold = readFileSync(flags.scaffold, "utf8");
+    const promptFile = join(task.dir, "prompt.md");
+    const intent = existsSync(promptFile) ? readFileSync(promptFile, "utf8") : task.prompt ?? task.description;
+    const full = `${scaffold}\n\n## Task\n\n${intent}\n\nImplement this in the current working directory. Do not run git and do not commit; leave the file changes in place.`;
+    const r = sh("claude", ["-p", full, "--model", flags.scaffoldModel, "--dangerously-skip-permissions"], { cwd: wt, timeout: task.solverTimeoutMs ?? 900000 });
+    if (!r.ok) throw new Error(`scaffold solver failed (status ${r.status}): ${r.out.slice(-400)}`);
     return;
   }
   throw new Error(`unknown solver: ${solver}`);

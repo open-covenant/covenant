@@ -323,6 +323,7 @@ dependencies = [
  "bincode",
  "bs58",
  "covenant-metaplex",
+ "mpl-agent-identity",
  "mpl-core",
  "reqwest",
  "serde",
@@ -1140,6 +1141,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "mpl-agent-identity"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71b67507e76991df8ee0a7e11fe5d9f87c31f53ae0bbfa7275053ee6365676b5"
+dependencies = [
+ "borsh 1.6.1",
+ "num-derive",
+ "num-traits",
+ "solana-program",
+ "solana-program-error",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

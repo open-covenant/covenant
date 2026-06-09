@@ -302,5 +302,44 @@ async fn live_covenantd_metaplex_attest_writes_to_devnet() {
         other => panic!("attest call failed: {other:?}"),
     }
 
+    // Identity: register a Covenant agent in the MPL Agent identity registry
+    // (daemon -> signer -> create Core asset + register_identity_v1).
+    match req(
+        &mut stream,
+        Request::GrantCapability {
+            action: "tool.call.metaplex.identity.register".into(),
+            scope: None,
+            expires_at: None,
+        },
+    )
+    .await
+    {
+        Response::CapabilityGranted { .. } => {}
+        other => panic!("identity grant failed: {other:?}"),
+    }
+    match req(
+        &mut stream,
+        Request::CallTool {
+            name: "metaplex.identity.register".into(),
+            arguments: json!({
+                "agentLabel": "covenant-e2e",
+                "agentPubkey": "DdfbBDCPKZQKvG8ZGsoVkxFu2FwrxdSK3wpQjYGUuPay",
+            }),
+        },
+    )
+    .await
+    {
+        Response::ToolResult { content, is_error } => {
+            let blob = serde_json::to_string(&content).unwrap();
+            assert!(!is_error, "identity register must succeed, got {blob}");
+            assert!(
+                blob.contains("signature") && blob.contains("asset"),
+                "result must carry the on-chain signature + asset, got {blob}"
+            );
+            eprintln!("devnet identity: {blob}");
+        }
+        other => panic!("identity call failed: {other:?}"),
+    }
+
     let _ = child.kill().await;
 }

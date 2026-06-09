@@ -1122,6 +1122,7 @@ name = "covenant"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "borsh 1.6.1",
  "bs58",
  "covenant-a2a",
@@ -1133,6 +1134,9 @@ dependencies = [
  "covenant-peer-auth",
  "covenant-permissions",
  "covenant-types",
+ "covenant-x402",
+ "covenant-zauth",
+ "reqwest 0.12.28",
  "serde_json",
  "sha2 0.11.0",
  "solana-client",
@@ -1511,6 +1515,22 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "covenant-mcp",
+ "covenant-x402",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "covenant-zauth"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
  "covenant-x402",
  "reqwest 0.12.28",
  "serde",

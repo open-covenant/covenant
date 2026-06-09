@@ -5,6 +5,7 @@ use anyhow::Context;
 use covenant_indexer::api::{router, AppState};
 use covenant_indexer::config::AppConfig;
 use covenant_indexer::model::seed_events;
+use covenant_indexer::x402_gate::{X402Config, X402Gate};
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -17,11 +18,16 @@ async fn main() -> anyhow::Result<()> {
 
     let config = AppConfig::from_env();
     let events = seed_events(&config.cluster, &config.program_id);
+
+    let x402 = X402Config::from_env().map(X402Gate::new);
+    let x402_enabled = x402.is_some();
+
     let state = AppState {
         cluster: config.cluster.clone(),
         rpc_url: config.solana_rpc_url.clone(),
         confirmations: config.confirmations,
         events: Arc::new(events),
+        x402,
     };
 
     let app = router(state);
@@ -34,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
         address = %config.bind_addr,
         cluster = %config.cluster,
         mode = "fixture",
+        x402 = x402_enabled,
         "covenant indexer up; serving seeded events (no Solana RPC subscriber wired yet)"
     );
     axum::serve(listener, app).await?;

@@ -1,0 +1,22 @@
+[package]
+name = "covenant-zauth"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Zauth integration for Covenant — directory read client + one-shot RepoScan over mainline x402 v2 with a header-encoded challenge and self-sponsored Solana feePayer."
+
+[dependencies]
+covenant-x402 = { path = "../covenant-x402" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+base64 = "0.22"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"

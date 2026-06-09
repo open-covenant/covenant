@@ -1,0 +1,12 @@
+{
+  "id": "rust-duration-parse",
+  "description": "capability: parse_duration(\"90s\")->Some(90) with edge cases (overflow, strict units), held-out rustc test",
+  "base": "69b41d40",
+  "gradeDest": ".",
+  "solverTimeoutMs": 600000,
+  "graderStages": [
+    { "name": "compile", "cmd": ["bash", "-lc", "rustc --test --edition 2021 tests.rs -o ./tparse 2>&1"], "gate": true, "timeoutMs": 120000 },
+    { "name": "test", "cmd": ["bash", "-lc", "./tparse 2>&1"], "metric": "tests", "timeoutMs": 60000 }
+  ],
+  "weights": { "tests": 1 }
+}

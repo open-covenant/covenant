@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 covenant-types = { path = "../covenant-types" }
+covenant-audit-kernel = { path = "../covenant-audit-kernel" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

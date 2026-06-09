@@ -541,15 +541,23 @@ fn chain_entry_for_line(
 }
 
 fn build_chain_entries(events: &[AuditEvent]) -> Result<Vec<AuditChainEntry>, AuditError> {
-    let mut previous = ZERO_CHAIN_HASH.to_string();
-    let mut entries = Vec::with_capacity(events.len());
-    for (index, event) in events.iter().enumerate() {
-        let line = serde_json::to_string(event)?;
-        let entry = chain_entry_for_line(index, event, &line, &previous);
-        previous = entry.chain_hash_hex.clone();
-        entries.push(entry);
-    }
-    Ok(entries)
+    let lines = events
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, serde_json::Error>>()?;
+    let refs: Vec<&[u8]> = lines.iter().map(|l| l.as_bytes()).collect();
+    Ok(events
+        .iter()
+        .zip(covenant_audit_kernel::fold_chain(&refs))
+        .map(|(event, entry)| AuditChainEntry {
+            index: entry.index,
+            event_id: event.id,
+            timestamp_ms: event.timestamp_ms,
+            event_hash_hex: entry.event_hash_hex,
+            previous_hash_hex: entry.previous_hash_hex,
+            chain_hash_hex: entry.chain_hash_hex,
+        })
+        .collect())
 }
 
 async fn read_events(path: &PathBuf) -> Result<Vec<AuditEvent>, AuditError> {
@@ -565,6 +573,7 @@ async fn read_events(path: &PathBuf) -> Result<Vec<AuditEvent>, AuditError> {
     }
 }
 
+#[cfg(test)] // verify_integrity reads raw bytes for the kernel now; a test still pins this reader's Io surface
 async fn read_event_lines(path: &PathBuf) -> Result<Vec<String>, AuditError> {
     match fs::read_to_string(path).await {
         Ok(s) => Ok(s
@@ -779,62 +788,55 @@ impl AuditLog for JsonlAuditLog {
 
     async fn verify_integrity(&self) -> Result<AuditIntegrityReport, AuditError> {
         let _g = self.lock.lock().await;
-        let event_lines = read_event_lines(&self.path).await?;
-        let anchors = read_chain_entries(&self.chain_path()).await?;
-        let mut failures = Vec::new();
-        if anchors.len() != event_lines.len() {
-            failures.push(format!(
-                "chain length mismatch: {} event(s), {} anchor(s)",
-                event_lines.len(),
-                anchors.len()
-            ));
+        let read_raw = |r: Result<String, std::io::Error>| match r {
+            Ok(s) => Ok(s),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+            Err(e) => Err(AuditError::from(e)),
+        };
+        let events_raw = read_raw(fs::read_to_string(&self.path).await)?;
+        let anchors_raw = read_raw(fs::read_to_string(&self.chain_path()).await)?;
+        // Typed pre-parse keeps the historical abort semantics: an anchor
+        // line that doesn't parse as AuditChainEntry is a serde error, not a
+        // per-line failure. The kernel then re-reads the same bytes.
+        for line in anchors_raw.lines().filter(|l| !l.is_empty()) {
+            serde_json::from_str::<AuditChainEntry>(line)?;
         }
-        let mut previous_hash_hex = ZERO_CHAIN_HASH.to_string();
-        for (index, line) in event_lines.iter().enumerate() {
-            let event_hash_hex = sha256_hex(line.as_bytes());
-            let chain_hash_hex = chain_hash(&previous_hash_hex, &event_hash_hex);
-            match serde_json::from_str::<AuditEvent>(line) {
-                Ok(event) => {
-                    let expected = AuditChainEntry {
-                        index: index as u64,
-                        event_id: event.id,
-                        timestamp_ms: event.timestamp_ms,
-                        event_hash_hex,
-                        previous_hash_hex: previous_hash_hex.clone(),
-                        chain_hash_hex: chain_hash_hex.clone(),
-                    };
-                    match anchors.get(index) {
-                        Some(actual) if actual == &expected => {}
-                        Some(_) => failures.push(format!("chain entry {index} mismatch")),
-                        None => failures.push(format!("chain entry {index} missing")),
-                    }
+        let report =
+            covenant_audit_kernel::verify_chain(events_raw.as_bytes(), anchors_raw.as_bytes());
+
+        use covenant_audit_kernel::Failure;
+        let failures = report
+            .failures
+            .iter()
+            .map(|f| match f {
+                Failure::LengthMismatch { events, anchors } => {
+                    format!("chain length mismatch: {events} event(s), {anchors} anchor(s)")
                 }
-                Err(e) => {
-                    failures.push(format!("event line {index} parse error: {e}"));
-                    match anchors.get(index) {
-                        Some(actual)
-                            if actual.index == index as u64
-                                && actual.event_hash_hex == event_hash_hex
-                                && actual.previous_hash_hex == previous_hash_hex
-                                && actual.chain_hash_hex == chain_hash_hex => {}
-                        Some(_) => failures.push(format!("chain entry {index} mismatch")),
-                        None => failures.push(format!("chain entry {index} missing")),
-                    }
+                Failure::ParseError { index } => {
+                    let detail = events_raw
+                        .lines()
+                        .filter(|l| !l.is_empty())
+                        .nth(*index as usize)
+                        .and_then(|line| serde_json::from_str::<AuditEvent>(line).err())
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "invalid event".into());
+                    format!("event line {index} parse error: {detail}")
                 }
-            }
-            previous_hash_hex = chain_hash_hex;
-        }
-        if anchors.len() > event_lines.len() {
-            failures.push(format!(
-                "{} dangling chain anchor(s)",
-                anchors.len() - event_lines.len()
-            ));
-        }
+                Failure::EntryMismatch { index } => format!("chain entry {index} mismatch"),
+                Failure::EntryMissing { index } => format!("chain entry {index} missing"),
+                Failure::AnchorParseError { index } => {
+                    format!("chain entry {index} unparseable")
+                }
+                Failure::DanglingAnchors { count } => {
+                    format!("{count} dangling chain anchor(s)")
+                }
+            })
+            .collect::<Vec<_>>();
         Ok(AuditIntegrityReport {
-            events: event_lines.len() as u64,
-            anchors: anchors.len() as u64,
-            valid: failures.is_empty(),
-            root_hash_hex: previous_hash_hex,
+            events: report.events,
+            anchors: report.anchors,
+            valid: report.valid,
+            root_hash_hex: report.root_hash_hex,
             failures,
         })
     }

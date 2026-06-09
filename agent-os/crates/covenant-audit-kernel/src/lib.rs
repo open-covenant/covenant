@@ -115,6 +115,7 @@ mod imp {
     /// per-instruction fuel. Ch uses the 3-op masked-select form; Maj reuses
     /// the previous round's `a ^ b` through an SSA chain of `$xo`/`$xn`
     /// bindings so no per-round shuffle instruction is paid.
+    #[cfg(not(target_arch = "wasm32"))]
     macro_rules! round {
         ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:literal, $w:ident, $xo:ident, $xn:ident) => {
             let t1 = $h
@@ -129,6 +130,7 @@ mod imp {
             $h = t1.wrapping_add(t2);
         };
     }
+    #[cfg(not(target_arch = "wasm32"))]
     macro_rules! sched {
         ($w0:ident, $w1:ident, $w9:ident, $w14:ident) => {
             $w0 = $w0
@@ -142,6 +144,7 @@ mod imp {
     /// by value and forcing inlining lets the mostly-constant final block of
     /// `chain_hex` fold its zero words at compile time. Pinned by the NIST
     /// vector unit test and the frozen corpus digest.
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     fn compress_w(state: &mut [u32; 8], w: [u32; 16]) {
         let [mut w0, mut w1, mut w2, mut w3, mut w4, mut w5, mut w6, mut w7, mut w8, mut w9, mut w10, mut w11, mut w12, mut w13, mut w14, mut w15] =
@@ -279,6 +282,7 @@ mod imp {
 
     /// Inlined so the block loop in `digest_state` carries the state in
     /// locals instead of spilling eight words to memory per block.
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
         let w = [
@@ -302,6 +306,7 @@ mod imp {
         compress_w(state, w);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn digest_state(bytes: &[u8]) -> [u32; 8] {
         let mut state = H0;
         let mut chunks = bytes.chunks_exact(64);
@@ -326,6 +331,7 @@ mod imp {
     /// then map nibble -> char branchlessly. The `+6` carry flags nibbles
     /// above 9; per-byte sums stay below 0x100 and the 0x27 multiply cannot
     /// carry across bytes because each flag byte is 0 or 1.
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     fn hex8(word: u32) -> u64 {
         const LO: u64 = 0x0101010101010101;
@@ -334,9 +340,11 @@ mod imp {
         let v = ((v >> 8) & 0x0000_00FF_0000_00FF) | ((v & 0x0000_00FF_0000_00FF) << 16);
         let v = ((v >> 4) & 0x000F_000F_000F_000F) | ((v & 0x000F_000F_000F_000F) << 8);
         let gap = (v.wrapping_add(LO * 0x06) & (LO * 0x10)) >> 4;
-        v.wrapping_add(LO * 0x30).wrapping_add(gap.wrapping_mul(0x27))
+        v.wrapping_add(LO * 0x30)
+            .wrapping_add(gap.wrapping_mul(0x27))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn hex_state(state: &[u32; 8]) -> [u8; 64] {
         let mut out = [0u8; 64];
         let mut i = 0;
@@ -352,6 +360,7 @@ mod imp {
     /// a one-byte carry (no 64-byte staging buffer), and the final padding
     /// block is constant except for the carried last hex char, so its
     /// schedule folds at compile time (length 129 * 8 = 1032 bits).
+    #[cfg(not(target_arch = "wasm32"))]
     fn chain_hex(previous: &[u8; 64], event: &[u8; 64]) -> [u8; 64] {
         let mut state = H0;
         compress(&mut state, previous);
@@ -372,6 +381,749 @@ mod imp {
         hex_state(&state)
     }
 
+    /// simd128 lane of the kernel, wasm-only. wasmtime's fuel meter charges
+    /// one unit per executed instruction regardless of width, so a v128 op
+    /// that does four words of work costs the same as one scalar op. The
+    /// build does not enable simd128 globally; `#[target_feature]` functions
+    /// are safe to call on wasm because feature support is validated at
+    /// module load, and the pinned wasmtime enables SIMD by default. Native
+    /// builds (unit tests, differential suite) keep the scalar path.
+    #[cfg(target_arch = "wasm32")]
+    mod simd {
+        use super::H0;
+        use std::arch::wasm32::*;
+
+        /// Same round as the scalar `round!`, but `k + w` arrives pre-added
+        /// as a lane extracted from the vectorized schedule.
+        macro_rules! roundv {
+            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:expr, $xo:ident, $xn:ident) => {
+                let t1 = $h
+                    .wrapping_add($e.rotate_right(6) ^ $e.rotate_right(11) ^ $e.rotate_right(25))
+                    .wrapping_add((($f ^ $g) & $e) ^ $g)
+                    .wrapping_add($wk);
+                let $xn = $a ^ $b;
+                let t2 = ($a.rotate_right(2) ^ $a.rotate_right(13) ^ $a.rotate_right(22))
+                    .wrapping_add($b ^ ($xn & $xo));
+                $d = $d.wrapping_add(t1);
+                $h = t1.wrapping_add(t2);
+            };
+        }
+
+        /// Eight rounds: the working-variable rotation has period eight, so
+        /// after one expansion the roles line back up with `a..h`. Re-seeding
+        /// the Maj cache (`b ^ c`) per oct costs one xor per eight rounds and
+        /// keeps the SSA chain local to the macro.
+        macro_rules! oct {
+            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wl:ident, $wh:ident) => {
+                let x0 = $b ^ $c;
+                roundv!(
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    u32x4_extract_lane::<0>($wl),
+                    x0,
+                    x1
+                );
+                roundv!(
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    u32x4_extract_lane::<1>($wl),
+                    x1,
+                    x2
+                );
+                roundv!(
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    u32x4_extract_lane::<2>($wl),
+                    x2,
+                    x3
+                );
+                roundv!(
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    u32x4_extract_lane::<3>($wl),
+                    x3,
+                    x4
+                );
+                roundv!(
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    u32x4_extract_lane::<0>($wh),
+                    x4,
+                    x5
+                );
+                roundv!(
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    u32x4_extract_lane::<1>($wh),
+                    x5,
+                    x6
+                );
+                roundv!(
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    u32x4_extract_lane::<2>($wh),
+                    x6,
+                    x7
+                );
+                roundv!(
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    u32x4_extract_lane::<3>($wh),
+                    x7,
+                    x8
+                );
+            };
+        }
+
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn small_sigma0(x: v128) -> v128 {
+            v128_xor(
+                v128_xor(
+                    v128_or(u32x4_shr(x, 7), u32x4_shl(x, 25)),
+                    v128_or(u32x4_shr(x, 18), u32x4_shl(x, 14)),
+                ),
+                u32x4_shr(x, 3),
+            )
+        }
+
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn small_sigma1(x: v128) -> v128 {
+            v128_xor(
+                v128_xor(
+                    v128_or(u32x4_shr(x, 17), u32x4_shl(x, 15)),
+                    v128_or(u32x4_shr(x, 19), u32x4_shl(x, 13)),
+                ),
+                u32x4_shr(x, 10),
+            )
+        }
+
+        /// Next four schedule words from the previous sixteen. The σ1 feed
+        /// has an in-batch dependency (w16/w17 feed w18/w19), handled in two
+        /// half-steps; σ1 of a zero lane is zero, so padding with zeros keeps
+        /// the untouched lanes exact.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn sched4(x0: v128, x1: v128, x2: v128, x3: v128) -> v128 {
+            let zero = u32x4(0, 0, 0, 0);
+            let w1 =
+                i8x16_shuffle::<4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19>(x0, x1);
+            let w9 =
+                i8x16_shuffle::<4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19>(x2, x3);
+            let t = u32x4_add(u32x4_add(x0, small_sigma0(w1)), w9);
+            let w14 = i8x16_shuffle::<8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23>(
+                x3, zero,
+            );
+            let t = u32x4_add(t, small_sigma1(w14));
+            let w16 =
+                i8x16_shuffle::<16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7>(t, zero);
+            u32x4_add(t, small_sigma1(w16))
+        }
+
+        /// One compression with the message schedule and the `+K` folds done
+        /// four lanes at a time; rounds stay scalar (each round depends on
+        /// the previous) and read their `k + w` term by lane extraction.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn compress_v(state: &mut [u32; 8], x0: v128, x1: v128, x2: v128, x3: v128) {
+            let x4 = sched4(x0, x1, x2, x3);
+            let x5 = sched4(x1, x2, x3, x4);
+            let x6 = sched4(x2, x3, x4, x5);
+            let x7 = sched4(x3, x4, x5, x6);
+            let x8 = sched4(x4, x5, x6, x7);
+            let x9 = sched4(x5, x6, x7, x8);
+            let x10 = sched4(x6, x7, x8, x9);
+            let x11 = sched4(x7, x8, x9, x10);
+            let x12 = sched4(x8, x9, x10, x11);
+            let x13 = sched4(x9, x10, x11, x12);
+            let x14 = sched4(x10, x11, x12, x13);
+            let x15 = sched4(x11, x12, x13, x14);
+            let wk0 = u32x4_add(x0, u32x4(0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5));
+            let wk1 = u32x4_add(x1, u32x4(0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5));
+            let wk2 = u32x4_add(x2, u32x4(0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3));
+            let wk3 = u32x4_add(x3, u32x4(0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174));
+            let wk4 = u32x4_add(x4, u32x4(0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc));
+            let wk5 = u32x4_add(x5, u32x4(0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da));
+            let wk6 = u32x4_add(x6, u32x4(0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7));
+            let wk7 = u32x4_add(x7, u32x4(0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967));
+            let wk8 = u32x4_add(x8, u32x4(0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13));
+            let wk9 = u32x4_add(x9, u32x4(0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85));
+            let wk10 = u32x4_add(x10, u32x4(0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3));
+            let wk11 = u32x4_add(x11, u32x4(0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070));
+            let wk12 = u32x4_add(x12, u32x4(0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5));
+            let wk13 = u32x4_add(x13, u32x4(0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3));
+            let wk14 = u32x4_add(x14, u32x4(0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208));
+            let wk15 = u32x4_add(x15, u32x4(0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2));
+            let mut a = state[0];
+            let mut b = state[1];
+            let mut c = state[2];
+            let mut d = state[3];
+            let mut e = state[4];
+            let mut f = state[5];
+            let mut g = state[6];
+            let mut h = state[7];
+            oct!(a, b, c, d, e, f, g, h, wk0, wk1);
+            oct!(a, b, c, d, e, f, g, h, wk2, wk3);
+            oct!(a, b, c, d, e, f, g, h, wk4, wk5);
+            oct!(a, b, c, d, e, f, g, h, wk6, wk7);
+            oct!(a, b, c, d, e, f, g, h, wk8, wk9);
+            oct!(a, b, c, d, e, f, g, h, wk10, wk11);
+            oct!(a, b, c, d, e, f, g, h, wk12, wk13);
+            oct!(a, b, c, d, e, f, g, h, wk14, wk15);
+            state[0] = state[0].wrapping_add(a);
+            state[1] = state[1].wrapping_add(b);
+            state[2] = state[2].wrapping_add(c);
+            state[3] = state[3].wrapping_add(d);
+            state[4] = state[4].wrapping_add(e);
+            state[5] = state[5].wrapping_add(f);
+            state[6] = state[6].wrapping_add(g);
+            state[7] = state[7].wrapping_add(h);
+        }
+
+        /// 16 message bytes as four big-endian schedule words: one fused
+        /// 16-byte load plus a single byte-reversing shuffle.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn load_be<const O: usize>(b: &[u8; 64]) -> v128 {
+            let v = u64x2(
+                u64::from_le_bytes(b[O..O + 8].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(b[O + 8..O + 16].try_into().expect("8-byte chunk")),
+            );
+            i8x16_shuffle::<3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12>(v, v)
+        }
+
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn load_raw<const O: usize>(b: &[u8; 64]) -> v128 {
+            u64x2(
+                u64::from_le_bytes(b[O..O + 8].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(b[O + 8..O + 16].try_into().expect("8-byte chunk")),
+            )
+        }
+
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn compress_block(state: &mut [u32; 8], block: &[u8; 64]) {
+            compress_v(
+                state,
+                load_be::<0>(block),
+                load_be::<16>(block),
+                load_be::<32>(block),
+                load_be::<48>(block),
+            );
+        }
+
+        /// Lowercase hex via nibble table lookup: byte-reverse each word to
+        /// big-endian, split nibbles, interleave high/low, then one swizzle
+        /// per 16 output chars maps nibble -> ascii.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn hex_half(out: &mut [u8], s0: u32, s1: u32, s2: u32, s3: u32) {
+            let table = u8x16(
+                b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd',
+                b'e', b'f',
+            );
+            let v = u32x4(s0, s1, s2, s3);
+            let v = i8x16_shuffle::<3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12>(v, v);
+            let hi = u8x16_shr(v, 4);
+            let lo = v128_and(v, u8x16_splat(0x0f));
+            let n0 =
+                i8x16_shuffle::<0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23>(hi, lo);
+            let n1 = i8x16_shuffle::<8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31>(
+                hi, lo,
+            );
+            let c0 = i8x16_swizzle(table, n0);
+            let c1 = i8x16_swizzle(table, n1);
+            out[0..8].copy_from_slice(&u64x2_extract_lane::<0>(c0).to_le_bytes());
+            out[8..16].copy_from_slice(&u64x2_extract_lane::<1>(c0).to_le_bytes());
+            out[16..24].copy_from_slice(&u64x2_extract_lane::<0>(c1).to_le_bytes());
+            out[24..32].copy_from_slice(&u64x2_extract_lane::<1>(c1).to_le_bytes());
+        }
+
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn hex_state(state: &[u32; 8]) -> [u8; 64] {
+            let mut out = [0u8; 64];
+            hex_half(&mut out[0..32], state[0], state[1], state[2], state[3]);
+            hex_half(&mut out[32..64], state[4], state[5], state[6], state[7]);
+            out
+        }
+
+        /// Vector rotate-right; wasm SIMD has no rotate, so shift/shift/or.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn rotrv<const N: u32>(x: v128) -> v128 {
+            v128_or(u32x4_shr(x, N), u32x4_shl(x, 32 - N))
+        }
+
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn big_sigma0(x: v128) -> v128 {
+            v128_xor(v128_xor(rotrv::<2>(x), rotrv::<13>(x)), rotrv::<22>(x))
+        }
+
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn big_sigma1(x: v128) -> v128 {
+            v128_xor(v128_xor(rotrv::<6>(x), rotrv::<11>(x)), rotrv::<25>(x))
+        }
+
+        /// Four-message round: lane L of every vector is message L's state,
+        /// so one instruction stream advances four independent digests. Same
+        /// Ch/Maj forms as the scalar `round!`.
+        macro_rules! roundm {
+            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:literal, $w:ident, $xo:ident, $xn:ident) => {
+                let t1 = u32x4_add(
+                    u32x4_add(
+                        u32x4_add(
+                            u32x4_add($h, big_sigma1($e)),
+                            v128_xor(v128_and(v128_xor($f, $g), $e), $g),
+                        ),
+                        u32x4($k, $k, $k, $k),
+                    ),
+                    $w,
+                );
+                let $xn = v128_xor($a, $b);
+                let t2 = u32x4_add(big_sigma0($a), v128_xor($b, v128_and($xn, $xo)));
+                $d = u32x4_add($d, t1);
+                $h = u32x4_add(t1, t2);
+            };
+        }
+        macro_rules! schedm {
+            ($w0:ident, $w1:ident, $w9:ident, $w14:ident) => {
+                $w0 = u32x4_add(
+                    u32x4_add($w0, u32x4_add(small_sigma0($w1), $w9)),
+                    small_sigma1($w14),
+                );
+            };
+        }
+
+        /// One compression over four messages in transposed lanes.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn compressm(state: &mut [v128; 8], w: [v128; 16]) {
+            let [mut w0, mut w1, mut w2, mut w3, mut w4, mut w5, mut w6, mut w7, mut w8, mut w9, mut w10, mut w11, mut w12, mut w13, mut w14, mut w15] =
+                w;
+            let mut a = state[0];
+            let mut b = state[1];
+            let mut c = state[2];
+            let mut d = state[3];
+            let mut e = state[4];
+            let mut f = state[5];
+            let mut g = state[6];
+            let mut h = state[7];
+            let x0 = v128_xor(b, c);
+            roundm!(a, b, c, d, e, f, g, h, 0x428a2f98u32, w0, x0, x1);
+            roundm!(h, a, b, c, d, e, f, g, 0x71374491u32, w1, x1, x2);
+            roundm!(g, h, a, b, c, d, e, f, 0xb5c0fbcfu32, w2, x2, x3);
+            roundm!(f, g, h, a, b, c, d, e, 0xe9b5dba5u32, w3, x3, x4);
+            roundm!(e, f, g, h, a, b, c, d, 0x3956c25bu32, w4, x4, x5);
+            roundm!(d, e, f, g, h, a, b, c, 0x59f111f1u32, w5, x5, x6);
+            roundm!(c, d, e, f, g, h, a, b, 0x923f82a4u32, w6, x6, x7);
+            roundm!(b, c, d, e, f, g, h, a, 0xab1c5ed5u32, w7, x7, x8);
+            roundm!(a, b, c, d, e, f, g, h, 0xd807aa98u32, w8, x8, x9);
+            roundm!(h, a, b, c, d, e, f, g, 0x12835b01u32, w9, x9, x10);
+            roundm!(g, h, a, b, c, d, e, f, 0x243185beu32, w10, x10, x11);
+            roundm!(f, g, h, a, b, c, d, e, 0x550c7dc3u32, w11, x11, x12);
+            roundm!(e, f, g, h, a, b, c, d, 0x72be5d74u32, w12, x12, x13);
+            roundm!(d, e, f, g, h, a, b, c, 0x80deb1feu32, w13, x13, x14);
+            roundm!(c, d, e, f, g, h, a, b, 0x9bdc06a7u32, w14, x14, x15);
+            roundm!(b, c, d, e, f, g, h, a, 0xc19bf174u32, w15, x15, x16);
+            schedm!(w0, w1, w9, w14);
+            roundm!(a, b, c, d, e, f, g, h, 0xe49b69c1u32, w0, x16, x17);
+            schedm!(w1, w2, w10, w15);
+            roundm!(h, a, b, c, d, e, f, g, 0xefbe4786u32, w1, x17, x18);
+            schedm!(w2, w3, w11, w0);
+            roundm!(g, h, a, b, c, d, e, f, 0x0fc19dc6u32, w2, x18, x19);
+            schedm!(w3, w4, w12, w1);
+            roundm!(f, g, h, a, b, c, d, e, 0x240ca1ccu32, w3, x19, x20);
+            schedm!(w4, w5, w13, w2);
+            roundm!(e, f, g, h, a, b, c, d, 0x2de92c6fu32, w4, x20, x21);
+            schedm!(w5, w6, w14, w3);
+            roundm!(d, e, f, g, h, a, b, c, 0x4a7484aau32, w5, x21, x22);
+            schedm!(w6, w7, w15, w4);
+            roundm!(c, d, e, f, g, h, a, b, 0x5cb0a9dcu32, w6, x22, x23);
+            schedm!(w7, w8, w0, w5);
+            roundm!(b, c, d, e, f, g, h, a, 0x76f988dau32, w7, x23, x24);
+            schedm!(w8, w9, w1, w6);
+            roundm!(a, b, c, d, e, f, g, h, 0x983e5152u32, w8, x24, x25);
+            schedm!(w9, w10, w2, w7);
+            roundm!(h, a, b, c, d, e, f, g, 0xa831c66du32, w9, x25, x26);
+            schedm!(w10, w11, w3, w8);
+            roundm!(g, h, a, b, c, d, e, f, 0xb00327c8u32, w10, x26, x27);
+            schedm!(w11, w12, w4, w9);
+            roundm!(f, g, h, a, b, c, d, e, 0xbf597fc7u32, w11, x27, x28);
+            schedm!(w12, w13, w5, w10);
+            roundm!(e, f, g, h, a, b, c, d, 0xc6e00bf3u32, w12, x28, x29);
+            schedm!(w13, w14, w6, w11);
+            roundm!(d, e, f, g, h, a, b, c, 0xd5a79147u32, w13, x29, x30);
+            schedm!(w14, w15, w7, w12);
+            roundm!(c, d, e, f, g, h, a, b, 0x06ca6351u32, w14, x30, x31);
+            schedm!(w15, w0, w8, w13);
+            roundm!(b, c, d, e, f, g, h, a, 0x14292967u32, w15, x31, x32);
+            schedm!(w0, w1, w9, w14);
+            roundm!(a, b, c, d, e, f, g, h, 0x27b70a85u32, w0, x32, x33);
+            schedm!(w1, w2, w10, w15);
+            roundm!(h, a, b, c, d, e, f, g, 0x2e1b2138u32, w1, x33, x34);
+            schedm!(w2, w3, w11, w0);
+            roundm!(g, h, a, b, c, d, e, f, 0x4d2c6dfcu32, w2, x34, x35);
+            schedm!(w3, w4, w12, w1);
+            roundm!(f, g, h, a, b, c, d, e, 0x53380d13u32, w3, x35, x36);
+            schedm!(w4, w5, w13, w2);
+            roundm!(e, f, g, h, a, b, c, d, 0x650a7354u32, w4, x36, x37);
+            schedm!(w5, w6, w14, w3);
+            roundm!(d, e, f, g, h, a, b, c, 0x766a0abbu32, w5, x37, x38);
+            schedm!(w6, w7, w15, w4);
+            roundm!(c, d, e, f, g, h, a, b, 0x81c2c92eu32, w6, x38, x39);
+            schedm!(w7, w8, w0, w5);
+            roundm!(b, c, d, e, f, g, h, a, 0x92722c85u32, w7, x39, x40);
+            schedm!(w8, w9, w1, w6);
+            roundm!(a, b, c, d, e, f, g, h, 0xa2bfe8a1u32, w8, x40, x41);
+            schedm!(w9, w10, w2, w7);
+            roundm!(h, a, b, c, d, e, f, g, 0xa81a664bu32, w9, x41, x42);
+            schedm!(w10, w11, w3, w8);
+            roundm!(g, h, a, b, c, d, e, f, 0xc24b8b70u32, w10, x42, x43);
+            schedm!(w11, w12, w4, w9);
+            roundm!(f, g, h, a, b, c, d, e, 0xc76c51a3u32, w11, x43, x44);
+            schedm!(w12, w13, w5, w10);
+            roundm!(e, f, g, h, a, b, c, d, 0xd192e819u32, w12, x44, x45);
+            schedm!(w13, w14, w6, w11);
+            roundm!(d, e, f, g, h, a, b, c, 0xd6990624u32, w13, x45, x46);
+            schedm!(w14, w15, w7, w12);
+            roundm!(c, d, e, f, g, h, a, b, 0xf40e3585u32, w14, x46, x47);
+            schedm!(w15, w0, w8, w13);
+            roundm!(b, c, d, e, f, g, h, a, 0x106aa070u32, w15, x47, x48);
+            schedm!(w0, w1, w9, w14);
+            roundm!(a, b, c, d, e, f, g, h, 0x19a4c116u32, w0, x48, x49);
+            schedm!(w1, w2, w10, w15);
+            roundm!(h, a, b, c, d, e, f, g, 0x1e376c08u32, w1, x49, x50);
+            schedm!(w2, w3, w11, w0);
+            roundm!(g, h, a, b, c, d, e, f, 0x2748774cu32, w2, x50, x51);
+            schedm!(w3, w4, w12, w1);
+            roundm!(f, g, h, a, b, c, d, e, 0x34b0bcb5u32, w3, x51, x52);
+            schedm!(w4, w5, w13, w2);
+            roundm!(e, f, g, h, a, b, c, d, 0x391c0cb3u32, w4, x52, x53);
+            schedm!(w5, w6, w14, w3);
+            roundm!(d, e, f, g, h, a, b, c, 0x4ed8aa4au32, w5, x53, x54);
+            schedm!(w6, w7, w15, w4);
+            roundm!(c, d, e, f, g, h, a, b, 0x5b9cca4fu32, w6, x54, x55);
+            schedm!(w7, w8, w0, w5);
+            roundm!(b, c, d, e, f, g, h, a, 0x682e6ff3u32, w7, x55, x56);
+            schedm!(w8, w9, w1, w6);
+            roundm!(a, b, c, d, e, f, g, h, 0x748f82eeu32, w8, x56, x57);
+            schedm!(w9, w10, w2, w7);
+            roundm!(h, a, b, c, d, e, f, g, 0x78a5636fu32, w9, x57, x58);
+            schedm!(w10, w11, w3, w8);
+            roundm!(g, h, a, b, c, d, e, f, 0x84c87814u32, w10, x58, x59);
+            schedm!(w11, w12, w4, w9);
+            roundm!(f, g, h, a, b, c, d, e, 0x8cc70208u32, w11, x59, x60);
+            schedm!(w12, w13, w5, w10);
+            roundm!(e, f, g, h, a, b, c, d, 0x90befffau32, w12, x60, x61);
+            schedm!(w13, w14, w6, w11);
+            roundm!(d, e, f, g, h, a, b, c, 0xa4506cebu32, w13, x61, x62);
+            schedm!(w14, w15, w7, w12);
+            roundm!(c, d, e, f, g, h, a, b, 0xbef9a3f7u32, w14, x62, x63);
+            schedm!(w15, w0, w8, w13);
+            roundm!(b, c, d, e, f, g, h, a, 0xc67178f2u32, w15, x63, _x64);
+            state[0] = u32x4_add(state[0], a);
+            state[1] = u32x4_add(state[1], b);
+            state[2] = u32x4_add(state[2], c);
+            state[3] = u32x4_add(state[3], d);
+            state[4] = u32x4_add(state[4], e);
+            state[5] = u32x4_add(state[5], f);
+            state[6] = u32x4_add(state[6], g);
+            state[7] = u32x4_add(state[7], h);
+        }
+
+        /// 16 bytes from each of four lanes, transposed into four schedule
+        /// vectors. The 4x4 word transpose is the usual unpack32/unpack64
+        /// ladder, with the big-endian byte swap folded into the first-level
+        /// shuffles for free.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn quad<const O: usize>(
+            b0: &[u8; 64],
+            b1: &[u8; 64],
+            b2: &[u8; 64],
+            b3: &[u8; 64],
+        ) -> [v128; 4] {
+            let r0 = load_raw::<O>(b0);
+            let r1 = load_raw::<O>(b1);
+            let r2 = load_raw::<O>(b2);
+            let r3 = load_raw::<O>(b3);
+            let p0 =
+                i8x16_shuffle::<3, 2, 1, 0, 19, 18, 17, 16, 7, 6, 5, 4, 23, 22, 21, 20>(r0, r1);
+            let p1 = i8x16_shuffle::<11, 10, 9, 8, 27, 26, 25, 24, 15, 14, 13, 12, 31, 30, 29, 28>(
+                r0, r1,
+            );
+            let p2 =
+                i8x16_shuffle::<3, 2, 1, 0, 19, 18, 17, 16, 7, 6, 5, 4, 23, 22, 21, 20>(r2, r3);
+            let p3 = i8x16_shuffle::<11, 10, 9, 8, 27, 26, 25, 24, 15, 14, 13, 12, 31, 30, 29, 28>(
+                r2, r3,
+            );
+            [
+                i8x16_shuffle::<0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23>(p0, p2),
+                i8x16_shuffle::<8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31>(
+                    p0, p2,
+                ),
+                i8x16_shuffle::<0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23>(p1, p3),
+                i8x16_shuffle::<8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31>(
+                    p1, p3,
+                ),
+            ]
+        }
+
+        /// Block `k` of a padded message: full blocks come from the line,
+        /// the one or two final blocks from the prebuilt 128-byte tail.
+        #[inline]
+        fn block_at<'a>(
+            line: &'a [u8],
+            tail: &'a [u8; 128],
+            full: usize,
+            k: usize,
+        ) -> &'a [u8; 64] {
+            if k < full {
+                line[64 * k..64 * k + 64].try_into().expect("64-byte block")
+            } else {
+                let off = 64 * (k - full);
+                tail[off..off + 64].try_into().expect("64-byte block")
+            }
+        }
+
+        /// Four equal-block-count messages digested in lockstep.
+        #[target_feature(enable = "simd128")]
+        fn digest4(lines: [&[u8]; 4], blocks: usize) -> [[u8; 64]; 4] {
+            let mut tails = [[0u8; 128]; 4];
+            let mut full = [0usize; 4];
+            for l in 0..4 {
+                let bytes = lines[l];
+                let rem = bytes.len() % 64;
+                full[l] = bytes.len() / 64;
+                let tail = &mut tails[l];
+                tail[..rem].copy_from_slice(&bytes[bytes.len() - rem..]);
+                tail[rem] = 0x80;
+                let len_at = if rem >= 56 { 120 } else { 56 };
+                tail[len_at..len_at + 8]
+                    .copy_from_slice(&((bytes.len() as u64).wrapping_mul(8)).to_be_bytes());
+            }
+            let mut state = [
+                u32x4(H0[0], H0[0], H0[0], H0[0]),
+                u32x4(H0[1], H0[1], H0[1], H0[1]),
+                u32x4(H0[2], H0[2], H0[2], H0[2]),
+                u32x4(H0[3], H0[3], H0[3], H0[3]),
+                u32x4(H0[4], H0[4], H0[4], H0[4]),
+                u32x4(H0[5], H0[5], H0[5], H0[5]),
+                u32x4(H0[6], H0[6], H0[6], H0[6]),
+                u32x4(H0[7], H0[7], H0[7], H0[7]),
+            ];
+            for k in 0..blocks {
+                let b0 = block_at(lines[0], &tails[0], full[0], k);
+                let b1 = block_at(lines[1], &tails[1], full[1], k);
+                let b2 = block_at(lines[2], &tails[2], full[2], k);
+                let b3 = block_at(lines[3], &tails[3], full[3], k);
+                let q0 = quad::<0>(b0, b1, b2, b3);
+                let q1 = quad::<16>(b0, b1, b2, b3);
+                let q2 = quad::<32>(b0, b1, b2, b3);
+                let q3 = quad::<48>(b0, b1, b2, b3);
+                compressm(
+                    &mut state,
+                    [
+                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1],
+                        q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
+                    ],
+                );
+            }
+            let mut out = [[0u8; 64]; 4];
+            macro_rules! lane_hex {
+                ($idx:literal) => {{
+                    let o = &mut out[$idx];
+                    hex_half(
+                        &mut o[0..32],
+                        u32x4_extract_lane::<$idx>(state[0]),
+                        u32x4_extract_lane::<$idx>(state[1]),
+                        u32x4_extract_lane::<$idx>(state[2]),
+                        u32x4_extract_lane::<$idx>(state[3]),
+                    );
+                    hex_half(
+                        &mut o[32..64],
+                        u32x4_extract_lane::<$idx>(state[4]),
+                        u32x4_extract_lane::<$idx>(state[5]),
+                        u32x4_extract_lane::<$idx>(state[6]),
+                        u32x4_extract_lane::<$idx>(state[7]),
+                    );
+                }};
+            }
+            lane_hex!(0);
+            lane_hex!(1);
+            lane_hex!(2);
+            lane_hex!(3);
+            out
+        }
+
+        /// Digest every line, four at a time. Messages only share a round
+        /// instruction stream when their padded block counts match, so lines
+        /// are bucketed by block count; leftovers take the single-lane path.
+        #[target_feature(enable = "simd128")]
+        pub(super) fn digest_all(lines: &[&[u8]]) -> Vec<[u8; 64]> {
+            let mut out = vec![[0u8; 64]; lines.len()];
+            let mut buckets: Vec<Vec<u32>> = Vec::new();
+            for (i, line) in lines.iter().enumerate() {
+                let blocks = (line.len() + 72) >> 6;
+                if buckets.len() <= blocks {
+                    buckets.resize_with(blocks + 1, Vec::new);
+                }
+                buckets[blocks].push(i as u32);
+            }
+            for (blocks, bucket) in buckets.iter().enumerate() {
+                let mut quads = bucket.chunks_exact(4);
+                for q in &mut quads {
+                    let hexes = digest4(
+                        [
+                            lines[q[0] as usize],
+                            lines[q[1] as usize],
+                            lines[q[2] as usize],
+                            lines[q[3] as usize],
+                        ],
+                        blocks,
+                    );
+                    for (j, hex) in hexes.iter().enumerate() {
+                        out[q[j] as usize] = *hex;
+                    }
+                }
+                for &i in quads.remainder() {
+                    out[i as usize] = digest_hex(lines[i as usize]);
+                }
+            }
+            out
+        }
+
+        /// sha256(line) as lowercase hex; same block walk as the scalar
+        /// `digest_state`, compression vectorized.
+        #[target_feature(enable = "simd128")]
+        pub(super) fn digest_hex(bytes: &[u8]) -> [u8; 64] {
+            let mut state = H0;
+            let mut chunks = bytes.chunks_exact(64);
+            for block in &mut chunks {
+                compress_block(&mut state, block.try_into().expect("64-byte block"));
+            }
+            let rem = chunks.remainder();
+            let mut tail = [0u8; 64];
+            tail[..rem.len()].copy_from_slice(rem);
+            tail[rem.len()] = 0x80;
+            if rem.len() >= 56 {
+                compress_block(&mut state, &tail);
+                tail = [0u8; 64];
+            }
+            tail[56..].copy_from_slice(&((bytes.len() as u64).wrapping_mul(8)).to_be_bytes());
+            compress_block(&mut state, &tail);
+            hex_state(&state)
+        }
+
+        /// sha256 of the 129-byte `previous \n event` hex composition. The
+        /// middle block is `\n` plus the first 63 event bytes: each schedule
+        /// word comes from one shuffle that fuses the one-byte shift and the
+        /// big-endian swap. The final block carries only the last event byte
+        /// plus padding (129 * 8 = 1032 bits).
+        #[target_feature(enable = "simd128")]
+        pub(super) fn link_hex(previous: &[u8; 64], event: &[u8; 64]) -> [u8; 64] {
+            let mut state = H0;
+            compress_block(&mut state, previous);
+            let v0 = load_raw::<0>(event);
+            let v1 = load_raw::<16>(event);
+            let v2 = load_raw::<32>(event);
+            let v3 = load_raw::<48>(event);
+            let nl = u8x16_splat(b'\n');
+            let s0 = i8x16_shuffle::<2, 1, 0, 16, 6, 5, 4, 3, 10, 9, 8, 7, 14, 13, 12, 11>(v0, nl);
+            let s1 = i8x16_shuffle::<18, 17, 16, 15, 22, 21, 20, 19, 26, 25, 24, 23, 30, 29, 28, 27>(
+                v0, v1,
+            );
+            let s2 = i8x16_shuffle::<18, 17, 16, 15, 22, 21, 20, 19, 26, 25, 24, 23, 30, 29, 28, 27>(
+                v1, v2,
+            );
+            let s3 = i8x16_shuffle::<18, 17, 16, 15, 22, 21, 20, 19, 26, 25, 24, 23, 30, 29, 28, 27>(
+                v2, v3,
+            );
+            compress_v(&mut state, s0, s1, s2, s3);
+            let zero = u32x4(0, 0, 0, 0);
+            let w0 = (u32::from(event[63]) << 24) | 0x0080_0000;
+            compress_v(
+                &mut state,
+                u32x4(w0, 0, 0, 0),
+                zero,
+                zero,
+                u32x4(0, 0, 0, 1032),
+            );
+            hex_state(&state)
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    use simd::{digest_all, digest_hex, link_hex};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn digest_all(lines: &[&[u8]]) -> Vec<[u8; 64]> {
+        lines.iter().map(|line| digest_hex(line)).collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn digest_hex(bytes: &[u8]) -> [u8; 64] {
+        hex_state(&digest_state(bytes))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn link_hex(previous: &[u8; 64], event: &[u8; 64]) -> [u8; 64] {
+        chain_hex(previous, event)
+    }
+
     fn hex_string(hex: &[u8; 64]) -> String {
         String::from_utf8(hex.to_vec()).expect("hex output is ascii")
     }
@@ -382,6 +1134,34 @@ mod imp {
         out
     }
 
+    /// 16-byte vector scan: one compare against `\n` and a lane bitmask
+    /// replace the SWAR detector at a quarter of the per-byte fuel.
+    #[cfg(target_arch = "wasm32")]
+    #[target_feature(enable = "simd128")]
+    fn find_newline(bytes: &[u8], mut i: usize) -> usize {
+        use std::arch::wasm32::*;
+        let n = bytes.len();
+        while i + 16 <= n {
+            let v = u64x2(
+                u64::from_le_bytes(bytes[i..i + 8].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(bytes[i + 8..i + 16].try_into().expect("8-byte chunk")),
+            );
+            let mask = i8x16_bitmask(u8x16_eq(v, u8x16_splat(b'\n')));
+            if mask != 0 {
+                return i + mask.trailing_zeros() as usize;
+            }
+            i += 16;
+        }
+        while i < n {
+            if bytes[i] == b'\n' {
+                return i;
+            }
+            i += 1;
+        }
+        n
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn find_newline(bytes: &[u8], mut i: usize) -> usize {
         const NL: u64 = 0x0a0a0a0a0a0a0a0a;
         const LO: u64 = 0x0101010101010101;
@@ -499,13 +1279,67 @@ mod imp {
         }
 
         /// String body after the opening quote: printable ASCII, no escapes.
-        /// Leaves pos past the closing quote. The detector drops the usual
-        /// `& !x` zero-test masking: every spurious flag it can raise either
-        /// sits on a byte with the high bit set (a true hit via the `| x`
-        /// term) or lands strictly above a true hit through borrow/carry
-        /// propagation, so the lowest flagged byte is always a genuine
-        /// quote/backslash/non-printable and is re-checked exactly by the
-        /// scalar arm.
+        /// Leaves pos past the closing quote. Stop lanes are quote,
+        /// backslash, control (signed < 0x20 also catches >= 0x80), or DEL;
+        /// the first flagged lane is re-checked exactly by the scalar arm.
+        #[cfg(target_arch = "wasm32")]
+        #[target_feature(enable = "simd128")]
+        fn string_body(&mut self) -> Option<&'a [u8]> {
+            use std::arch::wasm32::*;
+            let start = self.pos;
+            let buf = self.buf;
+            let mut i = self.pos;
+            while i + 16 <= buf.len() {
+                let v = u64x2(
+                    u64::from_le_bytes(buf[i..i + 8].try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes(buf[i + 8..i + 16].try_into().expect("8-byte chunk")),
+                );
+                let stop = v128_or(
+                    v128_or(
+                        u8x16_eq(v, u8x16_splat(b'"')),
+                        u8x16_eq(v, u8x16_splat(b'\\')),
+                    ),
+                    v128_or(
+                        i8x16_lt(v, i8x16_splat(0x20)),
+                        u8x16_eq(v, u8x16_splat(0x7f)),
+                    ),
+                );
+                let mask = i8x16_bitmask(stop);
+                if mask != 0 {
+                    i += mask.trailing_zeros() as usize;
+                    if buf[i] == b'"' {
+                        let body = &buf[start..i];
+                        self.pos = i + 1;
+                        return Some(body);
+                    }
+                    self.pos = i;
+                    return None;
+                }
+                i += 16;
+            }
+            while let Some(&c) = buf.get(i) {
+                if c == b'"' {
+                    let body = &buf[start..i];
+                    self.pos = i + 1;
+                    return Some(body);
+                }
+                if !(0x20..0x7f).contains(&c) || c == b'\\' {
+                    self.pos = i;
+                    return None;
+                }
+                i += 1;
+            }
+            self.pos = i;
+            None
+        }
+
+        /// SWAR form of the same detector. It drops the usual `& !x`
+        /// zero-test masking: every spurious flag it can raise either sits on
+        /// a byte with the high bit set (a true hit via the `| x` term) or
+        /// lands strictly above a true hit through borrow/carry propagation,
+        /// so the lowest flagged byte is always a genuine stop byte and is
+        /// re-checked exactly by the scalar arm.
+        #[cfg(not(target_arch = "wasm32"))]
         fn string_body(&mut self) -> Option<&'a [u8]> {
             const LO: u64 = 0x0101010101010101;
             const HI: u64 = 0x8080808080808080;
@@ -516,8 +1350,7 @@ mod imp {
                 let x = u64::from_le_bytes(buf[i..i + 8].try_into().expect("8-byte chunk"));
                 let quote = (x ^ (LO * 0x22)).wrapping_sub(LO);
                 let slash = (x ^ (LO * 0x5c)).wrapping_sub(LO);
-                let hit =
-                    (quote | slash | x.wrapping_sub(LO * 0x20) | x.wrapping_add(LO) | x) & HI;
+                let hit = (quote | slash | x.wrapping_sub(LO * 0x20) | x.wrapping_add(LO) | x) & HI;
                 if hit != 0 {
                     i += (hit.trailing_zeros() >> 3) as usize;
                     let c = buf[i];
@@ -756,10 +1589,11 @@ mod imp {
             });
         }
 
+        let event_hexes = digest_all(&event_lines);
         let mut previous = zero_hash();
         for (index, line) in event_lines.iter().enumerate() {
-            let event_hex = hex_state(&digest_state(line));
-            let chain = chain_hex(&previous, &event_hex);
+            let event_hex = event_hexes[index];
+            let chain = link_hex(&previous, &event_hex);
             match parse_event(line) {
                 Ok((id, timestamp_ms)) => match anchors.get(index) {
                     Some(Some(actual))
@@ -817,8 +1651,8 @@ mod imp {
         let mut previous = zero_hash();
         let mut entries = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
-            let event_hex = hex_state(&digest_state(line));
-            let chain = chain_hex(&previous, &event_hex);
+            let event_hex = digest_hex(line);
+            let chain = link_hex(&previous, &event_hex);
             let (event_id, timestamp_ms) = match parse_event(line) {
                 Ok((id, ts)) => (id.into_owned(), ts),
                 Err(()) => (String::new(), 0),

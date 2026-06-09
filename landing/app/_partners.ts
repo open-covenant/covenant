@@ -130,8 +130,9 @@ export const PARTNERS: Integration[] = [
     slug: "xona",
     name: "Xona Agent",
     blurb:
-      "Xona Agent's creative generation endpoints reach agents as capability-scoped, x402-billed tools.",
+      "Xona Agent's image, audio, and token-intelligence endpoints reach agents as capability-scoped, x402-billed MCP tools.",
     status: "building",
+    href: "https://xona-agent.com",
   },
   {
     slug: "orbserv",

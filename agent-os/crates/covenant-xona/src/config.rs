@@ -45,6 +45,10 @@ pub struct XonaConfig {
     /// allows every catalog endpoint; `Some([])` allows none.
     #[serde(default)]
     pub allow: Option<Vec<String>>,
+    /// Resale markup in basis points applied to the published price when
+    /// republishing tools through the SAP bridge. `0` = at cost.
+    #[serde(default)]
+    pub markup_bps: u16,
 }
 
 fn default_server_title_prefix() -> String {
@@ -66,6 +70,7 @@ impl Default for XonaConfig {
             asset: default_asset(),
             per_call_cap: 0,
             allow: None,
+            markup_bps: 0,
         }
     }
 }
@@ -82,6 +87,11 @@ impl XonaConfig {
             None => true,
             Some(list) => list.iter().any(|s| s == slug),
         }
+    }
+
+    /// Apply the resale markup to an atomic-USDC price.
+    pub fn marked_up(&self, price_micro_usdc: u128) -> u128 {
+        price_micro_usdc + price_micro_usdc * self.markup_bps as u128 / 10_000
     }
 }
 

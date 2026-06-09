@@ -27,11 +27,13 @@
 
 pub mod catalog;
 pub mod config;
+pub mod publish;
 pub mod tools;
 pub mod x402;
 
 pub use catalog::{XonaCatalog, XonaEndpoint};
 pub use config::XonaConfig;
+pub use publish::{publishable, PublishableTool};
 pub use tools::{xona_specs, xona_tool, xona_tools, PaidExecutor, PaidRequest, PaidResponse};
 pub use x402::{execute_paid, parse_challenge, PaidHttp};
 

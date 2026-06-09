@@ -415,6 +415,16 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match discovery_config_from_env() {
+        Some(state) => {
+            // No fetch here — the catalog loads on the first
+            // DiscoverProviders call, keeping startup offline-safe.
+            info!("x402 provider discovery enabled");
+            server.with_discovery(state)
+        }
+        None => server,
+    };
+
     server
         .register_agent_budgets()
         .await
@@ -809,6 +819,7 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
 /// - `COVENANT_XONA_ALLOW` — comma-separated endpoint slug allowlist (optional)
 /// - `COVENANT_XONA_SERVER_TITLE_PREFIX` — registry serverTitle prefix
 ///   that identifies Xona's entries (optional)
+/// - `COVENANT_XONA_MARKUP_BPS` — resale markup in basis points (optional)
 fn xona_config_from_env() -> Option<covenant_xona::XonaConfig> {
     let enabled = std::env::var("COVENANT_XONA_ENABLED")
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
@@ -845,7 +856,68 @@ fn xona_config_from_env() -> Option<covenant_xona::XonaConfig> {
                 .collect(),
         );
     }
+    if let Ok(bps) = std::env::var("COVENANT_XONA_MARKUP_BPS") {
+        match bps.trim().parse() {
+            Ok(n) => cfg.markup_bps = n,
+            Err(_) => tracing::warn!(value = %bps, "ignoring non-numeric COVENANT_XONA_MARKUP_BPS"),
+        }
+    }
     Some(cfg)
+}
+
+/// Build the x402 provider-discovery state from env, or None when the
+/// operator hasn't opted in. Construction is offline (it only builds an
+/// `OrbitClient`); the registry is fetched lazily on the first
+/// `DiscoverProviders` call, so this keeps daemon startup network-free.
+///
+/// - `COVENANT_X402_DISCOVERY_ENABLED` truthy (`1`, `true`, `yes`)
+/// - `COVENANT_X402_DISCOVERY_ORBIT_URL` — registry base URL
+///   (default `covenant_x402::orbit::DEFAULT_BASE_URL`)
+/// - `COVENANT_X402_DISCOVERY_REFRESH_SECS` — cache TTL in seconds
+///   (default 300; a non-numeric value is ignored)
+/// - `COVENANT_X402_DISCOVERY_ALLOW` — comma-separated `server_title`
+///   allowlist; only listed providers are ever returned (optional)
+fn discovery_config_from_env() -> Option<Arc<covenantd::discovery::DiscoveryState>> {
+    let enabled = std::env::var("COVENANT_X402_DISCOVERY_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let base_url = std::env::var("COVENANT_X402_DISCOVERY_ORBIT_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| covenant_x402::orbit::DEFAULT_BASE_URL.to_string());
+    let refresh_secs = match std::env::var("COVENANT_X402_DISCOVERY_REFRESH_SECS") {
+        Ok(v) => match v.trim().parse::<u64>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                tracing::warn!(value = %v, "ignoring invalid COVENANT_X402_DISCOVERY_REFRESH_SECS; using default");
+                300
+            }
+        },
+        Err(_) => 300,
+    };
+    let allow = std::env::var("COVENANT_X402_DISCOVERY_ALLOW")
+        .ok()
+        .map(|list| {
+            list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        });
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let client =
+        covenant_x402::OrbitClient::with(http, base_url, covenant_x402::orbit::DEFAULT_PAGE_SIZE);
+    Some(Arc::new(covenantd::discovery::DiscoveryState::new(
+        client,
+        std::time::Duration::from_secs(refresh_secs),
+        allow,
+    )))
 }
 
 /// Mask secret query params (api keys, tokens) in a URL before logging it,

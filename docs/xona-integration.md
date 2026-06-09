@@ -159,6 +159,25 @@ The profile is opt-in and requires the x402 funding-key sidecar
 With the profile disabled, no `xona.*` tool is advertised or callable and no
 Xona call ever leaves the host.
 
+## Resale publishing (SAP bridge)
+
+`covenant-xona::publish` derives per-tool resale descriptors so an operator who
+runs the SAP bridge can republish a marked-up Xona tier (markup set via
+`COVENANT_XONA_MARKUP_BPS`, the flow back through Covenant settlement). The
+bridge owns the on-chain registration and its own capability; with the bridge
+off, `publishable` returns nothing and the profile is unaffected.
+
+## Discovery (provider-agnostic)
+
+Xona is also reachable through generic x402 provider discovery: with
+`COVENANT_X402_DISCOVERY_ENABLED`, a `Request::DiscoverProviders { server_title }`
+(capability-gated by `x402.discover`) serves the cached orbit-x402 catalog —
+filtered to Xona via `server_title: "Xona Agent …"` — as `DiscoveredProvider`
+rows an agent can read before deciding to pay. Discovery is read-only: it never
+signs, pays, or touches the budget. An inbound resale quality gate
+(`covenantd::smart_layer`, default-off, fail-closed) is scaffolded for operators
+who resell Xona-fronted tools.
+
 ## Settlement, attestation, and the SAP bridge
 
 Nothing Xona-specific exists on the settlement or attestation path. A Xona

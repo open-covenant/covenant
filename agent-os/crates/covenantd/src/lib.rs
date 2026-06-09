@@ -8,8 +8,10 @@
 
 #![deny(unsafe_code)]
 
+pub mod discovery;
 pub mod http;
 pub mod hyre;
+pub mod smart_layer;
 pub mod sse;
 pub mod stream_dispatch;
 pub mod stream_tracker;
@@ -1065,6 +1067,10 @@ pub struct Server {
     /// config. None when the operator has not enabled Xona; in that state
     /// no `xona.*` tool is advertised or callable.
     xona: Option<Arc<xona::XonaState>>,
+    /// Opt-in x402 provider discovery over the orbit-x402 registry. None
+    /// when the operator has not enabled discovery; in that state every
+    /// `Request::DiscoverProviders` returns a "not configured" error.
+    discovery: Option<Arc<discovery::DiscoveryState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1117,6 +1123,7 @@ impl Server {
             x402_dispatch: None,
             hyre: None,
             xona: None,
+            discovery: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1209,6 +1216,15 @@ impl Server {
     /// "not configured" error.
     pub fn with_xona(mut self, state: xona::XonaState) -> Self {
         self.xona = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable x402 provider discovery over the orbit-x402 registry.
+    /// Without this, every `Request::DiscoverProviders` returns a "not
+    /// configured" error. The catalog loads lazily on the first
+    /// discovery call, so wiring this at boot adds no startup fetch.
+    pub fn with_discovery(mut self, state: Arc<discovery::DiscoveryState>) -> Self {
+        self.discovery = Some(state);
         self
     }
 
@@ -2230,6 +2246,45 @@ impl Server {
                 self.revoke_peer(token_prefix, force, match_limit, peer)
                     .await
             }
+            Request::DiscoverProviders { server_title } => {
+                self.discover_providers(server_title, peer).await
+            }
+        }
+    }
+
+    /// Enumerate x402 providers from the cached orbit-x402 registry.
+    ///
+    /// Gated by the `x402.discover` capability; the gate also records the
+    /// `CapabilityCheck` audit row (pass or fail), so a rejection is
+    /// audited like every other gated verb. Returns `Error` when
+    /// discovery was not wired in at boot. Otherwise serves the cached
+    /// catalog (refreshing when stale), filtered by `server_title` and
+    /// the operator allowlist, projected to `DiscoveredProvider`.
+    async fn discover_providers(&self, server_title: Option<String>, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities("x402:discover".into(), vec!["x402.discover".into()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "provider discovery requires capability \"x402.discover\". \
+                          Grant it with `covenant capabilities grant x402.discover`."
+                    .into(),
+            };
+        }
+
+        let Some(discovery) = self.discovery.clone() else {
+            return Response::Error {
+                message: "provider discovery is not configured on this daemon. \
+                          Enable it via COVENANT_X402_DISCOVERY_ENABLED and restart."
+                    .into(),
+            };
+        };
+
+        match discovery.providers(server_title.as_deref()).await {
+            Ok(providers) => Response::ProvidersDiscovered { providers },
+            Err(e) => Response::Error {
+                message: format!("provider discovery failed: {e}"),
+            },
         }
     }
 
@@ -46224,6 +46279,119 @@ required = {caps:?}
             997,
             "3 credits debited from the caller"
         );
+    }
+
+    fn discovery_entry(server: &str, slug: &str) -> covenant_x402::RegistryEntry {
+        covenant_x402::RegistryEntry {
+            server_url: format!("https://api.{}.test", server.to_lowercase()),
+            server_title: server.into(),
+            endpoint: format!("https://api.{}.test/{slug}", server.to_lowercase()),
+            slug: slug.into(),
+            method: "POST".into(),
+            description: "test endpoint".into(),
+            pricing: vec![covenant_x402::PaymentRequirements {
+                network: "solana:mainnet".into(),
+                asset: "usdc-sol".into(),
+                amount: "80000".into(),
+                amount_usdc: 0.08,
+                pay_to: "pay-to-addr".into(),
+                scheme: "exact".into(),
+                extra: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn discover_providers_rejects_when_capability_missing() {
+        // No x402.discover grant: the daemon must refuse before touching
+        // the registry, and the gate records the CapabilityCheck audit
+        // row like every other gated verb.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone()).with_discovery(discovery::seeded(
+            vec![discovery_entry("Xona", "image/creative-director")],
+            None,
+        ));
+        let resp = s
+            .op_respond(Request::DiscoverProviders { server_title: None })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("x402.discover"),
+                "error must name the missing capability so the operator can grant it: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+        let events = audit.recent(10).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::CapabilityCheck { passed, .. } if !passed)),
+            "a rejected discovery must leave a failed CapabilityCheck audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_providers_rejects_when_not_configured() {
+        // Capability granted, but discovery was never wired in — the
+        // daemon must say "not configured" rather than return an empty
+        // list (which would look like "no providers exist").
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "x402.discover").await;
+        let resp = s
+            .op_respond(Request::DiscoverProviders { server_title: None })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured' so the operator knows to enable discovery: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn discover_providers_returns_seeded_catalog_with_capability() {
+        // Capability granted + a seeded (no live fetch) catalog: the
+        // daemon projects and returns every provider, and the
+        // server_title filter narrows to one.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_discovery(discovery::seeded(
+                vec![
+                    discovery_entry("Xona", "image/creative-director"),
+                    discovery_entry("Hyre", "defi/tvl"),
+                ],
+                None,
+            ));
+        grant_action(&s, "x402.discover").await;
+
+        let resp = s
+            .op_respond(Request::DiscoverProviders { server_title: None })
+            .await;
+        match resp {
+            Response::ProvidersDiscovered { providers } => {
+                assert_eq!(providers.len(), 2);
+                let xona = providers
+                    .iter()
+                    .find(|p| p.server_title == "Xona")
+                    .expect("xona present");
+                assert_eq!(xona.slug, "image/creative-director");
+                assert_eq!(xona.price_atomic_usdc.as_deref(), Some("80000"));
+            }
+            other => panic!("expected ProvidersDiscovered, got: {other:?}"),
+        }
+
+        let resp = s
+            .op_respond(Request::DiscoverProviders {
+                server_title: Some("Hyre".into()),
+            })
+            .await;
+        match resp {
+            Response::ProvidersDiscovered { providers } => {
+                assert_eq!(providers.len(), 1);
+                assert_eq!(providers[0].server_title, "Hyre");
+            }
+            other => panic!("expected ProvidersDiscovered, got: {other:?}"),
+        }
     }
 
     #[tokio::test]

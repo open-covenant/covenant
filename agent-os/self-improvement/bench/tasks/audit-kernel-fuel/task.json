@@ -1,14 +1,49 @@
 {
   "id": "audit-kernel-fuel",
   "description": "Reduce wasmtime fuel of the covenant-audit-kernel EVOLVE block. Behavior frozen by unit tests, a vendored-reference differential suite, and a corpus report digest; diff confined to the EVOLVE region.",
-  "base": "4b7d22a185e68f5642a758d8682c6f0c0846fd78",
+  "base": "db0e4234815998c6336603322c7134fa78871ac5",
   "evolveFile": "agent-os/crates/covenant-audit-kernel/src/lib.rs",
-  "allowedPaths": ["agent-os/crates/covenant-audit-kernel/src/lib.rs"],
-  "weights": { "scalar": 1 },
+  "allowedPaths": [
+    "agent-os/crates/covenant-audit-kernel/src/lib.rs"
+  ],
+  "weights": {
+    "scalar": 1
+  },
   "solverTimeoutMs": 1200000,
   "graderStages": [
-    { "cmd": ["cargo", "test", "-p", "covenant-audit-kernel", "--lib"], "cwd": "agent-os", "gate": true, "timeoutMs": 600000 },
-    { "cmd": ["cargo", "test", "-p", "covenant-audit-kernel", "--test", "kernel_differential"], "cwd": "agent-os", "gate": true, "timeoutMs": 600000 },
-    { "cmd": ["node", "fuel-stage.mjs"], "gate": true, "metric": "scalar", "timeoutMs": 900000 }
+    {
+      "cmd": [
+        "cargo",
+        "test",
+        "-p",
+        "covenant-audit-kernel",
+        "--lib"
+      ],
+      "cwd": "agent-os",
+      "gate": true,
+      "timeoutMs": 600000
+    },
+    {
+      "cmd": [
+        "cargo",
+        "test",
+        "-p",
+        "covenant-audit-kernel",
+        "--test",
+        "kernel_differential"
+      ],
+      "cwd": "agent-os",
+      "gate": true,
+      "timeoutMs": 600000
+    },
+    {
+      "cmd": [
+        "node",
+        "fuel-stage.mjs"
+      ],
+      "gate": true,
+      "metric": "scalar",
+      "timeoutMs": 900000
+    }
   ]
 }

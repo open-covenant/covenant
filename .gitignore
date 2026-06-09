@@ -157,3 +157,5 @@ test-results/
 *.tsbuildinfo
 agent-os/self-improvement/scaffold/archive/
 agent-os/self-improvement/bench/runners/fuel-runner/target/
+agent-os/self-improvement/bench/runners/.cache/
+agent-os/self-improvement/kernel-archive/

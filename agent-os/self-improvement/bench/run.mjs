@@ -6,6 +6,7 @@ import { sh, runStage, testFraction, round } from "./lib.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
+process.env.COVENANT_BENCH_ROOT = here; // grade stages run in detached worktrees; git can't find the engine from there
 const tasksDir = join(here, "tasks");
 const wtRoot = resolve(repoRoot, "..", ".covenant-bench-wt");
 
@@ -73,17 +74,39 @@ function solve(solver, wt, task) {
 }
 
 // A candidate must not pass by weakening the suite: no removed tests, no added #[ignore].
-function gamingViolations(wt, base) {
+// Tasks with allowedPaths confine the diff to an allowlist; tasks with evolveFile
+// additionally require that everything outside the EVOLVE block is byte-identical.
+function gamingViolations(wt, task) {
+  const base = task.base;
   const diff = sh("git", ["-C", wt, "diff", base]).out;
   const v = [];
   if (/^\+\s*#\[\s*ignore/m.test(diff)) v.push("added #[ignore]");
-  const changedTests = sh("git", ["-C", wt, "diff", "--name-only", base]).out
+  const changed = sh("git", ["-C", wt, "diff", "--name-only", base]).out
     .split("\n")
     .map((s) => s.trim())
-    .filter((f) => /(^|\/)tests?\//.test(f) || /_tests?\.rs$/.test(f));
+    .filter(Boolean);
+  if (task.allowedPaths) {
+    for (const f of changed) {
+      if (!task.allowedPaths.includes(f)) v.push(`out-of-bounds change: ${f}`);
+    }
+  }
+  const changedTests = changed.filter((f) => /(^|\/)tests?\//.test(f) || /_tests?\.rs$/.test(f));
   for (const f of changedTests) {
     const d = sh("git", ["-C", wt, "diff", base, "--", f]).out;
     if (/^-\s*#\[\s*test/m.test(d) || /^-\s*fn\s+\w/m.test(d)) v.push(`weakened tests in ${f}`);
+  }
+  if (task.evolveFile) {
+    const outside = (src) => {
+      const a = src.indexOf("// EVOLVE-BLOCK-START");
+      const b = src.indexOf("// EVOLVE-BLOCK-END");
+      return a >= 0 && b > a ? src.slice(0, a) + src.slice(b) : null;
+    };
+    const baseSrc = sh("git", ["-C", wt, "show", `${base}:${task.evolveFile}`]).out;
+    let cur = null;
+    try { cur = readFileSync(join(wt, task.evolveFile), "utf8"); } catch { /* fall through to violation */ }
+    const curOutside = cur === null ? null : outside(cur);
+    if (curOutside === null) v.push(`EVOLVE markers missing in ${task.evolveFile}`);
+    else if (curOutside !== outside(baseSrc)) v.push(`changes outside EVOLVE block in ${task.evolveFile}`);
   }
   return v;
 }
@@ -104,7 +127,10 @@ function gradeStages(task, cwd) {
     }
     if (stage.metric === "tests") metrics.tests = round(testFraction(r.out).fraction);
     else if (stage.metric === "clippy") metrics.clippy = r.ok ? 1 : 0;
-    else if (stage.metric) metrics[stage.metric] = r.ok ? 1 : 0;
+    else if (stage.metric === "scalar") {
+      const m = r.out.match(/^SCALAR ([\d.]+)/m);
+      metrics.scalar = r.ok && m ? round(Number(m[1])) : 0;
+    } else if (stage.metric) metrics[stage.metric] = r.ok ? 1 : 0;
   }
   return { metrics, correctness, ms };
 }
@@ -124,7 +150,7 @@ function grade(task) {
   try {
     wt = addWorktree(task.base);
     solve(flags.solver, wt, task);
-    const gaming = gamingViolations(wt, task.base);
+    const gaming = gamingViolations(wt, task);
     if (gaming.length) return { id: task.id, correctness: 0, score: 0, metrics: {}, gaming, ms: 0 };
     const g = gradeStages(task, wt);
     return { id: task.id, correctness: g.correctness, metrics: g.metrics, score: score(task, g.metrics, g.correctness), ms: g.ms };

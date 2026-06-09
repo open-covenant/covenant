@@ -1,0 +1,12 @@
+{
+  "id": "rust-expr-eval",
+  "description": "capability: left-to-right (no-precedence) integer expression evaluator, held-out rustc test (spec-adherence trap)",
+  "base": "69b41d40",
+  "gradeDest": ".",
+  "solverTimeoutMs": 600000,
+  "graderStages": [
+    { "name": "compile", "cmd": ["bash", "-lc", "rustc --test --edition 2021 tests.rs -o ./texpr 2>&1"], "gate": true, "timeoutMs": 120000 },
+    { "name": "test", "cmd": ["bash", "-lc", "./texpr 2>&1"], "metric": "tests", "timeoutMs": 60000 }
+  ],
+  "weights": { "tests": 1 }
+}

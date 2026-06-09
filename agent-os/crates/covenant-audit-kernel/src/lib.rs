@@ -69,32 +69,55 @@ pub fn fold_chain(lines: &[&[u8]]) -> Vec<ChainEntry> {
 // EVOLVE-BLOCK-START
 mod imp {
     use super::{ChainEntry, ChainReport, Failure, ZERO_CHAIN_HASH};
+    use serde::de::IgnoredAny;
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
+    use std::borrow::Cow;
+
+    const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
     #[derive(Deserialize)]
-    struct EventFields {
-        id: String,
+    struct EventFields<'a> {
+        #[serde(borrow)]
+        id: Cow<'a, str>,
         timestamp_ms: u64,
         #[allow(dead_code)]
-        issuer: serde_json::Value,
+        issuer: IgnoredAny,
         #[allow(dead_code)]
-        kind: serde_json::Value,
+        kind: IgnoredAny,
     }
 
-    fn sha256_hex(bytes: &[u8]) -> String {
-        let digest = Sha256::digest(bytes);
-        let mut out = String::with_capacity(digest.len() * 2);
-        for byte in digest {
-            use std::fmt::Write as _;
-            write!(&mut out, "{byte:02x}").expect("write to string");
+    fn digest32(bytes: &[u8]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&Sha256::digest(bytes));
+        out
+    }
+
+    fn hex64(digest: &[u8; 32]) -> [u8; 64] {
+        let mut out = [0u8; 64];
+        for (i, &b) in digest.iter().enumerate() {
+            out[2 * i] = HEX_DIGITS[(b >> 4) as usize];
+            out[2 * i + 1] = HEX_DIGITS[(b & 15) as usize];
         }
         out
     }
 
-    fn chain_hash(previous_hash_hex: &str, event_hash_hex: &str) -> String {
-        let material = format!("{previous_hash_hex}\n{event_hash_hex}");
-        sha256_hex(material.as_bytes())
+    fn chain_hex(previous: &[u8; 64], event: &[u8; 64]) -> [u8; 64] {
+        let mut material = [0u8; 129];
+        material[..64].copy_from_slice(previous);
+        material[64] = b'\n';
+        material[65..].copy_from_slice(event);
+        hex64(&digest32(&material))
+    }
+
+    fn hex_string(hex: &[u8; 64]) -> String {
+        String::from_utf8(hex.to_vec()).expect("hex output is ascii")
+    }
+
+    fn zero_hash() -> [u8; 64] {
+        let mut out = [0u8; 64];
+        out.copy_from_slice(ZERO_CHAIN_HASH.as_bytes());
+        out
     }
 
     fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
@@ -107,15 +130,6 @@ mod imp {
 
     fn uuid_eq(a: &str, b: &str) -> bool {
         a.eq_ignore_ascii_case(b)
-    }
-
-    fn entries_match(actual: &ChainEntry, expected: &ChainEntry) -> bool {
-        actual.index == expected.index
-            && uuid_eq(&actual.event_id, &expected.event_id)
-            && actual.timestamp_ms == expected.timestamp_ms
-            && actual.event_hash_hex == expected.event_hash_hex
-            && actual.previous_hash_hex == expected.previous_hash_hex
-            && actual.chain_hash_hex == expected.chain_hash_hex
     }
 
     pub fn verify_chain(events_jsonl: &[u8], anchors_jsonl: &[u8]) -> ChainReport {
@@ -143,30 +157,26 @@ mod imp {
             });
         }
 
-        let mut previous_hash_hex = ZERO_CHAIN_HASH.to_string();
+        let mut previous = zero_hash();
         for (index, line) in event_lines.iter().enumerate() {
-            let event_hash_hex = sha256_hex(line);
-            let chain_hash_hex = chain_hash(&previous_hash_hex, &event_hash_hex);
+            let event_hex = hex64(&digest32(line));
+            let chain = chain_hex(&previous, &event_hex);
             match serde_json::from_slice::<EventFields>(line) {
-                Ok(event) => {
-                    let expected = ChainEntry {
+                Ok(event) => match anchors.get(index) {
+                    Some(Some(actual))
+                        if actual.index == index as u64
+                            && uuid_eq(&actual.event_id, &event.id)
+                            && actual.timestamp_ms == event.timestamp_ms
+                            && actual.event_hash_hex.as_bytes() == &event_hex[..]
+                            && actual.previous_hash_hex.as_bytes() == &previous[..]
+                            && actual.chain_hash_hex.as_bytes() == &chain[..] => {}
+                    Some(_) => failures.push(Failure::EntryMismatch {
                         index: index as u64,
-                        event_id: event.id,
-                        timestamp_ms: event.timestamp_ms,
-                        event_hash_hex,
-                        previous_hash_hex: previous_hash_hex.clone(),
-                        chain_hash_hex: chain_hash_hex.clone(),
-                    };
-                    match anchors.get(index) {
-                        Some(Some(actual)) if entries_match(actual, &expected) => {}
-                        Some(_) => failures.push(Failure::EntryMismatch {
-                            index: index as u64,
-                        }),
-                        None => failures.push(Failure::EntryMissing {
-                            index: index as u64,
-                        }),
-                    }
-                }
+                    }),
+                    None => failures.push(Failure::EntryMissing {
+                        index: index as u64,
+                    }),
+                },
                 Err(_) => {
                     failures.push(Failure::ParseError {
                         index: index as u64,
@@ -174,9 +184,9 @@ mod imp {
                     match anchors.get(index) {
                         Some(Some(actual))
                             if actual.index == index as u64
-                                && actual.event_hash_hex == event_hash_hex
-                                && actual.previous_hash_hex == previous_hash_hex
-                                && actual.chain_hash_hex == chain_hash_hex => {}
+                                && actual.event_hash_hex.as_bytes() == &event_hex[..]
+                                && actual.previous_hash_hex.as_bytes() == &previous[..]
+                                && actual.chain_hash_hex.as_bytes() == &chain[..] => {}
                         Some(_) => failures.push(Failure::EntryMismatch {
                             index: index as u64,
                         }),
@@ -186,7 +196,7 @@ mod imp {
                     }
                 }
             }
-            previous_hash_hex = chain_hash_hex;
+            previous = chain;
         }
 
         if anchors.len() > event_lines.len() {
@@ -199,30 +209,30 @@ mod imp {
             events: event_lines.len() as u64,
             anchors: anchors.len() as u64,
             valid: failures.is_empty(),
-            root_hash_hex: previous_hash_hex,
+            root_hash_hex: hex_string(&previous),
             failures,
         }
     }
 
     pub fn fold_chain(lines: &[&[u8]]) -> Vec<ChainEntry> {
-        let mut previous = ZERO_CHAIN_HASH.to_string();
+        let mut previous = zero_hash();
         let mut entries = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
-            let event_hash_hex = sha256_hex(line);
-            let chain_hash_hex = chain_hash(&previous, &event_hash_hex);
+            let event_hex = hex64(&digest32(line));
+            let chain = chain_hex(&previous, &event_hex);
             let (event_id, timestamp_ms) = match serde_json::from_slice::<EventFields>(line) {
-                Ok(event) => (event.id, event.timestamp_ms),
+                Ok(event) => (event.id.into_owned(), event.timestamp_ms),
                 Err(_) => (String::new(), 0),
             };
             entries.push(ChainEntry {
                 index: index as u64,
                 event_id,
                 timestamp_ms,
-                event_hash_hex,
-                previous_hash_hex: previous.clone(),
-                chain_hash_hex: chain_hash_hex.clone(),
+                event_hash_hex: hex_string(&event_hex),
+                previous_hash_hex: hex_string(&previous),
+                chain_hash_hex: hex_string(&chain),
             });
-            previous = chain_hash_hex;
+            previous = chain;
         }
         entries
     }

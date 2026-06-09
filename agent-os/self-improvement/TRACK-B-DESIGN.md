@@ -74,3 +74,29 @@ Half a day, no optimizer runs, no model spend:
 - **What WOULD have a deep gradient:** (a) *on-chain merkle proof verification for receipt batches* — today `anchor_receipt_batch` stores `merkle_root` unverified; an instruction that actually verifies inclusion proofs on-chain would put a hash loop under a hard 200k-CU budget, where syscall-vs-manual-sha256, proof layout, and account-packing choices create a deep, economically meaningful CU gradient. But that's new launch-sensitive feature work, not optimization of existing code. (b) Off-repo algorithmic kernels (scheduling heuristics, matrix/packing kernels) — the actual AlphaEvolve domain, with effectively unbounded ladders, at the cost of no longer improving covenant itself. If the goal of this loop is the *loop* (self-improvement machinery that demonstrably climbs), audit-kernel-fuel is the right next move; if the goal becomes *unbounded* gradient, plan on (a) after launch or (b) outside the repo.
 
 Suggested build order: kernel extraction + fuel-runner + corpus (½ day) → §5 validation (½ day) → go/no-go → `optimize-code.mjs` + first real iterations only if the hand-opt separation clears 15%.
+
+---
+
+## §5 validation results (2026-06-09): GO
+
+Built: `covenant-audit-kernel` (workspace crate, wasm-clean, 8 unit tests), `fuel-runner`
+(wasmtime =29.0.1 pinned, `bench/runners/fuel-runner`), seeded corpus generator
+(`bench/runners/gen-audit-corpus.mjs`). Frozen fuel corpus: seed 1, 8 cases / 50k events,
+33 MB — regenerable bit-identically, not committed; sha256
+`eec86e93bd6cac37efe4c1efccc836072d421f6ff01da08d84a7665660347d8e`.
+
+| variant | fuel | scalar | predicted |
+|---|---|---|---|
+| pessimized (Value re-parse, format!/clone-heavy hex) | 9,709,383,126 | 0.604 | 0.5–0.8 ✓ |
+| current (extraction, baseline) | **5,867,618,602** | 1.000 | 1.0 ✓ |
+| hand-optimized (incremental hasher, hex LUT, byte-held hash, IgnoredAny) | 4,173,220,343 | **1.406** | ≥1.2 ✓ |
+
+- Hand-opt gain = **40.6% fuel** vs the 15% abort line → the gradient is real, GO.
+- Determinism: 3 consecutive runs bit-identical fuel.
+- Behavioral equivalence: all three variants print the same report digest
+  `cbc91600fdcadb…` over the corpus and pass the same 8 unit tests.
+- Variants kept at `bench/tasks/audit-kernel-fuel/variants/` for the depth check and as
+  optimizer-era references. Baseline to freeze in `grade/`: **5867618602**.
+- Remaining ladder above the hand-opt (untouched rungs): hand-rolled JSON validity scan
+  replacing serde on the verify path, byte-level anchor comparison without parsing into
+  `ChainEntry`, memchr-style splitting, buffer reuse.

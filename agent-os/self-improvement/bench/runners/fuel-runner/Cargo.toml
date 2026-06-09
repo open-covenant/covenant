@@ -1,0 +1,15 @@
+[package]
+name = "fuel-runner"
+version = "0.1.0"
+edition = "2021"
+
+# Pinned exactly: fuel accounting must stay frozen across engine upgrades or
+# baseline numbers stop being comparable.
+[dependencies]
+wasmtime = "=29.0.1"
+wasmtime-wasi = "=29.0.1"
+
+[workspace]
+
+[profile.release]
+debug = false

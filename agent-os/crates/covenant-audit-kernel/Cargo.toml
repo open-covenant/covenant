@@ -1,0 +1,20 @@
+[package]
+name = "covenant-audit-kernel"
+version = "0.1.0"
+description = "Pure synchronous audit chain-fold and integrity-verification kernel extracted from covenant-audit. No async, no IO, no tokio: compiles cleanly to wasm32-wasip1 so the chain math can be fuel-metered deterministically. covenant-audit owns file handling and failure-message formatting; this crate owns the per-line hashing, chain linking, and anchor comparison."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[features]
+bench-bin = []
+
+[[bin]]
+name = "kernel_bench"
+required-features = ["bench-bin"]

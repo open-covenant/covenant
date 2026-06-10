@@ -21,7 +21,7 @@ for (const v of ledger.versions) {
   const n = parseInt(v.version.match(/^k(\d+)/)?.[1] ?? 0, 10);
   if (!rounds.has(n)) rounds.set(n, []);
   rounds.get(n).push({
-    proposer: PROPOSER_LABELS[v.proposer] ?? "Claude",
+    proposer: PROPOSER_LABELS[v.proposer] ?? (v.proposer ? v.proposer[0].toUpperCase() + v.proposer.slice(1) : "Claude"),
     model: v.model ?? "claude",
     scalar: v.candidate ?? 0,
     incumbent: v.incumbent,

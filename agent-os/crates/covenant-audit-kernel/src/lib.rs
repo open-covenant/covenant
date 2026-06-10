@@ -484,9 +484,11 @@ mod imp {
 
         /// Lowercase hex of four state words held as one vector: byte-reverse
         /// to big-endian, split nibbles, interleave, one swizzle per 16 chars.
+        /// The half offset is a const so every store lands at a fixed offset
+        /// with no slice checks.
         #[inline]
         #[target_feature(enable = "simd128")]
-        fn hex_half(out: &mut [u8], v: v128) {
+        fn hex_half<const O: usize>(out: &mut [u8; 64], v: v128) {
             let table = u8x16(
                 b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd',
                 b'e', b'f',
@@ -501,18 +503,18 @@ mod imp {
             );
             let c0 = i8x16_swizzle(table, n0);
             let c1 = i8x16_swizzle(table, n1);
-            out[0..8].copy_from_slice(&u64x2_extract_lane::<0>(c0).to_le_bytes());
-            out[8..16].copy_from_slice(&u64x2_extract_lane::<1>(c0).to_le_bytes());
-            out[16..24].copy_from_slice(&u64x2_extract_lane::<0>(c1).to_le_bytes());
-            out[24..32].copy_from_slice(&u64x2_extract_lane::<1>(c1).to_le_bytes());
+            out[O..O + 8].copy_from_slice(&u64x2_extract_lane::<0>(c0).to_le_bytes());
+            out[O + 8..O + 16].copy_from_slice(&u64x2_extract_lane::<1>(c0).to_le_bytes());
+            out[O + 16..O + 24].copy_from_slice(&u64x2_extract_lane::<0>(c1).to_le_bytes());
+            out[O + 24..O + 32].copy_from_slice(&u64x2_extract_lane::<1>(c1).to_le_bytes());
         }
 
         #[inline]
         #[target_feature(enable = "simd128")]
         fn hex_state(state: &[u32; 8]) -> [u8; 64] {
             let mut out = [0u8; 64];
-            hex_half(&mut out[0..32], u32x4(state[0], state[1], state[2], state[3]));
-            hex_half(&mut out[32..64], u32x4(state[4], state[5], state[6], state[7]));
+            hex_half::<0>(&mut out, u32x4(state[0], state[1], state[2], state[3]));
+            hex_half::<32>(&mut out, u32x4(state[4], state[5], state[6], state[7]));
             out
         }
 
@@ -817,8 +819,8 @@ mod imp {
             let mut out = [[0u8; 64]; 4];
             let mut l = 0;
             while l < 4 {
-                hex_half(&mut out[l][0..32], lo[l]);
-                hex_half(&mut out[l][32..64], hi[l]);
+                hex_half::<0>(&mut out[l], lo[l]);
+                hex_half::<32>(&mut out[l], hi[l]);
                 l += 1;
             }
             out
@@ -898,7 +900,7 @@ mod imp {
         /// wrong or missing candidates cost a recompute, never accuracy.
         #[target_feature(enable = "simd128")]
         pub(super) fn link_quad(
-            cand: &[Option<&[u8]>; 4],
+            cand: &[Option<&[u8; 64]>; 4],
             hexes: &[[u8; 64]],
             tail: &[[u32; 64]; 16],
             out: &mut [[u8; 64]; 4],
@@ -908,7 +910,7 @@ mod imp {
             let mut hx: [&[u8; 64]; 4] = [&hexes[0]; 4];
             let mut l = 0;
             while l < 4 {
-                if let Some(p) = cand[l].and_then(|p| <&[u8; 64]>::try_from(p).ok()) {
+                if let Some(p) = cand[l] {
                     prevs[l] = p;
                 }
                 if let Some(h) = hexes.get(l) {
@@ -954,7 +956,10 @@ mod imp {
             *out = lanes_hex(&state);
         }
 
-        /// Four equal-block-count messages digested in lockstep.
+        /// Four equal-block-count messages digested in lockstep. Below the
+        /// shortest lane's full-block count every lane is a pure data block,
+        /// so the hot loop skips the per-lane tail dispatch; at most the last
+        /// two blocks of a message go through `block_at`.
         #[target_feature(enable = "simd128")]
         fn digest4(lines: [&[u8]; 4], blocks: usize) -> [[u8; 64]; 4] {
             let mut tails = [[0u8; 128]; 4];
@@ -971,7 +976,26 @@ mod imp {
                     .copy_from_slice(&((bytes.len() as u64).wrapping_mul(8)).to_be_bytes());
             }
             let mut state = splat_h0();
-            for k in 0..blocks {
+            let shared = full[0].min(full[1]).min(full[2]).min(full[3]);
+            for k in 0..shared {
+                let o = 64 * k;
+                let b0: &[u8; 64] = lines[0][o..o + 64].try_into().expect("64-byte block");
+                let b1: &[u8; 64] = lines[1][o..o + 64].try_into().expect("64-byte block");
+                let b2: &[u8; 64] = lines[2][o..o + 64].try_into().expect("64-byte block");
+                let b3: &[u8; 64] = lines[3][o..o + 64].try_into().expect("64-byte block");
+                let q0 = quad::<0>(b0, b1, b2, b3);
+                let q1 = quad::<16>(b0, b1, b2, b3);
+                let q2 = quad::<32>(b0, b1, b2, b3);
+                let q3 = quad::<48>(b0, b1, b2, b3);
+                compressm(
+                    &mut state,
+                    [
+                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1],
+                        q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
+                    ],
+                );
+            }
+            for k in shared..blocks {
                 let b0 = block_at(lines[0], &tails[0], full[0], k);
                 let b1 = block_at(lines[1], &tails[1], full[1], k);
                 let b2 = block_at(lines[2], &tails[2], full[2], k);
@@ -1215,6 +1239,20 @@ mod imp {
         }
         for (x, y) in ca.remainder().iter().zip(cb.remainder()) {
             acc |= u64::from(x ^ y);
+        }
+        acc == 0
+    }
+
+    /// Hash-width equality with the word loop fully unrolled: both sides are
+    /// whole 64-char hex spans, so no length or remainder handling.
+    #[cfg(target_arch = "wasm32")]
+    fn eq64(a: &[u8; 64], b: &[u8; 64]) -> bool {
+        let mut acc = 0u64;
+        let mut i = 0;
+        while i < 64 {
+            acc |= u64::from_le_bytes(a[i..i + 8].try_into().expect("8-byte chunk"))
+                ^ u64::from_le_bytes(b[i..i + 8].try_into().expect("8-byte chunk"));
+            i += 8;
         }
         acc == 0
     }
@@ -1713,16 +1751,28 @@ mod imp {
 
     /// Best-effort extraction of the trailing `chain_hash_hex` value from an
     /// anchor line, used only to seed speculative links: a wrong or missing
-    /// span merely costs a sequential recompute.
+    /// span merely costs a sequential recompute. The tag compare is word-wise
+    /// because wasm lowers slice == to a per-byte memcmp loop.
     #[cfg(target_arch = "wasm32")]
-    fn chain_span(line: &[u8]) -> Option<&[u8]> {
+    fn chain_span(line: &[u8]) -> Option<&[u8; 64]> {
         let n = line.len();
         if n < 85 {
             return None;
         }
-        let t = &line[n - 85..];
-        if t[..19] == *b",\"chain_hash_hex\":\"" && t[83] == b'"' && t[84] == b'}' {
-            Some(&t[19..83])
+        let t: &[u8; 85] = line[n - 85..].try_into().expect("85-byte tail");
+        const TAG: &[u8; 19] = b",\"chain_hash_hex\":\"";
+        let acc = (u64::from_le_bytes(t[0..8].try_into().expect("8-byte chunk"))
+            ^ u64::from_le_bytes(TAG[0..8].try_into().expect("8-byte chunk")))
+            | (u64::from_le_bytes(t[8..16].try_into().expect("8-byte chunk"))
+                ^ u64::from_le_bytes(TAG[8..16].try_into().expect("8-byte chunk")))
+            | u64::from(
+                u32::from_le_bytes(t[15..19].try_into().expect("4-byte chunk"))
+                    ^ u32::from_le_bytes(TAG[15..19].try_into().expect("4-byte chunk")),
+            )
+            | u64::from(t[83] ^ b'"')
+            | u64::from(t[84] ^ b'}');
+        if acc == 0 {
+            t[19..83].try_into().ok()
         } else {
             None
         }
@@ -1754,7 +1804,7 @@ mod imp {
         #[cfg(target_arch = "wasm32")]
         let mut spec_miss = 0u32;
         #[cfg(target_arch = "wasm32")]
-        let mut spec_cand: [Option<&[u8]>; 4] = [None; 4];
+        let mut spec_cand: [Option<&[u8; 64]>; 4] = [None; 4];
         #[cfg(target_arch = "wasm32")]
         let mut spec_buf = [[0u8; 64]; 4];
         // Canonical decimal of the running entry index, incremented in place;
@@ -1790,7 +1840,7 @@ mod imp {
                             spec_cand[l] = if idx >= event_lines.len() {
                                 None
                             } else if idx == 0 {
-                                Some(&zero_prev[..])
+                                Some(&zero_prev)
                             } else {
                                 anchor_lines.get(idx - 1).and_then(|a| chain_span(a))
                             };
@@ -1802,7 +1852,7 @@ mod imp {
                     }
                 }
                 match spec_cand[index & 3] {
-                    Some(c) if bytes_eq(c, &previous[..]) => {
+                    Some(c) if eq64(c, &previous) => {
                         spec_miss = 0;
                         spec_buf[index & 3]
                     }

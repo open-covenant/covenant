@@ -202,4 +202,18 @@ ${block}
     console.log(`REJECTED ${stamp}: no candidate beat the incumbent by the margin`);
   }
   writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
+
+  const arena = sh("node", [join(here, "gen-arena.mjs")]);
+  if (arena.ok) {
+    sh("git", ["-C", repoRoot, "add", "landing/public/arena.json"]);
+    sh("git", [
+      "-C", repoRoot,
+      "-c", "user.name=Covenant",
+      "-c", "user.email=covenant@users.noreply.github.com",
+      "commit", "-m", `arena: round ${stamp.slice(1)} scoreboard`,
+      "--only", "landing/public/arena.json",
+    ]);
+  } else {
+    console.log(`arena update failed (non-fatal): ${arena.out.slice(-200)}`);
+  }
 }

@@ -1,0 +1,195 @@
+{
+  "updatedAt": "2026-06-10T10:33:48.674Z",
+  "task": "audit-kernel-fuel",
+  "baselineFuel": 5867618602,
+  "incumbent": {
+    "scalar": 4.426,
+    "fuelCutPct": 77.4
+  },
+  "tally": {
+    "Claude": 7,
+    "Grok": 0,
+    "rejectedRounds": 2
+  },
+  "curve": [
+    {
+      "round": 0,
+      "scalar": 1
+    },
+    {
+      "round": 1,
+      "scalar": 1.41
+    },
+    {
+      "round": 2,
+      "scalar": 1.51
+    },
+    {
+      "round": 3,
+      "scalar": 2.11
+    },
+    {
+      "round": 4,
+      "scalar": 2.161
+    },
+    {
+      "round": 5,
+      "scalar": 3.727
+    },
+    {
+      "round": 6,
+      "scalar": 4.272
+    },
+    {
+      "round": 8,
+      "scalar": 4.426
+    }
+  ],
+  "rounds": [
+    {
+      "round": 9,
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 4.426,
+          "gain": -4.426,
+          "promoted": false,
+          "commit": null,
+          "reason": "proposal failed: proposer output is not a complete EVOLVE block: ```rust\n// EVOLVE-BLOCK-START\nmod imp {\n    use super::{ChainEntry, ChainRe"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 4.426,
+          "gain": -4.426,
+          "promoted": false,
+          "commit": null,
+          "reason": "proposal failed: proposer output is not a complete EVOLVE block: /// sha256(line) as lowercase hex; same block walk as the scalar\n        //"
+        }
+      ]
+    },
+    {
+      "round": 8,
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude",
+          "scalar": 4.426,
+          "incumbent": 4.272,
+          "gain": 0.154,
+          "promoted": true,
+          "commit": "83e05aba70f7945099c7037da845537539c75afa",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": 7,
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude",
+          "scalar": 4.278,
+          "incumbent": 4.272,
+          "gain": 0.006,
+          "promoted": false,
+          "commit": null,
+          "reason": "gain 0.006 < margin 0.02"
+        }
+      ]
+    },
+    {
+      "round": 6,
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude",
+          "scalar": 4.272,
+          "incumbent": 3.727,
+          "gain": 0.545,
+          "promoted": true,
+          "commit": "582cfd9d18ca0c02ef07ae837c591c66061660b6",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude",
+          "scalar": 3.727,
+          "incumbent": 2.161,
+          "gain": 1.566,
+          "promoted": true,
+          "commit": "3071bc6402f569f04cb59f1b13361858936c2ced",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude",
+          "scalar": 2.161,
+          "incumbent": 2.11,
+          "gain": 0.051,
+          "promoted": true,
+          "commit": "ead098453569bfb54b7544a90def07048f5b2f36",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude",
+          "scalar": 2.11,
+          "incumbent": 1.51,
+          "gain": 0.6,
+          "promoted": true,
+          "commit": "431566fce9db31e926b079abfa198cafcf15d38e",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude",
+          "scalar": 1.51,
+          "incumbent": 1.41,
+          "gain": 0.1,
+          "promoted": true,
+          "commit": "883d6b70a3b166c36e66ec6b02dbc681ecf0ee13",
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude",
+          "scalar": 1.41,
+          "incumbent": 1,
+          "gain": 0.41,
+          "promoted": true,
+          "commit": "db0e4234815998c6336603322c7134fa78871ac5",
+          "reason": null
+        }
+      ]
+    }
+  ]
+}

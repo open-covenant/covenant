@@ -4,6 +4,12 @@
   "description": "The Covenant Foundation's production agent, running on covenantd — the open-source agent operating system for accountable autonomy. Every action it takes passes a scoped capability check, debits an enforced budget, and is recorded in an append-only, hash-chained audit log. Signed audit-root attestations anchoring that history are published on Solana as MPL Core AppData, so anyone can verify the agent's record through a standard DAS query — no Covenant infrastructure required. Identity, permissions, and a tamper-evident audit trail: trust you can check, not claim.",
   "image": "https://opencovenant.org/icon-maskable.png",
   "active": true,
+  "registrations": [
+    {
+      "agentId": "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH",
+      "agentRegistry": "solana:101:metaplex"
+    }
+  ],
   "services": [
     {
       "name": "web",

@@ -110,7 +110,7 @@ if (result.gaming?.length) {
 } else {
   const vs = incumbentScalar ? ` Incumbent: ${incumbentScalar}x.` : "";
   const margin = incumbentScalar ? scalar - incumbentScalar : null;
-  const call = margin === null ? "" : margin >= 0.02 ? " Clears the promotion margin — this ships, attributed." : margin > 0 ? " Above the incumbent, under the +0.02 promotion margin. Close." : margin === 0 ? " Exactly matches the incumbent." : " Behavior-identical, but more compute than the incumbent.";
+  const call = margin === null ? "" : margin >= 0.005 ? " Clears the promotion margin — this ships, attributed." : margin > 0 ? " Above the incumbent, under the +0.005 promotion margin. Close." : margin === 0 ? " Exactly matches the incumbent." : " Behavior-identical, but more compute than the incumbent.";
   console.log(`Gates: PASSED (behavior bit-identical). Score: ${scalar}x.${vs}${call}`);
 }
 console.log(`Candidate archived: ${candidateFile}`);

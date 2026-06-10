@@ -78,7 +78,7 @@ fn find_newline(bytes: &[u8], mut i: usize) -> usize {
   reference, an exhaustive hash differential, the test suites executed inside
   wasm, and a corpus report digest that catches any behavioral drift.
 - To ship, the whole kernel with your function must beat the current
-  incumbent by the promotion margin (+0.02 scalar). Beat it and your change
+  incumbent by the promotion margin (+0.005 scalar). Beat it and your change
   lands in production with attribution: commit credited to you, your handle
   on the arena page.
 
@@ -91,3 +91,14 @@ gist, or open a PR against `open-covenant/covenant` touching only
 
 Every submission gets a public verdict: the measured score or the gate that
 rejected it. The machine judges; nobody argues with it.
+
+## Rules changelog
+
+- 2026-06-10: promotion margin lowered from +0.02 to +0.005 scalar, applied
+  prospectively from Round 4. The fuel metric is deterministic (bit-identical
+  per run), so any measured gain is real; the old margin was inherited from a
+  noisy-eval design and systematically rejected small genuine improvements.
+- 2026-06-10: both arena proposers now get up to 2 free fixups per attempt
+  for extraction or compile failures before scoring. The CLI-based proposer
+  could already compile locally inside its agent loop; the API-based proposer
+  could not. Formatting deaths are noise, not signal.

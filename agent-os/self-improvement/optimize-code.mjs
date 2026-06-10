@@ -27,7 +27,10 @@ const argv = process.argv.slice(2);
 const opt = (f, d) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : d; };
 const proposerModel = opt("--model", "claude-fable-5");
 const grokModel = opt("--grok-model", "grok-4.3");
-const margin = parseFloat(opt("--margin", "0.02"));
+// 0.005 since 2026-06-10 (was 0.02): the fuel metric is deterministic, so
+// any measured gain is real; the old margin systematically killed small-gain
+// styles. Disclosed in docs/arena-challenge.md, applied prospectively.
+const margin = parseFloat(opt("--margin", "0.005"));
 const iters = parseInt(opt("--iters", "1"), 10);
 const attempts = parseInt(opt("--attempts", "3"), 10);
 const round = (n) => Math.round(n * 1000) / 1000;
@@ -59,6 +62,30 @@ function benchScore(solver) {
 
 const START = "// EVOLVE-BLOCK-START";
 const END = "// EVOLVE-BLOCK-END";
+
+// Fast wasm compile-check sandbox: a standalone copy of the kernel crate.
+// Both proposers get free fixups for extraction/compile failures (the CLI
+// proposer can compile locally inside its agent loop; the API proposer
+// cannot — this levels that without spending scored attempts).
+const checkDir = join(archiveDir, "compile-check");
+function compileCheck(candidateSrc) {
+  mkdirSync(join(checkDir, "src"), { recursive: true });
+  writeFileSync(join(checkDir, "Cargo.toml"), `[package]
+name = "covenant-audit-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+
+[workspace]
+`);
+  writeFileSync(join(checkDir, "src", "lib.rs"), candidateSrc);
+  const r = sh("cargo", ["check", "--lib", "--target", "wasm32-wasip1", "--quiet"], { cwd: checkDir });
+  return r.ok ? null : r.out.slice(-1500);
+}
 
 function splitEvolve(src) {
   const a = src.indexOf(START);
@@ -161,9 +188,30 @@ ${block}
     for (let attempt = 1; attempt <= attempts; attempt++) {
       let result;
       try {
-        const reply = p.call(messages, attempt);
-        messages.push({ role: "assistant", content: reply });
-        const candidateSrc = pre + extractBlock(reply) + post;
+        // Up to 2 free fixups per attempt for extraction/compile failures —
+        // formatting and syntax deaths are noise, not signal.
+        let candidateSrc = null;
+        for (let fix = 0; fix <= 2; fix++) {
+          const reply = p.call(messages, attempt);
+          messages.push({ role: "assistant", content: reply });
+          let block;
+          try {
+            block = extractBlock(reply);
+          } catch (e) {
+            if (fix === 2) throw e;
+            messages.push({ role: "user", content: "That reply did not contain a complete EVOLVE block. Resend the entire block, from the START marker to the END marker, nothing else." });
+            continue;
+          }
+          const src = pre + block + post;
+          const err = compileCheck(src);
+          if (err) {
+            if (fix === 2) throw new Error(`does not compile after fixups: ${err.slice(0, 200)}`);
+            messages.push({ role: "user", content: `Your block does not compile:\n${err}\nFix it and resend the entire EVOLVE block.` });
+            continue;
+          }
+          candidateSrc = src;
+          break;
+        }
         const candidateFile = join(archiveDir, `${label.replace(":", "-")}-a${attempt}-candidate.rs`);
         writeFileSync(candidateFile, candidateSrc);
         const scored = benchScore(`cmd:cp ${candidateFile} ${task.evolveFile}`);

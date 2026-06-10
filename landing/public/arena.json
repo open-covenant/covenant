@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-06-10T11:15:25.164Z",
+  "updatedAt": "2026-06-10T12:03:14.179Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
@@ -7,9 +7,9 @@
     "fuelCutPct": 80.9
   },
   "tally": {
-    "Claude": 8,
+    "Claude": 1,
     "Grok": 0,
-    "rejectedRounds": 2
+    "rejectedRounds": 1
   },
   "curve": [
     {
@@ -57,9 +57,16 @@
       "proposer": "Claude"
     }
   ],
+  "solo": {
+    "promotions": 7,
+    "rejected": 1,
+    "finalScalar": 4.426
+  },
   "rounds": [
     {
       "round": 10,
+      "display": "Round 1",
+      "era": "tournament",
       "entries": [
         {
           "proposer": "Grok",
@@ -85,6 +92,8 @@
     },
     {
       "round": 9,
+      "display": "Shakedown",
+      "era": "tournament",
       "entries": [
         {
           "proposer": "Grok",
@@ -110,6 +119,8 @@
     },
     {
       "round": 8,
+      "display": "Run 8",
+      "era": "solo",
       "entries": [
         {
           "proposer": "Claude",
@@ -125,6 +136,8 @@
     },
     {
       "round": 7,
+      "display": "Run 7",
+      "era": "solo",
       "entries": [
         {
           "proposer": "Claude",
@@ -140,6 +153,8 @@
     },
     {
       "round": 6,
+      "display": "Run 6",
+      "era": "solo",
       "entries": [
         {
           "proposer": "Claude",
@@ -155,6 +170,8 @@
     },
     {
       "round": 5,
+      "display": "Run 5",
+      "era": "solo",
       "entries": [
         {
           "proposer": "Claude",
@@ -170,6 +187,8 @@
     },
     {
       "round": 4,
+      "display": "Run 4",
+      "era": "solo",
       "entries": [
         {
           "proposer": "Claude",
@@ -185,6 +204,8 @@
     },
     {
       "round": 3,
+      "display": "Run 3",
+      "era": "solo",
       "entries": [
         {
           "proposer": "Claude",
@@ -200,6 +221,8 @@
     },
     {
       "round": 2,
+      "display": "Run 2",
+      "era": "solo",
       "entries": [
         {
           "proposer": "Claude",
@@ -215,6 +238,8 @@
     },
     {
       "round": 1,
+      "display": "Run 1",
+      "era": "solo",
       "entries": [
         {
           "proposer": "Claude",

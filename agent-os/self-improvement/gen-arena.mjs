@@ -32,17 +32,28 @@ for (const v of ledger.versions) {
   });
 }
 
+// k1-k8 = the loop's solo run (Claude as sole proposer); the tournament
+// starts at k9 (shakedown) / k10 (Round 1). The vs-tally counts only
+// tournament rounds; the curve keeps the whole history of the kernel.
+const TOURNAMENT_START = 9;
+const display = (n) => (n < TOURNAMENT_START ? `Run ${n}` : n === TOURNAMENT_START ? "Shakedown" : `Round ${n - TOURNAMENT_START}`);
+
 const tally = { Claude: 0, Grok: 0, rejectedRounds: 0 };
+const solo = { promotions: 0, rejected: 0, finalScalar: 1 };
 const curve = [{ round: 0, scalar: 1 }];
 let incumbentScalar = 1;
 for (const [n, entries] of [...rounds.entries()].sort((a, b) => a[0] - b[0])) {
   const winner = entries.find((e) => e.promoted);
+  const inTournament = n >= TOURNAMENT_START;
   if (winner) {
-    tally[winner.proposer] = (tally[winner.proposer] ?? 0) + 1;
     incumbentScalar = winner.scalar;
     curve.push({ round: n, scalar: winner.scalar, proposer: winner.proposer });
-  } else {
+    if (inTournament) tally[winner.proposer] = (tally[winner.proposer] ?? 0) + 1;
+    else { solo.promotions += 1; solo.finalScalar = winner.scalar; }
+  } else if (inTournament) {
     tally.rejectedRounds += 1;
+  } else {
+    solo.rejected += 1;
   }
 }
 
@@ -56,9 +67,10 @@ const payload = {
   },
   tally,
   curve,
+  solo,
   rounds: [...rounds.entries()]
     .sort((a, b) => b[0] - a[0])
-    .map(([n, entries]) => ({ round: n, entries })),
+    .map(([n, entries]) => ({ round: n, display: display(n), era: n >= TOURNAMENT_START ? "tournament" : "solo", entries })),
 };
 
 writeFileSync(outPath, JSON.stringify(payload, null, 2) + "\n");

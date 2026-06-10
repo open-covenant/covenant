@@ -48,7 +48,8 @@ type Arena = {
   incumbent: { scalar: number; fuelCutPct: number };
   tally: { Claude: number; Grok: number; rejectedRounds: number };
   curve: { round: number; scalar: number; proposer?: string }[];
-  rounds: { round: number; entries: Entry[] }[];
+  solo: { promotions: number; rejected: number; finalScalar: number };
+  rounds: { round: number; display: string; era: string; entries: Entry[] }[];
 };
 
 const RAW_URL =
@@ -217,12 +218,20 @@ export default async function ArenaPage() {
                 const isLast = i === arena.rounds.length - 1;
                 const winner = r.entries.find((e) => e.promoted);
                 const winColor = winner ? (ACCENT[winner.proposer] ?? NEUTRAL) : "#404040";
+                const eraBreak = r.era === "solo" && (i === 0 || arena.rounds[i - 1].era === "tournament");
                 return (
                   <li
                     key={r.round}
                     className={`arena-rise relative border-l border-neutral-800/80 pl-8 sm:pl-10 ${isLast ? "" : "pb-10 sm:pb-12"}`}
                     style={{ animationDelay: `${0.1 + i * 0.07}s` }}
                   >
+                    {eraBreak && (
+                      <div className="mb-8 -ml-8 border-y border-neutral-800/60 py-4 pl-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500 sm:-ml-10 sm:pl-10">
+                        Before the tournament: the loop ran solo, Claude Fable 5
+                        proposing alone. {arena.solo.promotions} promotions,{" "}
+                        {arena.solo.rejected} rejected, {arena.solo.finalScalar}x.
+                      </div>
+                    )}
                     <span
                       aria-hidden="true"
                       className="absolute -left-[5px] top-[7px] h-[9px] w-[9px] rounded-full transition-transform duration-300"
@@ -230,7 +239,7 @@ export default async function ArenaPage() {
                     />
                     <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
                       <span className="text-[11px] uppercase tracking-[0.3em] text-neutral-300">
-                        Round {r.round}
+                        {r.display}
                       </span>
                       <span className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
                         {winner ? (

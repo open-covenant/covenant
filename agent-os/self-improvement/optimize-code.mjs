@@ -131,7 +131,12 @@ ${block}
       name: "fable",
       model: proposerModel,
       call: () => {
-        const r = sh("claude", ["-p", prompt, "--model", proposerModel, "--dangerously-skip-permissions"]);
+        // Empty scratch cwd: the CLI proposer is an agent with tools and will
+        // otherwise edit the kernel in the live repo instead of printing the
+        // block (observed round 10). stdout is its only channel back.
+        const scratch = join(archiveDir, `${stamp}-fable-scratch`);
+        mkdirSync(scratch, { recursive: true });
+        const r = sh("claude", ["-p", prompt, "--model", proposerModel, "--dangerously-skip-permissions"], { cwd: scratch });
         if (!r.ok) throw new Error(`claude proposer failed: ${r.out.slice(-400)}`);
         return r.out;
       },

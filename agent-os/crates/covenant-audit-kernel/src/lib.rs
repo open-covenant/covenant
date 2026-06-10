@@ -1397,6 +1397,17 @@ mod imp {
         acc == 0
     }
 
+    /// Canonical (no leading zeros) decimal digits folded to a value; spans
+    /// come from `Scan::digits`, which caps length at 19, so the accumulate
+    /// cannot overflow u64.
+    fn fold_digits(digits: &[u8]) -> u64 {
+        let mut value = 0u64;
+        for &c in digits {
+            value = value.wrapping_mul(10).wrapping_add(u64::from(c - b'0'));
+        }
+        value
+    }
+
     fn uuid_eq(a: &str, b: &str) -> bool {
         bytes_eq(a.as_bytes(), b.as_bytes()) || a.eq_ignore_ascii_case(b)
     }
@@ -1557,24 +1568,26 @@ mod imp {
             None
         }
 
-        /// Up to 19 digits cannot overflow u64, so the accumulate is
-        /// unchecked; 20+ digit runs bail to the serde fallback, which parses
-        /// in-range values identically and rejects the rest.
-        fn uint(&mut self) -> Option<u64> {
+        /// Canonical unsigned decimal span: 1..=19 digits, no leading zero.
+        /// 19 digits cannot overflow u64, so a later fold is unchecked; 20+
+        /// digit runs bail to the serde fallback, which parses in-range
+        /// values identically and rejects the rest. Returning the span
+        /// instead of the value lets the verify fast path compare digit
+        /// bytes directly and defer the fold to the rare slow path.
+        fn digits(&mut self) -> Option<&'a [u8]> {
             let start = self.pos;
-            let mut value: u64 = 0;
-            while let Some(&c) = self.buf.get(self.pos) {
-                if !c.is_ascii_digit() {
-                    break;
-                }
-                value = value.wrapping_mul(10).wrapping_add(u64::from(c - b'0'));
+            while self.buf.get(self.pos).is_some_and(u8::is_ascii_digit) {
                 self.pos += 1;
             }
             let len = self.pos - start;
             if len == 0 || len > 19 || (self.buf[start] == b'0' && len > 1) {
                 return None;
             }
-            Some(value)
+            Some(&self.buf[start..self.pos])
+        }
+
+        fn uint(&mut self) -> Option<u64> {
+            self.digits().map(fold_digits)
         }
 
         fn number(&mut self) -> bool {
@@ -1602,6 +1615,7 @@ mod imp {
             !matches!(self.buf.get(self.pos), Some(b'e' | b'E'))
         }
 
+        #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
         fn value(&mut self, depth: u32) -> bool {
             if depth > 16 {
                 return false;
@@ -1670,23 +1684,6 @@ mod imp {
                 false
             }
         }
-
-        /// Match the canonical decimal rendering of `v`; any other digit
-        /// string (leading zeros, different value) fails to the slow path.
-        fn dec(&mut self, v: u64) -> bool {
-            let mut digits = [0u8; 20];
-            let mut i = digits.len();
-            let mut v = v;
-            loop {
-                i -= 1;
-                digits[i] = b'0' + (v % 10) as u8;
-                v /= 10;
-                if v == 0 {
-                    break;
-                }
-            }
-            self.bytes(&digits[i..])
-        }
     }
 
     fn ascii_str(bytes: &[u8]) -> Option<&str> {
@@ -1698,9 +1695,22 @@ mod imp {
     /// compares, variable spans as string scans — before handing anything
     /// unusual to the generic tokenizer, which stays the acceptance
     /// authority via the rewind.
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn kind_value(s: &mut Scan) -> bool {
         let start = s.pos;
-        if s.lit(b"{\"type\":\"intent_dispatched\",\"intent_id\":\"") {
+        // One-byte discriminators (kind tag initial, then invoked-vs-completed
+        // at the fixed offset where they diverge) pick the literal arm before
+        // any long compare runs, so non-matching arms never scan.
+        let arm = match (
+            s.buf.get(s.pos + 9).copied(),
+            s.buf.get(s.pos + 21).copied(),
+        ) {
+            (Some(b'i'), _) => 0u32,
+            (Some(b'h'), Some(b'i')) => 1,
+            (Some(b'h'), Some(b'c')) => 2,
+            _ => 3,
+        };
+        if arm == 0 && s.lit(b"{\"type\":\"intent_dispatched\",\"intent_id\":\"") {
             if s.string_body().is_some()
                 && s.lit(b",\"intent_text\":\"")
                 && s.string_body().is_some()
@@ -1714,7 +1724,7 @@ mod imp {
             {
                 return true;
             }
-        } else if s.lit(b"{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"") {
+        } else if arm == 1 && s.lit(b"{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"") {
             if s.string_body().is_some()
                 && s.lit(b",\"run_id\":\"")
                 && s.string_body().is_some()
@@ -1726,7 +1736,8 @@ mod imp {
             {
                 return true;
             }
-        } else if s.lit(b"{\"type\":\"hermes_tool_completed\",\"intent_id\":\"")
+        } else if arm == 2
+            && s.lit(b"{\"type\":\"hermes_tool_completed\",\"intent_id\":\"")
             && s.string_body().is_some()
             && s.lit(b",\"run_id\":\"")
             && s.string_body().is_some()
@@ -1744,7 +1755,17 @@ mod imp {
         s.value(0)
     }
 
-    fn fast_event(line: &[u8]) -> Option<(&str, u64)> {
+    /// Borrowed spans from a strict-scanned event line. `id` is printable
+    /// ASCII with no escapes (string_body's acceptance set), `ts` is a
+    /// canonical decimal span, so both embed verbatim in anchor JSON and a
+    /// UTF-8 check or value fold is only needed on slow paths.
+    struct EventSpans<'a> {
+        id: &'a [u8],
+        ts: &'a [u8],
+    }
+
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    fn fast_event(line: &[u8]) -> Option<EventSpans<'_>> {
         let mut s = Scan { buf: line, pos: 0 };
         if !s.lit(b"{\"id\":\"") {
             return None;
@@ -1753,7 +1774,7 @@ mod imp {
         if !s.lit(b",\"timestamp_ms\":") {
             return None;
         }
-        let ts = s.uint()?;
+        let ts = s.digits()?;
         if s.lit(b",\"issuer\":")
             && s.value(0)
             && s.lit(b",\"kind\":")
@@ -1761,15 +1782,17 @@ mod imp {
             && s.lit(b"}")
             && s.done()
         {
-            Some((ascii_str(id)?, ts))
+            Some(EventSpans { id, ts })
         } else {
             None
         }
     }
 
     fn parse_event(line: &[u8]) -> Result<(Cow<'_, str>, u64), ()> {
-        if let Some((id, ts)) = fast_event(line) {
-            return Ok((Cow::Borrowed(id), ts));
+        if let Some(ev) = fast_event(line) {
+            if let Some(id) = ascii_str(ev.id) {
+                return Ok((Cow::Borrowed(id), fold_digits(ev.ts)));
+            }
         }
         match serde_json::from_slice::<EventFields>(line) {
             Ok(event) => Ok((event.id, event.timestamp_ms)),
@@ -1777,6 +1800,7 @@ mod imp {
         }
     }
 
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn fast_anchor(line: &[u8]) -> Option<AnchorFields<'_>> {
         let mut s = Scan { buf: line, pos: 0 };
         if !s.lit(b"{\"index\":") {
@@ -1826,31 +1850,40 @@ mod imp {
     /// One-pass byte comparison of an anchor line against the entry this
     /// chain position expects, in the canonical field order and compact
     /// formatting `fold_chain` serializes. Byte equality implies the anchor
-    /// parses to exactly the expected field values (`id` is known
-    /// escape-free printable ASCII, decimals are canonical), so the parse +
-    /// field-compare slow path is skipped; any difference falls back to it.
+    /// parses to exactly the expected field values: `idx_digits` is the
+    /// maintained canonical decimal of the entry index, `id` is known
+    /// escape-free printable ASCII, and `ts_digits` is the event line's own
+    /// canonical span, so the parse + field-compare slow path is skipped;
+    /// any difference falls back to it.
     fn anchor_line_matches(
         line: &[u8],
-        index: u64,
+        idx_digits: &[u8],
         id: &[u8],
-        timestamp_ms: u64,
+        ts_digits: &[u8],
         event_hex: &[u8; 64],
         previous: &[u8; 64],
         chain: &[u8; 64],
     ) -> bool {
         let mut s = Scan { buf: line, pos: 0 };
+        // Corpus ids are uuid-shaped; a const-length arm lets the compare
+        // unroll like the hex fields. Any other length takes the generic
+        // word-wise compare with identical acceptance.
+        let id_eq = |s: &mut Scan| match <&[u8; 36]>::try_from(id) {
+            Ok(arr) => s.lit(arr),
+            Err(_) => s.bytes(id),
+        };
         s.lit(b"{\"index\":")
-            && s.dec(index)
+            && s.bytes(idx_digits)
             && s.lit(b",\"event_id\":\"")
-            && s.bytes(id)
+            && id_eq(&mut s)
             && s.lit(b"\",\"timestamp_ms\":")
-            && s.dec(timestamp_ms)
+            && s.bytes(ts_digits)
             && s.lit(b",\"event_hash_hex\":\"")
-            && s.bytes(event_hex)
+            && s.lit(event_hex)
             && s.lit(b"\",\"previous_hash_hex\":\"")
-            && s.bytes(previous)
+            && s.lit(previous)
             && s.lit(b"\",\"chain_hash_hex\":\"")
-            && s.bytes(chain)
+            && s.lit(chain)
             && s.lit(b"\"}")
             && s.done()
     }
@@ -1869,66 +1902,88 @@ mod imp {
         let event_hexes = digest_all(&event_lines);
         let tail = tail_wk_table();
         let mut previous = zero_hash();
+        // Canonical decimal of the running entry index, right-aligned and
+        // incremented in place; replaces a per-event itoa in the anchor
+        // fast compare.
+        let mut idx_buf = [0u8; 20];
+        let mut idx_start = idx_buf.len() - 1;
+        idx_buf[idx_start] = b'0';
         for (index, line) in event_lines.iter().enumerate() {
-            let event_hex = event_hexes[index];
-            let chain = link_hex(&previous, &event_hex, &tail);
-            let parsed = match fast_event(line) {
-                Some((id, ts)) => Some((Cow::Borrowed(id), ts, true)),
-                None => match serde_json::from_slice::<EventFields>(line) {
-                    Ok(event) => Some((event.id, event.timestamp_ms, false)),
-                    Err(_) => None,
-                },
-            };
-            match parsed {
-                Some((id, timestamp_ms, clean_id)) => match anchor_lines.get(index) {
+            if index > 0 {
+                let mut p = idx_buf.len() - 1;
+                loop {
+                    if idx_buf[p] < b'9' {
+                        idx_buf[p] += 1;
+                        break;
+                    }
+                    idx_buf[p] = b'0';
+                    if p == idx_start {
+                        idx_start -= 1;
+                        idx_buf[idx_start] = b'1';
+                        break;
+                    }
+                    p -= 1;
+                }
+            }
+            let event_hex = &event_hexes[index];
+            let chain = link_hex(&previous, event_hex, &tail);
+            // The strict scanner accepting the event guarantees the id and
+            // timestamp spans embed verbatim in anchor JSON, making byte
+            // equality sufficient; the value-level slow compare below
+            // re-derives owned fields only when the byte compare fails.
+            let mut slow: Option<Option<(Cow<'_, str>, u64)>> = None;
+            match fast_event(line) {
+                Some(ev) => match anchor_lines.get(index) {
                     Some(aline) => {
-                        // `clean_id` (the strict scanner accepted the event)
-                        // guarantees the id embeds verbatim in JSON, making
-                        // byte equality sufficient.
-                        if !(clean_id
-                            && anchor_line_matches(
-                                aline,
-                                index as u64,
-                                id.as_bytes(),
-                                timestamp_ms,
-                                &event_hex,
-                                &previous,
-                                &chain,
-                            ))
-                        {
-                            match parse_anchor(aline) {
-                                Some(actual)
-                                    if actual.index == index as u64
-                                        && uuid_eq(&actual.event_id, &id)
-                                        && actual.timestamp_ms == timestamp_ms
-                                        && bytes_eq(
-                                            actual.event_hash_hex.as_bytes(),
-                                            &event_hex,
-                                        )
-                                        && bytes_eq(
-                                            actual.previous_hash_hex.as_bytes(),
-                                            &previous,
-                                        )
-                                        && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
-                                Some(_) => failures.push(Failure::EntryMismatch {
-                                    index: index as u64,
-                                }),
-                                None => {
-                                    anchor_failures.push(Failure::AnchorParseError {
-                                        index: index as u64,
-                                    });
-                                    failures.push(Failure::EntryMismatch {
-                                        index: index as u64,
-                                    });
-                                }
-                            }
+                        if !anchor_line_matches(
+                            aline,
+                            &idx_buf[idx_start..],
+                            ev.id,
+                            ev.ts,
+                            event_hex,
+                            &previous,
+                            &chain,
+                        ) {
+                            slow = Some(parse_event(line).ok());
                         }
                     }
                     None => failures.push(Failure::EntryMissing {
                         index: index as u64,
                     }),
                 },
-                None => {
+                None => match serde_json::from_slice::<EventFields>(line) {
+                    Ok(event) => slow = Some(Some((event.id, event.timestamp_ms))),
+                    Err(_) => slow = Some(None),
+                },
+            }
+            match slow {
+                None => {}
+                Some(Some((id, timestamp_ms))) => match anchor_lines.get(index) {
+                    Some(aline) => match parse_anchor(aline) {
+                        Some(actual)
+                            if actual.index == index as u64
+                                && uuid_eq(&actual.event_id, &id)
+                                && actual.timestamp_ms == timestamp_ms
+                                && bytes_eq(actual.event_hash_hex.as_bytes(), event_hex)
+                                && bytes_eq(actual.previous_hash_hex.as_bytes(), &previous)
+                                && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
+                        Some(_) => failures.push(Failure::EntryMismatch {
+                            index: index as u64,
+                        }),
+                        None => {
+                            anchor_failures.push(Failure::AnchorParseError {
+                                index: index as u64,
+                            });
+                            failures.push(Failure::EntryMismatch {
+                                index: index as u64,
+                            });
+                        }
+                    },
+                    None => failures.push(Failure::EntryMissing {
+                        index: index as u64,
+                    }),
+                },
+                Some(None) => {
                     failures.push(Failure::ParseError {
                         index: index as u64,
                     });
@@ -1936,7 +1991,7 @@ mod imp {
                         Some(aline) => match parse_anchor(aline) {
                             Some(actual)
                                 if actual.index == index as u64
-                                    && bytes_eq(actual.event_hash_hex.as_bytes(), &event_hex)
+                                    && bytes_eq(actual.event_hash_hex.as_bytes(), event_hex)
                                     && bytes_eq(actual.previous_hash_hex.as_bytes(), &previous)
                                     && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
                             Some(_) => failures.push(Failure::EntryMismatch {

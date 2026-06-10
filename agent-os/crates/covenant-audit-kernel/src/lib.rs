@@ -84,9 +84,8 @@ mod imp {
         kind: IgnoredAny,
     }
 
-    /// Borrowed mirror of `ChainEntry`: same field names and value shapes, so
-    /// serde accepts and rejects exactly the same lines, without owning five
-    /// strings per anchor.
+    /// Borrowed mirror of `ChainEntry`: serde accepts and rejects exactly the
+    /// same lines, without owning five strings per anchor.
     #[derive(Deserialize)]
     struct AnchorFields<'a> {
         index: u64,
@@ -101,16 +100,11 @@ mod imp {
         chain_hash_hex: Cow<'a, str>,
     }
 
-    /// SHA-256, hand-rolled: the sha2 crate's generic core costs ~5.9k fuel
-    /// per block under wasmtime metering; this scalar compress with a 16-word
-    /// ring schedule costs a fraction of that. Pinned by the NIST vector unit
-    /// test and the frozen corpus digest.
     const H0: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
         0x5be0cd19,
     ];
 
-    /// Round-constant table for the precomputed tail schedules.
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
@@ -124,11 +118,9 @@ mod imp {
         0xc67178f2,
     ];
 
-    /// The final link block is constant except for the last event hex char:
-    /// `w0 = c << 24 | 0x0080_0000`, `w15 = 1032`, all other words zero. Only
-    /// 16 chars are possible, so the full 64-word `w + K` schedule for each
-    /// is expanded once per call and the tail compression skips its message
-    /// schedule entirely.
+    /// Final link block is constant except the last event hex char: 16
+    /// possible chars, so the full `w + K` schedule per char is expanded once
+    /// per call and tail compressions skip their message schedule entirely.
     fn tail_wk_table() -> [[u32; 64]; 16] {
         let mut tbl = [[0u32; 64]; 16];
         let mut n = 0;
@@ -161,16 +153,14 @@ mod imp {
         tbl
     }
 
-    /// Lowercase hex char -> nibble, masked so the table index never needs a
-    /// bounds check; link inputs are always this module's own hex output.
+    /// Lowercase hex char -> 0..15, masked so indexing never bounds-checks;
+    /// link inputs are always this module's own hex output.
     #[cfg(target_arch = "wasm32")]
     #[inline(always)]
     fn tail_idx(c: u8) -> usize {
         usize::from((c & 0x0f) + (c >> 6) * 9) & 15
     }
 
-    /// Same scalar round shape as the unrolled simd-lane rounds, with
-    /// `k + w` arriving pre-added from the table.
     #[cfg(target_arch = "wasm32")]
     macro_rules! roundt {
         ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:expr, $xo:ident, $xn:ident) => {
@@ -186,8 +176,25 @@ mod imp {
         };
     }
 
-    /// One compression whose full `w + K` schedule is precomputed; rounds
-    /// only load and add. Used for the constant-shape final link block.
+    /// Eight rounds: the working-variable rotation has period eight, so the
+    /// roles line back up with `a..h` after each oct; the reseeded `b ^ c`
+    /// equals the xor the chained form would have carried over.
+    #[cfg(target_arch = "wasm32")]
+    macro_rules! octt {
+        ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:ident, $i:literal) => {
+            let x0 = $b ^ $c;
+            roundt!($a, $b, $c, $d, $e, $f, $g, $h, $wk[$i], x0, x1);
+            roundt!($h, $a, $b, $c, $d, $e, $f, $g, $wk[$i + 1], x1, x2);
+            roundt!($g, $h, $a, $b, $c, $d, $e, $f, $wk[$i + 2], x2, x3);
+            roundt!($f, $g, $h, $a, $b, $c, $d, $e, $wk[$i + 3], x3, x4);
+            roundt!($e, $f, $g, $h, $a, $b, $c, $d, $wk[$i + 4], x4, x5);
+            roundt!($d, $e, $f, $g, $h, $a, $b, $c, $wk[$i + 5], x5, x6);
+            roundt!($c, $d, $e, $f, $g, $h, $a, $b, $wk[$i + 6], x6, x7);
+            roundt!($b, $c, $d, $e, $f, $g, $h, $a, $wk[$i + 7], x7, _x8);
+        };
+    }
+
+    /// One compression whose full `w + K` schedule is precomputed.
     #[cfg(target_arch = "wasm32")]
     fn compress_tail(state: &mut [u32; 8], wk: &[u32; 64]) {
         let mut a = state[0];
@@ -198,71 +205,14 @@ mod imp {
         let mut f = state[5];
         let mut g = state[6];
         let mut h = state[7];
-        let x0 = b ^ c;
-        roundt!(a, b, c, d, e, f, g, h, wk[0], x0, x1);
-        roundt!(h, a, b, c, d, e, f, g, wk[1], x1, x2);
-        roundt!(g, h, a, b, c, d, e, f, wk[2], x2, x3);
-        roundt!(f, g, h, a, b, c, d, e, wk[3], x3, x4);
-        roundt!(e, f, g, h, a, b, c, d, wk[4], x4, x5);
-        roundt!(d, e, f, g, h, a, b, c, wk[5], x5, x6);
-        roundt!(c, d, e, f, g, h, a, b, wk[6], x6, x7);
-        roundt!(b, c, d, e, f, g, h, a, wk[7], x7, x8);
-        roundt!(a, b, c, d, e, f, g, h, wk[8], x8, x9);
-        roundt!(h, a, b, c, d, e, f, g, wk[9], x9, x10);
-        roundt!(g, h, a, b, c, d, e, f, wk[10], x10, x11);
-        roundt!(f, g, h, a, b, c, d, e, wk[11], x11, x12);
-        roundt!(e, f, g, h, a, b, c, d, wk[12], x12, x13);
-        roundt!(d, e, f, g, h, a, b, c, wk[13], x13, x14);
-        roundt!(c, d, e, f, g, h, a, b, wk[14], x14, x15);
-        roundt!(b, c, d, e, f, g, h, a, wk[15], x15, x16);
-        roundt!(a, b, c, d, e, f, g, h, wk[16], x16, x17);
-        roundt!(h, a, b, c, d, e, f, g, wk[17], x17, x18);
-        roundt!(g, h, a, b, c, d, e, f, wk[18], x18, x19);
-        roundt!(f, g, h, a, b, c, d, e, wk[19], x19, x20);
-        roundt!(e, f, g, h, a, b, c, d, wk[20], x20, x21);
-        roundt!(d, e, f, g, h, a, b, c, wk[21], x21, x22);
-        roundt!(c, d, e, f, g, h, a, b, wk[22], x22, x23);
-        roundt!(b, c, d, e, f, g, h, a, wk[23], x23, x24);
-        roundt!(a, b, c, d, e, f, g, h, wk[24], x24, x25);
-        roundt!(h, a, b, c, d, e, f, g, wk[25], x25, x26);
-        roundt!(g, h, a, b, c, d, e, f, wk[26], x26, x27);
-        roundt!(f, g, h, a, b, c, d, e, wk[27], x27, x28);
-        roundt!(e, f, g, h, a, b, c, d, wk[28], x28, x29);
-        roundt!(d, e, f, g, h, a, b, c, wk[29], x29, x30);
-        roundt!(c, d, e, f, g, h, a, b, wk[30], x30, x31);
-        roundt!(b, c, d, e, f, g, h, a, wk[31], x31, x32);
-        roundt!(a, b, c, d, e, f, g, h, wk[32], x32, x33);
-        roundt!(h, a, b, c, d, e, f, g, wk[33], x33, x34);
-        roundt!(g, h, a, b, c, d, e, f, wk[34], x34, x35);
-        roundt!(f, g, h, a, b, c, d, e, wk[35], x35, x36);
-        roundt!(e, f, g, h, a, b, c, d, wk[36], x36, x37);
-        roundt!(d, e, f, g, h, a, b, c, wk[37], x37, x38);
-        roundt!(c, d, e, f, g, h, a, b, wk[38], x38, x39);
-        roundt!(b, c, d, e, f, g, h, a, wk[39], x39, x40);
-        roundt!(a, b, c, d, e, f, g, h, wk[40], x40, x41);
-        roundt!(h, a, b, c, d, e, f, g, wk[41], x41, x42);
-        roundt!(g, h, a, b, c, d, e, f, wk[42], x42, x43);
-        roundt!(f, g, h, a, b, c, d, e, wk[43], x43, x44);
-        roundt!(e, f, g, h, a, b, c, d, wk[44], x44, x45);
-        roundt!(d, e, f, g, h, a, b, c, wk[45], x45, x46);
-        roundt!(c, d, e, f, g, h, a, b, wk[46], x46, x47);
-        roundt!(b, c, d, e, f, g, h, a, wk[47], x47, x48);
-        roundt!(a, b, c, d, e, f, g, h, wk[48], x48, x49);
-        roundt!(h, a, b, c, d, e, f, g, wk[49], x49, x50);
-        roundt!(g, h, a, b, c, d, e, f, wk[50], x50, x51);
-        roundt!(f, g, h, a, b, c, d, e, wk[51], x51, x52);
-        roundt!(e, f, g, h, a, b, c, d, wk[52], x52, x53);
-        roundt!(d, e, f, g, h, a, b, c, wk[53], x53, x54);
-        roundt!(c, d, e, f, g, h, a, b, wk[54], x54, x55);
-        roundt!(b, c, d, e, f, g, h, a, wk[55], x55, x56);
-        roundt!(a, b, c, d, e, f, g, h, wk[56], x56, x57);
-        roundt!(h, a, b, c, d, e, f, g, wk[57], x57, x58);
-        roundt!(g, h, a, b, c, d, e, f, wk[58], x58, x59);
-        roundt!(f, g, h, a, b, c, d, e, wk[59], x59, x60);
-        roundt!(e, f, g, h, a, b, c, d, wk[60], x60, x61);
-        roundt!(d, e, f, g, h, a, b, c, wk[61], x61, x62);
-        roundt!(c, d, e, f, g, h, a, b, wk[62], x62, x63);
-        roundt!(b, c, d, e, f, g, h, a, wk[63], x63, _x64);
+        octt!(a, b, c, d, e, f, g, h, wk, 0);
+        octt!(a, b, c, d, e, f, g, h, wk, 8);
+        octt!(a, b, c, d, e, f, g, h, wk, 16);
+        octt!(a, b, c, d, e, f, g, h, wk, 24);
+        octt!(a, b, c, d, e, f, g, h, wk, 32);
+        octt!(a, b, c, d, e, f, g, h, wk, 40);
+        octt!(a, b, c, d, e, f, g, h, wk, 48);
+        octt!(a, b, c, d, e, f, g, h, wk, 56);
         state[0] = state[0].wrapping_add(a);
         state[1] = state[1].wrapping_add(b);
         state[2] = state[2].wrapping_add(c);
@@ -337,11 +287,9 @@ mod imp {
         state
     }
 
-    /// Eight lowercase hex chars from one state word via SWAR: spread the
-    /// nibbles into one byte each (already in output order, so no byte swap),
-    /// then map nibble -> char branchlessly. The `+6` carry flags nibbles
-    /// above 9; per-byte sums stay below 0x100 and the 0x27 multiply cannot
-    /// carry across bytes because each flag byte is 0 or 1.
+    /// Eight lowercase hex chars from one state word via SWAR: the `+6` carry
+    /// flags nibbles above 9; per-byte sums stay below 0x100 and the 0x27
+    /// multiply cannot carry across bytes because each flag byte is 0 or 1.
     #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
     fn hex8(word: u32) -> u64 {
@@ -366,20 +314,14 @@ mod imp {
         out
     }
 
-    /// simd128 lane of the kernel, wasm-only. wasmtime's fuel meter charges
-    /// one unit per executed instruction regardless of width, so a v128 op
-    /// that does four words of work costs the same as one scalar op. The
-    /// build does not enable simd128 globally; `#[target_feature]` functions
-    /// are safe to call on wasm because feature support is validated at
-    /// module load, and the pinned wasmtime enables SIMD by default. Native
-    /// builds (unit tests, differential suite) keep the scalar path.
+    /// simd128 lane of the kernel, wasm-only: the fuel meter charges one unit
+    /// per instruction regardless of width. Feature support is validated at
+    /// module load; native builds keep the scalar path.
     #[cfg(target_arch = "wasm32")]
     mod simd {
         use super::H0;
         use std::arch::wasm32::*;
 
-        /// Same round as the scalar `round!`, but `k + w` arrives pre-added
-        /// as a lane extracted from the vectorized schedule.
         macro_rules! roundv {
             ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:expr, $xo:ident, $xn:ident) => {
                 let t1 = $h
@@ -394,117 +336,17 @@ mod imp {
             };
         }
 
-        /// Eight rounds: the working-variable rotation has period eight, so
-        /// after one expansion the roles line back up with `a..h`. Re-seeding
-        /// the Maj cache (`b ^ c`) per oct costs one xor per eight rounds and
-        /// keeps the SSA chain local to the macro.
         macro_rules! oct {
             ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wl:ident, $wh:ident) => {
                 let x0 = $b ^ $c;
-                roundv!(
-                    $a,
-                    $b,
-                    $c,
-                    $d,
-                    $e,
-                    $f,
-                    $g,
-                    $h,
-                    u32x4_extract_lane::<0>($wl),
-                    x0,
-                    x1
-                );
-                roundv!(
-                    $h,
-                    $a,
-                    $b,
-                    $c,
-                    $d,
-                    $e,
-                    $f,
-                    $g,
-                    u32x4_extract_lane::<1>($wl),
-                    x1,
-                    x2
-                );
-                roundv!(
-                    $g,
-                    $h,
-                    $a,
-                    $b,
-                    $c,
-                    $d,
-                    $e,
-                    $f,
-                    u32x4_extract_lane::<2>($wl),
-                    x2,
-                    x3
-                );
-                roundv!(
-                    $f,
-                    $g,
-                    $h,
-                    $a,
-                    $b,
-                    $c,
-                    $d,
-                    $e,
-                    u32x4_extract_lane::<3>($wl),
-                    x3,
-                    x4
-                );
-                roundv!(
-                    $e,
-                    $f,
-                    $g,
-                    $h,
-                    $a,
-                    $b,
-                    $c,
-                    $d,
-                    u32x4_extract_lane::<0>($wh),
-                    x4,
-                    x5
-                );
-                roundv!(
-                    $d,
-                    $e,
-                    $f,
-                    $g,
-                    $h,
-                    $a,
-                    $b,
-                    $c,
-                    u32x4_extract_lane::<1>($wh),
-                    x5,
-                    x6
-                );
-                roundv!(
-                    $c,
-                    $d,
-                    $e,
-                    $f,
-                    $g,
-                    $h,
-                    $a,
-                    $b,
-                    u32x4_extract_lane::<2>($wh),
-                    x6,
-                    x7
-                );
-                roundv!(
-                    $b,
-                    $c,
-                    $d,
-                    $e,
-                    $f,
-                    $g,
-                    $h,
-                    $a,
-                    u32x4_extract_lane::<3>($wh),
-                    x7,
-                    x8
-                );
+                roundv!($a, $b, $c, $d, $e, $f, $g, $h, u32x4_extract_lane::<0>($wl), x0, x1);
+                roundv!($h, $a, $b, $c, $d, $e, $f, $g, u32x4_extract_lane::<1>($wl), x1, x2);
+                roundv!($g, $h, $a, $b, $c, $d, $e, $f, u32x4_extract_lane::<2>($wl), x2, x3);
+                roundv!($f, $g, $h, $a, $b, $c, $d, $e, u32x4_extract_lane::<3>($wl), x3, x4);
+                roundv!($e, $f, $g, $h, $a, $b, $c, $d, u32x4_extract_lane::<0>($wh), x4, x5);
+                roundv!($d, $e, $f, $g, $h, $a, $b, $c, u32x4_extract_lane::<1>($wh), x5, x6);
+                roundv!($c, $d, $e, $f, $g, $h, $a, $b, u32x4_extract_lane::<2>($wh), x6, x7);
+                roundv!($b, $c, $d, $e, $f, $g, $h, $a, u32x4_extract_lane::<3>($wh), x7, x8);
             };
         }
 
@@ -532,10 +374,8 @@ mod imp {
             )
         }
 
-        /// Next four schedule words from the previous sixteen. The σ1 feed
-        /// has an in-batch dependency (w16/w17 feed w18/w19), handled in two
-        /// half-steps; σ1 of a zero lane is zero, so padding with zeros keeps
-        /// the untouched lanes exact.
+        /// Next four schedule words; the in-batch σ1 dependency runs in two
+        /// half-steps, and σ1 of a zero lane is zero so the padding is exact.
         #[inline]
         #[target_feature(enable = "simd128")]
         fn sched4(x0: v128, x1: v128, x2: v128, x3: v128) -> v128 {
@@ -554,9 +394,6 @@ mod imp {
             u32x4_add(t, small_sigma1(w16))
         }
 
-        /// One compression with the message schedule and the `+K` folds done
-        /// four lanes at a time; rounds stay scalar (each round depends on
-        /// the previous) and read their `k + w` term by lane extraction.
         #[inline]
         #[target_feature(enable = "simd128")]
         fn compress_v(state: &mut [u32; 8], x0: v128, x1: v128, x2: v128, x3: v128) {
@@ -614,8 +451,6 @@ mod imp {
             state[7] = state[7].wrapping_add(h);
         }
 
-        /// 16 message bytes as four big-endian schedule words: one fused
-        /// 16-byte load plus a single byte-reversing shuffle.
         #[inline]
         #[target_feature(enable = "simd128")]
         fn load_be<const O: usize>(b: &[u8; 64]) -> v128 {
@@ -647,17 +482,15 @@ mod imp {
             );
         }
 
-        /// Lowercase hex via nibble table lookup: byte-reverse each word to
-        /// big-endian, split nibbles, interleave high/low, then one swizzle
-        /// per 16 output chars maps nibble -> ascii.
+        /// Lowercase hex of four state words held as one vector: byte-reverse
+        /// to big-endian, split nibbles, interleave, one swizzle per 16 chars.
         #[inline]
         #[target_feature(enable = "simd128")]
-        fn hex_half(out: &mut [u8], s0: u32, s1: u32, s2: u32, s3: u32) {
+        fn hex_half(out: &mut [u8], v: v128) {
             let table = u8x16(
                 b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd',
                 b'e', b'f',
             );
-            let v = u32x4(s0, s1, s2, s3);
             let v = i8x16_shuffle::<3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12>(v, v);
             let hi = u8x16_shr(v, 4);
             let lo = v128_and(v, u8x16_splat(0x0f));
@@ -678,12 +511,11 @@ mod imp {
         #[target_feature(enable = "simd128")]
         fn hex_state(state: &[u32; 8]) -> [u8; 64] {
             let mut out = [0u8; 64];
-            hex_half(&mut out[0..32], state[0], state[1], state[2], state[3]);
-            hex_half(&mut out[32..64], state[4], state[5], state[6], state[7]);
+            hex_half(&mut out[0..32], u32x4(state[0], state[1], state[2], state[3]));
+            hex_half(&mut out[32..64], u32x4(state[4], state[5], state[6], state[7]));
             out
         }
 
-        /// Vector rotate-right; wasm SIMD has no rotate, so shift/shift/or.
         #[inline]
         #[target_feature(enable = "simd128")]
         fn rotrv<const N: u32>(x: v128) -> v128 {
@@ -702,10 +534,8 @@ mod imp {
             v128_xor(v128_xor(rotrv::<6>(x), rotrv::<11>(x)), rotrv::<25>(x))
         }
 
-        /// Four-message round: lane L of every vector is message L's state,
-        /// so one instruction stream advances four independent digests. Ch
-        /// and Maj are single bitselects: Ch picks f/g by e's bits; Maj
-        /// picks c where a and b disagree, else a.
+        /// Four-message round: lane L of every vector is message L's state.
+        /// Ch picks f/g by e's bits; Maj picks c where a and b disagree.
         macro_rules! roundm {
             ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:literal, $w:ident) => {
                 let t1 = u32x4_add(
@@ -729,7 +559,6 @@ mod imp {
             };
         }
 
-        /// One compression over four messages in transposed lanes.
         #[inline]
         #[target_feature(enable = "simd128")]
         fn compressm(state: &mut [v128; 8], w: [v128; 16]) {
@@ -865,22 +694,12 @@ mod imp {
             state[7] = u32x4_add(state[7], h);
         }
 
-        /// 16 bytes from each of four lanes, transposed into four schedule
-        /// vectors. The 4x4 word transpose is the usual unpack32/unpack64
-        /// ladder, with the big-endian byte swap folded into the first-level
-        /// shuffles for free.
+        /// 4x4 word transpose of four raw 16-byte row vectors into four
+        /// schedule-word vectors, the big-endian swap folded into the
+        /// first-level shuffles for free.
         #[inline]
         #[target_feature(enable = "simd128")]
-        fn quad<const O: usize>(
-            b0: &[u8; 64],
-            b1: &[u8; 64],
-            b2: &[u8; 64],
-            b3: &[u8; 64],
-        ) -> [v128; 4] {
-            let r0 = load_raw::<O>(b0);
-            let r1 = load_raw::<O>(b1);
-            let r2 = load_raw::<O>(b2);
-            let r3 = load_raw::<O>(b3);
+        fn transpose_be(r0: v128, r1: v128, r2: v128, r3: v128) -> [v128; 4] {
             let p0 =
                 i8x16_shuffle::<3, 2, 1, 0, 19, 18, 17, 16, 7, 6, 5, 4, 23, 22, 21, 20>(r0, r1);
             let p1 = i8x16_shuffle::<11, 10, 9, 8, 27, 26, 25, 24, 15, 14, 13, 12, 31, 30, 29, 28>(
@@ -903,8 +722,46 @@ mod imp {
             ]
         }
 
-        /// Block `k` of a padded message: full blocks come from the line,
-        /// the one or two final blocks from the prebuilt 128-byte tail.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn quad<const O: usize>(
+            b0: &[u8; 64],
+            b1: &[u8; 64],
+            b2: &[u8; 64],
+            b3: &[u8; 64],
+        ) -> [v128; 4] {
+            transpose_be(
+                load_raw::<O>(b0),
+                load_raw::<O>(b1),
+                load_raw::<O>(b2),
+                load_raw::<O>(b3),
+            )
+        }
+
+        /// One lane's middle link block (`\n` + first 63 event hex bytes) as
+        /// four raw 16-byte column vectors: the one-byte shift is fused into
+        /// the shuffles, so the block never touches a stack buffer.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn shift_cols(hex: &[u8; 64], nl: v128) -> [v128; 4] {
+            let v0 = load_raw::<0>(hex);
+            let v1 = load_raw::<16>(hex);
+            let v2 = load_raw::<32>(hex);
+            let v3 = load_raw::<48>(hex);
+            [
+                i8x16_shuffle::<16, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14>(v0, nl),
+                i8x16_shuffle::<15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30>(
+                    v0, v1,
+                ),
+                i8x16_shuffle::<15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30>(
+                    v1, v2,
+                ),
+                i8x16_shuffle::<15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30>(
+                    v2, v3,
+                ),
+            ]
+        }
+
         #[inline]
         fn block_at<'a>(
             line: &'a [u8],
@@ -935,83 +792,165 @@ mod imp {
             ]
         }
 
-        /// Final states of four lockstep messages, each lane to lowercase hex.
+        /// 4x4 u32 transpose: word-major state vectors -> one vector per lane.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn transpose32(s0: v128, s1: v128, s2: v128, s3: v128) -> [v128; 4] {
+            let p0 = i32x4_shuffle::<0, 4, 1, 5>(s0, s1);
+            let p1 = i32x4_shuffle::<2, 6, 3, 7>(s0, s1);
+            let p2 = i32x4_shuffle::<0, 4, 1, 5>(s2, s3);
+            let p3 = i32x4_shuffle::<2, 6, 3, 7>(s2, s3);
+            [
+                i32x4_shuffle::<0, 1, 4, 5>(p0, p2),
+                i32x4_shuffle::<2, 3, 6, 7>(p0, p2),
+                i32x4_shuffle::<0, 1, 4, 5>(p1, p3),
+                i32x4_shuffle::<2, 3, 6, 7>(p1, p3),
+            ]
+        }
+
+        /// Final states of four lockstep messages, each lane to lowercase
+        /// hex; two 4x4 transposes replace the 32 scalar lane extracts.
         #[target_feature(enable = "simd128")]
         fn lanes_hex(state: &[v128; 8]) -> [[u8; 64]; 4] {
+            let lo = transpose32(state[0], state[1], state[2], state[3]);
+            let hi = transpose32(state[4], state[5], state[6], state[7]);
             let mut out = [[0u8; 64]; 4];
-            macro_rules! lane_hex {
-                ($idx:literal) => {{
-                    let o = &mut out[$idx];
-                    hex_half(
-                        &mut o[0..32],
-                        u32x4_extract_lane::<$idx>(state[0]),
-                        u32x4_extract_lane::<$idx>(state[1]),
-                        u32x4_extract_lane::<$idx>(state[2]),
-                        u32x4_extract_lane::<$idx>(state[3]),
-                    );
-                    hex_half(
-                        &mut o[32..64],
-                        u32x4_extract_lane::<$idx>(state[4]),
-                        u32x4_extract_lane::<$idx>(state[5]),
-                        u32x4_extract_lane::<$idx>(state[6]),
-                        u32x4_extract_lane::<$idx>(state[7]),
-                    );
-                }};
+            let mut l = 0;
+            while l < 4 {
+                hex_half(&mut out[l][0..32], lo[l]);
+                hex_half(&mut out[l][32..64], hi[l]);
+                l += 1;
             }
-            lane_hex!(0);
-            lane_hex!(1);
-            lane_hex!(2);
-            lane_hex!(3);
             out
         }
 
-        /// Four chain links in lockstep: each lane hashes the fixed-shape
-        /// 129-byte `prev \n event_hex` message (three padded blocks) from a
-        /// caller-supplied candidate previous hash. The caller only trusts a
-        /// lane after checking its candidate equaled the true previous hash,
-        /// so wrong or missing candidates cost a recompute, never accuracy.
+        /// Four-message round whose `w + K` term is gathered per lane from a
+        /// precomputed tail schedule.
+        macro_rules! roundg {
+            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $i:expr, $t0:ident, $t1:ident, $t2:ident, $t3:ident) => {
+                let wk = u32x4($t0[$i], $t1[$i], $t2[$i], $t3[$i]);
+                let t1v = u32x4_add(
+                    u32x4_add(u32x4_add($h, big_sigma1($e)), v128_bitselect($f, $g, $e)),
+                    wk,
+                );
+                let t2v = u32x4_add(big_sigma0($a), v128_bitselect($c, $a, v128_xor($a, $b)));
+                $d = u32x4_add($d, t1v);
+                $h = u32x4_add(t1v, t2v);
+            };
+        }
+        macro_rules! octg {
+            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $i:literal, $t0:ident, $t1:ident, $t2:ident, $t3:ident) => {
+                roundg!($a, $b, $c, $d, $e, $f, $g, $h, $i, $t0, $t1, $t2, $t3);
+                roundg!($h, $a, $b, $c, $d, $e, $f, $g, $i + 1, $t0, $t1, $t2, $t3);
+                roundg!($g, $h, $a, $b, $c, $d, $e, $f, $i + 2, $t0, $t1, $t2, $t3);
+                roundg!($f, $g, $h, $a, $b, $c, $d, $e, $i + 3, $t0, $t1, $t2, $t3);
+                roundg!($e, $f, $g, $h, $a, $b, $c, $d, $i + 4, $t0, $t1, $t2, $t3);
+                roundg!($d, $e, $f, $g, $h, $a, $b, $c, $i + 5, $t0, $t1, $t2, $t3);
+                roundg!($c, $d, $e, $f, $g, $h, $a, $b, $i + 6, $t0, $t1, $t2, $t3);
+                roundg!($b, $c, $d, $e, $f, $g, $h, $a, $i + 7, $t0, $t1, $t2, $t3);
+            };
+        }
+
+        /// One lockstep compression of the constant-shape final link block:
+        /// every lane's full `w + K` schedule comes from the tail table, so
+        /// the rounds skip the message schedule entirely.
+        #[inline]
+        #[target_feature(enable = "simd128")]
+        fn compress_tail4(
+            state: &mut [v128; 8],
+            t0: &[u32; 64],
+            t1: &[u32; 64],
+            t2: &[u32; 64],
+            t3: &[u32; 64],
+        ) {
+            let mut a = state[0];
+            let mut b = state[1];
+            let mut c = state[2];
+            let mut d = state[3];
+            let mut e = state[4];
+            let mut f = state[5];
+            let mut g = state[6];
+            let mut h = state[7];
+            octg!(a, b, c, d, e, f, g, h, 0, t0, t1, t2, t3);
+            octg!(a, b, c, d, e, f, g, h, 8, t0, t1, t2, t3);
+            octg!(a, b, c, d, e, f, g, h, 16, t0, t1, t2, t3);
+            octg!(a, b, c, d, e, f, g, h, 24, t0, t1, t2, t3);
+            octg!(a, b, c, d, e, f, g, h, 32, t0, t1, t2, t3);
+            octg!(a, b, c, d, e, f, g, h, 40, t0, t1, t2, t3);
+            octg!(a, b, c, d, e, f, g, h, 48, t0, t1, t2, t3);
+            octg!(a, b, c, d, e, f, g, h, 56, t0, t1, t2, t3);
+            state[0] = u32x4_add(state[0], a);
+            state[1] = u32x4_add(state[1], b);
+            state[2] = u32x4_add(state[2], c);
+            state[3] = u32x4_add(state[3], d);
+            state[4] = u32x4_add(state[4], e);
+            state[5] = u32x4_add(state[5], f);
+            state[6] = u32x4_add(state[6], g);
+            state[7] = u32x4_add(state[7], h);
+        }
+
+        /// Four chain links in lockstep over the fixed-shape 129-byte
+        /// `prev \n event_hex` message: block 0 transposes straight from the
+        /// candidate spans, block 1 fuses the `\n` shift into the lane
+        /// shuffles, and the constant final block reuses the precomputed
+        /// tail schedules, gathered per lane. The caller only trusts a lane
+        /// after checking its candidate equaled the true previous hash, so
+        /// wrong or missing candidates cost a recompute, never accuracy.
         #[target_feature(enable = "simd128")]
         pub(super) fn link_quad(
             cand: &[Option<&[u8]>; 4],
             hexes: &[[u8; 64]],
+            tail: &[[u32; 64]; 16],
             out: &mut [[u8; 64]; 4],
         ) {
             let zero = super::zero_hash();
-            let mut bufs = [[0u8; 192]; 4];
+            let mut prevs: [&[u8; 64]; 4] = [&zero; 4];
+            let mut hx: [&[u8; 64]; 4] = [&hexes[0]; 4];
             let mut l = 0;
             while l < 4 {
-                let prev = cand[l].unwrap_or(&zero[..]);
-                let hex = hexes.get(l).unwrap_or(&hexes[0]);
-                let b = &mut bufs[l];
-                b[..64].copy_from_slice(prev);
-                b[64] = b'\n';
-                b[65..129].copy_from_slice(hex);
-                b[129] = 0x80;
-                b[190] = 0x04;
-                b[191] = 0x08;
+                if let Some(p) = cand[l].and_then(|p| <&[u8; 64]>::try_from(p).ok()) {
+                    prevs[l] = p;
+                }
+                if let Some(h) = hexes.get(l) {
+                    hx[l] = h;
+                }
                 l += 1;
             }
             let mut state = splat_h0();
-            let mut k = 0;
-            while k < 3 {
-                let o = 64 * k;
-                let b0: &[u8; 64] = bufs[0][o..o + 64].try_into().expect("64-byte block");
-                let b1: &[u8; 64] = bufs[1][o..o + 64].try_into().expect("64-byte block");
-                let b2: &[u8; 64] = bufs[2][o..o + 64].try_into().expect("64-byte block");
-                let b3: &[u8; 64] = bufs[3][o..o + 64].try_into().expect("64-byte block");
-                let q0 = quad::<0>(b0, b1, b2, b3);
-                let q1 = quad::<16>(b0, b1, b2, b3);
-                let q2 = quad::<32>(b0, b1, b2, b3);
-                let q3 = quad::<48>(b0, b1, b2, b3);
-                compressm(
-                    &mut state,
-                    [
-                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1],
-                        q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
-                    ],
-                );
-                k += 1;
-            }
+            let q0 = quad::<0>(prevs[0], prevs[1], prevs[2], prevs[3]);
+            let q1 = quad::<16>(prevs[0], prevs[1], prevs[2], prevs[3]);
+            let q2 = quad::<32>(prevs[0], prevs[1], prevs[2], prevs[3]);
+            let q3 = quad::<48>(prevs[0], prevs[1], prevs[2], prevs[3]);
+            compressm(
+                &mut state,
+                [
+                    q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1], q2[2],
+                    q2[3], q3[0], q3[1], q3[2], q3[3],
+                ],
+            );
+            let nl = u8x16_splat(b'\n');
+            let s0 = shift_cols(hx[0], nl);
+            let s1 = shift_cols(hx[1], nl);
+            let s2 = shift_cols(hx[2], nl);
+            let s3 = shift_cols(hx[3], nl);
+            let q0 = transpose_be(s0[0], s1[0], s2[0], s3[0]);
+            let q1 = transpose_be(s0[1], s1[1], s2[1], s3[1]);
+            let q2 = transpose_be(s0[2], s1[2], s2[2], s3[2]);
+            let q3 = transpose_be(s0[3], s1[3], s2[3], s3[3]);
+            compressm(
+                &mut state,
+                [
+                    q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1], q2[2],
+                    q2[3], q3[0], q3[1], q3[2], q3[3],
+                ],
+            );
+            compress_tail4(
+                &mut state,
+                &tail[super::tail_idx(hx[0][63])],
+                &tail[super::tail_idx(hx[1][63])],
+                &tail[super::tail_idx(hx[2][63])],
+                &tail[super::tail_idx(hx[3][63])],
+            );
             *out = lanes_hex(&state);
         }
 
@@ -1052,9 +991,8 @@ mod imp {
             lanes_hex(&state)
         }
 
-        /// Digest every line, four at a time. Messages only share a round
-        /// instruction stream when their padded block counts match, so lines
-        /// are bucketed by block count; leftovers take the single-lane path.
+        /// Digest every line, four at a time, bucketed by padded block count;
+        /// leftovers take the single-lane path.
         #[target_feature(enable = "simd128")]
         pub(super) fn digest_all(lines: &[&[u8]]) -> Vec<[u8; 64]> {
             let mut out = vec![[0u8; 64]; lines.len()];
@@ -1089,8 +1027,6 @@ mod imp {
             out
         }
 
-        /// sha256(line) as lowercase hex; same block walk as the scalar
-        /// `digest_state`, compression vectorized.
         #[target_feature(enable = "simd128")]
         pub(super) fn digest_hex(bytes: &[u8]) -> [u8; 64] {
             let mut state = H0;
@@ -1111,11 +1047,9 @@ mod imp {
             hex_state(&state)
         }
 
-        /// sha256 of the 129-byte `previous \n event` hex composition. The
-        /// middle block is `\n` plus the first 63 event bytes: each schedule
-        /// word comes from one shuffle that fuses the one-byte shift and the
-        /// big-endian swap. The final block carries only the last event byte
-        /// plus padding (129 * 8 = 1032 bits).
+        /// sha256 of the 129-byte `previous \n event` hex composition; the
+        /// final block carries only the last event byte plus padding
+        /// (129 * 8 = 1032 bits).
         #[target_feature(enable = "simd128")]
         pub(super) fn link_hex(
             previous: &[u8; 64],
@@ -1177,8 +1111,6 @@ mod imp {
         out
     }
 
-    /// 16-byte vector scan: one compare against `\n` and a lane bitmask
-    /// replace the SWAR detector at a quarter of the per-byte fuel.
     #[cfg(target_arch = "wasm32")]
     #[target_feature(enable = "simd128")]
     fn find_newline(bytes: &[u8], mut i: usize) -> usize {
@@ -1287,9 +1219,8 @@ mod imp {
         acc == 0
     }
 
-    /// Canonical (no leading zeros) decimal digits folded to a value; spans
-    /// come from `Scan::digits`, which caps length at 19, so the accumulate
-    /// cannot overflow u64.
+    /// Spans come from `Scan::digits`, which caps length at 19, so the
+    /// accumulate cannot overflow u64.
     fn fold_digits(digits: &[u8]) -> u64 {
         let mut value = 0u64;
         for &c in digits {
@@ -1304,18 +1235,14 @@ mod imp {
 
     /// Strict scanner over the compact JSON this chain emits. It accepts only
     /// inputs serde_json provably accepts with identical extracted values;
-    /// anything unusual (whitespace, escapes, non-ASCII, exponents, deep
-    /// nesting, reordered fields) bails out to the serde fallback, which
-    /// remains the behavioral authority.
+    /// anything unusual bails out to the serde fallback, which remains the
+    /// behavioral authority.
     struct Scan<'a> {
         buf: &'a [u8],
         pos: usize,
     }
 
     impl<'a> Scan<'a> {
-        /// Const-size literal match decomposed into 8/4/2/1-byte loads, so
-        /// short prefixes like `{"id":"` cost a couple of wide compares
-        /// against folded constants instead of a per-byte tail loop.
         #[inline(always)]
         fn lit<const N: usize>(&mut self, s: &[u8; N]) -> bool {
             let end = self.pos + N;
@@ -1356,9 +1283,9 @@ mod imp {
         }
 
         /// String body after the opening quote: printable ASCII, no escapes.
-        /// Leaves pos past the closing quote. Stop lanes are quote,
-        /// backslash, control (signed < 0x20 also catches >= 0x80), or DEL;
-        /// the first flagged lane is re-checked exactly by the scalar arm.
+        /// Stop lanes are quote, backslash, control (signed < 0x20 also
+        /// catches >= 0x80), or DEL; the first flagged lane is re-checked
+        /// exactly by the scalar arm.
         #[cfg(target_arch = "wasm32")]
         #[target_feature(enable = "simd128")]
         fn string_body(&mut self) -> Option<&'a [u8]> {
@@ -1411,8 +1338,7 @@ mod imp {
             None
         }
 
-        /// SWAR form of the same detector. It drops the usual `& !x`
-        /// zero-test masking: every spurious flag it can raise either sits on
+        /// SWAR form of the same detector. Every spurious flag either sits on
         /// a byte with the high bit set (a true hit via the `| x` term) or
         /// lands strictly above a true hit through borrow/carry propagation,
         /// so the lowest flagged byte is always a genuine stop byte and is
@@ -1458,12 +1384,9 @@ mod imp {
             None
         }
 
-        /// Canonical unsigned decimal span: 1..=19 digits, no leading zero.
-        /// 19 digits cannot overflow u64, so a later fold is unchecked; 20+
-        /// digit runs bail to the serde fallback, which parses in-range
-        /// values identically and rejects the rest. Returning the span
-        /// instead of the value lets the verify fast path compare digit
-        /// bytes directly and defer the fold to the rare slow path.
+        /// Canonical unsigned decimal span: 1..=19 digits, no leading zero;
+        /// 20+ digit runs bail to the serde fallback, which parses in-range
+        /// values identically and rejects the rest.
         fn digits(&mut self) -> Option<&'a [u8]> {
             let start = self.pos;
             while self.buf.get(self.pos).is_some_and(u8::is_ascii_digit) {
@@ -1561,7 +1484,6 @@ mod imp {
             self.pos == self.buf.len()
         }
 
-        /// Exact match against a variable-length byte string, word-wise.
         fn bytes(&mut self, s: &[u8]) -> bool {
             let end = self.pos + s.len();
             let Some(a) = self.buf.get(self.pos..end) else {
@@ -1581,16 +1503,14 @@ mod imp {
     }
 
     /// Audit `kind` payloads come from a small closed enum, so the common
-    /// serialized shapes are matched literally — fixed key runs as wide
-    /// compares, variable spans as string scans — before handing anything
+    /// serialized shapes are matched literally before handing anything
     /// unusual to the generic tokenizer, which stays the acceptance
     /// authority via the rewind.
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn kind_value(s: &mut Scan) -> bool {
         let start = s.pos;
-        // One-byte discriminators (kind tag initial, then invoked-vs-completed
-        // at the fixed offset where they diverge) pick the literal arm before
-        // any long compare runs, so non-matching arms never scan.
+        // One-byte discriminators at the offsets where the tags diverge pick
+        // the literal arm before any long compare runs.
         let arm = match (
             s.buf.get(s.pos + 9).copied(),
             s.buf.get(s.pos + 21).copied(),
@@ -1645,10 +1565,27 @@ mod imp {
         s.value(0)
     }
 
+    /// Issuer payloads are usually a fixed two-field object; one literal arm
+    /// covers that shape before the generic tokenizer, which stays the
+    /// acceptance authority via the rewind.
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    fn issuer_value(s: &mut Scan) -> bool {
+        let start = s.pos;
+        if s.lit(b"{\"display\":\"")
+            && s.string_body().is_some()
+            && s.lit(b",\"pubkey_b58\":\"")
+            && s.string_body().is_some()
+            && s.lit(b"}")
+        {
+            return true;
+        }
+        s.pos = start;
+        s.value(0)
+    }
+
     /// Borrowed spans from a strict-scanned event line. `id` is printable
-    /// ASCII with no escapes (string_body's acceptance set), `ts` is a
-    /// canonical decimal span, so both embed verbatim in anchor JSON and a
-    /// UTF-8 check or value fold is only needed on slow paths.
+    /// ASCII with no escapes, `ts` is a canonical decimal span, so both embed
+    /// verbatim in anchor JSON.
     struct EventSpans<'a> {
         id: &'a [u8],
         ts: &'a [u8],
@@ -1666,7 +1603,7 @@ mod imp {
         }
         let ts = s.digits()?;
         if s.lit(b",\"issuer\":")
-            && s.value(0)
+            && issuer_value(&mut s)
             && s.lit(b",\"kind\":")
             && kind_value(&mut s)
             && s.lit(b"}")
@@ -1740,11 +1677,8 @@ mod imp {
     /// One-pass byte comparison of an anchor line against the entry this
     /// chain position expects, in the canonical field order and compact
     /// formatting `fold_chain` serializes. Byte equality implies the anchor
-    /// parses to exactly the expected field values: `idx_digits` is the
-    /// maintained canonical decimal of the entry index, `id` is known
-    /// escape-free printable ASCII, and `ts_digits` is the event line's own
-    /// canonical span, so the parse + field-compare slow path is skipped;
-    /// any difference falls back to it.
+    /// parses to exactly the expected field values; any difference falls
+    /// back to the parse + field-compare slow path.
     fn anchor_line_matches(
         line: &[u8],
         idx_digits: &[u8],
@@ -1756,8 +1690,7 @@ mod imp {
     ) -> bool {
         let mut s = Scan { buf: line, pos: 0 };
         // Corpus ids are uuid-shaped; a const-length arm lets the compare
-        // unroll like the hex fields. Any other length takes the generic
-        // word-wise compare with identical acceptance.
+        // unroll like the hex fields.
         let id_eq = |s: &mut Scan| match <&[u8; 36]>::try_from(id) {
             Ok(arr) => s.lit(arr),
             Err(_) => s.bytes(id),
@@ -1780,8 +1713,7 @@ mod imp {
 
     /// Best-effort extraction of the trailing `chain_hash_hex` value from an
     /// anchor line, used only to seed speculative links: a wrong or missing
-    /// span merely costs a sequential recompute, so this matches the exact
-    /// tail shape `fold_chain` serializes and nothing else.
+    /// span merely costs a sequential recompute.
     #[cfg(target_arch = "wasm32")]
     fn chain_span(line: &[u8]) -> Option<&[u8]> {
         let n = line.len();
@@ -1800,10 +1732,9 @@ mod imp {
         let event_lines = split_lines(events_jsonl);
         let anchor_lines = split_lines(anchors_jsonl);
 
-        // Anchor parse errors precede every other failure kind in the
-        // report; they are collected separately (in anchor-line order,
-        // which the in-order walks below preserve) and stitched together
-        // with the event-side failures at the end.
+        // Anchor parse errors precede every other failure kind in the report;
+        // they are collected separately (in anchor-line order, which the
+        // in-order walks below preserve) and stitched together at the end.
         let mut anchor_failures = Vec::new();
         let mut failures = Vec::new();
 
@@ -1812,12 +1743,10 @@ mod imp {
         let mut previous = zero_hash();
         // Speculative links: each anchor line carries the chain hash its
         // position should produce, so candidate previous hashes for a group
-        // of four events are known up front and the three blocks of every
-        // link run four lanes wide. A lane is trusted only when its
-        // candidate equaled the true previous hash, so tampered or missing
-        // anchors cost a sequential recompute, never accuracy. A run of
-        // consecutive misses (a diverged chain re-misses every event from
-        // the divergence on) parks the batches for the rest of the call.
+        // of four events are known up front and every link runs four lanes
+        // wide. A lane is trusted only when its candidate equaled the true
+        // previous hash; a run of consecutive misses parks the batches for
+        // the rest of the call.
         #[cfg(target_arch = "wasm32")]
         let zero_prev = zero_hash();
         #[cfg(target_arch = "wasm32")]
@@ -1828,9 +1757,8 @@ mod imp {
         let mut spec_cand: [Option<&[u8]>; 4] = [None; 4];
         #[cfg(target_arch = "wasm32")]
         let mut spec_buf = [[0u8; 64]; 4];
-        // Canonical decimal of the running entry index, right-aligned and
-        // incremented in place; replaces a per-event itoa in the anchor
-        // fast compare.
+        // Canonical decimal of the running entry index, incremented in place;
+        // replaces a per-event itoa in the anchor fast compare.
         let mut idx_buf = [0u8; 20];
         let mut idx_start = idx_buf.len() - 1;
         idx_buf[idx_start] = b'0';
@@ -1868,7 +1796,7 @@ mod imp {
                             };
                             l += 1;
                         }
-                        link_quad(&spec_cand, &event_hexes[index..], &mut spec_buf);
+                        link_quad(&spec_cand, &event_hexes[index..], &tail, &mut spec_buf);
                     } else {
                         spec_cand = [None; 4];
                     }

@@ -38,6 +38,27 @@
     },
     {
       "cmd": [
+        "cargo",
+        "test",
+        "-p",
+        "covenant-audit-kernel",
+        "--test",
+        "sha_differential"
+      ],
+      "cwd": "agent-os",
+      "gate": true,
+      "timeoutMs": 600000
+    },
+    {
+      "cmd": [
+        "node",
+        "wasm-tests-stage.mjs"
+      ],
+      "gate": true,
+      "timeoutMs": 900000
+    },
+    {
+      "cmd": [
         "node",
         "fuel-stage.mjs"
       ],

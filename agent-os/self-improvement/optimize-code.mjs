@@ -96,9 +96,19 @@ ${block}
 `;
 
   const prop = sh("claude", ["-p", prompt, "--model", proposerModel, "--dangerously-skip-permissions"]);
-  if (!prop.ok) throw new Error(`proposer failed: ${prop.out.slice(-400)}`);
   const stamp = `k${ledger.versions.length + 1}`;
-  const candidateSrc = pre + extractBlock(prop.out) + post;
+  let block;
+  try {
+    if (!prop.ok) throw new Error(`proposer failed: ${prop.out.slice(-400)}`);
+    block = extractBlock(prop.out);
+  } catch (e) {
+    // A malformed proposal is a rejection, not a crash — log it and move on.
+    ledger.versions.push({ version: stamp, incumbent: incumbent.metrics.scalar, candidate: 0, gain: 0, promoted: false, reason: `malformed proposal: ${String(e.message).slice(0, 200)}` });
+    writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
+    console.log(`REJECTED ${stamp}: malformed proposal`);
+    continue;
+  }
+  const candidateSrc = pre + block + post;
   const candidateFile = join(archiveDir, `${stamp}-candidate.rs`);
   writeFileSync(candidateFile, candidateSrc);
 

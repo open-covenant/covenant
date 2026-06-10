@@ -351,3 +351,20 @@ fn differential_fold_chain() {
     assert_eq!(c[0].previous_hash_hex, ZERO_CHAIN_HASH);
     assert_eq!(c.last().unwrap().event_id, "");
 }
+
+#[test]
+fn differential_escaped_strings() {
+    // JSON escapes force the fast scanners to bail to serde; candidate and
+    // reference must classify and extract identically either way.
+    let esc = r#"{"id":"00000000-0000-4000-a000-000000000000","timestamp_ms":5,"issuer":"agent-\"q\\u00e9\"","kind":{"type":"intent_dispatched","intent_id":"00000000-0000-4000-a000-000000000000","intent_text":"say \"hi\"\nback\\slash A","matched_agent":null,"result_hash_hex":"00","status":"ok"}}"#;
+    let esc_id = r#"{"id":"66f9619-8b86-4011-a42d-00cf4fc964ff","timestamp_ms":6,"issuer":"a","kind":{}}"#;
+    for (name, line) in [("escaped-kind", esc), ("escaped-id", esc_id)] {
+        let refs: Vec<&[u8]> = vec![line.as_bytes()];
+        let entries = reference::fold_chain(&refs);
+        let ev = format!("{line}\n");
+        let an = anchors_json(&entries);
+        assert_same(name, ev.as_bytes(), &an);
+        let c = candidate::fold_chain(&refs);
+        assert_eq!(c, entries, "fold_chain diverged on {name}");
+    }
+}

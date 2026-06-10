@@ -163,12 +163,15 @@ mod imp {
 
     /// Lowercase hex char -> nibble, masked so the table index never needs a
     /// bounds check; link inputs are always this module's own hex output.
+    #[cfg(target_arch = "wasm32")]
     #[inline(always)]
     fn tail_idx(c: u8) -> usize {
         usize::from((c & 0x0f) + (c >> 6) * 9) & 15
     }
 
-    /// Same round as `round!` with `k + w` arriving pre-added from the table.
+    /// Same scalar round shape as the unrolled simd-lane rounds, with
+    /// `k + w` arriving pre-added from the table.
+    #[cfg(target_arch = "wasm32")]
     macro_rules! roundt {
         ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:expr, $xo:ident, $xn:ident) => {
             let t1 = $h
@@ -185,6 +188,7 @@ mod imp {
 
     /// One compression whose full `w + K` schedule is precomputed; rounds
     /// only load and add. Used for the constant-shape final link block.
+    #[cfg(target_arch = "wasm32")]
     fn compress_tail(state: &mut [u32; 8], wk: &[u32; 64]) {
         let mut a = state[0];
         let mut b = state[1];
@@ -269,166 +273,40 @@ mod imp {
         state[7] = state[7].wrapping_add(h);
     }
 
-    /// One round with rotated working-variable roles: wasm has no register
-    /// renaming, so a looped round with `h = g; g = f; ...` shuffles pay
-    /// per-instruction fuel. Ch uses the 3-op masked-select form; Maj reuses
-    /// the previous round's `a ^ b` through an SSA chain of `$xo`/`$xn`
-    /// bindings so no per-round shuffle instruction is paid.
+    /// Loop-based scalar SHA-256 for native builds (unit tests and the
+    /// differential suite); the metered wasm path lives in the simd module.
     #[cfg(not(target_arch = "wasm32"))]
-    macro_rules! round {
-        ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:literal, $w:ident, $xo:ident, $xn:ident) => {
-            let t1 = $h
-                .wrapping_add($e.rotate_right(6) ^ $e.rotate_right(11) ^ $e.rotate_right(25))
-                .wrapping_add((($f ^ $g) & $e) ^ $g)
-                .wrapping_add($k)
-                .wrapping_add($w);
-            let $xn = $a ^ $b;
-            let t2 = ($a.rotate_right(2) ^ $a.rotate_right(13) ^ $a.rotate_right(22))
-                .wrapping_add($b ^ ($xn & $xo));
-            $d = $d.wrapping_add(t1);
-            $h = t1.wrapping_add(t2);
-        };
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    macro_rules! sched {
-        ($w0:ident, $w1:ident, $w9:ident, $w14:ident) => {
-            $w0 = $w0
-                .wrapping_add($w1.rotate_right(7) ^ $w1.rotate_right(18) ^ ($w1 >> 3))
-                .wrapping_add($w9)
-                .wrapping_add($w14.rotate_right(17) ^ $w14.rotate_right(19) ^ ($w14 >> 10));
-        };
-    }
-
-    /// One SHA-256 compression over a pre-loaded schedule head. Taking `w`
-    /// by value and forcing inlining lets the mostly-constant final block of
-    /// `chain_hex` fold its zero words at compile time. Pinned by the NIST
-    /// vector unit test and the frozen corpus digest.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[inline(always)]
-    fn compress_w(state: &mut [u32; 8], w: [u32; 16]) {
-        let [mut w0, mut w1, mut w2, mut w3, mut w4, mut w5, mut w6, mut w7, mut w8, mut w9, mut w10, mut w11, mut w12, mut w13, mut w14, mut w15] =
-            w;
-        let mut a = state[0];
-        let mut b = state[1];
-        let mut c = state[2];
-        let mut d = state[3];
-        let mut e = state[4];
-        let mut f = state[5];
-        let mut g = state[6];
-        let mut h = state[7];
-        let x0 = b ^ c;
-        round!(a, b, c, d, e, f, g, h, 0x428a2f98u32, w0, x0, x1);
-        round!(h, a, b, c, d, e, f, g, 0x71374491u32, w1, x1, x2);
-        round!(g, h, a, b, c, d, e, f, 0xb5c0fbcfu32, w2, x2, x3);
-        round!(f, g, h, a, b, c, d, e, 0xe9b5dba5u32, w3, x3, x4);
-        round!(e, f, g, h, a, b, c, d, 0x3956c25bu32, w4, x4, x5);
-        round!(d, e, f, g, h, a, b, c, 0x59f111f1u32, w5, x5, x6);
-        round!(c, d, e, f, g, h, a, b, 0x923f82a4u32, w6, x6, x7);
-        round!(b, c, d, e, f, g, h, a, 0xab1c5ed5u32, w7, x7, x8);
-        round!(a, b, c, d, e, f, g, h, 0xd807aa98u32, w8, x8, x9);
-        round!(h, a, b, c, d, e, f, g, 0x12835b01u32, w9, x9, x10);
-        round!(g, h, a, b, c, d, e, f, 0x243185beu32, w10, x10, x11);
-        round!(f, g, h, a, b, c, d, e, 0x550c7dc3u32, w11, x11, x12);
-        round!(e, f, g, h, a, b, c, d, 0x72be5d74u32, w12, x12, x13);
-        round!(d, e, f, g, h, a, b, c, 0x80deb1feu32, w13, x13, x14);
-        round!(c, d, e, f, g, h, a, b, 0x9bdc06a7u32, w14, x14, x15);
-        round!(b, c, d, e, f, g, h, a, 0xc19bf174u32, w15, x15, x16);
-        sched!(w0, w1, w9, w14);
-        round!(a, b, c, d, e, f, g, h, 0xe49b69c1u32, w0, x16, x17);
-        sched!(w1, w2, w10, w15);
-        round!(h, a, b, c, d, e, f, g, 0xefbe4786u32, w1, x17, x18);
-        sched!(w2, w3, w11, w0);
-        round!(g, h, a, b, c, d, e, f, 0x0fc19dc6u32, w2, x18, x19);
-        sched!(w3, w4, w12, w1);
-        round!(f, g, h, a, b, c, d, e, 0x240ca1ccu32, w3, x19, x20);
-        sched!(w4, w5, w13, w2);
-        round!(e, f, g, h, a, b, c, d, 0x2de92c6fu32, w4, x20, x21);
-        sched!(w5, w6, w14, w3);
-        round!(d, e, f, g, h, a, b, c, 0x4a7484aau32, w5, x21, x22);
-        sched!(w6, w7, w15, w4);
-        round!(c, d, e, f, g, h, a, b, 0x5cb0a9dcu32, w6, x22, x23);
-        sched!(w7, w8, w0, w5);
-        round!(b, c, d, e, f, g, h, a, 0x76f988dau32, w7, x23, x24);
-        sched!(w8, w9, w1, w6);
-        round!(a, b, c, d, e, f, g, h, 0x983e5152u32, w8, x24, x25);
-        sched!(w9, w10, w2, w7);
-        round!(h, a, b, c, d, e, f, g, 0xa831c66du32, w9, x25, x26);
-        sched!(w10, w11, w3, w8);
-        round!(g, h, a, b, c, d, e, f, 0xb00327c8u32, w10, x26, x27);
-        sched!(w11, w12, w4, w9);
-        round!(f, g, h, a, b, c, d, e, 0xbf597fc7u32, w11, x27, x28);
-        sched!(w12, w13, w5, w10);
-        round!(e, f, g, h, a, b, c, d, 0xc6e00bf3u32, w12, x28, x29);
-        sched!(w13, w14, w6, w11);
-        round!(d, e, f, g, h, a, b, c, 0xd5a79147u32, w13, x29, x30);
-        sched!(w14, w15, w7, w12);
-        round!(c, d, e, f, g, h, a, b, 0x06ca6351u32, w14, x30, x31);
-        sched!(w15, w0, w8, w13);
-        round!(b, c, d, e, f, g, h, a, 0x14292967u32, w15, x31, x32);
-        sched!(w0, w1, w9, w14);
-        round!(a, b, c, d, e, f, g, h, 0x27b70a85u32, w0, x32, x33);
-        sched!(w1, w2, w10, w15);
-        round!(h, a, b, c, d, e, f, g, 0x2e1b2138u32, w1, x33, x34);
-        sched!(w2, w3, w11, w0);
-        round!(g, h, a, b, c, d, e, f, 0x4d2c6dfcu32, w2, x34, x35);
-        sched!(w3, w4, w12, w1);
-        round!(f, g, h, a, b, c, d, e, 0x53380d13u32, w3, x35, x36);
-        sched!(w4, w5, w13, w2);
-        round!(e, f, g, h, a, b, c, d, 0x650a7354u32, w4, x36, x37);
-        sched!(w5, w6, w14, w3);
-        round!(d, e, f, g, h, a, b, c, 0x766a0abbu32, w5, x37, x38);
-        sched!(w6, w7, w15, w4);
-        round!(c, d, e, f, g, h, a, b, 0x81c2c92eu32, w6, x38, x39);
-        sched!(w7, w8, w0, w5);
-        round!(b, c, d, e, f, g, h, a, 0x92722c85u32, w7, x39, x40);
-        sched!(w8, w9, w1, w6);
-        round!(a, b, c, d, e, f, g, h, 0xa2bfe8a1u32, w8, x40, x41);
-        sched!(w9, w10, w2, w7);
-        round!(h, a, b, c, d, e, f, g, 0xa81a664bu32, w9, x41, x42);
-        sched!(w10, w11, w3, w8);
-        round!(g, h, a, b, c, d, e, f, 0xc24b8b70u32, w10, x42, x43);
-        sched!(w11, w12, w4, w9);
-        round!(f, g, h, a, b, c, d, e, 0xc76c51a3u32, w11, x43, x44);
-        sched!(w12, w13, w5, w10);
-        round!(e, f, g, h, a, b, c, d, 0xd192e819u32, w12, x44, x45);
-        sched!(w13, w14, w6, w11);
-        round!(d, e, f, g, h, a, b, c, 0xd6990624u32, w13, x45, x46);
-        sched!(w14, w15, w7, w12);
-        round!(c, d, e, f, g, h, a, b, 0xf40e3585u32, w14, x46, x47);
-        sched!(w15, w0, w8, w13);
-        round!(b, c, d, e, f, g, h, a, 0x106aa070u32, w15, x47, x48);
-        sched!(w0, w1, w9, w14);
-        round!(a, b, c, d, e, f, g, h, 0x19a4c116u32, w0, x48, x49);
-        sched!(w1, w2, w10, w15);
-        round!(h, a, b, c, d, e, f, g, 0x1e376c08u32, w1, x49, x50);
-        sched!(w2, w3, w11, w0);
-        round!(g, h, a, b, c, d, e, f, 0x2748774cu32, w2, x50, x51);
-        sched!(w3, w4, w12, w1);
-        round!(f, g, h, a, b, c, d, e, 0x34b0bcb5u32, w3, x51, x52);
-        sched!(w4, w5, w13, w2);
-        round!(e, f, g, h, a, b, c, d, 0x391c0cb3u32, w4, x52, x53);
-        sched!(w5, w6, w14, w3);
-        round!(d, e, f, g, h, a, b, c, 0x4ed8aa4au32, w5, x53, x54);
-        sched!(w6, w7, w15, w4);
-        round!(c, d, e, f, g, h, a, b, 0x5b9cca4fu32, w6, x54, x55);
-        sched!(w7, w8, w0, w5);
-        round!(b, c, d, e, f, g, h, a, 0x682e6ff3u32, w7, x55, x56);
-        sched!(w8, w9, w1, w6);
-        round!(a, b, c, d, e, f, g, h, 0x748f82eeu32, w8, x56, x57);
-        sched!(w9, w10, w2, w7);
-        round!(h, a, b, c, d, e, f, g, 0x78a5636fu32, w9, x57, x58);
-        sched!(w10, w11, w3, w8);
-        round!(g, h, a, b, c, d, e, f, 0x84c87814u32, w10, x58, x59);
-        sched!(w11, w12, w4, w9);
-        round!(f, g, h, a, b, c, d, e, 0x8cc70208u32, w11, x59, x60);
-        sched!(w12, w13, w5, w10);
-        round!(e, f, g, h, a, b, c, d, 0x90befffau32, w12, x60, x61);
-        sched!(w13, w14, w6, w11);
-        round!(d, e, f, g, h, a, b, c, 0xa4506cebu32, w13, x61, x62);
-        sched!(w14, w15, w7, w12);
-        round!(c, d, e, f, g, h, a, b, 0xbef9a3f7u32, w14, x62, x63);
-        sched!(w15, w0, w8, w13);
-        round!(b, c, d, e, f, g, h, a, 0xc67178f2u32, w15, x63, _x64);
+    fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
+        let mut w = [0u32; 64];
+        for (i, chunk) in block.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes(chunk.try_into().expect("4-byte chunk"));
+        }
+        for i in 16..64 {
+            let w15 = w[i - 15];
+            let w2 = w[i - 2];
+            w[i] = w[i - 16]
+                .wrapping_add(w15.rotate_right(7) ^ w15.rotate_right(18) ^ (w15 >> 3))
+                .wrapping_add(w[i - 7])
+                .wrapping_add(w2.rotate_right(17) ^ w2.rotate_right(19) ^ (w2 >> 10));
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
+        for i in 0..64 {
+            let t1 = h
+                .wrapping_add(e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25))
+                .wrapping_add(((f ^ g) & e) ^ g)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let t2 = (a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22))
+                .wrapping_add(((a | b) & c) | (a & b));
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
         state[0] = state[0].wrapping_add(a);
         state[1] = state[1].wrapping_add(b);
         state[2] = state[2].wrapping_add(c);
@@ -437,32 +315,6 @@ mod imp {
         state[5] = state[5].wrapping_add(f);
         state[6] = state[6].wrapping_add(g);
         state[7] = state[7].wrapping_add(h);
-    }
-
-    /// Inlined so the block loop in `digest_state` carries the state in
-    /// locals instead of spilling eight words to memory per block.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[inline(always)]
-    fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
-        let w = [
-            u32::from_be_bytes([block[0], block[1], block[2], block[3]]),
-            u32::from_be_bytes([block[4], block[5], block[6], block[7]]),
-            u32::from_be_bytes([block[8], block[9], block[10], block[11]]),
-            u32::from_be_bytes([block[12], block[13], block[14], block[15]]),
-            u32::from_be_bytes([block[16], block[17], block[18], block[19]]),
-            u32::from_be_bytes([block[20], block[21], block[22], block[23]]),
-            u32::from_be_bytes([block[24], block[25], block[26], block[27]]),
-            u32::from_be_bytes([block[28], block[29], block[30], block[31]]),
-            u32::from_be_bytes([block[32], block[33], block[34], block[35]]),
-            u32::from_be_bytes([block[36], block[37], block[38], block[39]]),
-            u32::from_be_bytes([block[40], block[41], block[42], block[43]]),
-            u32::from_be_bytes([block[44], block[45], block[46], block[47]]),
-            u32::from_be_bytes([block[48], block[49], block[50], block[51]]),
-            u32::from_be_bytes([block[52], block[53], block[54], block[55]]),
-            u32::from_be_bytes([block[56], block[57], block[58], block[59]]),
-            u32::from_be_bytes([block[60], block[61], block[62], block[63]]),
-        ];
-        compress_w(state, w);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -512,30 +364,6 @@ mod imp {
             i += 1;
         }
         out
-    }
-
-    /// sha256 of the 129-byte `previous \n event` hex composition. The middle
-    /// block's schedule is built directly from `event` words shifted through
-    /// a one-byte carry (no 64-byte staging buffer), and the final padding
-    /// block is constant except for the carried last hex char, so its
-    /// schedule folds at compile time (length 129 * 8 = 1032 bits).
-    #[cfg(not(target_arch = "wasm32"))]
-    fn chain_hex(previous: &[u8; 64], event: &[u8; 64], tail: &[[u32; 64]; 16]) -> [u8; 64] {
-        let mut state = H0;
-        compress(&mut state, previous);
-        let mut w = [0u32; 16];
-        let mut carry = u32::from(b'\n');
-        let mut i = 0;
-        while i < 16 {
-            let v = u32::from_be_bytes(event[4 * i..4 * i + 4].try_into().expect("4-byte chunk"));
-            w[i] = (carry << 24) | (v >> 8);
-            carry = v & 0xFF;
-            i += 1;
-        }
-        compress_w(&mut state, w);
-        let _ = carry;
-        compress_tail(&mut state, &tail[tail_idx(event[63])]);
-        hex_state(&state)
     }
 
     /// simd128 lane of the kernel, wasm-only. wasmtime's fuel meter charges
@@ -875,22 +703,19 @@ mod imp {
         }
 
         /// Four-message round: lane L of every vector is message L's state,
-        /// so one instruction stream advances four independent digests. Same
-        /// Ch/Maj forms as the scalar `round!`.
+        /// so one instruction stream advances four independent digests. Ch
+        /// and Maj are single bitselects: Ch picks f/g by e's bits; Maj
+        /// picks c where a and b disagree, else a.
         macro_rules! roundm {
-            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:literal, $w:ident, $xo:ident, $xn:ident) => {
+            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:literal, $w:ident) => {
                 let t1 = u32x4_add(
                     u32x4_add(
-                        u32x4_add(
-                            u32x4_add($h, big_sigma1($e)),
-                            v128_xor(v128_and(v128_xor($f, $g), $e), $g),
-                        ),
+                        u32x4_add(u32x4_add($h, big_sigma1($e)), v128_bitselect($f, $g, $e)),
                         u32x4($k, $k, $k, $k),
                     ),
                     $w,
                 );
-                let $xn = v128_xor($a, $b);
-                let t2 = u32x4_add(big_sigma0($a), v128_xor($b, v128_and($xn, $xo)));
+                let t2 = u32x4_add(big_sigma0($a), v128_bitselect($c, $a, v128_xor($a, $b)));
                 $d = u32x4_add($d, t1);
                 $h = u32x4_add(t1, t2);
             };
@@ -918,119 +743,118 @@ mod imp {
             let mut f = state[5];
             let mut g = state[6];
             let mut h = state[7];
-            let x0 = v128_xor(b, c);
-            roundm!(a, b, c, d, e, f, g, h, 0x428a2f98u32, w0, x0, x1);
-            roundm!(h, a, b, c, d, e, f, g, 0x71374491u32, w1, x1, x2);
-            roundm!(g, h, a, b, c, d, e, f, 0xb5c0fbcfu32, w2, x2, x3);
-            roundm!(f, g, h, a, b, c, d, e, 0xe9b5dba5u32, w3, x3, x4);
-            roundm!(e, f, g, h, a, b, c, d, 0x3956c25bu32, w4, x4, x5);
-            roundm!(d, e, f, g, h, a, b, c, 0x59f111f1u32, w5, x5, x6);
-            roundm!(c, d, e, f, g, h, a, b, 0x923f82a4u32, w6, x6, x7);
-            roundm!(b, c, d, e, f, g, h, a, 0xab1c5ed5u32, w7, x7, x8);
-            roundm!(a, b, c, d, e, f, g, h, 0xd807aa98u32, w8, x8, x9);
-            roundm!(h, a, b, c, d, e, f, g, 0x12835b01u32, w9, x9, x10);
-            roundm!(g, h, a, b, c, d, e, f, 0x243185beu32, w10, x10, x11);
-            roundm!(f, g, h, a, b, c, d, e, 0x550c7dc3u32, w11, x11, x12);
-            roundm!(e, f, g, h, a, b, c, d, 0x72be5d74u32, w12, x12, x13);
-            roundm!(d, e, f, g, h, a, b, c, 0x80deb1feu32, w13, x13, x14);
-            roundm!(c, d, e, f, g, h, a, b, 0x9bdc06a7u32, w14, x14, x15);
-            roundm!(b, c, d, e, f, g, h, a, 0xc19bf174u32, w15, x15, x16);
+            roundm!(a, b, c, d, e, f, g, h, 0x428a2f98u32, w0);
+            roundm!(h, a, b, c, d, e, f, g, 0x71374491u32, w1);
+            roundm!(g, h, a, b, c, d, e, f, 0xb5c0fbcfu32, w2);
+            roundm!(f, g, h, a, b, c, d, e, 0xe9b5dba5u32, w3);
+            roundm!(e, f, g, h, a, b, c, d, 0x3956c25bu32, w4);
+            roundm!(d, e, f, g, h, a, b, c, 0x59f111f1u32, w5);
+            roundm!(c, d, e, f, g, h, a, b, 0x923f82a4u32, w6);
+            roundm!(b, c, d, e, f, g, h, a, 0xab1c5ed5u32, w7);
+            roundm!(a, b, c, d, e, f, g, h, 0xd807aa98u32, w8);
+            roundm!(h, a, b, c, d, e, f, g, 0x12835b01u32, w9);
+            roundm!(g, h, a, b, c, d, e, f, 0x243185beu32, w10);
+            roundm!(f, g, h, a, b, c, d, e, 0x550c7dc3u32, w11);
+            roundm!(e, f, g, h, a, b, c, d, 0x72be5d74u32, w12);
+            roundm!(d, e, f, g, h, a, b, c, 0x80deb1feu32, w13);
+            roundm!(c, d, e, f, g, h, a, b, 0x9bdc06a7u32, w14);
+            roundm!(b, c, d, e, f, g, h, a, 0xc19bf174u32, w15);
             schedm!(w0, w1, w9, w14);
-            roundm!(a, b, c, d, e, f, g, h, 0xe49b69c1u32, w0, x16, x17);
+            roundm!(a, b, c, d, e, f, g, h, 0xe49b69c1u32, w0);
             schedm!(w1, w2, w10, w15);
-            roundm!(h, a, b, c, d, e, f, g, 0xefbe4786u32, w1, x17, x18);
+            roundm!(h, a, b, c, d, e, f, g, 0xefbe4786u32, w1);
             schedm!(w2, w3, w11, w0);
-            roundm!(g, h, a, b, c, d, e, f, 0x0fc19dc6u32, w2, x18, x19);
+            roundm!(g, h, a, b, c, d, e, f, 0x0fc19dc6u32, w2);
             schedm!(w3, w4, w12, w1);
-            roundm!(f, g, h, a, b, c, d, e, 0x240ca1ccu32, w3, x19, x20);
+            roundm!(f, g, h, a, b, c, d, e, 0x240ca1ccu32, w3);
             schedm!(w4, w5, w13, w2);
-            roundm!(e, f, g, h, a, b, c, d, 0x2de92c6fu32, w4, x20, x21);
+            roundm!(e, f, g, h, a, b, c, d, 0x2de92c6fu32, w4);
             schedm!(w5, w6, w14, w3);
-            roundm!(d, e, f, g, h, a, b, c, 0x4a7484aau32, w5, x21, x22);
+            roundm!(d, e, f, g, h, a, b, c, 0x4a7484aau32, w5);
             schedm!(w6, w7, w15, w4);
-            roundm!(c, d, e, f, g, h, a, b, 0x5cb0a9dcu32, w6, x22, x23);
+            roundm!(c, d, e, f, g, h, a, b, 0x5cb0a9dcu32, w6);
             schedm!(w7, w8, w0, w5);
-            roundm!(b, c, d, e, f, g, h, a, 0x76f988dau32, w7, x23, x24);
+            roundm!(b, c, d, e, f, g, h, a, 0x76f988dau32, w7);
             schedm!(w8, w9, w1, w6);
-            roundm!(a, b, c, d, e, f, g, h, 0x983e5152u32, w8, x24, x25);
+            roundm!(a, b, c, d, e, f, g, h, 0x983e5152u32, w8);
             schedm!(w9, w10, w2, w7);
-            roundm!(h, a, b, c, d, e, f, g, 0xa831c66du32, w9, x25, x26);
+            roundm!(h, a, b, c, d, e, f, g, 0xa831c66du32, w9);
             schedm!(w10, w11, w3, w8);
-            roundm!(g, h, a, b, c, d, e, f, 0xb00327c8u32, w10, x26, x27);
+            roundm!(g, h, a, b, c, d, e, f, 0xb00327c8u32, w10);
             schedm!(w11, w12, w4, w9);
-            roundm!(f, g, h, a, b, c, d, e, 0xbf597fc7u32, w11, x27, x28);
+            roundm!(f, g, h, a, b, c, d, e, 0xbf597fc7u32, w11);
             schedm!(w12, w13, w5, w10);
-            roundm!(e, f, g, h, a, b, c, d, 0xc6e00bf3u32, w12, x28, x29);
+            roundm!(e, f, g, h, a, b, c, d, 0xc6e00bf3u32, w12);
             schedm!(w13, w14, w6, w11);
-            roundm!(d, e, f, g, h, a, b, c, 0xd5a79147u32, w13, x29, x30);
+            roundm!(d, e, f, g, h, a, b, c, 0xd5a79147u32, w13);
             schedm!(w14, w15, w7, w12);
-            roundm!(c, d, e, f, g, h, a, b, 0x06ca6351u32, w14, x30, x31);
+            roundm!(c, d, e, f, g, h, a, b, 0x06ca6351u32, w14);
             schedm!(w15, w0, w8, w13);
-            roundm!(b, c, d, e, f, g, h, a, 0x14292967u32, w15, x31, x32);
+            roundm!(b, c, d, e, f, g, h, a, 0x14292967u32, w15);
             schedm!(w0, w1, w9, w14);
-            roundm!(a, b, c, d, e, f, g, h, 0x27b70a85u32, w0, x32, x33);
+            roundm!(a, b, c, d, e, f, g, h, 0x27b70a85u32, w0);
             schedm!(w1, w2, w10, w15);
-            roundm!(h, a, b, c, d, e, f, g, 0x2e1b2138u32, w1, x33, x34);
+            roundm!(h, a, b, c, d, e, f, g, 0x2e1b2138u32, w1);
             schedm!(w2, w3, w11, w0);
-            roundm!(g, h, a, b, c, d, e, f, 0x4d2c6dfcu32, w2, x34, x35);
+            roundm!(g, h, a, b, c, d, e, f, 0x4d2c6dfcu32, w2);
             schedm!(w3, w4, w12, w1);
-            roundm!(f, g, h, a, b, c, d, e, 0x53380d13u32, w3, x35, x36);
+            roundm!(f, g, h, a, b, c, d, e, 0x53380d13u32, w3);
             schedm!(w4, w5, w13, w2);
-            roundm!(e, f, g, h, a, b, c, d, 0x650a7354u32, w4, x36, x37);
+            roundm!(e, f, g, h, a, b, c, d, 0x650a7354u32, w4);
             schedm!(w5, w6, w14, w3);
-            roundm!(d, e, f, g, h, a, b, c, 0x766a0abbu32, w5, x37, x38);
+            roundm!(d, e, f, g, h, a, b, c, 0x766a0abbu32, w5);
             schedm!(w6, w7, w15, w4);
-            roundm!(c, d, e, f, g, h, a, b, 0x81c2c92eu32, w6, x38, x39);
+            roundm!(c, d, e, f, g, h, a, b, 0x81c2c92eu32, w6);
             schedm!(w7, w8, w0, w5);
-            roundm!(b, c, d, e, f, g, h, a, 0x92722c85u32, w7, x39, x40);
+            roundm!(b, c, d, e, f, g, h, a, 0x92722c85u32, w7);
             schedm!(w8, w9, w1, w6);
-            roundm!(a, b, c, d, e, f, g, h, 0xa2bfe8a1u32, w8, x40, x41);
+            roundm!(a, b, c, d, e, f, g, h, 0xa2bfe8a1u32, w8);
             schedm!(w9, w10, w2, w7);
-            roundm!(h, a, b, c, d, e, f, g, 0xa81a664bu32, w9, x41, x42);
+            roundm!(h, a, b, c, d, e, f, g, 0xa81a664bu32, w9);
             schedm!(w10, w11, w3, w8);
-            roundm!(g, h, a, b, c, d, e, f, 0xc24b8b70u32, w10, x42, x43);
+            roundm!(g, h, a, b, c, d, e, f, 0xc24b8b70u32, w10);
             schedm!(w11, w12, w4, w9);
-            roundm!(f, g, h, a, b, c, d, e, 0xc76c51a3u32, w11, x43, x44);
+            roundm!(f, g, h, a, b, c, d, e, 0xc76c51a3u32, w11);
             schedm!(w12, w13, w5, w10);
-            roundm!(e, f, g, h, a, b, c, d, 0xd192e819u32, w12, x44, x45);
+            roundm!(e, f, g, h, a, b, c, d, 0xd192e819u32, w12);
             schedm!(w13, w14, w6, w11);
-            roundm!(d, e, f, g, h, a, b, c, 0xd6990624u32, w13, x45, x46);
+            roundm!(d, e, f, g, h, a, b, c, 0xd6990624u32, w13);
             schedm!(w14, w15, w7, w12);
-            roundm!(c, d, e, f, g, h, a, b, 0xf40e3585u32, w14, x46, x47);
+            roundm!(c, d, e, f, g, h, a, b, 0xf40e3585u32, w14);
             schedm!(w15, w0, w8, w13);
-            roundm!(b, c, d, e, f, g, h, a, 0x106aa070u32, w15, x47, x48);
+            roundm!(b, c, d, e, f, g, h, a, 0x106aa070u32, w15);
             schedm!(w0, w1, w9, w14);
-            roundm!(a, b, c, d, e, f, g, h, 0x19a4c116u32, w0, x48, x49);
+            roundm!(a, b, c, d, e, f, g, h, 0x19a4c116u32, w0);
             schedm!(w1, w2, w10, w15);
-            roundm!(h, a, b, c, d, e, f, g, 0x1e376c08u32, w1, x49, x50);
+            roundm!(h, a, b, c, d, e, f, g, 0x1e376c08u32, w1);
             schedm!(w2, w3, w11, w0);
-            roundm!(g, h, a, b, c, d, e, f, 0x2748774cu32, w2, x50, x51);
+            roundm!(g, h, a, b, c, d, e, f, 0x2748774cu32, w2);
             schedm!(w3, w4, w12, w1);
-            roundm!(f, g, h, a, b, c, d, e, 0x34b0bcb5u32, w3, x51, x52);
+            roundm!(f, g, h, a, b, c, d, e, 0x34b0bcb5u32, w3);
             schedm!(w4, w5, w13, w2);
-            roundm!(e, f, g, h, a, b, c, d, 0x391c0cb3u32, w4, x52, x53);
+            roundm!(e, f, g, h, a, b, c, d, 0x391c0cb3u32, w4);
             schedm!(w5, w6, w14, w3);
-            roundm!(d, e, f, g, h, a, b, c, 0x4ed8aa4au32, w5, x53, x54);
+            roundm!(d, e, f, g, h, a, b, c, 0x4ed8aa4au32, w5);
             schedm!(w6, w7, w15, w4);
-            roundm!(c, d, e, f, g, h, a, b, 0x5b9cca4fu32, w6, x54, x55);
+            roundm!(c, d, e, f, g, h, a, b, 0x5b9cca4fu32, w6);
             schedm!(w7, w8, w0, w5);
-            roundm!(b, c, d, e, f, g, h, a, 0x682e6ff3u32, w7, x55, x56);
+            roundm!(b, c, d, e, f, g, h, a, 0x682e6ff3u32, w7);
             schedm!(w8, w9, w1, w6);
-            roundm!(a, b, c, d, e, f, g, h, 0x748f82eeu32, w8, x56, x57);
+            roundm!(a, b, c, d, e, f, g, h, 0x748f82eeu32, w8);
             schedm!(w9, w10, w2, w7);
-            roundm!(h, a, b, c, d, e, f, g, 0x78a5636fu32, w9, x57, x58);
+            roundm!(h, a, b, c, d, e, f, g, 0x78a5636fu32, w9);
             schedm!(w10, w11, w3, w8);
-            roundm!(g, h, a, b, c, d, e, f, 0x84c87814u32, w10, x58, x59);
+            roundm!(g, h, a, b, c, d, e, f, 0x84c87814u32, w10);
             schedm!(w11, w12, w4, w9);
-            roundm!(f, g, h, a, b, c, d, e, 0x8cc70208u32, w11, x59, x60);
+            roundm!(f, g, h, a, b, c, d, e, 0x8cc70208u32, w11);
             schedm!(w12, w13, w5, w10);
-            roundm!(e, f, g, h, a, b, c, d, 0x90befffau32, w12, x60, x61);
+            roundm!(e, f, g, h, a, b, c, d, 0x90befffau32, w12);
             schedm!(w13, w14, w6, w11);
-            roundm!(d, e, f, g, h, a, b, c, 0xa4506cebu32, w13, x61, x62);
+            roundm!(d, e, f, g, h, a, b, c, 0xa4506cebu32, w13);
             schedm!(w14, w15, w7, w12);
-            roundm!(c, d, e, f, g, h, a, b, 0xbef9a3f7u32, w14, x62, x63);
+            roundm!(c, d, e, f, g, h, a, b, 0xbef9a3f7u32, w14);
             schedm!(w15, w0, w8, w13);
-            roundm!(b, c, d, e, f, g, h, a, 0xc67178f2u32, w15, x63, _x64);
+            roundm!(b, c, d, e, f, g, h, a, 0xc67178f2u32, w15);
             state[0] = u32x4_add(state[0], a);
             state[1] = u32x4_add(state[1], b);
             state[2] = u32x4_add(state[2], c);
@@ -1096,49 +920,24 @@ mod imp {
             }
         }
 
-        /// Four equal-block-count messages digested in lockstep.
+        #[inline]
         #[target_feature(enable = "simd128")]
-        fn digest4(lines: [&[u8]; 4], blocks: usize) -> [[u8; 64]; 4] {
-            let mut tails = [[0u8; 128]; 4];
-            let mut full = [0usize; 4];
-            for l in 0..4 {
-                let bytes = lines[l];
-                let rem = bytes.len() % 64;
-                full[l] = bytes.len() / 64;
-                let tail = &mut tails[l];
-                tail[..rem].copy_from_slice(&bytes[bytes.len() - rem..]);
-                tail[rem] = 0x80;
-                let len_at = if rem >= 56 { 120 } else { 56 };
-                tail[len_at..len_at + 8]
-                    .copy_from_slice(&((bytes.len() as u64).wrapping_mul(8)).to_be_bytes());
-            }
-            let mut state = [
-                u32x4(H0[0], H0[0], H0[0], H0[0]),
-                u32x4(H0[1], H0[1], H0[1], H0[1]),
-                u32x4(H0[2], H0[2], H0[2], H0[2]),
-                u32x4(H0[3], H0[3], H0[3], H0[3]),
-                u32x4(H0[4], H0[4], H0[4], H0[4]),
-                u32x4(H0[5], H0[5], H0[5], H0[5]),
-                u32x4(H0[6], H0[6], H0[6], H0[6]),
-                u32x4(H0[7], H0[7], H0[7], H0[7]),
-            ];
-            for k in 0..blocks {
-                let b0 = block_at(lines[0], &tails[0], full[0], k);
-                let b1 = block_at(lines[1], &tails[1], full[1], k);
-                let b2 = block_at(lines[2], &tails[2], full[2], k);
-                let b3 = block_at(lines[3], &tails[3], full[3], k);
-                let q0 = quad::<0>(b0, b1, b2, b3);
-                let q1 = quad::<16>(b0, b1, b2, b3);
-                let q2 = quad::<32>(b0, b1, b2, b3);
-                let q3 = quad::<48>(b0, b1, b2, b3);
-                compressm(
-                    &mut state,
-                    [
-                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1],
-                        q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
-                    ],
-                );
-            }
+        fn splat_h0() -> [v128; 8] {
+            [
+                u32x4_splat(H0[0]),
+                u32x4_splat(H0[1]),
+                u32x4_splat(H0[2]),
+                u32x4_splat(H0[3]),
+                u32x4_splat(H0[4]),
+                u32x4_splat(H0[5]),
+                u32x4_splat(H0[6]),
+                u32x4_splat(H0[7]),
+            ]
+        }
+
+        /// Final states of four lockstep messages, each lane to lowercase hex.
+        #[target_feature(enable = "simd128")]
+        fn lanes_hex(state: &[v128; 8]) -> [[u8; 64]; 4] {
             let mut out = [[0u8; 64]; 4];
             macro_rules! lane_hex {
                 ($idx:literal) => {{
@@ -1164,6 +963,93 @@ mod imp {
             lane_hex!(2);
             lane_hex!(3);
             out
+        }
+
+        /// Four chain links in lockstep: each lane hashes the fixed-shape
+        /// 129-byte `prev \n event_hex` message (three padded blocks) from a
+        /// caller-supplied candidate previous hash. The caller only trusts a
+        /// lane after checking its candidate equaled the true previous hash,
+        /// so wrong or missing candidates cost a recompute, never accuracy.
+        #[target_feature(enable = "simd128")]
+        pub(super) fn link_quad(
+            cand: &[Option<&[u8]>; 4],
+            hexes: &[[u8; 64]],
+            out: &mut [[u8; 64]; 4],
+        ) {
+            let zero = super::zero_hash();
+            let mut bufs = [[0u8; 192]; 4];
+            let mut l = 0;
+            while l < 4 {
+                let prev = cand[l].unwrap_or(&zero[..]);
+                let hex = hexes.get(l).unwrap_or(&hexes[0]);
+                let b = &mut bufs[l];
+                b[..64].copy_from_slice(prev);
+                b[64] = b'\n';
+                b[65..129].copy_from_slice(hex);
+                b[129] = 0x80;
+                b[190] = 0x04;
+                b[191] = 0x08;
+                l += 1;
+            }
+            let mut state = splat_h0();
+            let mut k = 0;
+            while k < 3 {
+                let o = 64 * k;
+                let b0: &[u8; 64] = bufs[0][o..o + 64].try_into().expect("64-byte block");
+                let b1: &[u8; 64] = bufs[1][o..o + 64].try_into().expect("64-byte block");
+                let b2: &[u8; 64] = bufs[2][o..o + 64].try_into().expect("64-byte block");
+                let b3: &[u8; 64] = bufs[3][o..o + 64].try_into().expect("64-byte block");
+                let q0 = quad::<0>(b0, b1, b2, b3);
+                let q1 = quad::<16>(b0, b1, b2, b3);
+                let q2 = quad::<32>(b0, b1, b2, b3);
+                let q3 = quad::<48>(b0, b1, b2, b3);
+                compressm(
+                    &mut state,
+                    [
+                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1],
+                        q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
+                    ],
+                );
+                k += 1;
+            }
+            *out = lanes_hex(&state);
+        }
+
+        /// Four equal-block-count messages digested in lockstep.
+        #[target_feature(enable = "simd128")]
+        fn digest4(lines: [&[u8]; 4], blocks: usize) -> [[u8; 64]; 4] {
+            let mut tails = [[0u8; 128]; 4];
+            let mut full = [0usize; 4];
+            for l in 0..4 {
+                let bytes = lines[l];
+                let rem = bytes.len() % 64;
+                full[l] = bytes.len() / 64;
+                let tail = &mut tails[l];
+                tail[..rem].copy_from_slice(&bytes[bytes.len() - rem..]);
+                tail[rem] = 0x80;
+                let len_at = if rem >= 56 { 120 } else { 56 };
+                tail[len_at..len_at + 8]
+                    .copy_from_slice(&((bytes.len() as u64).wrapping_mul(8)).to_be_bytes());
+            }
+            let mut state = splat_h0();
+            for k in 0..blocks {
+                let b0 = block_at(lines[0], &tails[0], full[0], k);
+                let b1 = block_at(lines[1], &tails[1], full[1], k);
+                let b2 = block_at(lines[2], &tails[2], full[2], k);
+                let b3 = block_at(lines[3], &tails[3], full[3], k);
+                let q0 = quad::<0>(b0, b1, b2, b3);
+                let q1 = quad::<16>(b0, b1, b2, b3);
+                let q2 = quad::<32>(b0, b1, b2, b3);
+                let q3 = quad::<48>(b0, b1, b2, b3);
+                compressm(
+                    &mut state,
+                    [
+                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1],
+                        q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
+                    ],
+                );
+            }
+            lanes_hex(&state)
         }
 
         /// Digest every line, four at a time. Messages only share a round
@@ -1260,7 +1146,7 @@ mod imp {
     }
 
     #[cfg(target_arch = "wasm32")]
-    use simd::{digest_all, digest_hex, link_hex};
+    use simd::{digest_all, link_hex, link_quad};
 
     #[cfg(not(target_arch = "wasm32"))]
     fn digest_all(lines: &[&[u8]]) -> Vec<[u8; 64]> {
@@ -1273,8 +1159,12 @@ mod imp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn link_hex(previous: &[u8; 64], event: &[u8; 64], tail: &[[u32; 64]; 16]) -> [u8; 64] {
-        chain_hex(previous, event, tail)
+    fn link_hex(previous: &[u8; 64], event: &[u8; 64], _tail: &[[u32; 64]; 16]) -> [u8; 64] {
+        let mut msg = [0u8; 129];
+        msg[..64].copy_from_slice(previous);
+        msg[64] = b'\n';
+        msg[65..].copy_from_slice(event);
+        hex_state(&digest_state(&msg))
     }
 
     fn hex_string(hex: &[u8; 64]) -> String {
@@ -1888,6 +1778,24 @@ mod imp {
             && s.done()
     }
 
+    /// Best-effort extraction of the trailing `chain_hash_hex` value from an
+    /// anchor line, used only to seed speculative links: a wrong or missing
+    /// span merely costs a sequential recompute, so this matches the exact
+    /// tail shape `fold_chain` serializes and nothing else.
+    #[cfg(target_arch = "wasm32")]
+    fn chain_span(line: &[u8]) -> Option<&[u8]> {
+        let n = line.len();
+        if n < 85 {
+            return None;
+        }
+        let t = &line[n - 85..];
+        if t[..19] == *b",\"chain_hash_hex\":\"" && t[83] == b'"' && t[84] == b'}' {
+            Some(&t[19..83])
+        } else {
+            None
+        }
+    }
+
     pub fn verify_chain(events_jsonl: &[u8], anchors_jsonl: &[u8]) -> ChainReport {
         let event_lines = split_lines(events_jsonl);
         let anchor_lines = split_lines(anchors_jsonl);
@@ -1902,6 +1810,24 @@ mod imp {
         let event_hexes = digest_all(&event_lines);
         let tail = tail_wk_table();
         let mut previous = zero_hash();
+        // Speculative links: each anchor line carries the chain hash its
+        // position should produce, so candidate previous hashes for a group
+        // of four events are known up front and the three blocks of every
+        // link run four lanes wide. A lane is trusted only when its
+        // candidate equaled the true previous hash, so tampered or missing
+        // anchors cost a sequential recompute, never accuracy. A run of
+        // consecutive misses (a diverged chain re-misses every event from
+        // the divergence on) parks the batches for the rest of the call.
+        #[cfg(target_arch = "wasm32")]
+        let zero_prev = zero_hash();
+        #[cfg(target_arch = "wasm32")]
+        let mut spec_on = true;
+        #[cfg(target_arch = "wasm32")]
+        let mut spec_miss = 0u32;
+        #[cfg(target_arch = "wasm32")]
+        let mut spec_cand: [Option<&[u8]>; 4] = [None; 4];
+        #[cfg(target_arch = "wasm32")]
+        let mut spec_buf = [[0u8; 64]; 4];
         // Canonical decimal of the running entry index, right-aligned and
         // incremented in place; replaces a per-event itoa in the anchor
         // fast compare.
@@ -1926,6 +1852,42 @@ mod imp {
                 }
             }
             let event_hex = &event_hexes[index];
+            #[cfg(target_arch = "wasm32")]
+            let chain = {
+                if index & 3 == 0 {
+                    if spec_on {
+                        let mut l = 0;
+                        while l < 4 {
+                            let idx = index + l;
+                            spec_cand[l] = if idx >= event_lines.len() {
+                                None
+                            } else if idx == 0 {
+                                Some(&zero_prev[..])
+                            } else {
+                                anchor_lines.get(idx - 1).and_then(|a| chain_span(a))
+                            };
+                            l += 1;
+                        }
+                        link_quad(&spec_cand, &event_hexes[index..], &mut spec_buf);
+                    } else {
+                        spec_cand = [None; 4];
+                    }
+                }
+                match spec_cand[index & 3] {
+                    Some(c) if bytes_eq(c, &previous[..]) => {
+                        spec_miss = 0;
+                        spec_buf[index & 3]
+                    }
+                    _ => {
+                        spec_miss += 1;
+                        if spec_miss >= 8 {
+                            spec_on = false;
+                        }
+                        link_hex(&previous, event_hex, &tail)
+                    }
+                }
+            };
+            #[cfg(not(target_arch = "wasm32"))]
             let chain = link_hex(&previous, event_hex, &tail);
             // The strict scanner accepting the event guarantees the id and
             // timestamp spans embed verbatim in anchor JSON, making byte
@@ -2048,10 +2010,11 @@ mod imp {
 
     pub fn fold_chain(lines: &[&[u8]]) -> Vec<ChainEntry> {
         let tail = tail_wk_table();
+        let event_hexes = digest_all(lines);
         let mut previous = zero_hash();
         let mut entries = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
-            let event_hex = digest_hex(line);
+            let event_hex = event_hexes[index];
             let chain = link_hex(&previous, &event_hex, &tail);
             let (event_id, timestamp_ms) = match parse_event(line) {
                 Ok((id, ts)) => (id.into_owned(), ts),

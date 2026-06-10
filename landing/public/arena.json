@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-10T21:05:04.434Z",
+  "updatedAt": "2026-06-10T21:19:20.787Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
-    "scalar": 5.379,
+    "scalar": 5.39,
     "fuelCutPct": 81.4
   },
   "tally": {
@@ -65,6 +65,11 @@
       "round": "k12",
       "scalar": 5.379,
       "proposer": "Claude"
+    },
+    {
+      "round": "c1",
+      "scalar": 5.39,
+      "proposer": "Grok"
     }
   ],
   "solo": {
@@ -73,9 +78,27 @@
     "finalScalar": 4.426
   },
   "community": {
-    "ships": 0
+    "ships": 1
   },
   "rounds": [
+    {
+      "round": "c1",
+      "display": "Challenge 1",
+      "era": "challenge",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "claude",
+          "scalar": 5.39,
+          "incumbent": 5.379,
+          "gain": 0.011,
+          "promoted": true,
+          "commit": "b6068a65d818a8f29f0cd8229725431299eac8a5",
+          "handle": "@grok",
+          "reason": null
+        }
+      ]
+    },
     {
       "round": "k12",
       "display": "Round 3",

@@ -152,8 +152,8 @@ export default async function ArenaPage() {
           </span>
         </div>
 
-        <div className="lg:grid lg:grid-cols-12 lg:gap-14">
-          <div className="lg:col-span-5">
+        <div className="lg:grid lg:grid-cols-2 lg:gap-14">
+          <div>
             <div className="lg:sticky lg:top-24">
               <h2 className="text-balance text-[2.6rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[3rem]">
                 <span style={{ color: ACCENT.Claude }}>Claude</span> vs{" "}
@@ -210,7 +210,7 @@ export default async function ArenaPage() {
             </div>
           </div>
 
-          <div className="mt-16 lg:col-span-7 lg:mt-0">
+          <div className="mt-16 lg:mt-0">
             <ol className="relative">
               {arena.rounds.map((r, i) => {
                 const isLast = i === arena.rounds.length - 1;

@@ -343,3 +343,95 @@ async fn live_covenantd_metaplex_attest_writes_to_devnet() {
 
     let _ = child.kill().await;
 }
+
+/// Live, env-gated: proves the autonomous Metaplex anchor driver end to
+/// end through the real daemon — an audit row lands in the chain, the
+/// driver notices the changed root on its next tick, and a confirmed MPL
+/// Core AppData attestation comes back from the signer sidecar. Forwards
+/// COVENANT_METAPLEX_CLUSTER / COVENANT_METAPLEX_COLLECTION when set, so
+/// the same test proves devnet or mainnet.
+#[tokio::test]
+#[ignore = "live+funded: drives the daemon's auto-attest driver to an on-chain mint"]
+async fn live_covenantd_metaplex_auto_attest_anchors_changed_root() {
+    let (Ok(signer_bin), Ok(keypair), Ok(rpc)) = (
+        std::env::var("COVENANT_METAPLEX_SIGNER_BIN"),
+        std::env::var("COVENANT_METAPLEX_KEYPAIR"),
+        std::env::var("COVENANT_METAPLEX_RPC_URL"),
+    ) else {
+        eprintln!(
+            "skip: set COVENANT_METAPLEX_SIGNER_BIN + COVENANT_METAPLEX_KEYPAIR + \
+             COVENANT_METAPLEX_RPC_URL (funded key) to run this"
+        );
+        return;
+    };
+    let cluster =
+        std::env::var("COVENANT_METAPLEX_CLUSTER").unwrap_or_else(|_| "devnet".to_string());
+    let collection = std::env::var("COVENANT_METAPLEX_COLLECTION").unwrap_or_default();
+
+    let home = tempfile::tempdir().expect("tempdir");
+    let port = pick_free_port();
+    let exe = env!("CARGO_BIN_EXE_covenantd");
+    let mut cmd = Command::new(exe);
+    cmd.env("COVENANT_HOME", home.path())
+        .env("HOME", home.path())
+        .env("COVENANT_HTTP_PORT", port.to_string())
+        .env("COVENANT_METAPLEX_ENABLED", "true")
+        .env("COVENANT_METAPLEX_CLUSTER", &cluster)
+        .env("COVENANT_METAPLEX_SIGNER_BIN", &signer_bin)
+        .env("COVENANT_METAPLEX_KEYPAIR", &keypair)
+        .env("COVENANT_METAPLEX_RPC_URL", &rpc)
+        .env("COVENANT_METAPLEX_AUTO_ATTEST", "1")
+        .env("COVENANT_METAPLEX_ATTEST_INTERVAL_SECS", "2")
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    if !collection.is_empty() {
+        cmd.env("COVENANT_METAPLEX_COLLECTION", &collection);
+    }
+    let mut child = cmd.spawn().expect("spawn covenantd");
+
+    let sock = home.path().join("sock");
+    if !wait_for_sock(&sock).await {
+        let _ = child.kill().await;
+        panic!("daemon never created its socket");
+    }
+    let operator_token = read_operator_token(home.path()).await;
+
+    // Any audited action moves the audit-integrity root off empty; a
+    // capability grant is the cheapest one.
+    let mut stream = authenticated_operator(&sock, &operator_token).await;
+    match req(
+        &mut stream,
+        Request::GrantCapability {
+            action: "tool.call.metaplex.das.get_asset".into(),
+            scope: None,
+            expires_at: None,
+        },
+    )
+    .await
+    {
+        Response::CapabilityGranted { .. } => {}
+        other => panic!("grant failed: {other:?}"),
+    }
+
+    // The driver persists the root only after the signer confirms the
+    // on-chain write, so the file appearing IS the proof of anchor.
+    let last_root_file = home.path().join("metaplex-last-attested-root");
+    let mut anchored = None;
+    for _ in 0..60 {
+        if let Ok(s) = std::fs::read_to_string(&last_root_file) {
+            let trimmed = s.trim().to_string();
+            // The genesis all-zeros root must never be anchored; wait for
+            // a real one produced by the audited grant above.
+            if trimmed.len() == 64 && !trimmed.bytes().all(|b| b == b'0') {
+                anchored = Some(trimmed);
+                break;
+            }
+        }
+        sleep(Duration::from_millis(1000)).await;
+    }
+    let _ = child.kill().await;
+    let root = anchored.expect("auto-attest driver never anchored a root on-chain");
+    eprintln!("auto-anchored audit root: {root} (cluster {cluster})");
+}

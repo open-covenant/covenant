@@ -213,6 +213,10 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
                 .instruction();
             let write_ix = WriteExternalPluginAdapterDataV1Builder::new()
                 .asset(asset.pubkey())
+                // The asset lives in this collection (when one is pinned);
+                // Core requires the collection account on every instruction
+                // touching such an asset, or it fails with MissingCollection.
+                .collection(collection)
                 .payer(payer.pubkey())
                 .authority(Some(payer.pubkey()))
                 .key(ExternalPluginAdapterKey::AppData(PluginAuthority::Address {

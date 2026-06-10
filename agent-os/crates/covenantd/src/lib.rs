@@ -266,6 +266,97 @@ pub fn sap_attest_config_from_values(
     config
 }
 
+/// Config for the autonomous Metaplex audit-root anchoring driver — the
+/// second, DAS-discoverable anchor beside SAP. Same shape and defaults as
+/// [`SapAttestConfig`]; tracked separately so either anchor can run, fail,
+/// and retry independently of the other.
+#[derive(Debug, Clone)]
+pub struct MetaplexAttestConfig {
+    pub enabled: bool,
+    pub interval: Duration,
+}
+
+impl Default for MetaplexAttestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval: Duration::from_secs(900),
+        }
+    }
+}
+
+/// Resolve the Metaplex auto-attest driver config from env. Infallible:
+/// a bad interval falls back to the default rather than refusing to boot.
+pub fn metaplex_attest_config_from_env() -> MetaplexAttestConfig {
+    metaplex_attest_config_from_values(
+        std::env::var("COVENANT_METAPLEX_AUTO_ATTEST").ok().as_deref(),
+        std::env::var("COVENANT_METAPLEX_ATTEST_INTERVAL_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Pure resolver over the raw env values — no process-global reads, so
+/// tests can drive every branch deterministically.
+pub fn metaplex_attest_config_from_values(
+    enabled: Option<&str>,
+    interval_secs: Option<&str>,
+) -> MetaplexAttestConfig {
+    let mut config = MetaplexAttestConfig {
+        enabled: matches!(
+            enabled.map(str::trim),
+            Some("1") | Some("true") | Some("yes")
+        ),
+        ..Default::default()
+    };
+    if let Some(secs) = interval_secs
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+    {
+        config.interval = Duration::from_secs(secs);
+    }
+    config
+}
+
+#[cfg(test)]
+mod metaplex_attest_config_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_off_with_fallback_interval() {
+        let c = metaplex_attest_config_from_values(None, None);
+        assert!(!c.enabled, "auto-attest must default OFF");
+        assert_eq!(c.interval, Duration::from_secs(900));
+    }
+
+    #[test]
+    fn parses_truthy_enabled_and_interval_override() {
+        for v in ["1", "true", "yes", " 1 "] {
+            assert!(
+                metaplex_attest_config_from_values(Some(v), None).enabled,
+                "v={v:?}"
+            );
+        }
+        for v in ["0", "false", "no", ""] {
+            assert!(
+                !metaplex_attest_config_from_values(Some(v), None).enabled,
+                "v={v:?}"
+            );
+        }
+        assert_eq!(
+            metaplex_attest_config_from_values(Some("1"), Some("120")).interval,
+            Duration::from_secs(120)
+        );
+        for bad in ["abc", "0"] {
+            assert_eq!(
+                metaplex_attest_config_from_values(Some("1"), Some(bad)).interval,
+                Duration::from_secs(900),
+                "bad interval {bad:?} must fall back to default"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod sap_attest_config_tests {
     use super::*;
@@ -668,6 +759,58 @@ pub fn spawn_sap_attest_driver(
         loop {
             interval.tick().await;
             server.run_sap_attest_iteration(&mut last_root).await;
+        }
+    })
+}
+
+/// Path the Metaplex auto-attest driver uses to remember the last audit
+/// root it anchored. Deliberately separate from the SAP file: the two
+/// anchors are independent sinks of the same root, so one failing (or
+/// being enabled later) must not suppress or replay the other.
+fn metaplex_last_root_path() -> std::path::PathBuf {
+    let home = std::env::var("COVENANT_HOME")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| {
+            let h = std::env::var("HOME").unwrap_or_default();
+            format!("{h}/.covenant")
+        });
+    std::path::PathBuf::from(home).join("metaplex-last-attested-root")
+}
+
+fn read_metaplex_last_root() -> Option<String> {
+    std::fs::read_to_string(metaplex_last_root_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn write_metaplex_last_root(root: &str) {
+    let path = metaplex_last_root_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, root);
+}
+
+/// Autonomous Metaplex audit-root anchoring driver — the DAS-discoverable
+/// anchor beside SAP. On each tick it reads the current audit-integrity
+/// root and, if it has changed since the last Metaplex anchor, writes it
+/// as an MPL Core AppData attestation through the signer sidecar. Strictly
+/// opt-in (`COVENANT_METAPLEX_AUTO_ATTEST`) and a silent no-op when the
+/// Metaplex write surface is not configured — see [`MetaplexAttestConfig`].
+pub fn spawn_metaplex_attest_driver(
+    server: Server,
+    config: MetaplexAttestConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(config.interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_root = read_metaplex_last_root();
+        loop {
+            interval.tick().await;
+            server.run_metaplex_attest_iteration(&mut last_root).await;
         }
     })
 }
@@ -1343,6 +1486,71 @@ impl Server {
             }
             Err(e) => {
                 warn!(error = %e, root = %root, "sap auto-attest: anchor failed; will retry next tick");
+            }
+        }
+    }
+
+    /// One iteration of the autonomous Metaplex audit-root anchor (driven
+    /// by [`spawn_metaplex_attest_driver`]). Mirrors
+    /// [`Self::run_sap_attest_iteration`] against the second anchor: the
+    /// changed root is written as an MPL Core AppData attestation via the
+    /// signer sidecar, with its own last-root tracking so the two anchors
+    /// never gate each other. Every failure mode (profile off / writes not
+    /// configured / signer error) is logged and swallowed so the driver
+    /// keeps ticking.
+    pub(crate) async fn run_metaplex_attest_iteration(&self, last_root: &mut Option<String>) {
+        let root = match self.audit.verify_integrity().await {
+            Ok(report) => report.root_hash_hex,
+            Err(e) => {
+                warn!(error = %e, "metaplex auto-attest: audit integrity check failed; skipping tick");
+                return;
+            }
+        };
+        // An empty chain reports the all-zeros genesis root — not worth
+        // paying rent to anchor. Skip it alongside empty/unchanged roots.
+        if root.is_empty()
+            || root.bytes().all(|b| b == b'0')
+            || last_root.as_deref() == Some(root.as_str())
+        {
+            return;
+        }
+        let Some(state) = self.metaplex.as_ref() else {
+            return; // metaplex profile not wired into this daemon
+        };
+        if !state.config.allows("attest.audit_root") {
+            return; // attestation writes excluded by the allowlist
+        }
+        let Some(signer) = state.signer() else {
+            return; // write surface not configured
+        };
+        let payload = covenant_metaplex::AttestationPayload::new(
+            root.clone(),
+            "covenant",
+            "witness-loop",
+            "audit",
+            epoch_ms() / 1000,
+        );
+        let request = covenant_metaplex::SignerRequest::AttestAuditRoot {
+            payload,
+            asset: None,
+            // The sidecar resolves the collection from its own env
+            // (COVENANT_METAPLEX_COLLECTION), same as tool-driven writes.
+            collection: None,
+        };
+        match signer.sign(request).await {
+            Ok(response) => {
+                info!(
+                    asset = %response.asset,
+                    signature = %response.signature,
+                    cluster = %response.cluster,
+                    root = %root,
+                    "metaplex auto-anchored audit root"
+                );
+                *last_root = Some(root.clone());
+                write_metaplex_last_root(&root);
+            }
+            Err(e) => {
+                warn!(error = %e, root = %root, "metaplex auto-attest: anchor failed; will retry next tick");
             }
         }
     }

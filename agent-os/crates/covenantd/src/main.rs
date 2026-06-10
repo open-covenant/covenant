@@ -435,6 +435,25 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Autonomous Metaplex audit-root anchoring (opt-in, default off). The
+    // second anchor: the same changed audit root is also written as an MPL
+    // Core AppData attestation, DAS-indexed and discoverable ecosystem-wide.
+    // Independent of the SAP driver — separate flag, interval, and last-root
+    // tracking. No-op when the Metaplex write surface is not configured.
+    let metaplex_attest = covenantd::metaplex_attest_config_from_env();
+    let metaplex_attest_handle = if metaplex_attest.enabled {
+        info!(
+            interval_secs = metaplex_attest.interval.as_secs(),
+            "metaplex auto-attest driver enabled (anchors changed audit roots to MPL Core AppData)"
+        );
+        Some(covenantd::spawn_metaplex_attest_driver(
+            server.clone(),
+            metaplex_attest,
+        ))
+    } else {
+        None
+    };
+
     // Fold live Hermes runtime traces into the audit chain as they stream in
     // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
     // Even when the drainer is off, the broadcast channel is created so the
@@ -532,6 +551,9 @@ async fn main() -> Result<()> {
     }
     projection_tick_handle.abort();
     if let Some(handle) = sap_attest_handle {
+        handle.abort();
+    }
+    if let Some(handle) = metaplex_attest_handle {
         handle.abort();
     }
     if let Some(h) = runtime_event_drainer_handle {

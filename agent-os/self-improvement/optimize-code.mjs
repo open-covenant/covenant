@@ -26,9 +26,23 @@ const ledgerPath = join(archiveDir, "ledger.json");
 const argv = process.argv.slice(2);
 const opt = (f, d) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : d; };
 const proposerModel = opt("--model", "claude-fable-5");
+const grokModel = opt("--grok-model", "grok-4.3");
 const margin = parseFloat(opt("--margin", "0.02"));
 const iters = parseInt(opt("--iters", "1"), 10);
 const round = (n) => Math.round(n * 1000) / 1000;
+
+function dotenv(name) {
+  if (process.env[name]) return process.env[name];
+  try {
+    const line = readFileSync(join(repoRoot, ".env"), "utf8")
+      .split("\n")
+      .find((l) => l.startsWith(`${name}=`));
+    return line ? line.slice(name.length + 1).trim() : null;
+  } catch {
+    return null;
+  }
+}
+const xaiKey = dotenv("XAI_API_KEY");
 
 function sh(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...opts });
@@ -53,10 +67,10 @@ function splitEvolve(src) {
 }
 
 function extractBlock(reply) {
-  const fence = reply.match(/```(?:rust)?\n([\s\S]*?)```/);
-  const body = (fence ? fence[1] : reply).trim();
-  if (!body.startsWith(START) || !body.endsWith(END)) throw new Error(`proposer output is not a complete EVOLVE block: ${body.slice(0, 120)}…`);
-  return body;
+  const a = reply.indexOf(START);
+  const b = reply.lastIndexOf(END);
+  if (a < 0 || b <= a) throw new Error(`proposer output is not a complete EVOLVE block: ${reply.trim().slice(0, 120)}…`);
+  return reply.slice(a, b + END.length);
 }
 
 const task = JSON.parse(readFileSync(taskJsonPath, "utf8"));
@@ -95,29 +109,70 @@ Current code:
 ${block}
 `;
 
-  const prop = sh("claude", ["-p", prompt, "--model", proposerModel, "--dangerously-skip-permissions"]);
-  const stamp = `k${ledger.versions.length + 1}`;
-  let proposed;
-  try {
-    if (!prop.ok) throw new Error(`proposer failed: ${prop.out.slice(-400)}`);
-    proposed = extractBlock(prop.out);
-  } catch (e) {
-    // A malformed proposal is a rejection, not a crash — log it and move on.
-    ledger.versions.push({ version: stamp, incumbent: incumbent.metrics.scalar, candidate: 0, gain: 0, promoted: false, reason: `malformed proposal: ${String(e.message).slice(0, 200)}` });
-    writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
-    console.log(`REJECTED ${stamp}: malformed proposal`);
-    continue;
-  }
-  const candidateSrc = pre + proposed + post;
-  const candidateFile = join(archiveDir, `${stamp}-candidate.rs`);
-  writeFileSync(candidateFile, candidateSrc);
+  const stamp = `k${ledger.versions.reduce((m, v) => Math.max(m, parseInt(v.version.match(/^k(\d+)/)?.[1] ?? 0, 10)), 0) + 1}`;
 
-  const candidate = benchScore(`cmd:cp ${candidateFile} ${task.evolveFile}`);
-  const gain = round((candidate.metrics.scalar ?? 0) - incumbent.metrics.scalar);
-  const promote = candidate.correctness === 1 && gain >= margin;
-  console.log(`[${iter + 1}/${iters}] candidate scalar=${candidate.metrics.scalar ?? 0} gain=${gain}${candidate.gaming?.length ? ` GAMING ${candidate.gaming.join("; ")}` : ""}${candidate.error ? ` ERROR ${candidate.error}` : ""}`);
+  const proposers = [
+    {
+      name: "grok",
+      model: grokModel,
+      call: () => {
+        if (!xaiKey) throw new Error("XAI_API_KEY not set");
+        const bodyFile = join(archiveDir, `${stamp}-grok-request.json`);
+        writeFileSync(bodyFile, JSON.stringify({ model: grokModel, messages: [{ role: "user", content: prompt }], max_tokens: 131072 }));
+        const r = sh("curl", ["-s", "-m", "1800", "-X", "POST", "https://api.x.ai/v1/chat/completions", "-H", `Authorization: Bearer ${xaiKey}`, "-H", "Content-Type: application/json", "--data", `@${bodyFile}`]);
+        if (!r.ok) throw new Error(`xai request failed: ${r.out.slice(-200)}`);
+        const d = JSON.parse(r.out);
+        if (!d.choices) throw new Error(`xai error: ${JSON.stringify(d).slice(0, 300)}`);
+        if (d.choices[0].finish_reason === "length") throw new Error("xai output truncated at max_tokens");
+        return d.choices[0].message.content;
+      },
+    },
+    {
+      name: "fable",
+      model: proposerModel,
+      call: () => {
+        const r = sh("claude", ["-p", prompt, "--model", proposerModel, "--dangerously-skip-permissions"]);
+        if (!r.ok) throw new Error(`claude proposer failed: ${r.out.slice(-400)}`);
+        return r.out;
+      },
+    },
+  ].filter((p) => p.name !== "grok" || xaiKey);
+
+  const entries = [];
+  for (const p of proposers) {
+    const label = `${stamp}:${p.name}`;
+    try {
+      const candidateSrc = pre + extractBlock(p.call()) + post;
+      const candidateFile = join(archiveDir, `${label.replace(":", "-")}-candidate.rs`);
+      writeFileSync(candidateFile, candidateSrc);
+      const scored = benchScore(`cmd:cp ${candidateFile} ${task.evolveFile}`);
+      const scalar = scored.correctness === 1 ? scored.metrics.scalar ?? 0 : 0;
+      entries.push({ proposer: p.name, model: p.model, label, candidateSrc, scored, scalar });
+      console.log(`[${iter + 1}/${iters}] ${p.name} scalar=${scalar}${scored.gaming?.length ? ` GAMING ${scored.gaming.join("; ")}` : ""}${scored.error ? ` ERROR ${scored.error}` : ""}`);
+    } catch (e) {
+      entries.push({ proposer: p.name, model: p.model, label, scalar: 0, failure: String(e.message).slice(0, 200) });
+      console.log(`[${iter + 1}/${iters}] ${p.name} FAILED: ${String(e.message).slice(0, 120)}`);
+    }
+  }
+
+  const winner = entries.reduce((best, e) => (e.scalar > (best?.scalar ?? 0) ? e : best), null);
+  const gain = round((winner?.scalar ?? 0) - incumbent.metrics.scalar);
+  const promote = winner && winner.scored?.correctness === 1 && gain >= margin;
+
+  for (const e of entries) {
+    if (promote && e === winner) continue;
+    const reason = e.failure ? `proposal failed: ${e.failure}`
+      : e.scored?.gaming?.length ? `gaming: ${e.scored.gaming.join("; ")}`
+      : e.scored?.error ? `error: ${e.scored.error}`
+      : e.scored?.correctness !== 1 ? "correctness gate failed"
+      : promote ? `lost tournament to ${winner.proposer} (${e.scalar} vs ${winner.scalar})`
+      : `gain ${round(e.scalar - incumbent.metrics.scalar)} < margin ${margin}`;
+    ledger.versions.push({ version: e.label, proposer: e.proposer, model: e.model, incumbent: incumbent.metrics.scalar, candidate: e.scalar, gain: round(e.scalar - incumbent.metrics.scalar), promoted: false, reason });
+  }
 
   if (promote) {
+    const candidateSrc = winner.candidateSrc;
+    const candidate = winner.scored;
     writeFileSync(join(repoRoot, task.evolveFile), candidateSrc);
     const add = sh("git", ["-C", repoRoot, "add", task.evolveFile]);
     if (!add.ok) throw new Error(`git add failed: ${add.out}`);
@@ -125,7 +180,7 @@ ${block}
       "-C", repoRoot,
       "-c", "user.name=Covenant",
       "-c", "user.email=covenant@users.noreply.github.com",
-      "commit", "-m", `self-improvement(kernel): ${stamp} fuel scalar ${incumbent.metrics.scalar} -> ${candidate.metrics.scalar}`,
+      "commit", "-m", `self-improvement(kernel): ${stamp} fuel scalar ${incumbent.metrics.scalar} -> ${candidate.metrics.scalar} (proposer ${winner.proposer})`,
       "--only", task.evolveFile,
     ]);
     if (!commit.ok) throw new Error(`git commit failed: ${commit.out}`);
@@ -141,15 +196,10 @@ ${block}
       "commit", "-m", `self-improvement(kernel): advance audit-kernel-fuel base to ${sha.slice(0, 8)}`,
       "--only", taskJsonPath,
     ]);
-    ledger.versions.push({ version: stamp, incumbent: incumbent.metrics.scalar, candidate: candidate.metrics.scalar, gain, promoted: true, commit: sha });
-    console.log(`PROMOTED ${stamp}: scalar ${incumbent.metrics.scalar} -> ${candidate.metrics.scalar} (commit ${sha.slice(0, 8)}, base advanced)`);
+    ledger.versions.push({ version: winner.label, proposer: winner.proposer, model: winner.model, incumbent: incumbent.metrics.scalar, candidate: candidate.metrics.scalar, gain, promoted: true, commit: sha });
+    console.log(`PROMOTED ${stamp} (${winner.proposer}): scalar ${incumbent.metrics.scalar} -> ${candidate.metrics.scalar} (commit ${sha.slice(0, 8)}, base advanced)`);
   } else {
-    const reason = candidate.gaming?.length ? `gaming: ${candidate.gaming.join("; ")}`
-      : candidate.error ? `error: ${candidate.error}`
-      : candidate.correctness !== 1 ? "correctness gate failed"
-      : `gain ${gain} < margin ${margin}`;
-    ledger.versions.push({ version: stamp, incumbent: incumbent.metrics.scalar, candidate: candidate.metrics.scalar ?? 0, gain, promoted: false, reason });
-    console.log(`REJECTED ${stamp}: ${reason}`);
+    console.log(`REJECTED ${stamp}: no candidate beat the incumbent by the margin`);
   }
   writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
 }

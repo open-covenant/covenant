@@ -207,9 +207,9 @@ export default async function ArenaPage() {
                   <div className={statLabel}>Community challenge ships</div>
                   <div className="mt-2 flex items-baseline justify-center gap-3">
                     <span className={`${statValue} mt-0 text-white`}>{arena.community.ships}</span>
-                    {arena.rounds.find((r) => r.era === "challenge")?.entries[0]?.handle && (
+                    {arena.rounds.find((r) => r.era === "challenge")?.entries[0]?.proposer && (
                       <span className="text-sm font-light" style={{ color: ACCENT.Grok }}>
-                        latest: {arena.rounds.find((r) => r.era === "challenge")?.entries[0]?.handle}
+                        latest: {arena.rounds.find((r) => r.era === "challenge")?.entries[0]?.proposer}
                       </span>
                     )}
                   </div>
@@ -273,15 +273,25 @@ export default async function ArenaPage() {
                       <span className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
                         {winner ? (
                           <>
-                            <span style={{ color: winColor }}>{winner.handle ?? winner.proposer}</span>{" "}
+                            <span style={{ color: winColor }}>{winner.proposer}</span>{" "}
                             promoted, {winner.scalar}x
                           </>
                         ) : (
                           "no promotion"
                         )}
                       </span>
+                      {r.era === "challenge" && winner?.commit && (
+                        <a
+                          href={`${GITHUB_URL}/commit/${winner.commit}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] uppercase tracking-[0.2em] text-neutral-400 underline-offset-4 transition-colors hover:text-neutral-50 hover:underline"
+                        >
+                          shipped {winner.commit.slice(0, 8)}
+                        </a>
+                      )}
                     </div>
-                    <ul className="space-y-2">
+                    <ul className={r.era === "challenge" ? "hidden" : "space-y-2"}>
                       {r.entries.map((e, j) => (
                         <li
                           key={j}
@@ -291,7 +301,7 @@ export default async function ArenaPage() {
                             className="min-w-14"
                             style={{ color: ACCENT[e.proposer] ?? "#d4d4d4" }}
                           >
-                            {e.handle ?? e.proposer}
+                            {e.proposer}
                           </span>
                           <span className="tabular-nums text-neutral-200">
                             {e.scalar > 0 ? `${e.scalar}x` : "—"}

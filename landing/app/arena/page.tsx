@@ -39,6 +39,7 @@ type Entry = {
   gain: number;
   promoted: boolean;
   commit: string | null;
+  handle: string | null;
   reason: string | null;
 };
 
@@ -47,9 +48,10 @@ type Arena = {
   baselineFuel: number;
   incumbent: { scalar: number; fuelCutPct: number };
   tally: { Claude: number; Grok: number; rejectedRounds: number };
-  curve: { round: number; scalar: number; proposer?: string }[];
+  curve: { round: number | string; scalar: number; proposer?: string }[];
   solo: { promotions: number; rejected: number; finalScalar: number };
-  rounds: { round: number; display: string; era: string; entries: Entry[] }[];
+  community: { ships: number };
+  rounds: { round: string; display: string; era: string; entries: Entry[] }[];
 };
 
 const RAW_URL =
@@ -257,7 +259,7 @@ export default async function ArenaPage() {
                       <span className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
                         {winner ? (
                           <>
-                            <span style={{ color: winColor }}>{winner.proposer}</span>{" "}
+                            <span style={{ color: winColor }}>{winner.handle ?? winner.proposer}</span>{" "}
                             promoted, {winner.scalar}x
                           </>
                         ) : (
@@ -272,10 +274,10 @@ export default async function ArenaPage() {
                           className="group flex flex-wrap items-baseline gap-x-3 text-sm font-light text-neutral-300"
                         >
                           <span
-                            className="w-14"
+                            className="min-w-14"
                             style={{ color: ACCENT[e.proposer] ?? "#d4d4d4" }}
                           >
-                            {e.proposer}
+                            {e.handle ?? e.proposer}
                           </span>
                           <span className="tabular-nums text-neutral-200">
                             {e.scalar > 0 ? `${e.scalar}x` : "—"}

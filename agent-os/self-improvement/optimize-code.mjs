@@ -29,6 +29,7 @@ const proposerModel = opt("--model", "claude-fable-5");
 const grokModel = opt("--grok-model", "grok-4.3");
 const margin = parseFloat(opt("--margin", "0.02"));
 const iters = parseInt(opt("--iters", "1"), 10);
+const attempts = parseInt(opt("--attempts", "3"), 10);
 const round = (n) => Math.round(n * 1000) / 1000;
 
 function dotenv(name) {
@@ -115,10 +116,11 @@ ${block}
     {
       name: "grok",
       model: grokModel,
-      call: () => {
+      // Multi-turn chat: feedback goes back as user turns.
+      call: (messages, attempt) => {
         if (!xaiKey) throw new Error("XAI_API_KEY not set");
-        const bodyFile = join(archiveDir, `${stamp}-grok-request.json`);
-        writeFileSync(bodyFile, JSON.stringify({ model: grokModel, messages: [{ role: "user", content: prompt }], max_tokens: 131072 }));
+        const bodyFile = join(archiveDir, `${stamp}-grok-request-${attempt}.json`);
+        writeFileSync(bodyFile, JSON.stringify({ model: grokModel, messages, max_tokens: 131072, reasoning_effort: "high" }));
         const r = sh("curl", ["-s", "-m", "1800", "-X", "POST", "https://api.x.ai/v1/chat/completions", "-H", `Authorization: Bearer ${xaiKey}`, "-H", "Content-Type: application/json", "--data", `@${bodyFile}`]);
         if (!r.ok) throw new Error(`xai request failed: ${r.out.slice(-200)}`);
         const d = JSON.parse(r.out);
@@ -130,34 +132,62 @@ ${block}
     {
       name: "fable",
       model: proposerModel,
-      call: () => {
-        // Empty scratch cwd: the CLI proposer is an agent with tools and will
-        // otherwise edit the kernel in the live repo instead of printing the
-        // block (observed round 10). stdout is its only channel back.
+      // Empty scratch cwd: the CLI proposer is an agent with tools and will
+      // otherwise edit the kernel in the live repo instead of printing the
+      // block (observed round 10). stdout is its only channel back. The CLI
+      // is stateless per call, so the transcript is folded into the prompt.
+      call: (messages, attempt) => {
         const scratch = join(archiveDir, `${stamp}-fable-scratch`);
         mkdirSync(scratch, { recursive: true });
-        const r = sh("claude", ["-p", prompt, "--model", proposerModel, "--dangerously-skip-permissions"], { cwd: scratch });
-        if (!r.ok) throw new Error(`claude proposer failed: ${r.out.slice(-400)}`);
+        const folded = messages
+          .map((m) => (m.role === "user" ? m.content : `## Your previous attempt\n\n${m.content}`))
+          .join("\n\n");
+        const r = sh("claude", ["-p", folded, "--model", proposerModel, "--dangerously-skip-permissions"], { cwd: scratch });
+        if (!r.ok) throw new Error(`claude proposer failed (attempt ${attempt}): ${r.out.slice(-400)}`);
         return r.out;
       },
     },
   ].filter((p) => p.name !== "grok" || xaiKey);
 
+  // v2 rules: every proposer gets up to `attempts` tries with gate/fuel
+  // feedback between tries, stopping early once it holds a promotable
+  // candidate. Same rules both sides; the bench stays the only judge.
   const entries = [];
   for (const p of proposers) {
     const label = `${stamp}:${p.name}`;
-    try {
-      const candidateSrc = pre + extractBlock(p.call()) + post;
-      const candidateFile = join(archiveDir, `${label.replace(":", "-")}-candidate.rs`);
-      writeFileSync(candidateFile, candidateSrc);
-      const scored = benchScore(`cmd:cp ${candidateFile} ${task.evolveFile}`);
-      const scalar = scored.correctness === 1 ? scored.metrics.scalar ?? 0 : 0;
-      entries.push({ proposer: p.name, model: p.model, label, candidateSrc, scored, scalar });
-      console.log(`[${iter + 1}/${iters}] ${p.name} scalar=${scalar}${scored.gaming?.length ? ` GAMING ${scored.gaming.join("; ")}` : ""}${scored.error ? ` ERROR ${scored.error}` : ""}`);
-    } catch (e) {
-      entries.push({ proposer: p.name, model: p.model, label, scalar: 0, failure: String(e.message).slice(0, 200) });
-      console.log(`[${iter + 1}/${iters}] ${p.name} FAILED: ${String(e.message).slice(0, 120)}`);
+    const messages = [{ role: "user", content: prompt }];
+    const tries = [];
+    let bestResult = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      let result;
+      try {
+        const reply = p.call(messages, attempt);
+        messages.push({ role: "assistant", content: reply });
+        const candidateSrc = pre + extractBlock(reply) + post;
+        const candidateFile = join(archiveDir, `${label.replace(":", "-")}-a${attempt}-candidate.rs`);
+        writeFileSync(candidateFile, candidateSrc);
+        const scored = benchScore(`cmd:cp ${candidateFile} ${task.evolveFile}`);
+        const scalar = scored.correctness === 1 ? scored.metrics.scalar ?? 0 : 0;
+        result = { candidateSrc, scored, scalar };
+      } catch (e) {
+        result = { scalar: 0, failure: String(e.message).slice(0, 200) };
+        if (messages[messages.length - 1]?.role !== "assistant") messages.push({ role: "assistant", content: "(no usable block)" });
+      }
+      tries.push({ attempt, scalar: result.scalar, failure: result.failure ?? null });
+      if (!bestResult || result.scalar > bestResult.scalar) bestResult = result;
+      const gainNow = round(result.scalar - incumbent.metrics.scalar);
+      console.log(`[${iter + 1}/${iters}] ${p.name} attempt ${attempt}/${attempts}: scalar=${result.scalar}${result.failure ? ` FAILED ${result.failure.slice(0, 100)}` : ""}`);
+      if (result.scalar > 0 && gainNow >= margin) break;
+      if (attempt < attempts) {
+        const feedback = result.failure
+          ? `That attempt failed before scoring: ${result.failure}. Output the complete EVOLVE block this time, nothing else.`
+          : result.scored.correctness !== 1
+            ? `Your block failed the gates (${result.scored.gaming?.length ? `gaming: ${result.scored.gaming.join("; ")}` : result.scored.error ? `error: ${result.scored.error.slice(0, 300)}` : "a correctness gate: unit, differential, sha, wasm-tests, or corpus digest"}). Fix correctness first, then optimize. Output the full corrected EVOLVE block.`
+            : `Your block passed all gates and scored scalar ${result.scalar}; the incumbent is ${incumbent.metrics.scalar} and you need at least ${round(incumbent.metrics.scalar + margin)}. Find more fuel: look for remaining per-line allocations, schedule work, branchy scans, or redundant passes. Output the full improved EVOLVE block.`;
+        messages.push({ role: "user", content: feedback });
+      }
     }
+    entries.push({ proposer: p.name, model: p.model, label, tries, ...bestResult });
   }
 
   const winner = entries.reduce((best, e) => (e.scalar > (best?.scalar ?? 0) ? e : best), null);
@@ -172,7 +202,7 @@ ${block}
       : e.scored?.correctness !== 1 ? "correctness gate failed"
       : promote ? `lost tournament to ${winner.proposer} (${e.scalar} vs ${winner.scalar})`
       : `gain ${round(e.scalar - incumbent.metrics.scalar)} < margin ${margin}`;
-    ledger.versions.push({ version: e.label, proposer: e.proposer, model: e.model, incumbent: incumbent.metrics.scalar, candidate: e.scalar, gain: round(e.scalar - incumbent.metrics.scalar), promoted: false, reason });
+    ledger.versions.push({ version: e.label, proposer: e.proposer, model: e.model, incumbent: incumbent.metrics.scalar, candidate: e.scalar, gain: round(e.scalar - incumbent.metrics.scalar), promoted: false, reason, tries: e.tries });
   }
 
   if (promote) {
@@ -201,7 +231,7 @@ ${block}
       "commit", "-m", `self-improvement(kernel): advance audit-kernel-fuel base to ${sha.slice(0, 8)}`,
       "--only", taskJsonPath,
     ]);
-    ledger.versions.push({ version: winner.label, proposer: winner.proposer, model: winner.model, incumbent: incumbent.metrics.scalar, candidate: candidate.metrics.scalar, gain, promoted: true, commit: sha });
+    ledger.versions.push({ version: winner.label, proposer: winner.proposer, model: winner.model, incumbent: incumbent.metrics.scalar, candidate: candidate.metrics.scalar, gain, promoted: true, commit: sha, tries: winner.tries });
     console.log(`PROMOTED ${stamp} (${winner.proposer}): scalar ${incumbent.metrics.scalar} -> ${candidate.metrics.scalar} (commit ${sha.slice(0, 8)}, base advanced)`);
   } else {
     console.log(`REJECTED ${stamp}: no candidate beat the incumbent by the margin`);

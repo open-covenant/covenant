@@ -26,7 +26,12 @@ pub const X402_VERSION_V1: u32 = 1;
 pub const SCHEME_EXACT: &str = "exact";
 pub const PAYAI_FACILITATOR: &str = "https://facilitator.payai.network";
 pub const PAYAI_FEE_PAYER: &str = "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4";
-pub const SOLANA_NETWORK: &str = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+/// Wire value for the `network` field PayAI's facilitator expects on
+/// `paymentRequirements`. Must be the short `"solana"`; the CAIP-2
+/// form (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) is what zauth-style
+/// clients use internally but PayAI `/verify` 500s on it (confirmed
+/// live 2026-06-09). Matches `covenant-hyre` and Heurist endpoints.
+pub const SOLANA_NETWORK: &str = "solana";
 pub const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 #[derive(Debug, Clone)]

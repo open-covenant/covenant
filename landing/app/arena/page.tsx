@@ -164,8 +164,9 @@ export default async function ArenaPage() {
                 Covenant is built by a recursive, self-improving loop: an
                 autonomous agent that ships this codebase and then rewrites its
                 own components to make them measurably better. The arena is
-                where that happens in the open. Each round, Claude and Grok
-                both propose a rewrite of live Covenant code. A frozen
+                where that happens in the open. Each round, the two frontier
+                models, Anthropic&apos;s Claude Fable 5 and xAI&apos;s Grok
+                4.3, each propose a rewrite of live Covenant code. A frozen
                 benchmark neither can touch measures exact instruction cost,
                 held-out suites require bit-identical behavior, and the best
                 proposal ships. Rejections are listed next to wins.

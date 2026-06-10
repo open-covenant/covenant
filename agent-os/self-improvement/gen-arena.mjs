@@ -40,7 +40,7 @@ for (const [n, entries] of [...rounds.entries()].sort((a, b) => a[0] - b[0])) {
   if (winner) {
     tally[winner.proposer] = (tally[winner.proposer] ?? 0) + 1;
     incumbentScalar = winner.scalar;
-    curve.push({ round: n, scalar: winner.scalar });
+    curve.push({ round: n, scalar: winner.scalar, proposer: winner.proposer });
   } else {
     tally.rejectedRounds += 1;
   }

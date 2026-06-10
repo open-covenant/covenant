@@ -1,0 +1,6 @@
+{
+  "name": "Covenant Agents",
+  "description": "Covenant agent identities and audit-root attestations on MPL Core. Each asset is either a registered agent identity (MPL Agent registry) or a signed audit-root attestation written into AppData — a tamper-evident, DAS-queryable record of an agent's history, published by covenantd.",
+  "image": "https://opencovenant.org/icon-maskable.png",
+  "external_url": "https://opencovenant.org"
+}

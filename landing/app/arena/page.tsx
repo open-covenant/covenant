@@ -6,7 +6,7 @@ import { SiteHeader } from "../SiteHeader";
 import { GITHUB_URL } from "../_brand";
 
 const DESCRIPTION =
-  "Claude and Grok compete to optimize Covenant's own code. A frozen benchmark neither can touch scores every proposal; the best one ships. Live scoreboard, every verdict public.";
+  "Claude and Grok compete to provably improve Covenant's own code: same verified behavior, less compute. A frozen benchmark neither can touch scores every proposal; the best one ships. Live scoreboard, every verdict public.";
 
 export const metadata: Metadata = {
   title: "Arena: Covenant",
@@ -193,7 +193,7 @@ export default async function ArenaPage() {
                   </div>
                 </div>
                 <div className={`${stat} arena-rise`} style={{ animationDelay: "0.26s" }}>
-                  <div className={statLabel}>Cost cut</div>
+                  <div className={statLabel}>Compute cut</div>
                   <div className={`${statValue} text-emerald-300`}>
                     {arena.incumbent.fuelCutPct}%
                   </div>
@@ -201,7 +201,7 @@ export default async function ArenaPage() {
               </div>
 
               <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
-                Efficiency multiple, round by round (now{" "}
+                Same work, less compute: efficiency multiple (now{" "}
                 <span className="text-neutral-200">{arena.incumbent.scalar}x</span>)
               </p>
               <Curve points={arena.curve} />

@@ -108,7 +108,8 @@ fn input_schema(slug: &str) -> Value {
             "type": "object",
             "properties": {
                 "agentLabel": { "type": "string" },
-                "agentPubkey": { "type": "string" }
+                "agentPubkey": { "type": "string" },
+                "registrationUri": { "type": "string", "description": "ERC-8004 registration document URI (https:// or ar://); omit to record the covenant://agent/<pubkey> identifier form" }
             },
             "required": ["agentLabel", "agentPubkey"],
             "additionalProperties": false,
@@ -278,11 +279,19 @@ impl WriteTool {
                     },
                 })
             }
-            "identity.register" => Ok(SignerRequest::RegisterIdentity {
-                agent_label: str_arg(args, "agentLabel")?.to_string(),
-                agent_pubkey: str_arg(args, "agentPubkey")?.to_string(),
-                asset: None,
-            }),
+            "identity.register" => {
+                let registration_uri = opt_str_arg(args, "registrationUri");
+                if let Some(uri) = &registration_uri {
+                    crate::request::validate_registration_uri(uri)
+                        .map_err(ToolError::InvalidArguments)?;
+                }
+                Ok(SignerRequest::RegisterIdentity {
+                    agent_label: str_arg(args, "agentLabel")?.to_string(),
+                    agent_pubkey: str_arg(args, "agentPubkey")?.to_string(),
+                    asset: None,
+                    registration_uri,
+                })
+            }
             other => Err(ToolError::NotFound(format!("{TOOL_PREFIX}{other}"))),
         }
     }

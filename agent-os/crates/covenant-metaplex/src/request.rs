@@ -35,6 +35,27 @@ pub fn validate_root_hash_hex(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate an ERC-8004 registration document URI before it is recorded
+/// on-chain: `https://` or `ar://` only, no whitespace/control characters,
+/// bounded length. Shared by the daemon-side tool and the signer sidecar
+/// so a malformed URI is rejected before any subprocess spawn or send.
+pub fn validate_registration_uri(s: &str) -> Result<(), String> {
+    const MAX_LEN: usize = 200;
+    if s.len() > MAX_LEN {
+        return Err(format!(
+            "registrationUri must be at most {MAX_LEN} bytes, got {}",
+            s.len()
+        ));
+    }
+    if !(s.starts_with("https://") || s.starts_with("ar://")) {
+        return Err("registrationUri must start with https:// or ar://".to_string());
+    }
+    if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("registrationUri must not contain whitespace or control characters".to_string());
+    }
+    Ok(())
+}
+
 /// JSON payload written into an MPL Core AppData plugin as a Covenant
 /// attestation. Mirrors the daemon's audit-root attestation envelope:
 /// identifiers and the 32-byte root only, never audit-log contents.
@@ -94,6 +115,11 @@ pub enum SignerRequest {
         agent_pubkey: String,
         #[serde(default)]
         asset: Option<String>,
+        /// ERC-8004 registration document URI (`https://` or `ar://`).
+        /// `None` falls back to the non-fetchable `covenant://agent/<pubkey>`
+        /// identifier form.
+        #[serde(default)]
+        registration_uri: Option<String>,
     },
 }
 
@@ -143,10 +169,41 @@ mod tests {
             agent_label: "agent@local".into(),
             agent_pubkey: "Agent11111111111111111111111111111111111111".into(),
             asset: None,
+            registration_uri: Some("https://example.org/agent.json".into()),
         };
         let wire = serde_json::to_value(&req).unwrap();
         assert_eq!(wire["action"], "register-identity");
         let back: SignerRequest = serde_json::from_value(wire).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn registration_uri_validation_accepts_https_and_ar_only() {
+        validate_registration_uri("https://opencovenant.org/agents/covenant.json")
+            .expect("https URI");
+        validate_registration_uri("ar://abc123").expect("arweave URI");
+        assert!(validate_registration_uri("http://example.org/a.json").is_err(), "plain http");
+        assert!(validate_registration_uri("covenant://agent/abc").is_err(), "covenant scheme is the default, not an override");
+        assert!(validate_registration_uri("https://a.example/with space").is_err(), "whitespace");
+        assert!(
+            validate_registration_uri(&format!("https://a.example/{}", "x".repeat(200))).is_err(),
+            "over length"
+        );
+    }
+
+    #[test]
+    fn identity_request_registration_uri_defaults_to_none() {
+        let wire = serde_json::json!({
+            "action": "register-identity",
+            "agent_label": "agent@local",
+            "agent_pubkey": "Agent11111111111111111111111111111111111111",
+        });
+        let back: SignerRequest = serde_json::from_value(wire).unwrap();
+        match back {
+            SignerRequest::RegisterIdentity {
+                registration_uri, ..
+            } => assert_eq!(registration_uri, None),
+            other => panic!("unexpected request: {other:?}"),
+        }
     }
 }

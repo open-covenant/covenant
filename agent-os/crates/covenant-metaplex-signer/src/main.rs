@@ -233,15 +233,23 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
             agent_label,
             agent_pubkey,
             asset,
+            registration_uri,
         } => {
             if asset.is_some() {
                 bail!("binding an existing asset is not supported yet; omit `asset`");
             }
             let collection = collection_from_env()?;
             let asset = Keypair::new();
-            // A namespaced, honest identifier for the agent. Not a fetchable
-            // URL — it points at the agent's Covenant pubkey identity.
-            let uri = format!("covenant://agent/{agent_pubkey}");
+            // Prefer a fetchable ERC-8004 registration document; fall back
+            // to the namespaced identifier form pointing at the agent's
+            // Covenant pubkey identity.
+            let uri = match registration_uri {
+                Some(u) => {
+                    covenant_metaplex::validate_registration_uri(u).map_err(|e| anyhow!("{e}"))?;
+                    u.clone()
+                }
+                None => format!("covenant://agent/{agent_pubkey}"),
+            };
             let create_ix = CreateV2Builder::new()
                 .asset(asset.pubkey())
                 .payer(payer.pubkey())

@@ -24,6 +24,7 @@ pub mod tools;
 pub use config::MetaplexConfig;
 pub use das::{DasClient, DasError, HttpDasClient};
 pub use request::{
-    validate_root_hash_hex, AttestationPayload, SignerRequest, SignerResponse, ATTESTATION_SCHEMA,
+    validate_registration_uri, validate_root_hash_hex, AttestationPayload, SignerRequest,
+    SignerResponse, ATTESTATION_SCHEMA,
 };
 pub use tools::{metaplex_specs, metaplex_tool, MetaplexSigner};

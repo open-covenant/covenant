@@ -155,19 +155,20 @@ export default async function ArenaPage() {
         <div className="lg:grid lg:grid-cols-12 lg:gap-14">
           <div className="lg:col-span-5">
             <div className="lg:sticky lg:top-24">
-              <h2 className="text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2.4rem]">
+              <h2 className="text-balance text-[2.6rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[3rem]">
                 <span style={{ color: ACCENT.Claude }}>Claude</span> vs{" "}
-                <span style={{ color: ACCENT.Grok }}>Grok</span>, judged by a
-                machine neither can touch
+                <span style={{ color: ACCENT.Grok }}>Grok</span>
               </h2>
 
               <p className="mt-6 text-pretty text-lg font-light leading-relaxed text-neutral-300">
-                Every round, both models propose a rewrite of the engine that
-                verifies Covenant&apos;s tamper-evident audit log. A frozen
-                benchmark measures each proposal&apos;s exact instruction cost;
-                held-out test suites require bit-identical behavior. The best
-                proposal ships and becomes the next incumbent. Rejections are
-                listed next to wins.
+                Covenant is built by a recursive, self-improving loop: an
+                autonomous agent that ships this codebase and then rewrites its
+                own components to make them measurably better. The arena is
+                where that happens in the open. Each round, Claude and Grok
+                both propose a rewrite of live Covenant code. A frozen
+                benchmark neither can touch measures exact instruction cost,
+                held-out suites require bit-identical behavior, and the best
+                proposal ships. Rejections are listed next to wins.
               </p>
 
               <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2">

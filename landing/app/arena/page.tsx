@@ -200,6 +200,20 @@ export default async function ArenaPage() {
                     {arena.incumbent.fuelCutPct}%
                   </div>
                 </div>
+                <div
+                  className={`${stat} arena-rise col-span-2 sm:col-span-4 lg:col-span-2`}
+                  style={{ animationDelay: "0.33s" }}
+                >
+                  <div className={statLabel}>Community challenge ships</div>
+                  <div className="mt-2 flex items-baseline justify-center gap-3">
+                    <span className={`${statValue} mt-0 text-white`}>{arena.community.ships}</span>
+                    {arena.rounds.find((r) => r.era === "challenge")?.entries[0]?.handle && (
+                      <span className="text-sm font-light" style={{ color: ACCENT.Grok }}>
+                        latest: {arena.rounds.find((r) => r.era === "challenge")?.entries[0]?.handle}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-neutral-500">

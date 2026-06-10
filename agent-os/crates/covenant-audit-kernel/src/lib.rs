@@ -319,7 +319,7 @@ mod imp {
     /// module load; native builds keep the scalar path.
     #[cfg(target_arch = "wasm32")]
     mod simd {
-        use super::H0;
+        use super::{H0, K};
         use std::arch::wasm32::*;
 
         macro_rules! roundv {
@@ -956,6 +956,143 @@ mod imp {
             *out = lanes_hex(&state);
         }
 
+        /// Middle link block (`\n` + first 63 event hex bytes) `w + K`
+        /// schedules for four upcoming sequential links. The schedule is
+        /// state-free, so it expands four lines wide even though the chain
+        /// itself is strictly sequential; the rounds then run schedule-free
+        /// like the constant tail block. Lanes past the slice reuse the
+        /// first hex and are never read.
+        #[target_feature(enable = "simd128")]
+        pub(super) fn mid_wk_quad(hexes: &[[u8; 64]], out: &mut [[u32; 64]; 4]) {
+            let first = &hexes[0];
+            let hx: [&[u8; 64]; 4] = [
+                first,
+                hexes.get(1).unwrap_or(first),
+                hexes.get(2).unwrap_or(first),
+                hexes.get(3).unwrap_or(first),
+            ];
+            let nl = u8x16_splat(b'\n');
+            let s0 = shift_cols(hx[0], nl);
+            let s1 = shift_cols(hx[1], nl);
+            let s2 = shift_cols(hx[2], nl);
+            let s3 = shift_cols(hx[3], nl);
+            let q0 = transpose_be(s0[0], s1[0], s2[0], s3[0]);
+            let q1 = transpose_be(s0[1], s1[1], s2[1], s3[1]);
+            let q2 = transpose_be(s0[2], s1[2], s2[2], s3[2]);
+            let q3 = transpose_be(s0[3], s1[3], s2[3], s3[3]);
+            let [mut w0, mut w1, mut w2, mut w3] = q0;
+            let [mut w4, mut w5, mut w6, mut w7] = q1;
+            let [mut w8, mut w9, mut w10, mut w11] = q2;
+            let [mut w12, mut w13, mut w14, mut w15] = q3;
+            macro_rules! emit {
+                ($i:literal, $a:ident, $b:ident, $c:ident, $d:ident) => {
+                    let r = transpose32(
+                        u32x4_add($a, u32x4_splat(K[$i])),
+                        u32x4_add($b, u32x4_splat(K[$i + 1])),
+                        u32x4_add($c, u32x4_splat(K[$i + 2])),
+                        u32x4_add($d, u32x4_splat(K[$i + 3])),
+                    );
+                    out[0][$i] = u32x4_extract_lane::<0>(r[0]);
+                    out[0][$i + 1] = u32x4_extract_lane::<1>(r[0]);
+                    out[0][$i + 2] = u32x4_extract_lane::<2>(r[0]);
+                    out[0][$i + 3] = u32x4_extract_lane::<3>(r[0]);
+                    out[1][$i] = u32x4_extract_lane::<0>(r[1]);
+                    out[1][$i + 1] = u32x4_extract_lane::<1>(r[1]);
+                    out[1][$i + 2] = u32x4_extract_lane::<2>(r[1]);
+                    out[1][$i + 3] = u32x4_extract_lane::<3>(r[1]);
+                    out[2][$i] = u32x4_extract_lane::<0>(r[2]);
+                    out[2][$i + 1] = u32x4_extract_lane::<1>(r[2]);
+                    out[2][$i + 2] = u32x4_extract_lane::<2>(r[2]);
+                    out[2][$i + 3] = u32x4_extract_lane::<3>(r[2]);
+                    out[3][$i] = u32x4_extract_lane::<0>(r[3]);
+                    out[3][$i + 1] = u32x4_extract_lane::<1>(r[3]);
+                    out[3][$i + 2] = u32x4_extract_lane::<2>(r[3]);
+                    out[3][$i + 3] = u32x4_extract_lane::<3>(r[3]);
+                };
+            }
+            emit!(0, w0, w1, w2, w3);
+            emit!(4, w4, w5, w6, w7);
+            emit!(8, w8, w9, w10, w11);
+            emit!(12, w12, w13, w14, w15);
+            schedm!(w0, w1, w9, w14);
+            schedm!(w1, w2, w10, w15);
+            schedm!(w2, w3, w11, w0);
+            schedm!(w3, w4, w12, w1);
+            emit!(16, w0, w1, w2, w3);
+            schedm!(w4, w5, w13, w2);
+            schedm!(w5, w6, w14, w3);
+            schedm!(w6, w7, w15, w4);
+            schedm!(w7, w8, w0, w5);
+            emit!(20, w4, w5, w6, w7);
+            schedm!(w8, w9, w1, w6);
+            schedm!(w9, w10, w2, w7);
+            schedm!(w10, w11, w3, w8);
+            schedm!(w11, w12, w4, w9);
+            emit!(24, w8, w9, w10, w11);
+            schedm!(w12, w13, w5, w10);
+            schedm!(w13, w14, w6, w11);
+            schedm!(w14, w15, w7, w12);
+            schedm!(w15, w0, w8, w13);
+            emit!(28, w12, w13, w14, w15);
+            schedm!(w0, w1, w9, w14);
+            schedm!(w1, w2, w10, w15);
+            schedm!(w2, w3, w11, w0);
+            schedm!(w3, w4, w12, w1);
+            emit!(32, w0, w1, w2, w3);
+            schedm!(w4, w5, w13, w2);
+            schedm!(w5, w6, w14, w3);
+            schedm!(w6, w7, w15, w4);
+            schedm!(w7, w8, w0, w5);
+            emit!(36, w4, w5, w6, w7);
+            schedm!(w8, w9, w1, w6);
+            schedm!(w9, w10, w2, w7);
+            schedm!(w10, w11, w3, w8);
+            schedm!(w11, w12, w4, w9);
+            emit!(40, w8, w9, w10, w11);
+            schedm!(w12, w13, w5, w10);
+            schedm!(w13, w14, w6, w11);
+            schedm!(w14, w15, w7, w12);
+            schedm!(w15, w0, w8, w13);
+            emit!(44, w12, w13, w14, w15);
+            schedm!(w0, w1, w9, w14);
+            schedm!(w1, w2, w10, w15);
+            schedm!(w2, w3, w11, w0);
+            schedm!(w3, w4, w12, w1);
+            emit!(48, w0, w1, w2, w3);
+            schedm!(w4, w5, w13, w2);
+            schedm!(w5, w6, w14, w3);
+            schedm!(w6, w7, w15, w4);
+            schedm!(w7, w8, w0, w5);
+            emit!(52, w4, w5, w6, w7);
+            schedm!(w8, w9, w1, w6);
+            schedm!(w9, w10, w2, w7);
+            schedm!(w10, w11, w3, w8);
+            schedm!(w11, w12, w4, w9);
+            emit!(56, w8, w9, w10, w11);
+            schedm!(w12, w13, w5, w10);
+            schedm!(w13, w14, w6, w11);
+            schedm!(w14, w15, w7, w12);
+            schedm!(w15, w0, w8, w13);
+            emit!(60, w12, w13, w14, w15);
+        }
+
+        /// Sequential link whose middle-block schedule came from
+        /// `mid_wk_quad`: block 0 hashes the previous hex normally, blocks 1
+        /// and 2 run schedule-free.
+        #[target_feature(enable = "simd128")]
+        pub(super) fn link_hex_mid(
+            previous: &[u8; 64],
+            mid_wk: &[u32; 64],
+            last: u8,
+            tail: &[[u32; 64]; 16],
+        ) -> [u8; 64] {
+            let mut state = H0;
+            compress_block(&mut state, previous);
+            super::compress_tail(&mut state, mid_wk);
+            super::compress_tail(&mut state, &tail[super::tail_idx(last)]);
+            hex_state(&state)
+        }
+
         /// Four equal-block-count messages digested in lockstep. Below the
         /// shortest lane's full-block count every lane is a pure data block,
         /// so the hot loop skips the per-lane tail dispatch; at most the last
@@ -1104,7 +1241,7 @@ mod imp {
     }
 
     #[cfg(target_arch = "wasm32")]
-    use simd::{digest_all, link_hex, link_quad};
+    use simd::{digest_all, link_hex, link_hex_mid, link_quad, mid_wk_quad};
 
     #[cfg(not(target_arch = "wasm32"))]
     fn digest_all(lines: &[&[u8]]) -> Vec<[u8; 64]> {
@@ -1252,9 +1389,36 @@ mod imp {
         acc == 0
     }
 
-    /// Hash-width equality with the word loop fully unrolled: both sides are
-    /// whole 64-char hex spans, so no length or remainder handling.
+    /// Hash-width equality: both sides are whole 64-char hex spans, so no
+    /// length or remainder handling; the wasm arm folds the four vector
+    /// xors with one any-true test.
     #[cfg(target_arch = "wasm32")]
+    #[target_feature(enable = "simd128")]
+    fn eq64(a: &[u8; 64], b: &[u8; 64]) -> bool {
+        use std::arch::wasm32::*;
+        macro_rules! lane {
+            ($p:ident, $o:literal) => {
+                u64x2(
+                    u64::from_le_bytes($p[$o..$o + 8].try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes($p[$o + 8..$o + 16].try_into().expect("8-byte chunk")),
+                )
+            };
+        }
+        let d = v128_or(
+            v128_or(
+                v128_xor(lane!(a, 0), lane!(b, 0)),
+                v128_xor(lane!(a, 16), lane!(b, 16)),
+            ),
+            v128_or(
+                v128_xor(lane!(a, 32), lane!(b, 32)),
+                v128_xor(lane!(a, 48), lane!(b, 48)),
+            ),
+        );
+        !v128_any_true(d)
+    }
+
+    /// Hash-width equality with the word loop fully unrolled.
+    #[cfg(not(target_arch = "wasm32"))]
     fn eq64(a: &[u8; 64], b: &[u8; 64]) -> bool {
         let mut acc = 0u64;
         let mut i = 0;
@@ -1278,6 +1442,27 @@ mod imp {
 
     fn uuid_eq(a: &str, b: &str) -> bool {
         bytes_eq(a.as_bytes(), b.as_bytes()) || a.eq_ignore_ascii_case(b)
+    }
+
+    /// End of the ASCII-digit run starting at `i`, eight bytes per probe:
+    /// a byte is a digit iff its high nibble is 3 and its low nibble has no
+    /// carry out of `+6`; both flags land inside their own byte, so the
+    /// lowest set bit indexes the first non-digit exactly.
+    fn digit_run(buf: &[u8], mut i: usize) -> usize {
+        const LO: u64 = 0x0101010101010101;
+        while i + 8 <= buf.len() {
+            let x = u64::from_le_bytes(buf[i..i + 8].try_into().expect("8-byte chunk"));
+            let bad = ((x & (LO * 0xf0)) ^ (LO * 0x30))
+                | (((x & (LO * 0x0f)).wrapping_add(LO * 0x06)) & (LO * 0x10));
+            if bad != 0 {
+                return i + (bad.trailing_zeros() >> 3) as usize;
+            }
+            i += 8;
+        }
+        while buf.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        i
     }
 
     /// Strict scanner over the compact JSON this chain emits. It accepts only
@@ -1436,9 +1621,7 @@ mod imp {
         /// values identically and rejects the rest.
         fn digits(&mut self) -> Option<&'a [u8]> {
             let start = self.pos;
-            while self.buf.get(self.pos).is_some_and(u8::is_ascii_digit) {
-                self.pos += 1;
-            }
+            self.pos = digit_run(self.buf, start);
             let len = self.pos - start;
             if len == 0 || len > 19 || (self.buf[start] == b'0' && len > 1) {
                 return None;
@@ -1455,9 +1638,7 @@ mod imp {
                 self.pos += 1;
             }
             let start = self.pos;
-            while self.buf.get(self.pos).is_some_and(u8::is_ascii_digit) {
-                self.pos += 1;
-            }
+            self.pos = digit_run(self.buf, start);
             let len = self.pos - start;
             if len == 0 || len > 17 || (self.buf[start] == b'0' && len > 1) {
                 return false;
@@ -1465,9 +1646,7 @@ mod imp {
             if self.buf.get(self.pos) == Some(&b'.') {
                 self.pos += 1;
                 let frac = self.pos;
-                while self.buf.get(self.pos).is_some_and(u8::is_ascii_digit) {
-                    self.pos += 1;
-                }
+                self.pos = digit_run(self.buf, frac);
                 if self.pos == frac || self.pos - frac > 17 {
                     return false;
                 }
@@ -1617,16 +1796,18 @@ mod imp {
     /// acceptance authority via the rewind.
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn issuer_value(s: &mut Scan) -> bool {
-        let start = s.pos;
-        if s.lit(b"{\"display\":\"")
-            && s.string_body().is_some()
-            && s.lit(b",\"pubkey_b58\":\"")
-            && s.string_body().is_some()
-            && s.lit(b"}")
-        {
-            return true;
+        if s.buf.get(s.pos) == Some(&b'{') {
+            let start = s.pos;
+            if s.lit(b"{\"display\":\"")
+                && s.string_body().is_some()
+                && s.lit(b",\"pubkey_b58\":\"")
+                && s.string_body().is_some()
+                && s.lit(b"}")
+            {
+                return true;
+            }
+            s.pos = start;
         }
-        s.pos = start;
         s.value(0)
     }
 
@@ -1714,6 +1895,30 @@ mod imp {
         })
     }
 
+    /// `fast_anchor`'s acceptance test without extraction or compares. Used
+    /// when the anchor's trailing chain hash already differs from the
+    /// expected chain: a shape-valid anchor is then a guaranteed
+    /// `EntryMismatch` (a byte-equal chain value would have made the
+    /// canonical 85-byte tail match), so the walk only validates.
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    fn anchor_shape(line: &[u8]) -> bool {
+        let mut s = Scan { buf: line, pos: 0 };
+        s.lit(b"{\"index\":")
+            && s.uint().is_some()
+            && s.lit(b",\"event_id\":\"")
+            && s.string_body().is_some()
+            && s.lit(b",\"timestamp_ms\":")
+            && s.uint().is_some()
+            && s.lit(b",\"event_hash_hex\":\"")
+            && s.string_body().is_some()
+            && s.lit(b",\"previous_hash_hex\":\"")
+            && s.string_body().is_some()
+            && s.lit(b",\"chain_hash_hex\":\"")
+            && s.string_body().is_some()
+            && s.lit(b"}")
+            && s.done()
+    }
+
     fn parse_anchor(line: &[u8]) -> Option<AnchorFields<'_>> {
         if let Some(anchor) = fast_anchor(line) {
             return Some(anchor);
@@ -1721,11 +1926,67 @@ mod imp {
         serde_json::from_slice::<AnchorFields>(line).ok()
     }
 
+    /// `fast_anchor` fused with the expected-entry compare: one strict-scan
+    /// pass accepts exactly the lines `fast_anchor` accepts while checking
+    /// each field as it is extracted. `Some(matched)` mirrors "fast path
+    /// parses, fields compare to `matched`"; `None` defers to the serde
+    /// fallback, which stays the acceptance authority.
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    fn anchor_diff(
+        line: &[u8],
+        index: u64,
+        id: &str,
+        timestamp_ms: u64,
+        event_hex: &[u8; 64],
+        previous: &[u8; 64],
+        chain: &[u8; 64],
+    ) -> Option<bool> {
+        let mut s = Scan { buf: line, pos: 0 };
+        if !s.lit(b"{\"index\":") {
+            return None;
+        }
+        let a_index = s.uint()?;
+        if !s.lit(b",\"event_id\":\"") {
+            return None;
+        }
+        let a_id = ascii_str(s.string_body()?)?;
+        if !s.lit(b",\"timestamp_ms\":") {
+            return None;
+        }
+        let a_ts = s.uint()?;
+        if !s.lit(b",\"event_hash_hex\":\"") {
+            return None;
+        }
+        let a_event = s.string_body()?;
+        if !s.lit(b",\"previous_hash_hex\":\"") {
+            return None;
+        }
+        let a_previous = s.string_body()?;
+        if !s.lit(b",\"chain_hash_hex\":\"") {
+            return None;
+        }
+        let a_chain = s.string_body()?;
+        if !(s.lit(b"}") && s.done()) {
+            return None;
+        }
+        Some(
+            a_index == index
+                && uuid_eq(a_id, id)
+                && a_ts == timestamp_ms
+                && bytes_eq(a_event, event_hex)
+                && bytes_eq(a_previous, previous)
+                && bytes_eq(a_chain, chain),
+        )
+    }
+
     /// One-pass byte comparison of an anchor line against the entry this
     /// chain position expects, in the canonical field order and compact
-    /// formatting `fold_chain` serializes. Byte equality implies the anchor
-    /// parses to exactly the expected field values; any difference falls
-    /// back to the parse + field-compare slow path.
+    /// formatting `fold_chain` serializes. The caller has already pinned the
+    /// 85-byte tail `,"chain_hash_hex":"<chain>"}` via `chain_span`, so the
+    /// walk stops at the previous-hash closing quote and a position check
+    /// covers the rest. Byte equality implies the anchor parses to exactly
+    /// the expected field values; any difference falls back to the parse +
+    /// field-compare slow path.
     fn anchor_line_matches(
         line: &[u8],
         idx_digits: &[u8],
@@ -1733,7 +1994,6 @@ mod imp {
         ts_digits: &[u8],
         event_hex: &[u8; 64],
         previous: &[u8; 64],
-        chain: &[u8; 64],
     ) -> bool {
         let mut s = Scan { buf: line, pos: 0 };
         // Corpus ids are uuid-shaped; a const-length arm lets the compare
@@ -1752,17 +2012,15 @@ mod imp {
             && s.lit(event_hex)
             && s.lit(b"\",\"previous_hash_hex\":\"")
             && s.lit(previous)
-            && s.lit(b"\",\"chain_hash_hex\":\"")
-            && s.lit(chain)
-            && s.lit(b"\"}")
-            && s.done()
+            && s.lit(b"\"")
+            && s.pos == line.len() - 85
     }
 
     /// Best-effort extraction of the trailing `chain_hash_hex` value from an
-    /// anchor line, used only to seed speculative links: a wrong or missing
-    /// span merely costs a sequential recompute. The tag compare is word-wise
+    /// anchor line. Seeds speculative links and pre-checks the fast anchor
+    /// compare: a wrong or missing span costs a sequential recompute or a
+    /// slow-path compare, never accuracy. The tag compare is word-wise
     /// because wasm lowers slice == to a per-byte memcmp loop.
-    #[cfg(target_arch = "wasm32")]
     fn chain_span(line: &[u8]) -> Option<&[u8; 64]> {
         let n = line.len();
         if n < 85 {
@@ -1805,17 +2063,26 @@ mod imp {
         // of four events are known up front and every link runs four lanes
         // wide. A lane is trusted only when its candidate equaled the true
         // previous hash; a run of consecutive misses parks the batches for
-        // the rest of the call.
+        // the rest of the call. The window holds one extra span (the next
+        // batch's first candidate, rolled over at the boundary) so every
+        // line can also pre-check its own anchor's trailing chain hash, and
+        // that pre-check doubles as the next lane's hit test via `pre_hit`.
         #[cfg(target_arch = "wasm32")]
         let zero_prev = zero_hash();
         #[cfg(target_arch = "wasm32")]
         let mut spec_on = true;
         #[cfg(target_arch = "wasm32")]
+        let mut spec_batch = false;
+        #[cfg(target_arch = "wasm32")]
         let mut spec_miss = 0u32;
         #[cfg(target_arch = "wasm32")]
-        let mut spec_cand: [Option<&[u8; 64]>; 4] = [None; 4];
+        let mut spec_span: [Option<&[u8; 64]>; 5] = [None; 5];
         #[cfg(target_arch = "wasm32")]
         let mut spec_buf = [[0u8; 64]; 4];
+        #[cfg(target_arch = "wasm32")]
+        let mut seq_wk = [[0u32; 64]; 4];
+        #[cfg(target_arch = "wasm32")]
+        let mut pre_hit: Option<bool> = None;
         // Canonical decimal of the running entry index, incremented in place;
         // replaces a per-event itoa in the anchor fast compare.
         let mut idx_buf = [0u8; 20];
@@ -1842,26 +2109,30 @@ mod imp {
             #[cfg(target_arch = "wasm32")]
             let chain = {
                 if index & 3 == 0 {
+                    spec_batch = spec_on;
                     if spec_on {
-                        let mut l = 0;
-                        while l < 4 {
-                            let idx = index + l;
-                            spec_cand[l] = if idx >= event_lines.len() {
-                                None
-                            } else if idx == 0 {
-                                Some(&zero_prev)
-                            } else {
-                                anchor_lines.get(idx - 1).and_then(|a| chain_span(a))
-                            };
-                            l += 1;
+                        spec_span[0] = if index == 0 {
+                            Some(&zero_prev)
+                        } else {
+                            spec_span[4]
+                        };
+                        let mut m = 1;
+                        while m < 5 {
+                            spec_span[m] =
+                                anchor_lines.get(index + m - 1).and_then(|a| chain_span(a));
+                            m += 1;
                         }
-                        link_quad(&spec_cand, &event_hexes[index..], &tail, &mut spec_buf);
+                        let cand: &[Option<&[u8; 64]>; 4] =
+                            spec_span[..4].try_into().expect("4-lane window");
+                        link_quad(cand, &event_hexes[index..], &tail, &mut spec_buf);
                     } else {
-                        spec_cand = [None; 4];
+                        spec_span = [None; 5];
+                        mid_wk_quad(&event_hexes[index..], &mut seq_wk);
                     }
                 }
-                match spec_cand[index & 3] {
-                    Some(c) if eq64(c, &previous) => {
+                let cached = pre_hit.take();
+                match spec_span[index & 3] {
+                    Some(c) if cached.unwrap_or_else(|| eq64(c, &previous)) => {
                         spec_miss = 0;
                         spec_buf[index & 3]
                     }
@@ -1870,7 +2141,11 @@ mod imp {
                         if spec_miss >= 8 {
                             spec_on = false;
                         }
-                        link_hex(&previous, event_hex, &tail)
+                        if spec_batch {
+                            link_hex(&previous, event_hex, &tail)
+                        } else {
+                            link_hex_mid(&previous, &seq_wk[index & 3], event_hex[63], &tail)
+                        }
                     }
                 }
             };
@@ -1878,22 +2153,52 @@ mod imp {
             let chain = link_hex(&previous, event_hex, &tail);
             // The strict scanner accepting the event guarantees the id and
             // timestamp spans embed verbatim in anchor JSON, making byte
-            // equality sufficient; the value-level slow compare below
-            // re-derives owned fields only when the byte compare fails.
+            // equality sufficient. The anchor's trailing chain hash is
+            // checked first: on a diverged chain it differs immediately and
+            // skips the field walk, and the walk's tail is pinned by
+            // `chain_span`'s shape check so it stops at the previous hash.
+            // The spans already in hand re-derive the slow-compare fields
+            // without re-scanning the event line.
             let mut slow: Option<Option<(Cow<'_, str>, u64)>> = None;
             match fast_event(line) {
                 Some(ev) => match anchor_lines.get(index) {
                     Some(aline) => {
-                        if !anchor_line_matches(
-                            aline,
-                            &idx_buf[idx_start..],
-                            ev.id,
-                            ev.ts,
-                            event_hex,
-                            &previous,
-                            &chain,
-                        ) {
-                            slow = Some(parse_event(line).ok());
+                        #[cfg(target_arch = "wasm32")]
+                        let tail_ok = {
+                            let cs = if spec_batch {
+                                spec_span[(index & 3) + 1]
+                            } else {
+                                chain_span(aline)
+                            };
+                            let ok = matches!(cs, Some(c) if eq64(c, &chain));
+                            pre_hit = Some(ok);
+                            ok
+                        };
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let tail_ok = matches!(chain_span(aline), Some(c) if eq64(c, &chain));
+                        if tail_ok {
+                            if !anchor_line_matches(
+                                aline,
+                                &idx_buf[idx_start..],
+                                ev.id,
+                                ev.ts,
+                                event_hex,
+                                &previous,
+                            ) {
+                                slow = Some(match ascii_str(ev.id) {
+                                    Some(id) => Some((Cow::Borrowed(id), fold_digits(ev.ts))),
+                                    None => parse_event(line).ok(),
+                                });
+                            }
+                        } else if anchor_shape(aline) {
+                            failures.push(Failure::EntryMismatch {
+                                index: index as u64,
+                            });
+                        } else {
+                            slow = Some(match ascii_str(ev.id) {
+                                Some(id) => Some((Cow::Borrowed(id), fold_digits(ev.ts))),
+                                None => parse_event(line).ok(),
+                            });
                         }
                     }
                     None => failures.push(Failure::EntryMissing {
@@ -1908,15 +2213,27 @@ mod imp {
             match slow {
                 None => {}
                 Some(Some((id, timestamp_ms))) => match anchor_lines.get(index) {
-                    Some(aline) => match parse_anchor(aline) {
-                        Some(actual)
-                            if actual.index == index as u64
-                                && uuid_eq(&actual.event_id, &id)
-                                && actual.timestamp_ms == timestamp_ms
-                                && bytes_eq(actual.event_hash_hex.as_bytes(), event_hex)
-                                && bytes_eq(actual.previous_hash_hex.as_bytes(), &previous)
-                                && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
-                        Some(_) => failures.push(Failure::EntryMismatch {
+                    Some(aline) => match anchor_diff(
+                        aline,
+                        index as u64,
+                        &id,
+                        timestamp_ms,
+                        event_hex,
+                        &previous,
+                        &chain,
+                    )
+                    .or_else(|| {
+                        serde_json::from_slice::<AnchorFields>(aline).ok().map(|a| {
+                            a.index == index as u64
+                                && uuid_eq(&a.event_id, &id)
+                                && a.timestamp_ms == timestamp_ms
+                                && bytes_eq(a.event_hash_hex.as_bytes(), event_hex)
+                                && bytes_eq(a.previous_hash_hex.as_bytes(), &previous)
+                                && bytes_eq(a.chain_hash_hex.as_bytes(), &chain)
+                        })
+                    }) {
+                        Some(true) => {}
+                        Some(false) => failures.push(Failure::EntryMismatch {
                             index: index as u64,
                         }),
                         None => {

@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-06-10T14:17:41.004Z",
+  "updatedAt": "2026-06-10T21:05:04.434Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
@@ -17,52 +17,52 @@
       "scalar": 1
     },
     {
-      "round": 1,
+      "round": "k1",
       "scalar": 1.41,
       "proposer": "Claude"
     },
     {
-      "round": 2,
+      "round": "k2",
       "scalar": 1.51,
       "proposer": "Claude"
     },
     {
-      "round": 3,
+      "round": "k3",
       "scalar": 2.11,
       "proposer": "Claude"
     },
     {
-      "round": 4,
+      "round": "k4",
       "scalar": 2.161,
       "proposer": "Claude"
     },
     {
-      "round": 5,
+      "round": "k5",
       "scalar": 3.727,
       "proposer": "Claude"
     },
     {
-      "round": 6,
+      "round": "k6",
       "scalar": 4.272,
       "proposer": "Claude"
     },
     {
-      "round": 8,
+      "round": "k8",
       "scalar": 4.426,
       "proposer": "Claude"
     },
     {
-      "round": 10,
+      "round": "k10",
       "scalar": 5.244,
       "proposer": "Claude"
     },
     {
-      "round": 11,
+      "round": "k11",
       "scalar": 5.321,
       "proposer": "Claude"
     },
     {
-      "round": 12,
+      "round": "k12",
       "scalar": 5.379,
       "proposer": "Claude"
     }
@@ -72,9 +72,12 @@
     "rejected": 1,
     "finalScalar": 4.426
   },
+  "community": {
+    "ships": 0
+  },
   "rounds": [
     {
-      "round": 12,
+      "round": "k12",
       "display": "Round 3",
       "era": "tournament",
       "entries": [
@@ -86,6 +89,7 @@
           "gain": 0.003,
           "promoted": false,
           "commit": null,
+          "handle": null,
           "reason": "lost tournament to fable (5.324 vs 5.379)"
         },
         {
@@ -96,12 +100,13 @@
           "gain": 0.058,
           "promoted": true,
           "commit": "9a4a838820263e86dc7453207f44b87c8d7faa8a",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 11,
+      "round": "k11",
       "display": "Round 2",
       "era": "tournament",
       "entries": [
@@ -113,6 +118,7 @@
           "gain": 0.005,
           "promoted": false,
           "commit": null,
+          "handle": null,
           "reason": "lost tournament to fable (5.249 vs 5.321)"
         },
         {
@@ -123,12 +129,13 @@
           "gain": 0.077,
           "promoted": true,
           "commit": "b6d5aafe2a8a10e7f26fabf53fe2ac232247837a",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 10,
+      "round": "k10",
       "display": "Round 1",
       "era": "tournament",
       "entries": [
@@ -140,6 +147,7 @@
           "gain": -1.519,
           "promoted": false,
           "commit": null,
+          "handle": null,
           "reason": "lost tournament to fable (2.907 vs 5.244)"
         },
         {
@@ -150,12 +158,13 @@
           "gain": 0.818,
           "promoted": true,
           "commit": "54017d7cf628c3d4e434f0e928cb04487fb47535",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 9,
+      "round": "k9",
       "display": "Shakedown",
       "era": "tournament",
       "entries": [
@@ -167,6 +176,7 @@
           "gain": -4.426,
           "promoted": false,
           "commit": null,
+          "handle": null,
           "reason": "proposal failed: proposer output is not a complete EVOLVE block: ```rust\n// EVOLVE-BLOCK-START\nmod imp {\n    use super::{ChainEntry, ChainRe"
         },
         {
@@ -177,12 +187,13 @@
           "gain": -4.426,
           "promoted": false,
           "commit": null,
+          "handle": null,
           "reason": "proposal failed: proposer output is not a complete EVOLVE block: /// sha256(line) as lowercase hex; same block walk as the scalar\n        //"
         }
       ]
     },
     {
-      "round": 8,
+      "round": "k8",
       "display": "Run 8",
       "era": "solo",
       "entries": [
@@ -194,12 +205,13 @@
           "gain": 0.154,
           "promoted": true,
           "commit": "83e05aba70f7945099c7037da845537539c75afa",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 7,
+      "round": "k7",
       "display": "Run 7",
       "era": "solo",
       "entries": [
@@ -211,12 +223,13 @@
           "gain": 0.006,
           "promoted": false,
           "commit": null,
+          "handle": null,
           "reason": "gain 0.006 < margin 0.02"
         }
       ]
     },
     {
-      "round": 6,
+      "round": "k6",
       "display": "Run 6",
       "era": "solo",
       "entries": [
@@ -228,12 +241,13 @@
           "gain": 0.545,
           "promoted": true,
           "commit": "582cfd9d18ca0c02ef07ae837c591c66061660b6",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 5,
+      "round": "k5",
       "display": "Run 5",
       "era": "solo",
       "entries": [
@@ -245,12 +259,13 @@
           "gain": 1.566,
           "promoted": true,
           "commit": "3071bc6402f569f04cb59f1b13361858936c2ced",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 4,
+      "round": "k4",
       "display": "Run 4",
       "era": "solo",
       "entries": [
@@ -262,12 +277,13 @@
           "gain": 0.051,
           "promoted": true,
           "commit": "ead098453569bfb54b7544a90def07048f5b2f36",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 3,
+      "round": "k3",
       "display": "Run 3",
       "era": "solo",
       "entries": [
@@ -279,12 +295,13 @@
           "gain": 0.6,
           "promoted": true,
           "commit": "431566fce9db31e926b079abfa198cafcf15d38e",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 2,
+      "round": "k2",
       "display": "Run 2",
       "era": "solo",
       "entries": [
@@ -296,12 +313,13 @@
           "gain": 0.1,
           "promoted": true,
           "commit": "883d6b70a3b166c36e66ec6b02dbc681ecf0ee13",
+          "handle": null,
           "reason": null
         }
       ]
     },
     {
-      "round": 1,
+      "round": "k1",
       "display": "Run 1",
       "era": "solo",
       "entries": [
@@ -313,6 +331,7 @@
           "gain": 0.41,
           "promoted": true,
           "commit": "db0e4234815998c6336603322c7134fa78871ac5",
+          "handle": null,
           "reason": null
         }
       ]

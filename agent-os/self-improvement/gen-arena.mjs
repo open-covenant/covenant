@@ -17,10 +17,11 @@ const PROPOSER_LABELS = { fable: "Claude", grok: "Grok" };
 const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
 
 const rounds = new Map();
+let order = 0;
 for (const v of ledger.versions) {
-  const n = parseInt(v.version.match(/^k(\d+)/)?.[1] ?? 0, 10);
-  if (!rounds.has(n)) rounds.set(n, []);
-  rounds.get(n).push({
+  const key = v.version.split(":")[0];
+  if (!rounds.has(key)) rounds.set(key, { order: order++, entries: [] });
+  rounds.get(key).entries.push({
     proposer: PROPOSER_LABELS[v.proposer] ?? (v.proposer ? v.proposer[0].toUpperCase() + v.proposer.slice(1) : "Claude"),
     model: v.model ?? "claude",
     scalar: v.candidate ?? 0,
@@ -28,6 +29,7 @@ for (const v of ledger.versions) {
     gain: v.gain,
     promoted: !!v.promoted,
     commit: v.commit ?? null,
+    handle: v.handle ?? null,
     reason: v.promoted ? null : String(v.reason ?? "").slice(0, 140),
   });
 }
@@ -36,23 +38,31 @@ for (const v of ledger.versions) {
 // starts at k9 (shakedown) / k10 (Round 1). The vs-tally counts only
 // tournament rounds; the curve keeps the whole history of the kernel.
 const TOURNAMENT_START = 9;
-const display = (n) => (n < TOURNAMENT_START ? `Run ${n}` : n === TOURNAMENT_START ? "Shakedown" : `Round ${n - TOURNAMENT_START}`);
+const meta = (key) => {
+  if (key.startsWith("c")) return { era: "challenge", display: `Challenge ${key.slice(1)}` };
+  const n = parseInt(key.slice(1), 10);
+  if (n < TOURNAMENT_START) return { era: "solo", display: `Run ${n}` };
+  if (n === TOURNAMENT_START) return { era: "tournament", display: "Shakedown" };
+  return { era: "tournament", display: `Round ${n - TOURNAMENT_START}` };
+};
 
 const tally = { Claude: 0, Grok: 0, rejectedRounds: 0 };
 const solo = { promotions: 0, rejected: 0, finalScalar: 1 };
+const community = { ships: 0 };
 const curve = [{ round: 0, scalar: 1 }];
 let incumbentScalar = 1;
-for (const [n, entries] of [...rounds.entries()].sort((a, b) => a[0] - b[0])) {
-  const winner = entries.find((e) => e.promoted);
-  const inTournament = n >= TOURNAMENT_START;
+for (const [key, group] of [...rounds.entries()].sort((a, b) => a[1].order - b[1].order)) {
+  const { era } = meta(key);
+  const winner = group.entries.find((e) => e.promoted);
   if (winner) {
     incumbentScalar = winner.scalar;
-    curve.push({ round: n, scalar: winner.scalar, proposer: winner.proposer });
-    if (inTournament) tally[winner.proposer] = (tally[winner.proposer] ?? 0) + 1;
+    curve.push({ round: key, scalar: winner.scalar, proposer: winner.proposer });
+    if (era === "tournament") tally[winner.proposer] = (tally[winner.proposer] ?? 0) + 1;
+    else if (era === "challenge") community.ships += 1;
     else { solo.promotions += 1; solo.finalScalar = winner.scalar; }
-  } else if (inTournament) {
+  } else if (era === "tournament") {
     tally.rejectedRounds += 1;
-  } else {
+  } else if (era === "solo") {
     solo.rejected += 1;
   }
 }
@@ -68,9 +78,10 @@ const payload = {
   tally,
   curve,
   solo,
+  community,
   rounds: [...rounds.entries()]
-    .sort((a, b) => b[0] - a[0])
-    .map(([n, entries]) => ({ round: n, display: display(n), era: n >= TOURNAMENT_START ? "tournament" : "solo", entries })),
+    .sort((a, b) => b[1].order - a[1].order)
+    .map(([key, group]) => ({ round: key, display: meta(key).display, era: meta(key).era, entries: group.entries })),
 };
 
 writeFileSync(outPath, JSON.stringify(payload, null, 2) + "\n");

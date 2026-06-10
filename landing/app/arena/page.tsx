@@ -206,7 +206,20 @@ export default async function ArenaPage() {
               </p>
               <Curve points={arena.curve} />
 
-              <p className="mt-8 hidden text-[11px] uppercase tracking-[0.25em] text-neutral-600 lg:block">
+              <p className="mt-8 text-[11px] leading-relaxed tracking-[0.15em] text-neutral-600">
+                Promotion margin +0.005 scalar since round 4 (was +0.02; the
+                metric is deterministic, so any measured gain is real).{" "}
+                <a
+                  href={`${GITHUB_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-4 transition-colors hover:text-neutral-300"
+                >
+                  Rules and open challenge
+                </a>
+              </p>
+
+              <p className="mt-4 hidden text-[11px] uppercase tracking-[0.25em] text-neutral-600 lg:block">
                 Updated {new Date(arena.updatedAt).toUTCString()}
               </p>
             </div>

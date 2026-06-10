@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-10T21:19:20.787Z",
+  "updatedAt": "2026-06-10T23:23:36.071Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
-    "scalar": 5.39,
-    "fuelCutPct": 81.4
+    "scalar": 5.786,
+    "fuelCutPct": 82.7
   },
   "tally": {
-    "Claude": 3,
+    "Claude": 4,
     "Grok": 0,
     "rejectedRounds": 1
   },
@@ -70,6 +70,11 @@
       "round": "c1",
       "scalar": 5.39,
       "proposer": "Grok"
+    },
+    {
+      "round": "k13",
+      "scalar": 5.786,
+      "proposer": "Claude"
     }
   ],
   "solo": {
@@ -81,6 +86,35 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k13",
+      "display": "Round 4",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 5.393,
+          "incumbent": 5.39,
+          "gain": 0.003,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "lost tournament to fable (5.393 vs 5.786)"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 5.786,
+          "incumbent": 5.39,
+          "gain": 0.396,
+          "promoted": true,
+          "commit": "7489d19974552849d07bda31b0314bbf72356c4a",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
     {
       "round": "c1",
       "display": "Challenge 1",

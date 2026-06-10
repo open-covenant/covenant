@@ -110,6 +110,165 @@ mod imp {
         0x5be0cd19,
     ];
 
+    /// Round-constant table for the precomputed tail schedules.
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    /// The final link block is constant except for the last event hex char:
+    /// `w0 = c << 24 | 0x0080_0000`, `w15 = 1032`, all other words zero. Only
+    /// 16 chars are possible, so the full 64-word `w + K` schedule for each
+    /// is expanded once per call and the tail compression skips its message
+    /// schedule entirely.
+    fn tail_wk_table() -> [[u32; 64]; 16] {
+        let mut tbl = [[0u32; 64]; 16];
+        let mut n = 0;
+        while n < 16 {
+            let c = if n < 10 {
+                0x30 + n as u32
+            } else {
+                0x57 + n as u32
+            };
+            let wk = &mut tbl[n];
+            wk[0] = (c << 24) | 0x0080_0000;
+            wk[15] = 1032;
+            let mut i = 16;
+            while i < 64 {
+                let w15 = wk[i - 15];
+                let w2 = wk[i - 2];
+                wk[i] = wk[i - 16]
+                    .wrapping_add(w15.rotate_right(7) ^ w15.rotate_right(18) ^ (w15 >> 3))
+                    .wrapping_add(wk[i - 7])
+                    .wrapping_add(w2.rotate_right(17) ^ w2.rotate_right(19) ^ (w2 >> 10));
+                i += 1;
+            }
+            let mut i = 0;
+            while i < 64 {
+                wk[i] = wk[i].wrapping_add(K[i]);
+                i += 1;
+            }
+            n += 1;
+        }
+        tbl
+    }
+
+    /// Lowercase hex char -> nibble, masked so the table index never needs a
+    /// bounds check; link inputs are always this module's own hex output.
+    #[inline(always)]
+    fn tail_idx(c: u8) -> usize {
+        usize::from((c & 0x0f) + (c >> 6) * 9) & 15
+    }
+
+    /// Same round as `round!` with `k + w` arriving pre-added from the table.
+    macro_rules! roundt {
+        ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:expr, $xo:ident, $xn:ident) => {
+            let t1 = $h
+                .wrapping_add($e.rotate_right(6) ^ $e.rotate_right(11) ^ $e.rotate_right(25))
+                .wrapping_add((($f ^ $g) & $e) ^ $g)
+                .wrapping_add($wk);
+            let $xn = $a ^ $b;
+            let t2 = ($a.rotate_right(2) ^ $a.rotate_right(13) ^ $a.rotate_right(22))
+                .wrapping_add($b ^ ($xn & $xo));
+            $d = $d.wrapping_add(t1);
+            $h = t1.wrapping_add(t2);
+        };
+    }
+
+    /// One compression whose full `w + K` schedule is precomputed; rounds
+    /// only load and add. Used for the constant-shape final link block.
+    fn compress_tail(state: &mut [u32; 8], wk: &[u32; 64]) {
+        let mut a = state[0];
+        let mut b = state[1];
+        let mut c = state[2];
+        let mut d = state[3];
+        let mut e = state[4];
+        let mut f = state[5];
+        let mut g = state[6];
+        let mut h = state[7];
+        let x0 = b ^ c;
+        roundt!(a, b, c, d, e, f, g, h, wk[0], x0, x1);
+        roundt!(h, a, b, c, d, e, f, g, wk[1], x1, x2);
+        roundt!(g, h, a, b, c, d, e, f, wk[2], x2, x3);
+        roundt!(f, g, h, a, b, c, d, e, wk[3], x3, x4);
+        roundt!(e, f, g, h, a, b, c, d, wk[4], x4, x5);
+        roundt!(d, e, f, g, h, a, b, c, wk[5], x5, x6);
+        roundt!(c, d, e, f, g, h, a, b, wk[6], x6, x7);
+        roundt!(b, c, d, e, f, g, h, a, wk[7], x7, x8);
+        roundt!(a, b, c, d, e, f, g, h, wk[8], x8, x9);
+        roundt!(h, a, b, c, d, e, f, g, wk[9], x9, x10);
+        roundt!(g, h, a, b, c, d, e, f, wk[10], x10, x11);
+        roundt!(f, g, h, a, b, c, d, e, wk[11], x11, x12);
+        roundt!(e, f, g, h, a, b, c, d, wk[12], x12, x13);
+        roundt!(d, e, f, g, h, a, b, c, wk[13], x13, x14);
+        roundt!(c, d, e, f, g, h, a, b, wk[14], x14, x15);
+        roundt!(b, c, d, e, f, g, h, a, wk[15], x15, x16);
+        roundt!(a, b, c, d, e, f, g, h, wk[16], x16, x17);
+        roundt!(h, a, b, c, d, e, f, g, wk[17], x17, x18);
+        roundt!(g, h, a, b, c, d, e, f, wk[18], x18, x19);
+        roundt!(f, g, h, a, b, c, d, e, wk[19], x19, x20);
+        roundt!(e, f, g, h, a, b, c, d, wk[20], x20, x21);
+        roundt!(d, e, f, g, h, a, b, c, wk[21], x21, x22);
+        roundt!(c, d, e, f, g, h, a, b, wk[22], x22, x23);
+        roundt!(b, c, d, e, f, g, h, a, wk[23], x23, x24);
+        roundt!(a, b, c, d, e, f, g, h, wk[24], x24, x25);
+        roundt!(h, a, b, c, d, e, f, g, wk[25], x25, x26);
+        roundt!(g, h, a, b, c, d, e, f, wk[26], x26, x27);
+        roundt!(f, g, h, a, b, c, d, e, wk[27], x27, x28);
+        roundt!(e, f, g, h, a, b, c, d, wk[28], x28, x29);
+        roundt!(d, e, f, g, h, a, b, c, wk[29], x29, x30);
+        roundt!(c, d, e, f, g, h, a, b, wk[30], x30, x31);
+        roundt!(b, c, d, e, f, g, h, a, wk[31], x31, x32);
+        roundt!(a, b, c, d, e, f, g, h, wk[32], x32, x33);
+        roundt!(h, a, b, c, d, e, f, g, wk[33], x33, x34);
+        roundt!(g, h, a, b, c, d, e, f, wk[34], x34, x35);
+        roundt!(f, g, h, a, b, c, d, e, wk[35], x35, x36);
+        roundt!(e, f, g, h, a, b, c, d, wk[36], x36, x37);
+        roundt!(d, e, f, g, h, a, b, c, wk[37], x37, x38);
+        roundt!(c, d, e, f, g, h, a, b, wk[38], x38, x39);
+        roundt!(b, c, d, e, f, g, h, a, wk[39], x39, x40);
+        roundt!(a, b, c, d, e, f, g, h, wk[40], x40, x41);
+        roundt!(h, a, b, c, d, e, f, g, wk[41], x41, x42);
+        roundt!(g, h, a, b, c, d, e, f, wk[42], x42, x43);
+        roundt!(f, g, h, a, b, c, d, e, wk[43], x43, x44);
+        roundt!(e, f, g, h, a, b, c, d, wk[44], x44, x45);
+        roundt!(d, e, f, g, h, a, b, c, wk[45], x45, x46);
+        roundt!(c, d, e, f, g, h, a, b, wk[46], x46, x47);
+        roundt!(b, c, d, e, f, g, h, a, wk[47], x47, x48);
+        roundt!(a, b, c, d, e, f, g, h, wk[48], x48, x49);
+        roundt!(h, a, b, c, d, e, f, g, wk[49], x49, x50);
+        roundt!(g, h, a, b, c, d, e, f, wk[50], x50, x51);
+        roundt!(f, g, h, a, b, c, d, e, wk[51], x51, x52);
+        roundt!(e, f, g, h, a, b, c, d, wk[52], x52, x53);
+        roundt!(d, e, f, g, h, a, b, c, wk[53], x53, x54);
+        roundt!(c, d, e, f, g, h, a, b, wk[54], x54, x55);
+        roundt!(b, c, d, e, f, g, h, a, wk[55], x55, x56);
+        roundt!(a, b, c, d, e, f, g, h, wk[56], x56, x57);
+        roundt!(h, a, b, c, d, e, f, g, wk[57], x57, x58);
+        roundt!(g, h, a, b, c, d, e, f, wk[58], x58, x59);
+        roundt!(f, g, h, a, b, c, d, e, wk[59], x59, x60);
+        roundt!(e, f, g, h, a, b, c, d, wk[60], x60, x61);
+        roundt!(d, e, f, g, h, a, b, c, wk[61], x61, x62);
+        roundt!(c, d, e, f, g, h, a, b, wk[62], x62, x63);
+        roundt!(b, c, d, e, f, g, h, a, wk[63], x63, _x64);
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+        state[5] = state[5].wrapping_add(f);
+        state[6] = state[6].wrapping_add(g);
+        state[7] = state[7].wrapping_add(h);
+    }
+
     /// One round with rotated working-variable roles: wasm has no register
     /// renaming, so a looped round with `h = g; g = f; ...` shuffles pay
     /// per-instruction fuel. Ch uses the 3-op masked-select form; Maj reuses
@@ -361,7 +520,7 @@ mod imp {
     /// block is constant except for the carried last hex char, so its
     /// schedule folds at compile time (length 129 * 8 = 1032 bits).
     #[cfg(not(target_arch = "wasm32"))]
-    fn chain_hex(previous: &[u8; 64], event: &[u8; 64]) -> [u8; 64] {
+    fn chain_hex(previous: &[u8; 64], event: &[u8; 64], tail: &[[u32; 64]; 16]) -> [u8; 64] {
         let mut state = H0;
         compress(&mut state, previous);
         let mut w = [0u32; 16];
@@ -374,10 +533,8 @@ mod imp {
             i += 1;
         }
         compress_w(&mut state, w);
-        let mut w = [0u32; 16];
-        w[0] = (carry << 24) | 0x0080_0000;
-        w[15] = 1032;
-        compress_w(&mut state, w);
+        let _ = carry;
+        compress_tail(&mut state, &tail[tail_idx(event[63])]);
         hex_state(&state)
     }
 
@@ -1074,7 +1231,11 @@ mod imp {
         /// big-endian swap. The final block carries only the last event byte
         /// plus padding (129 * 8 = 1032 bits).
         #[target_feature(enable = "simd128")]
-        pub(super) fn link_hex(previous: &[u8; 64], event: &[u8; 64]) -> [u8; 64] {
+        pub(super) fn link_hex(
+            previous: &[u8; 64],
+            event: &[u8; 64],
+            tail: &[[u32; 64]; 16],
+        ) -> [u8; 64] {
             let mut state = H0;
             compress_block(&mut state, previous);
             let v0 = load_raw::<0>(event);
@@ -1093,15 +1254,7 @@ mod imp {
                 v2, v3,
             );
             compress_v(&mut state, s0, s1, s2, s3);
-            let zero = u32x4(0, 0, 0, 0);
-            let w0 = (u32::from(event[63]) << 24) | 0x0080_0000;
-            compress_v(
-                &mut state,
-                u32x4(w0, 0, 0, 0),
-                zero,
-                zero,
-                u32x4(0, 0, 0, 1032),
-            );
+            super::compress_tail(&mut state, &tail[super::tail_idx(event[63])]);
             hex_state(&state)
         }
     }
@@ -1120,8 +1273,8 @@ mod imp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn link_hex(previous: &[u8; 64], event: &[u8; 64]) -> [u8; 64] {
-        chain_hex(previous, event)
+    fn link_hex(previous: &[u8; 64], event: &[u8; 64], tail: &[[u32; 64]; 16]) -> [u8; 64] {
+        chain_hex(previous, event, tail)
     }
 
     fn hex_string(hex: &[u8; 64]) -> String {
@@ -1141,12 +1294,35 @@ mod imp {
     fn find_newline(bytes: &[u8], mut i: usize) -> usize {
         use std::arch::wasm32::*;
         let n = bytes.len();
+        let nl = u8x16_splat(b'\n');
+        while i + 64 <= n {
+            let b: &[u8; 64] = bytes[i..i + 64].try_into().expect("64-byte chunk");
+            let w = |lo: &[u8], hi: &[u8]| {
+                u64x2(
+                    u64::from_le_bytes(lo.try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes(hi.try_into().expect("8-byte chunk")),
+                )
+            };
+            let e0 = u8x16_eq(w(&b[0..8], &b[8..16]), nl);
+            let e1 = u8x16_eq(w(&b[16..24], &b[24..32]), nl);
+            let e2 = u8x16_eq(w(&b[32..40], &b[40..48]), nl);
+            let e3 = u8x16_eq(w(&b[48..56], &b[56..64]), nl);
+            if v128_any_true(v128_or(v128_or(e0, e1), v128_or(e2, e3))) {
+                let mask = u64::from(i8x16_bitmask(e0) as u16)
+                    | u64::from(i8x16_bitmask(e1) as u16) << 16
+                    | u64::from(i8x16_bitmask(e2) as u16) << 32
+                    | u64::from(i8x16_bitmask(e3) as u16) << 48;
+                return i + mask.trailing_zeros() as usize;
+            }
+            i += 64;
+        }
         while i + 16 <= n {
+            let c: &[u8; 16] = bytes[i..i + 16].try_into().expect("16-byte chunk");
             let v = u64x2(
-                u64::from_le_bytes(bytes[i..i + 8].try_into().expect("8-byte chunk")),
-                u64::from_le_bytes(bytes[i + 8..i + 16].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
             );
-            let mask = i8x16_bitmask(u8x16_eq(v, u8x16_splat(b'\n')));
+            let mask = i8x16_bitmask(u8x16_eq(v, nl));
             if mask != 0 {
                 return i + mask.trailing_zeros() as usize;
             }
@@ -1209,15 +1385,14 @@ mod imp {
             return false;
         }
         let mut acc = 0u64;
-        let mut i = 0;
-        while i + 8 <= a.len() {
-            acc |= u64::from_le_bytes(a[i..i + 8].try_into().expect("8-byte chunk"))
-                ^ u64::from_le_bytes(b[i..i + 8].try_into().expect("8-byte chunk"));
-            i += 8;
+        let mut ca = a.chunks_exact(8);
+        let mut cb = b.chunks_exact(8);
+        for (x, y) in (&mut ca).zip(&mut cb) {
+            acc |= u64::from_le_bytes(x.try_into().expect("8-byte chunk"))
+                ^ u64::from_le_bytes(y.try_into().expect("8-byte chunk"));
         }
-        while i < a.len() {
-            acc |= u64::from(a[i] ^ b[i]);
-            i += 1;
+        for (x, y) in ca.remainder().iter().zip(cb.remainder()) {
+            acc |= u64::from(x ^ y);
         }
         acc == 0
     }
@@ -1246,6 +1421,7 @@ mod imp {
             let Some(a) = self.buf.get(self.pos..end) else {
                 return false;
             };
+            let a: &[u8; N] = a.try_into().expect("length-checked slice");
             let mut acc = 0u64;
             let mut i = 0;
             while i + 8 <= N {
@@ -1290,9 +1466,10 @@ mod imp {
             let buf = self.buf;
             let mut i = self.pos;
             while i + 16 <= buf.len() {
+                let c: &[u8; 16] = buf[i..i + 16].try_into().expect("16-byte chunk");
                 let v = u64x2(
-                    u64::from_le_bytes(buf[i..i + 8].try_into().expect("8-byte chunk")),
-                    u64::from_le_bytes(buf[i + 8..i + 16].try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
                 );
                 let stop = v128_or(
                     v128_or(
@@ -1479,10 +1656,92 @@ mod imp {
         fn done(&self) -> bool {
             self.pos == self.buf.len()
         }
+
+        /// Exact match against a variable-length byte string, word-wise.
+        fn bytes(&mut self, s: &[u8]) -> bool {
+            let end = self.pos + s.len();
+            let Some(a) = self.buf.get(self.pos..end) else {
+                return false;
+            };
+            if bytes_eq(a, s) {
+                self.pos = end;
+                true
+            } else {
+                false
+            }
+        }
+
+        /// Match the canonical decimal rendering of `v`; any other digit
+        /// string (leading zeros, different value) fails to the slow path.
+        fn dec(&mut self, v: u64) -> bool {
+            let mut digits = [0u8; 20];
+            let mut i = digits.len();
+            let mut v = v;
+            loop {
+                i -= 1;
+                digits[i] = b'0' + (v % 10) as u8;
+                v /= 10;
+                if v == 0 {
+                    break;
+                }
+            }
+            self.bytes(&digits[i..])
+        }
     }
 
     fn ascii_str(bytes: &[u8]) -> Option<&str> {
         std::str::from_utf8(bytes).ok()
+    }
+
+    /// Audit `kind` payloads come from a small closed enum, so the common
+    /// serialized shapes are matched literally — fixed key runs as wide
+    /// compares, variable spans as string scans — before handing anything
+    /// unusual to the generic tokenizer, which stays the acceptance
+    /// authority via the rewind.
+    fn kind_value(s: &mut Scan) -> bool {
+        let start = s.pos;
+        if s.lit(b"{\"type\":\"intent_dispatched\",\"intent_id\":\"") {
+            if s.string_body().is_some()
+                && s.lit(b",\"intent_text\":\"")
+                && s.string_body().is_some()
+                && s.lit(b",\"matched_agent\":")
+                && (s.lit(b"null") || (s.lit(b"\"") && s.string_body().is_some()))
+                && s.lit(b",\"result_hash_hex\":\"")
+                && s.string_body().is_some()
+                && s.lit(b",\"status\":\"")
+                && s.string_body().is_some()
+                && s.lit(b"}")
+            {
+                return true;
+            }
+        } else if s.lit(b"{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"") {
+            if s.string_body().is_some()
+                && s.lit(b",\"run_id\":\"")
+                && s.string_body().is_some()
+                && s.lit(b",\"tool\":\"")
+                && s.string_body().is_some()
+                && s.lit(b",\"preview_hash_hex\":\"")
+                && s.string_body().is_some()
+                && s.lit(b"}")
+            {
+                return true;
+            }
+        } else if s.lit(b"{\"type\":\"hermes_tool_completed\",\"intent_id\":\"")
+            && s.string_body().is_some()
+            && s.lit(b",\"run_id\":\"")
+            && s.string_body().is_some()
+            && s.lit(b",\"tool\":\"")
+            && s.string_body().is_some()
+            && s.lit(b",\"duration_ms\":")
+            && s.number()
+            && s.lit(b",\"error\":")
+            && (s.lit(b"true") || s.lit(b"false"))
+            && s.lit(b"}")
+        {
+            return true;
+        }
+        s.pos = start;
+        s.value(0)
     }
 
     fn fast_event(line: &[u8]) -> Option<(&str, u64)> {
@@ -1498,7 +1757,7 @@ mod imp {
         if s.lit(b",\"issuer\":")
             && s.value(0)
             && s.lit(b",\"kind\":")
-            && s.value(0)
+            && kind_value(&mut s)
             && s.lit(b"}")
             && s.done()
         {
@@ -1564,65 +1823,134 @@ mod imp {
         serde_json::from_slice::<AnchorFields>(line).ok()
     }
 
+    /// One-pass byte comparison of an anchor line against the entry this
+    /// chain position expects, in the canonical field order and compact
+    /// formatting `fold_chain` serializes. Byte equality implies the anchor
+    /// parses to exactly the expected field values (`id` is known
+    /// escape-free printable ASCII, decimals are canonical), so the parse +
+    /// field-compare slow path is skipped; any difference falls back to it.
+    fn anchor_line_matches(
+        line: &[u8],
+        index: u64,
+        id: &[u8],
+        timestamp_ms: u64,
+        event_hex: &[u8; 64],
+        previous: &[u8; 64],
+        chain: &[u8; 64],
+    ) -> bool {
+        let mut s = Scan { buf: line, pos: 0 };
+        s.lit(b"{\"index\":")
+            && s.dec(index)
+            && s.lit(b",\"event_id\":\"")
+            && s.bytes(id)
+            && s.lit(b"\",\"timestamp_ms\":")
+            && s.dec(timestamp_ms)
+            && s.lit(b",\"event_hash_hex\":\"")
+            && s.bytes(event_hex)
+            && s.lit(b"\",\"previous_hash_hex\":\"")
+            && s.bytes(previous)
+            && s.lit(b"\",\"chain_hash_hex\":\"")
+            && s.bytes(chain)
+            && s.lit(b"\"}")
+            && s.done()
+    }
+
     pub fn verify_chain(events_jsonl: &[u8], anchors_jsonl: &[u8]) -> ChainReport {
         let event_lines = split_lines(events_jsonl);
         let anchor_lines = split_lines(anchors_jsonl);
+
+        // Anchor parse errors precede every other failure kind in the
+        // report; they are collected separately (in anchor-line order,
+        // which the in-order walks below preserve) and stitched together
+        // with the event-side failures at the end.
+        let mut anchor_failures = Vec::new();
         let mut failures = Vec::new();
 
-        let mut anchors: Vec<Option<AnchorFields>> = Vec::with_capacity(anchor_lines.len());
-        for (index, line) in anchor_lines.iter().enumerate() {
-            match parse_anchor(line) {
-                Some(entry) => anchors.push(Some(entry)),
-                None => {
-                    failures.push(Failure::AnchorParseError {
-                        index: index as u64,
-                    });
-                    anchors.push(None);
-                }
-            }
-        }
-
-        if anchors.len() != event_lines.len() {
-            failures.push(Failure::LengthMismatch {
-                events: event_lines.len() as u64,
-                anchors: anchors.len() as u64,
-            });
-        }
-
         let event_hexes = digest_all(&event_lines);
+        let tail = tail_wk_table();
         let mut previous = zero_hash();
         for (index, line) in event_lines.iter().enumerate() {
             let event_hex = event_hexes[index];
-            let chain = link_hex(&previous, &event_hex);
-            match parse_event(line) {
-                Ok((id, timestamp_ms)) => match anchors.get(index) {
-                    Some(Some(actual))
-                        if actual.index == index as u64
-                            && uuid_eq(&actual.event_id, &id)
-                            && actual.timestamp_ms == timestamp_ms
-                            && bytes_eq(actual.event_hash_hex.as_bytes(), &event_hex)
-                            && bytes_eq(actual.previous_hash_hex.as_bytes(), &previous)
-                            && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
-                    Some(_) => failures.push(Failure::EntryMismatch {
-                        index: index as u64,
-                    }),
+            let chain = link_hex(&previous, &event_hex, &tail);
+            let parsed = match fast_event(line) {
+                Some((id, ts)) => Some((Cow::Borrowed(id), ts, true)),
+                None => match serde_json::from_slice::<EventFields>(line) {
+                    Ok(event) => Some((event.id, event.timestamp_ms, false)),
+                    Err(_) => None,
+                },
+            };
+            match parsed {
+                Some((id, timestamp_ms, clean_id)) => match anchor_lines.get(index) {
+                    Some(aline) => {
+                        // `clean_id` (the strict scanner accepted the event)
+                        // guarantees the id embeds verbatim in JSON, making
+                        // byte equality sufficient.
+                        if !(clean_id
+                            && anchor_line_matches(
+                                aline,
+                                index as u64,
+                                id.as_bytes(),
+                                timestamp_ms,
+                                &event_hex,
+                                &previous,
+                                &chain,
+                            ))
+                        {
+                            match parse_anchor(aline) {
+                                Some(actual)
+                                    if actual.index == index as u64
+                                        && uuid_eq(&actual.event_id, &id)
+                                        && actual.timestamp_ms == timestamp_ms
+                                        && bytes_eq(
+                                            actual.event_hash_hex.as_bytes(),
+                                            &event_hex,
+                                        )
+                                        && bytes_eq(
+                                            actual.previous_hash_hex.as_bytes(),
+                                            &previous,
+                                        )
+                                        && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
+                                Some(_) => failures.push(Failure::EntryMismatch {
+                                    index: index as u64,
+                                }),
+                                None => {
+                                    anchor_failures.push(Failure::AnchorParseError {
+                                        index: index as u64,
+                                    });
+                                    failures.push(Failure::EntryMismatch {
+                                        index: index as u64,
+                                    });
+                                }
+                            }
+                        }
+                    }
                     None => failures.push(Failure::EntryMissing {
                         index: index as u64,
                     }),
                 },
-                Err(()) => {
+                None => {
                     failures.push(Failure::ParseError {
                         index: index as u64,
                     });
-                    match anchors.get(index) {
-                        Some(Some(actual))
-                            if actual.index == index as u64
-                                && bytes_eq(actual.event_hash_hex.as_bytes(), &event_hex)
-                                && bytes_eq(actual.previous_hash_hex.as_bytes(), &previous)
-                                && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
-                        Some(_) => failures.push(Failure::EntryMismatch {
-                            index: index as u64,
-                        }),
+                    match anchor_lines.get(index) {
+                        Some(aline) => match parse_anchor(aline) {
+                            Some(actual)
+                                if actual.index == index as u64
+                                    && bytes_eq(actual.event_hash_hex.as_bytes(), &event_hex)
+                                    && bytes_eq(actual.previous_hash_hex.as_bytes(), &previous)
+                                    && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
+                            Some(_) => failures.push(Failure::EntryMismatch {
+                                index: index as u64,
+                            }),
+                            None => {
+                                anchor_failures.push(Failure::AnchorParseError {
+                                    index: index as u64,
+                                });
+                                failures.push(Failure::EntryMismatch {
+                                    index: index as u64,
+                                });
+                            }
+                        },
                         None => failures.push(Failure::EntryMissing {
                             index: index as u64,
                         }),
@@ -1632,27 +1960,44 @@ mod imp {
             previous = chain;
         }
 
-        if anchors.len() > event_lines.len() {
-            failures.push(Failure::DanglingAnchors {
-                count: (anchors.len() - event_lines.len()) as u64,
+        for (index, aline) in anchor_lines.iter().enumerate().skip(event_lines.len()) {
+            if parse_anchor(aline).is_none() {
+                anchor_failures.push(Failure::AnchorParseError {
+                    index: index as u64,
+                });
+            }
+        }
+
+        let mut all = anchor_failures;
+        if anchor_lines.len() != event_lines.len() {
+            all.push(Failure::LengthMismatch {
+                events: event_lines.len() as u64,
+                anchors: anchor_lines.len() as u64,
+            });
+        }
+        all.extend(failures);
+        if anchor_lines.len() > event_lines.len() {
+            all.push(Failure::DanglingAnchors {
+                count: (anchor_lines.len() - event_lines.len()) as u64,
             });
         }
 
         ChainReport {
             events: event_lines.len() as u64,
-            anchors: anchors.len() as u64,
-            valid: failures.is_empty(),
+            anchors: anchor_lines.len() as u64,
+            valid: all.is_empty(),
             root_hash_hex: hex_string(&previous),
-            failures,
+            failures: all,
         }
     }
 
     pub fn fold_chain(lines: &[&[u8]]) -> Vec<ChainEntry> {
+        let tail = tail_wk_table();
         let mut previous = zero_hash();
         let mut entries = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
             let event_hex = digest_hex(line);
-            let chain = link_hex(&previous, &event_hex);
+            let chain = link_hex(&previous, &event_hex, &tail);
             let (event_id, timestamp_ms) = match parse_event(line) {
                 Ok((id, ts)) => (id.into_owned(), ts),
                 Err(()) => (String::new(), 0),

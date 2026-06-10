@@ -1150,15 +1150,24 @@ mod imp {
                 )
             };
             let e0 = u8x16_eq(w(&b[0..8], &b[8..16]), nl);
-            let e1 = u8x16_eq(w(&b[16..24], &b[24..32]), nl);
-            let e2 = u8x16_eq(w(&b[32..40], &b[40..48]), nl);
-            let e3 = u8x16_eq(w(&b[48..56], &b[56..64]), nl);
-            if v128_any_true(v128_or(v128_or(e0, e1), v128_or(e2, e3))) {
-                let mask = u64::from(i8x16_bitmask(e0) as u16)
-                    | u64::from(i8x16_bitmask(e1) as u16) << 16
-                    | u64::from(i8x16_bitmask(e2) as u16) << 32
-                    | u64::from(i8x16_bitmask(e3) as u16) << 48;
+            if v128_any_true(e0) {
+                let mask = u64::from(i8x16_bitmask(e0) as u16);
                 return i + mask.trailing_zeros() as usize;
+            }
+            let e1 = u8x16_eq(w(&b[16..24], &b[24..32]), nl);
+            if v128_any_true(e1) {
+                let mask = u64::from(i8x16_bitmask(e1) as u16);
+                return i + 16 + mask.trailing_zeros() as usize;
+            }
+            let e2 = u8x16_eq(w(&b[32..40], &b[40..48]), nl);
+            if v128_any_true(e2) {
+                let mask = u64::from(i8x16_bitmask(e2) as u16);
+                return i + 32 + mask.trailing_zeros() as usize;
+            }
+            let e3 = u8x16_eq(w(&b[48..56], &b[56..64]), nl);
+            if v128_any_true(e3) {
+                let mask = u64::from(i8x16_bitmask(e3) as u16);
+                return i + 48 + mask.trailing_zeros() as usize;
             }
             i += 64;
         }

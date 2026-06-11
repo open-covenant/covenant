@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-11T22:34:40.682Z",
+  "updatedAt": "2026-06-11T23:58:31.259Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8110,
-    "tasks": 966,
-    "integrated": 967
+    "events": 8195,
+    "tasks": 977,
+    "integrated": 977
   },
   "throughput": {
-    "last24h": 8,
-    "last7d": 174,
-    "velocity": 24.9
+    "last24h": 18,
+    "last7d": 176,
+    "velocity": 25.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-11",
-      "count": 8
+      "count": 18
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-11",
-      "total": 967
+      "total": 977
     }
   ],
   "states": {
-    "integrated": 962,
+    "integrated": 972,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,62 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "covenantd-metaplex-write-surface-env-construction",
+    "state": "in_progress",
+    "since": "2026-06-11T23:55:51.598Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-11T23:23:42.824Z",
+      "task": "metaplex-signer-register-pda-derivation-coverage",
+      "note": "Committed 44a4bc44 + pushed to origin/loop/main-track. Test-only signer register PDA-derivation coverage; README metrics 2644->2645."
+    },
+    {
+      "at": "2026-06-11T23:19:39.551Z",
+      "task": "metaplex-das-http-status-error-coverage",
+      "note": "Committed 24418eb9 + pushed to origin/loop/main-track. Test-only DAS non-2xx HTTP-status coverage; README metrics 2642->2644."
+    },
+    {
+      "at": "2026-06-11T23:15:23.889Z",
+      "task": "metaplex-signer-build-request-collection-coverage",
+      "note": "Committed a38e71a3 + pushed to origin/loop/main-track. Test-only signer build() request-collection coverage; README metrics 2640->2642."
+    },
+    {
+      "at": "2026-06-11T23:10:51.273Z",
+      "task": "metaplex-attest-tool-input-validation-coverage",
+      "note": "Committed 9469ca28 + pushed to origin/loop/main-track. Test-only attest.audit_root input-validation coverage; README metrics 2638->2640."
+    },
+    {
+      "at": "2026-06-11T23:07:06.216Z",
+      "task": "metaplex-attestation-payload-wire-contract-coverage",
+      "note": "Committed 3a4144be + pushed to origin/loop/main-track. Test-only AppData camelCase + AttestAuditRoot serde-default coverage; README metrics "
+    },
+    {
+      "at": "2026-06-11T23:03:24.102Z",
+      "task": "zauth-challenge-select-scheme-asset-filter-coverage",
+      "note": "Committed 067aef36 + pushed to origin/loop/main-track. Test-only x402 scheme/asset filter coverage in covenant-zauth challenge::select; READ"
+    },
+    {
+      "at": "2026-06-11T22:51:56.954Z",
+      "task": "metaplex-das-outbound-envelope-coverage",
+      "note": "Committed + pushed to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-11T22:48:46.339Z",
+      "task": "zauth-directory-list-query-param-completeness-coverage",
+      "note": "Committed 9956a66b, pushed to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-11T22:45:16.794Z",
+      "task": "metaplex-das-http-rpc-envelope-coverage",
+      "note": "Committed + pushed to origin/loop/main-track (das.rs + wiremock dev-dep + Cargo.lock edge + README)."
+    },
+    {
+      "at": "2026-06-11T22:38:12.823Z",
+      "task": "metaplex-request-uri-control-char-and-length-boundary-covera",
+      "note": "Security review performed in-role (test-only, no production change): both arms non-vacuous (control-char test fails if the is_control half i"
+    },
     {
       "at": "2026-06-11T22:33:27.362Z",
       "task": "metaplex-signer-collection-from-env-coverage",
@@ -265,56 +320,6 @@
       "at": "2026-06-08T16:30:16.601Z",
       "task": "covenantd-verify-memory-record-metadata-stale-context-unexpe",
       "note": "Integrated as 7f904d33, pushed c8d09eac..7f904d33 main->main. New drift kind memory_record_metadata_stale_context_unexpected_key completes s"
-    },
-    {
-      "at": "2026-06-08T09:49:33.598Z",
-      "task": "covenantd-verify-memory-record-metadata-stale-context-reason",
-      "note": "pushed to origin/main as 75922cbd (ff from 65b7c103). Security gate: independent adversarial review verdict SAFE TO INTEGRATE (invariant sin"
-    },
-    {
-      "at": "2026-06-08T08:53:49.599Z",
-      "task": "covenantd-verify-memory-record-metadata-stale-context-marked",
-      "note": "Integrated as 8008caa6, pushed to origin/main (74bcde8f..8008caa6). marked_at_ms missing + non_integer arms complete the metadata.stale_cont"
-    },
-    {
-      "at": "2026-06-08T08:44:11.248Z",
-      "task": "covenantd-verify-memory-record-metadata-stale-context-shape",
-      "note": "Integrated as 74bcde8f, pushed to origin/main (28c01b10..74bcde8f). Two within-row drift arms (memory_record_metadata_stale_context_non_obje"
-    },
-    {
-      "at": "2026-06-08T08:19:43.311Z",
-      "task": "covenantd-verify-memory-record-metadata-receipt-id-unparseab",
-      "note": "Pushed 28c01b10 to origin/main (e0b39377..28c01b10). 2 within-row memory metadata.receipt_id drift arms (unparseable + nil) + test + docs. F"
-    },
-    {
-      "at": "2026-06-08T08:06:53.614Z",
-      "task": "covenantd-verify-memory-record-metadata-agent-id-charset",
-      "note": "Pushed e0b39377 to origin/main (e28caccd..e0b39377). 2 within-row memory metadata.agent_id drift arms + test + docs. Full covenantd --lib 67"
-    },
-    {
-      "at": "2026-06-08T07:32:35.524Z",
-      "task": "covenantd-verify-memory-record-metadata-status-not-ok",
-      "note": "Pushed e28caccd to origin/main. Two within-row Check-5 arms (memory_record_metadata_status_{empty,not_ok}) mirroring audit_intent_dispatched"
-    },
-    {
-      "at": "2026-06-08T06:50:12.442Z",
-      "task": "covenantd-verify-audit-peer-self-revoke-blocked-pubkey-trust",
-      "note": "shipped on main: audit_peer_self_revoke_blocked_peer_pubkey_b58_not_daemon_trust_root drift kind + test + docs"
-    },
-    {
-      "at": "2026-06-08T03:18:07.682Z",
-      "task": "covenantd-verify-audit-budget-requested-not-intent-dispatch",
-      "note": "Committed d2b9da77 and pushed to origin/main. Two audit-log carriers (BudgetExhausted, BudgetUnseeded) of the flat-dispatch-cost invariant. "
-    },
-    {
-      "at": "2026-06-08T02:55:05.989Z",
-      "task": "covenantd-verify-budget-debit-credits-zero",
-      "note": "Committed 9f3c0c1e and pushed to origin/main (dad998f2..9f3c0c1e). budget_debit_credits_zero within-row drift arm + test + docs. Security re"
-    },
-    {
-      "at": "2026-06-08T02:19:43.405Z",
-      "task": "covenantd-verify-operator-token-rotated-issuer-not-trust-roo",
-      "note": "Committed dad998f2, pushed to origin/main (7348fe34..dad998f2); all identity/push guards green. SECURITY GATE (recorded here as cross_review"
     }
   ]
 }

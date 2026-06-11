@@ -97,7 +97,9 @@ impl RepoScanClient {
             .await?;
         let paid_status = paid.status();
         let paid_body = paid.text().await.unwrap_or_default();
-        let paid_amount = paid_status.is_success().then(|| requirements.amount.clone());
+        let paid_amount = paid_status
+            .is_success()
+            .then(|| requirements.amount.clone());
         Ok(RepoScanResult {
             status: paid_status.as_u16(),
             body: paid_body,
@@ -186,13 +188,11 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/x402/reposcan"))
             .and(header_exists("x-payment"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": "scanned",
-                    "score": 92,
-                    "scanId": "abc123"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "scanned",
+                "score": 92,
+                "scanId": "abc123"
+            })))
             .mount(&server)
             .await;
 
@@ -209,11 +209,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/x402/reposcan"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": "cached", "score": 88
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "cached", "score": 88
+            })))
             .expect(1)
             .mount(&server)
             .await;

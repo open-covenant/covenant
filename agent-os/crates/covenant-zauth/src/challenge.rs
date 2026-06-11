@@ -309,7 +309,10 @@ mod tests {
             50_000,
         )
         .expect_err("unpinned");
-        assert!(matches!(err, ZauthError::UnpinnedPayTo { .. }), "got {err:?}");
+        assert!(
+            matches!(err, ZauthError::UnpinnedPayTo { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -347,5 +350,66 @@ mod tests {
             pr.extra.is_none(),
             "Base extra is {{name, version}} only; no feePayer to lift"
         );
+    }
+
+    fn mk_accept(network: &str, asset: &str, amount: &str, pay_to: &str) -> Accept {
+        Accept {
+            scheme: "exact".into(),
+            network: network.into(),
+            asset: asset.into(),
+            amount: amount.into(),
+            pay_to: pay_to.into(),
+            max_timeout_seconds: 0,
+            extra: None,
+        }
+    }
+
+    #[test]
+    fn select_rejects_a_first_unpinned_match_even_when_a_later_one_is_pinned() {
+        // A hostile or misconfigured 402 that lists a wrong payTo first must be
+        // rejected outright, not skipped in favour of a later pinned option.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![
+            mk_accept(
+                "solana",
+                "usdc",
+                "1000",
+                "WrongTreasury111111111111111111111111111111",
+            ),
+            mk_accept("solana", "usdc", "1000", pinned),
+        ];
+        let err = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect_err("first unpinned match shadows the later pinned accept");
+        assert!(
+            matches!(err, ZauthError::UnpinnedPayTo { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn select_skips_an_over_cap_match_and_takes_a_later_within_cap_one() {
+        // Over-cap is not a hard reject: a cheaper later accept on the same
+        // pair is still eligible.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![
+            mk_accept("solana", "usdc", "90000", pinned),
+            mk_accept("solana", "usdc", "40000", pinned),
+        ];
+        let picked = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect("the later within-cap accept is selected");
+        assert_eq!(picked.amount, "40000");
+    }
+
+    #[test]
+    fn to_requirements_coerces_an_unparseable_amount_to_zero() {
+        let a = mk_accept(
+            "solana",
+            "usdc",
+            "abc",
+            "PinnedTreasury11111111111111111111111111111",
+        );
+        let pr = to_payment_requirements(&a);
+        assert_eq!(pr.amount, "abc", "raw amount string is preserved");
+        assert_eq!(pr.amount_usdc, 0.0, "unparseable amount degrades to 0");
     }
 }

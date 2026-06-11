@@ -390,14 +390,110 @@ mod imp {
         macro_rules! oct {
             ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wl:ident, $wh:ident) => {
                 let x0 = $b ^ $c;
-                roundv!($a, $b, $c, $d, $e, $f, $g, $h, u32x4_extract_lane::<0>($wl), x0, x1);
-                roundv!($h, $a, $b, $c, $d, $e, $f, $g, u32x4_extract_lane::<1>($wl), x1, x2);
-                roundv!($g, $h, $a, $b, $c, $d, $e, $f, u32x4_extract_lane::<2>($wl), x2, x3);
-                roundv!($f, $g, $h, $a, $b, $c, $d, $e, u32x4_extract_lane::<3>($wl), x3, x4);
-                roundv!($e, $f, $g, $h, $a, $b, $c, $d, u32x4_extract_lane::<0>($wh), x4, x5);
-                roundv!($d, $e, $f, $g, $h, $a, $b, $c, u32x4_extract_lane::<1>($wh), x5, x6);
-                roundv!($c, $d, $e, $f, $g, $h, $a, $b, u32x4_extract_lane::<2>($wh), x6, x7);
-                roundv!($b, $c, $d, $e, $f, $g, $h, $a, u32x4_extract_lane::<3>($wh), x7, x8);
+                roundv!(
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    u32x4_extract_lane::<0>($wl),
+                    x0,
+                    x1
+                );
+                roundv!(
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    u32x4_extract_lane::<1>($wl),
+                    x1,
+                    x2
+                );
+                roundv!(
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    u32x4_extract_lane::<2>($wl),
+                    x2,
+                    x3
+                );
+                roundv!(
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    u32x4_extract_lane::<3>($wl),
+                    x3,
+                    x4
+                );
+                roundv!(
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    $d,
+                    u32x4_extract_lane::<0>($wh),
+                    x4,
+                    x5
+                );
+                roundv!(
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    $c,
+                    u32x4_extract_lane::<1>($wh),
+                    x5,
+                    x6
+                );
+                roundv!(
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    $b,
+                    u32x4_extract_lane::<2>($wh),
+                    x6,
+                    x7
+                );
+                roundv!(
+                    $b,
+                    $c,
+                    $d,
+                    $e,
+                    $f,
+                    $g,
+                    $h,
+                    $a,
+                    u32x4_extract_lane::<3>($wh),
+                    x7,
+                    x8
+                );
             };
         }
 
@@ -612,9 +708,15 @@ mod imp {
             };
         }
 
-        #[inline]
-        #[target_feature(enable = "simd128")]
-        fn compressm(state: &mut [v128; 8], w: [v128; 16]) {
+        /// `compressm` as a macro so each call site expands inline: the
+        /// 16-word schedule array dissolves into SSA values instead of a
+        /// 256-byte stack round-trip per block, and the call overhead goes
+        /// with it.
+        macro_rules! compressm_at {
+            ($state:expr, $w:expr $(,)?) => {{
+                let state: &mut [v128; 8] = $state;
+                let w: [v128; 16] = $w;
+
             let [mut w0, mut w1, mut w2, mut w3, mut w4, mut w5, mut w6, mut w7, mut w8, mut w9, mut w10, mut w11, mut w12, mut w13, mut w14, mut w15] =
                 w;
             let mut a = state[0];
@@ -745,6 +847,7 @@ mod imp {
             state[5] = u32x4_add(state[5], f);
             state[6] = u32x4_add(state[6], g);
             state[7] = u32x4_add(state[7], h);
+                    }};
         }
 
         /// 4x4 word transpose of four raw 16-byte row vectors into four
@@ -986,7 +1089,7 @@ mod imp {
             let q1 = quad::<16>(prevs[0], prevs[1], prevs[2], prevs[3]);
             let q2 = quad::<32>(prevs[0], prevs[1], prevs[2], prevs[3]);
             let q3 = quad::<48>(prevs[0], prevs[1], prevs[2], prevs[3]);
-            compressm(
+            compressm_at!(
                 &mut state,
                 [
                     q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1], q2[2],
@@ -1002,7 +1105,7 @@ mod imp {
             let q1 = transpose_be(s0[1], s1[1], s2[1], s3[1]);
             let q2 = transpose_be(s0[2], s1[2], s2[2], s3[2]);
             let q3 = transpose_be(s0[3], s1[3], s2[3], s3[3]);
-            compressm(
+            compressm_at!(
                 &mut state,
                 [
                     q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1], q2[2],
@@ -1181,17 +1284,25 @@ mod imp {
             }
             let mut state = splat_h0();
             let shared = full[0].min(full[1]).min(full[2]).min(full[3]);
-            for k in 0..shared {
-                let o = 64 * k;
-                let b0: &[u8; 64] = lines[0][o..o + 64].try_into().expect("64-byte block");
-                let b1: &[u8; 64] = lines[1][o..o + 64].try_into().expect("64-byte block");
-                let b2: &[u8; 64] = lines[2][o..o + 64].try_into().expect("64-byte block");
-                let b3: &[u8; 64] = lines[3][o..o + 64].try_into().expect("64-byte block");
+            let mut it0 = lines[0].chunks_exact(64);
+            let mut it1 = lines[1].chunks_exact(64);
+            let mut it2 = lines[2].chunks_exact(64);
+            let mut it3 = lines[3].chunks_exact(64);
+            for _ in 0..shared {
+                let (Some(b0), Some(b1), Some(b2), Some(b3)) =
+                    (it0.next(), it1.next(), it2.next(), it3.next())
+                else {
+                    break;
+                };
+                let b0: &[u8; 64] = b0.try_into().expect("64-byte block");
+                let b1: &[u8; 64] = b1.try_into().expect("64-byte block");
+                let b2: &[u8; 64] = b2.try_into().expect("64-byte block");
+                let b3: &[u8; 64] = b3.try_into().expect("64-byte block");
                 let q0 = quad::<0>(b0, b1, b2, b3);
                 let q1 = quad::<16>(b0, b1, b2, b3);
                 let q2 = quad::<32>(b0, b1, b2, b3);
                 let q3 = quad::<48>(b0, b1, b2, b3);
-                compressm(
+                compressm_at!(
                     &mut state,
                     [
                         q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1],
@@ -1208,7 +1319,7 @@ mod imp {
                 let q1 = quad::<16>(b0, b1, b2, b3);
                 let q2 = quad::<32>(b0, b1, b2, b3);
                 let q3 = quad::<48>(b0, b1, b2, b3);
-                compressm(
+                compressm_at!(
                     &mut state,
                     [
                         q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3], q2[0], q2[1],
@@ -1541,16 +1652,9 @@ mod imp {
         i
     }
 
-    /// `Scan::lit` in position-passing form: the new position on a match,
-    /// 0 otherwise (tags are non-empty, so 0 is never a valid result). Keeps
-    /// the cursor in a register instead of a memory-resident scanner.
+    /// Word-wise equality of fixed-size arrays for spans under 16 bytes.
     #[inline(always)]
-    fn tag<const N: usize>(buf: &[u8], pos: usize, s: &[u8; N]) -> usize {
-        let end = pos + N;
-        let Some(a) = buf.get(pos..end) else {
-            return 0;
-        };
-        let a: &[u8; N] = a.try_into().expect("length-checked slice");
+    fn eq_small<const N: usize>(a: &[u8; N], s: &[u8; N]) -> bool {
         let mut acc = 0u64;
         let mut i = 0;
         while i + 8 <= N {
@@ -1575,22 +1679,55 @@ mod imp {
         if i < N {
             acc |= u64::from(a[i] ^ s[i]);
         }
-        if acc == 0 {
-            end
-        } else {
-            0
-        }
+        acc == 0
     }
 
-    /// `Scan::bytes` in position-passing form: word-wise compare of a
-    /// variable-length span, new position on match, 0 otherwise.
+    /// Fixed-size equality; the wasm arm folds 16-byte chunks (the last one
+    /// overlapping) into one any-true test, halving the word loads of the
+    /// scalar ladder on the 36- and 64-byte spans the scanners compare most.
+    #[cfg(target_arch = "wasm32")]
+    #[inline]
+    #[target_feature(enable = "simd128")]
+    fn eq_n<const N: usize>(a: &[u8; N], s: &[u8; N]) -> bool {
+        use std::arch::wasm32::*;
+        if N < 16 {
+            return eq_small(a, s);
+        }
+        let ld = |x: &[u8]| {
+            u64x2(
+                u64::from_le_bytes(x[..8].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(x[8..16].try_into().expect("8-byte chunk")),
+            )
+        };
+        let mut acc = v128_xor(ld(&a[..16]), ld(&s[..16]));
+        let mut i = 16;
+        while i + 16 <= N {
+            acc = v128_or(acc, v128_xor(ld(&a[i..i + 16]), ld(&s[i..i + 16])));
+            i += 16;
+        }
+        if i < N {
+            acc = v128_or(acc, v128_xor(ld(&a[N - 16..]), ld(&s[N - 16..])));
+        }
+        !v128_any_true(acc)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     #[inline(always)]
-    fn span(buf: &[u8], pos: usize, s: &[u8]) -> usize {
-        let end = pos + s.len();
+    fn eq_n<const N: usize>(a: &[u8; N], s: &[u8; N]) -> bool {
+        eq_small(a, s)
+    }
+
+    /// `Scan::lit` in position-passing form: the new position on a match,
+    /// 0 otherwise (tags are non-empty, so 0 is never a valid result). Keeps
+    /// the cursor in a register instead of a memory-resident scanner.
+    #[inline(always)]
+    fn tag<const N: usize>(buf: &[u8], pos: usize, s: &[u8; N]) -> usize {
+        let end = pos + N;
         let Some(a) = buf.get(pos..end) else {
             return 0;
         };
-        if bytes_eq(a, s) {
+        let a: &[u8; N] = a.try_into().expect("length-checked slice");
+        if eq_n(a, s) {
             end
         } else {
             0
@@ -1896,7 +2033,6 @@ mod imp {
                 _ => false,
             }
         }
-
     }
 
     fn ascii_str(bytes: &[u8]) -> Option<&str> {
@@ -1919,7 +2055,11 @@ mod imp {
         };
         'fast: {
             if arm == 0 {
-                let mut p = tag(buf, pos, b"{\"type\":\"intent_dispatched\",\"intent_id\":\"");
+                let mut p = tag(
+                    buf,
+                    pos,
+                    b"{\"type\":\"intent_dispatched\",\"intent_id\":\"",
+                );
                 if p == 0 {
                     break 'fast;
                 }
@@ -1974,7 +2114,11 @@ mod imp {
                 }
                 return p;
             } else if arm == 1 {
-                let mut p = tag(buf, pos, b"{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"");
+                let mut p = tag(
+                    buf,
+                    pos,
+                    b"{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"",
+                );
                 if p == 0 {
                     break 'fast;
                 }
@@ -2012,7 +2156,11 @@ mod imp {
                 }
                 return p;
             } else if arm == 2 {
-                let mut p = tag(buf, pos, b"{\"type\":\"hermes_tool_completed\",\"intent_id\":\"");
+                let mut p = tag(
+                    buf,
+                    pos,
+                    b"{\"type\":\"hermes_tool_completed\",\"intent_id\":\"",
+                );
                 if p == 0 {
                     break 'fast;
                 }
@@ -2113,14 +2261,287 @@ mod imp {
         }
     }
 
-    /// Spans of a strict-scanned event line, packed into one register: the
-    /// id starts at the constant offset 7 and the timestamp span position is
-    /// derivable, so `id_len << 5 | ts_len` pins both (`ts_len <= 19`, and
-    /// oversized ids defer to serde); 0 means not fast-path JSON. The id is printable ASCII with
-    /// no escapes and the timestamp is a canonical decimal span, so both
-    /// embed verbatim in anchor JSON.
+    /// Stop-byte-free check of exactly `$n` string-body bytes (no quote,
+    /// backslash, control, or DEL), the last chunk overlapping; `$n` >= 16.
+    /// `qstr` semantics minus the closing-quote check, which callers fold
+    /// into the following literal. A macro so every use expands inline and
+    /// the stop-class constants hoist across chunks.
+    #[cfg(target_arch = "wasm32")]
+    macro_rules! clean_at {
+        ($buf:expr, $pos:expr, $n:literal) => {{
+            use std::arch::wasm32::*;
+            match $buf.get($pos..$pos + $n) {
+                None => false,
+                Some(b) => {
+                    let stops = |c: &[u8]| {
+                        let v = u64x2(
+                            u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
+                            u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
+                        );
+                        v128_or(
+                            v128_or(
+                                u8x16_eq(v, u8x16_splat(b'"')),
+                                u8x16_eq(v, u8x16_splat(b'\\')),
+                            ),
+                            v128_or(
+                                i8x16_lt(v, i8x16_splat(0x20)),
+                                u8x16_eq(v, u8x16_splat(0x7f)),
+                            ),
+                        )
+                    };
+                    let mut acc = stops(&b[0..16]);
+                    let mut i = 16;
+                    while i + 16 <= $n {
+                        acc = v128_or(acc, stops(&b[i..i + 16]));
+                        i += 16;
+                    }
+                    if i < $n {
+                        acc = v128_or(acc, stops(&b[$n - 16..$n]));
+                    }
+                    !v128_any_true(acc)
+                }
+            }
+        }};
+    }
+
+    /// Stop-byte class vector for one 16-byte chunk of a fixed-size line:
+    /// lanes flag quote, backslash, control (signed < 0x20 also catches
+    /// >= 0x80), or DEL, exactly the `str_end` stop set.
+    #[cfg(target_arch = "wasm32")]
+    macro_rules! stops_at {
+        ($a:expr, $p:expr) => {{
+            let c: &[u8; 16] = $a[$p..$p + 16].try_into().expect("16-byte chunk");
+            let v = u64x2(
+                u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
+            );
+            v128_or(
+                v128_or(
+                    u8x16_eq(v, u8x16_splat(b'"')),
+                    u8x16_eq(v, u8x16_splat(b'\\')),
+                ),
+                v128_or(i8x16_lt(v, i8x16_splat(0x20)), u8x16_eq(v, u8x16_splat(0x7f))),
+            )
+        }};
+    }
+
+    /// Branch-light digit predicate for one 8-byte chunk (every byte in
+    /// '0'..='9'), the SWAR form of `digit_run`'s probe.
+    #[cfg(target_arch = "wasm32")]
+    #[inline(always)]
+    fn all_digits8(x: u64) -> bool {
+        const LO: u64 = 0x0101010101010101;
+        (((x & (LO * 0xf0)) ^ (LO * 0x30))
+            | (((x & (LO * 0x0f)).wrapping_add(LO * 0x06)) & (LO * 0x10)))
+            == 0
+    }
+
+    /// intent_dispatched with a null matched_agent.
+    #[cfg(target_arch = "wasm32")]
+    #[target_feature(enable = "simd128")]
+    fn tmpl_k0n(a: &[u8; 339]) -> bool {
+        use std::arch::wasm32::*;
+        let mut bad = u32x4(0, 0, 0, 0);
+        let mut ok = true;
+        ok &= eq_n::<7>(a[0..7].try_into().expect("lit"), b"{\"id\":\"");
+        bad = v128_or(bad, stops_at!(a, 7));
+        bad = v128_or(bad, stops_at!(a, 23));
+        bad = v128_or(bad, stops_at!(a, 27));
+        ok &= eq_n::<17>(a[43..60].try_into().expect("lit"), b"\",\"timestamp_ms\":");
+        ok &= all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
+        ok &= all_digits8(u64::from_le_bytes(a[65..73].try_into().expect("8-byte chunk")));
+        ok &= a[60] != b'0';
+        ok &= eq_n::<11>(a[73..84].try_into().expect("lit"), b",\"issuer\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0)));
+        ok &= eq_n::<50>(a[96..146].try_into().expect("lit"), b"\",\"kind\":{\"type\":\"intent_dispatched\",\"intent_id\":\"");
+        bad = v128_or(bad, stops_at!(a, 146));
+        bad = v128_or(bad, stops_at!(a, 162));
+        bad = v128_or(bad, stops_at!(a, 166));
+        ok &= eq_n::<17>(a[182..199].try_into().expect("lit"), b"\",\"intent_text\":\"");
+        bad = v128_or(bad, stops_at!(a, 199));
+        bad = v128_or(bad, stops_at!(a, 200));
+        ok &= eq_n::<42>(a[216..258].try_into().expect("lit"), b"\",\"matched_agent\":null,\"result_hash_hex\":\"");
+        bad = v128_or(bad, stops_at!(a, 258));
+        bad = v128_or(bad, stops_at!(a, 274));
+        bad = v128_or(bad, stops_at!(a, 290));
+        bad = v128_or(bad, stops_at!(a, 306));
+        ok &= eq_n::<12>(a[322..334].try_into().expect("lit"), b"\",\"status\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 323), u8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0)));
+        ok &= eq_n::<3>(a[336..339].try_into().expect("lit"), b"\"}}");
+        ok && !v128_any_true(bad)
+    }
+
+    /// intent_dispatched with a 10-char matched_agent.
+    #[cfg(target_arch = "wasm32")]
+    #[target_feature(enable = "simd128")]
+    fn tmpl_k0a(a: &[u8; 347]) -> bool {
+        use std::arch::wasm32::*;
+        let mut bad = u32x4(0, 0, 0, 0);
+        let mut ok = true;
+        ok &= eq_n::<7>(a[0..7].try_into().expect("lit"), b"{\"id\":\"");
+        bad = v128_or(bad, stops_at!(a, 7));
+        bad = v128_or(bad, stops_at!(a, 23));
+        bad = v128_or(bad, stops_at!(a, 27));
+        ok &= eq_n::<17>(a[43..60].try_into().expect("lit"), b"\",\"timestamp_ms\":");
+        ok &= all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
+        ok &= all_digits8(u64::from_le_bytes(a[65..73].try_into().expect("8-byte chunk")));
+        ok &= a[60] != b'0';
+        ok &= eq_n::<11>(a[73..84].try_into().expect("lit"), b",\"issuer\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0)));
+        ok &= eq_n::<50>(a[96..146].try_into().expect("lit"), b"\",\"kind\":{\"type\":\"intent_dispatched\",\"intent_id\":\"");
+        bad = v128_or(bad, stops_at!(a, 146));
+        bad = v128_or(bad, stops_at!(a, 162));
+        bad = v128_or(bad, stops_at!(a, 166));
+        ok &= eq_n::<17>(a[182..199].try_into().expect("lit"), b"\",\"intent_text\":\"");
+        bad = v128_or(bad, stops_at!(a, 199));
+        bad = v128_or(bad, stops_at!(a, 200));
+        ok &= eq_n::<19>(a[216..235].try_into().expect("lit"), b"\",\"matched_agent\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 235), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0)));
+        ok &= eq_n::<21>(a[245..266].try_into().expect("lit"), b"\",\"result_hash_hex\":\"");
+        bad = v128_or(bad, stops_at!(a, 266));
+        bad = v128_or(bad, stops_at!(a, 282));
+        bad = v128_or(bad, stops_at!(a, 298));
+        bad = v128_or(bad, stops_at!(a, 314));
+        ok &= eq_n::<12>(a[330..342].try_into().expect("lit"), b"\",\"status\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 331), u8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0)));
+        ok &= eq_n::<3>(a[344..347].try_into().expect("lit"), b"\"}}");
+        ok && !v128_any_true(bad)
+    }
+
+    /// hermes_tool_invoked.
+    #[cfg(target_arch = "wasm32")]
+    #[target_feature(enable = "simd128")]
+    fn tmpl_k1(a: &[u8; 322]) -> bool {
+        use std::arch::wasm32::*;
+        let mut bad = u32x4(0, 0, 0, 0);
+        let mut ok = true;
+        ok &= eq_n::<7>(a[0..7].try_into().expect("lit"), b"{\"id\":\"");
+        bad = v128_or(bad, stops_at!(a, 7));
+        bad = v128_or(bad, stops_at!(a, 23));
+        bad = v128_or(bad, stops_at!(a, 27));
+        ok &= eq_n::<17>(a[43..60].try_into().expect("lit"), b"\",\"timestamp_ms\":");
+        ok &= all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
+        ok &= all_digits8(u64::from_le_bytes(a[65..73].try_into().expect("8-byte chunk")));
+        ok &= a[60] != b'0';
+        ok &= eq_n::<11>(a[73..84].try_into().expect("lit"), b",\"issuer\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0)));
+        ok &= eq_n::<52>(a[96..148].try_into().expect("lit"), b"\",\"kind\":{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"");
+        bad = v128_or(bad, stops_at!(a, 148));
+        bad = v128_or(bad, stops_at!(a, 164));
+        bad = v128_or(bad, stops_at!(a, 168));
+        ok &= eq_n::<12>(a[184..196].try_into().expect("lit"), b"\",\"run_id\":\"");
+        bad = v128_or(bad, stops_at!(a, 196));
+        ok &= eq_n::<10>(a[212..222].try_into().expect("lit"), b"\",\"tool\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 222), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0)));
+        ok &= eq_n::<22>(a[233..255].try_into().expect("lit"), b"\",\"preview_hash_hex\":\"");
+        bad = v128_or(bad, stops_at!(a, 255));
+        bad = v128_or(bad, stops_at!(a, 271));
+        bad = v128_or(bad, stops_at!(a, 287));
+        bad = v128_or(bad, stops_at!(a, 303));
+        ok &= eq_n::<3>(a[319..322].try_into().expect("lit"), b"\"}}");
+        ok && !v128_any_true(bad)
+    }
+
+    /// hermes_tool_completed, parameterized by duration digit count and
+    /// the error literal; everything before the duration sits at fixed
+    /// offsets and the tail literal runs exactly to the line end.
+    #[cfg(target_arch = "wasm32")]
+    #[target_feature(enable = "simd128")]
+    fn tmpl_k2<const D: usize, const ERR: bool, const L: usize>(a: &[u8; L]) -> bool {
+        use std::arch::wasm32::*;
+        let mut bad = u32x4(0, 0, 0, 0);
+        let mut ok = true;
+        ok &= eq_n::<7>(a[0..7].try_into().expect("lit"), b"{\"id\":\"");
+        bad = v128_or(bad, stops_at!(a, 7));
+        bad = v128_or(bad, stops_at!(a, 23));
+        bad = v128_or(bad, stops_at!(a, 27));
+        ok &= eq_n::<17>(a[43..60].try_into().expect("lit"), b"\",\"timestamp_ms\":");
+        ok &= all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
+        ok &= all_digits8(u64::from_le_bytes(a[65..73].try_into().expect("8-byte chunk")));
+        ok &= a[60] != b'0';
+        ok &= eq_n::<11>(a[73..84].try_into().expect("lit"), b",\"issuer\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0)));
+        ok &= eq_n::<54>(a[96..150].try_into().expect("lit"), b"\",\"kind\":{\"type\":\"hermes_tool_completed\",\"intent_id\":\"");
+        bad = v128_or(bad, stops_at!(a, 150));
+        bad = v128_or(bad, stops_at!(a, 166));
+        bad = v128_or(bad, stops_at!(a, 170));
+        ok &= eq_n::<12>(a[186..198].try_into().expect("lit"), b"\",\"run_id\":\"");
+        bad = v128_or(bad, stops_at!(a, 198));
+        ok &= eq_n::<10>(a[214..224].try_into().expect("lit"), b"\",\"tool\":\"");
+        bad = v128_or(bad, v128_and(stops_at!(a, 224), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0)));
+        ok &= eq_n::<16>(a[235..251].try_into().expect("lit"), b"\",\"duration_ms\":");
+        let mut q = 251;
+        while q < 251 + D {
+            ok &= a[q].is_ascii_digit();
+            q += 1;
+        }
+        if D > 1 {
+            ok &= a[251] != b'0';
+        }
+        ok &= if ERR {
+            eq_n::<15>(a[251 + D..266 + D].try_into().expect("lit"), b",\"error\":true}}")
+        } else {
+            eq_n::<16>(a[251 + D..267 + D].try_into().expect("lit"), b",\"error\":false}}")
+        };
+        ok && !v128_any_true(bad)
+    }
+
+    /// Exact-template dispatch over the dominant serialized event shapes:
+    /// one length probe plus two discriminator bytes select a fixed layout
+    /// whose literals, string spans, and digit spans are then checked in a
+    /// single accumulated pass with no per-field branches. Accepts a strict
+    /// subset of the general scanner with identical packed spans (id 36,
+    /// ts 13); anything else returns 0 and the cold scanner re-derives.
+    #[cfg(target_arch = "wasm32")]
+    #[target_feature(enable = "simd128")]
+    fn fast_event_tmpl(line: &[u8]) -> u32 {
+        let hit = match line.get(114) {
+            Some(b'i') => match line.len() {
+                339 => matches!(<&[u8; 339]>::try_from(line), Ok(a) if tmpl_k0n(a)),
+                347 => matches!(<&[u8; 347]>::try_from(line), Ok(a) if tmpl_k0a(a)),
+                _ => false,
+            },
+            Some(b'h') => match line.get(126) {
+                Some(b'i') => matches!(<&[u8; 322]>::try_from(line), Ok(a) if tmpl_k1(a)),
+                Some(b'c') => {
+                    let n = line.len();
+                    match (n, line.get(n.wrapping_sub(4))) {
+                        (267, _) => matches!(<&[u8; 267]>::try_from(line), Ok(a) if tmpl_k2::<1, true, 267>(a)),
+                        (268, Some(b'u')) => matches!(<&[u8; 268]>::try_from(line), Ok(a) if tmpl_k2::<2, true, 268>(a)),
+                        (268, _) => matches!(<&[u8; 268]>::try_from(line), Ok(a) if tmpl_k2::<1, false, 268>(a)),
+                        (269, Some(b'u')) => matches!(<&[u8; 269]>::try_from(line), Ok(a) if tmpl_k2::<3, true, 269>(a)),
+                        (269, _) => matches!(<&[u8; 269]>::try_from(line), Ok(a) if tmpl_k2::<2, false, 269>(a)),
+                        (270, Some(b'u')) => matches!(<&[u8; 270]>::try_from(line), Ok(a) if tmpl_k2::<4, true, 270>(a)),
+                        (270, _) => matches!(<&[u8; 270]>::try_from(line), Ok(a) if tmpl_k2::<3, false, 270>(a)),
+                        (271, _) => matches!(<&[u8; 271]>::try_from(line), Ok(a) if tmpl_k2::<4, false, 271>(a)),
+                        _ => false,
+                    }
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if hit {
+            36 << 5 | 13
+        } else {
+            0
+        }
+    }
+
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn fast_event(line: &[u8]) -> u32 {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let packed = fast_event_tmpl(line);
+            if packed != 0 {
+                return packed;
+            }
+        }
+        fast_event_cold(line)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    fn fast_event_cold(line: &[u8]) -> u32 {
         let mut p = tag(line, 0, b"{\"id\":\"");
         if p == 0 {
             return 0;
@@ -2170,10 +2591,7 @@ mod imp {
         let id_len = (packed >> 5) as usize;
         let ts_start = 7 + id_len + 17;
         let ts_len = (packed & 31) as usize;
-        (
-            &line[7..7 + id_len],
-            &line[ts_start..ts_start + ts_len],
-        )
+        (&line[7..7 + id_len], &line[ts_start..ts_start + ts_len])
     }
 
     fn parse_event(line: &[u8]) -> Result<(Cow<'_, str>, u64), ()> {
@@ -2270,9 +2688,42 @@ mod imp {
     /// when the anchor's trailing chain hash already differs from the
     /// expected chain: a shape-valid anchor is then a guaranteed
     /// `EntryMismatch` (a byte-equal chain value would have made the
-    /// canonical 85-byte tail match), so the walk only validates.
+    /// canonical 85-byte tail match), so the walk only validates. The wasm
+    /// arm speculates the dominant shape (36-char id, fixed offsets after
+    /// the two digit runs) in one accumulated pass and falls back to the
+    /// exact walk on any deviation.
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn anchor_shape(line: &[u8]) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if tag(line, 0, b"{\"index\":") == 0 {
+                return false;
+            }
+            let il_end = digits_end(line, 9);
+            if il_end != 0 && tag(line, il_end, b",\"event_id\":\"") != 0 {
+                let id = il_end + 13;
+                if clean_at!(line, id, 36) && tag(line, id + 36, b"\",\"timestamp_ms\":") != 0 {
+                    let ts_end = digits_end(line, id + 53);
+                    if ts_end != 0 && line.len() == ts_end + 256 {
+                        let mut ok = tag(line, ts_end, b",\"event_hash_hex\":\"") != 0;
+                        ok &= clean_at!(line, ts_end + 19, 64);
+                        ok &= tag(line, ts_end + 83, b"\",\"previous_hash_hex\":\"") != 0;
+                        ok &= clean_at!(line, ts_end + 106, 64);
+                        ok &= tag(line, ts_end + 170, b"\",\"chain_hash_hex\":\"") != 0;
+                        ok &= clean_at!(line, ts_end + 190, 64);
+                        ok &= tag(line, ts_end + 254, b"\"}") != 0;
+                        if ok {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        anchor_shape_cold(line)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    fn anchor_shape_cold(line: &[u8]) -> bool {
         let mut p = tag(line, 0, b"{\"index\":");
         if p == 0 {
             return false;
@@ -2424,11 +2875,12 @@ mod imp {
     /// One-pass byte comparison of an anchor line against the entry this
     /// chain position expects, in the canonical field order and compact
     /// formatting `fold_chain` serializes. The caller has already pinned the
-    /// 85-byte tail `,"chain_hash_hex":"<chain>"}` via `chain_span`, so the
-    /// walk stops at the previous-hash closing quote and a position check
-    /// covers the rest. Byte equality implies the anchor parses to exactly
-    /// the expected field values; any difference falls back to the parse +
-    /// field-compare slow path.
+    /// 85-byte tail `,"chain_hash_hex":"<chain>"}` via `chain_span`, so one
+    /// total-length check fixes every field offset and the field compares
+    /// run branch-free into a single accept test. Byte equality implies the
+    /// anchor parses to exactly the expected field values; any difference
+    /// falls back to the parse + field-compare slow path.
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn anchor_line_matches(
         line: &[u8],
         idx_digits: &[u8],
@@ -2437,53 +2889,58 @@ mod imp {
         event_hex: &[u8; 64],
         previous: &[u8; 64],
     ) -> bool {
-        let mut p = tag(line, 0, b"{\"index\":");
-        if p == 0 {
+        let il = idx_digits.len();
+        let idl = id.len();
+        let tl = ts_digits.len();
+        if line.len() != 295 + il + idl + tl {
             return false;
         }
-        p = span(line, p, idx_digits);
-        if p == 0 {
+        let p_id = 22 + il;
+        let p_ts = p_id + idl + 17;
+        let p_ev = p_ts + tl + 19;
+        let p_pr = p_ev + 87;
+        let Some(seg_id) = line.get(p_id..p_id + idl) else {
             return false;
-        }
-        p = tag(line, p, b",\"event_id\":\"");
-        if p == 0 {
-            return false;
-        }
-        // Corpus ids are uuid-shaped; a const-length arm lets the compare
-        // unroll like the hex fields.
-        p = match <&[u8; 36]>::try_from(id) {
-            Ok(arr) => tag(line, p, arr),
-            Err(_) => span(line, p, id),
         };
-        if p == 0 {
-            return false;
-        }
-        p = tag(line, p, b"\",\"timestamp_ms\":");
-        if p == 0 {
-            return false;
-        }
-        p = span(line, p, ts_digits);
-        if p == 0 {
-            return false;
-        }
-        p = tag(line, p, b",\"event_hash_hex\":\"");
-        if p == 0 {
-            return false;
-        }
-        p = tag(line, p, event_hex);
-        if p == 0 {
-            return false;
-        }
-        p = tag(line, p, b"\",\"previous_hash_hex\":\"");
-        if p == 0 {
-            return false;
-        }
-        p = tag(line, p, previous);
-        if p == 0 {
-            return false;
-        }
-        p = tag(line, p, b"\"");
-        p != 0 && p == line.len() - 85
+        let lit = |pos: usize| -> &[u8] { &line[pos..] };
+        let mut ok = eq_n::<9>(line[0..9].try_into().expect("9-byte slice"), b"{\"index\":");
+        ok &= bytes_eq(&line[9..9 + il], idx_digits);
+        ok &= eq_n::<13>(
+            lit(9 + il)[..13].try_into().expect("13-byte slice"),
+            b",\"event_id\":\"",
+        );
+        // Corpus ids are uuid-shaped; a const-length arm lets the compare
+        // run as four overlapping vector chunks.
+        ok &= match <&[u8; 36]>::try_from(id) {
+            Ok(arr) => match seg_id.try_into() {
+                Ok(seg) => eq_n::<36>(seg, arr),
+                Err(_) => false,
+            },
+            Err(_) => bytes_eq(seg_id, id),
+        };
+        ok &= eq_n::<17>(
+            lit(p_id + idl)[..17].try_into().expect("17-byte slice"),
+            b"\",\"timestamp_ms\":",
+        );
+        ok &= bytes_eq(&line[p_ts..p_ts + tl], ts_digits);
+        ok &= eq_n::<19>(
+            lit(p_ts + tl)[..19].try_into().expect("19-byte slice"),
+            b",\"event_hash_hex\":\"",
+        );
+        ok &= eq_n::<64>(
+            line[p_ev..p_ev + 64].try_into().expect("64-byte slice"),
+            event_hex,
+        );
+        ok &= eq_n::<23>(
+            lit(p_ev + 64)[..23].try_into().expect("23-byte slice"),
+            b"\",\"previous_hash_hex\":\"",
+        );
+        ok &= eq_n::<64>(
+            line[p_pr..p_pr + 64].try_into().expect("64-byte slice"),
+            previous,
+        );
+        ok &= line[p_pr + 64] == b'"';
+        ok
     }
 
     /// Best-effort extraction of the trailing `chain_hash_hex` value from an
@@ -2491,6 +2948,7 @@ mod imp {
     /// compare: a wrong or missing span costs a sequential recompute or a
     /// slow-path compare, never accuracy. The tag compare is word-wise
     /// because wasm lowers slice == to a per-byte memcmp loop.
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn chain_span(line: &[u8]) -> Option<&[u8; 64]> {
         let n = line.len();
         if n < 85 {

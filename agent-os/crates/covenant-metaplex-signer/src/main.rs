@@ -689,6 +689,39 @@ mod tests {
     }
 
     #[test]
+    fn build_register_binds_the_agent_identity_pda_to_the_created_asset() {
+        // The register instruction must target the PDA ["agent_identity", asset]
+        // under the MPL Agent Identity program, and that asset must be the one
+        // the create instruction mints. The seed is hardcoded here so a change
+        // to AGENT_IDENTITY_SEED is caught, not mirrored.
+        let req = SignerRequest::RegisterIdentity {
+            agent_label: "agent".into(),
+            agent_pubkey: Pubkey::new_unique().to_string(),
+            asset: None,
+            registration_uri: None,
+        };
+        let built = build(&req, &Keypair::new()).unwrap();
+        let asset = built.asset.pubkey();
+        let (expected_pda, _) = Pubkey::find_program_address(
+            &[b"agent_identity", asset.as_ref()],
+            &mpl_agent_identity::ID,
+        );
+        let register_ix = &built.instructions[1];
+        assert!(
+            register_ix
+                .accounts
+                .iter()
+                .any(|a| a.pubkey == expected_pda),
+            "register instruction must reference the derived agent_identity PDA"
+        );
+        let create_ix = &built.instructions[0];
+        assert!(
+            create_ix.accounts.iter().any(|a| a.pubkey == asset),
+            "create and register must reference the same minted asset"
+        );
+    }
+
+    #[test]
     fn parse_collection_parses_a_pubkey_and_treats_unset_or_empty_as_none() {
         assert_eq!(parse_collection(None).unwrap(), None, "unset -> no pin");
         assert_eq!(

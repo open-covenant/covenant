@@ -200,7 +200,8 @@ mod tests {
 
     #[test]
     fn config_round_trips_through_serde_with_defaults() {
-        let c: MetaplexConfig = serde_json::from_value(serde_json::json!({ "enabled": true })).unwrap();
+        let c: MetaplexConfig =
+            serde_json::from_value(serde_json::json!({ "enabled": true })).unwrap();
         assert!(c.enabled);
         assert_eq!(c.cluster, "devnet");
         assert_eq!(c.per_action_cap_lamports, 0);

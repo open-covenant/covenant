@@ -123,4 +123,23 @@ mod tests {
         let err = c.get_asset("abc").await.expect_err("must refuse");
         assert!(matches!(err, DasError::NotConfigured));
     }
+
+    #[tokio::test]
+    async fn every_method_refuses_an_empty_endpoint() {
+        let c = HttpDasClient::new("");
+        assert!(matches!(
+            c.get_asset_proof("abc").await.expect_err("proof"),
+            DasError::NotConfigured
+        ));
+        assert!(matches!(
+            c.get_assets_by_owner("owner", 10, 1)
+                .await
+                .expect_err("owner"),
+            DasError::NotConfigured
+        ));
+        assert!(matches!(
+            c.search_assets(json!({})).await.expect_err("search"),
+            DasError::NotConfigured
+        ));
+    }
 }

@@ -262,9 +262,11 @@ impl WriteTool {
                     str_arg(args, "releaseTarget")?,
                     str_arg(args, "releaseSubject")?,
                     str_arg(args, "releaseScope")?,
-                    args.get("recordedAt").and_then(Value::as_u64).ok_or_else(|| {
-                        ToolError::InvalidArguments("recordedAt (integer) is required".into())
-                    })?,
+                    args.get("recordedAt")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| {
+                            ToolError::InvalidArguments("recordedAt (integer) is required".into())
+                        })?,
                 );
                 // `asset` (append to an existing attestation asset) is not
                 // wired yet — v1 always mints a fresh asset, so we never
@@ -421,12 +423,7 @@ mod tests {
     #[test]
     fn write_tool_unavailable_without_signer() {
         let cfg = enabled_all();
-        let got = metaplex_tool(
-            &cfg,
-            "metaplex.attest.audit_root",
-            Arc::new(NullDas),
-            None,
-        );
+        let got = metaplex_tool(&cfg, "metaplex.attest.audit_root", Arc::new(NullDas), None);
         assert!(got.is_none(), "write tool must be None without a signer");
     }
 
@@ -473,5 +470,236 @@ mod tests {
             .await
             .unwrap();
         assert!(!ok.is_error);
+    }
+
+    struct EchoDas;
+    #[async_trait]
+    impl DasClient for EchoDas {
+        async fn get_asset(&self, id: &str) -> Result<Value, crate::das::DasError> {
+            Ok(json!({ "id": id }))
+        }
+        async fn get_asset_proof(&self, id: &str) -> Result<Value, crate::das::DasError> {
+            Ok(json!({ "id": id }))
+        }
+        async fn get_assets_by_owner(
+            &self,
+            o: &str,
+            l: u32,
+            p: u32,
+        ) -> Result<Value, crate::das::DasError> {
+            Ok(json!({ "owner": o, "limit": l, "page": p }))
+        }
+        async fn search_assets(&self, p: Value) -> Result<Value, crate::das::DasError> {
+            Ok(p)
+        }
+    }
+
+    struct ErrDas;
+    #[async_trait]
+    impl DasClient for ErrDas {
+        async fn get_asset(&self, _id: &str) -> Result<Value, crate::das::DasError> {
+            Err(crate::das::DasError::Rpc("boom".into()))
+        }
+        async fn get_asset_proof(&self, _id: &str) -> Result<Value, crate::das::DasError> {
+            Err(crate::das::DasError::Rpc("boom".into()))
+        }
+        async fn get_assets_by_owner(
+            &self,
+            _o: &str,
+            _l: u32,
+            _p: u32,
+        ) -> Result<Value, crate::das::DasError> {
+            Err(crate::das::DasError::Rpc("boom".into()))
+        }
+        async fn search_assets(&self, _p: Value) -> Result<Value, crate::das::DasError> {
+            Err(crate::das::DasError::Rpc("boom".into()))
+        }
+    }
+
+    #[test]
+    fn allowlist_filters_advertised_specs() {
+        let mut cfg = enabled_all();
+        cfg.allow = Some(vec!["das.get_asset".into(), "attest.audit_root".into()]);
+        let names: Vec<_> = metaplex_specs(&cfg).into_iter().map(|s| s.name).collect();
+        assert_eq!(
+            names,
+            vec!["metaplex.das.get_asset", "metaplex.attest.audit_root"]
+        );
+    }
+
+    #[test]
+    fn allowlist_gates_per_name_dispatch() {
+        let mut cfg = enabled_all();
+        cfg.allow = Some(vec!["das.get_asset".into()]);
+        assert!(
+            metaplex_tool(&cfg, "metaplex.das.get_asset", Arc::new(NullDas), None).is_some(),
+            "an allowed read resolves"
+        );
+        assert!(
+            metaplex_tool(&cfg, "metaplex.das.search", Arc::new(NullDas), None).is_none(),
+            "a disallowed read does not resolve even with reads enabled"
+        );
+        assert!(
+            metaplex_tool(
+                &cfg,
+                "metaplex.attest.audit_root",
+                Arc::new(NullDas),
+                Some(Arc::new(CapturingSigner)),
+            )
+            .is_none(),
+            "a disallowed write does not resolve even with a signer wired"
+        );
+    }
+
+    #[test]
+    fn unknown_tool_name_resolves_to_none() {
+        let cfg = enabled_all();
+        assert!(metaplex_tool(
+            &cfg,
+            "metaplex.does.not_exist",
+            Arc::new(NullDas),
+            Some(Arc::new(CapturingSigner)),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn read_tool_unavailable_when_reads_disabled() {
+        let cfg = MetaplexConfig {
+            enabled: true,
+            das_url: String::new(),
+            ..Default::default()
+        };
+        assert!(!cfg.reads_enabled());
+        assert!(metaplex_tool(&cfg, "metaplex.das.get_asset", Arc::new(NullDas), None).is_none());
+    }
+
+    #[test]
+    fn write_tool_unavailable_when_writes_disabled() {
+        // Reads on, writes off (no rpc/signer), but a signer is supplied: the
+        // writes_enabled config gate must refuse before the signer is consulted.
+        let cfg = enabled_reads();
+        assert!(!cfg.writes_enabled());
+        assert!(metaplex_tool(
+            &cfg,
+            "metaplex.attest.audit_root",
+            Arc::new(NullDas),
+            Some(Arc::new(CapturingSigner)),
+        )
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn identity_register_rejects_malformed_uri() {
+        let cfg = enabled_all();
+        let tool = metaplex_tool(
+            &cfg,
+            "metaplex.identity.register",
+            Arc::new(NullDas),
+            Some(Arc::new(CapturingSigner)),
+        )
+        .unwrap();
+        let err = tool
+            .call(json!({
+                "agentLabel": "agent@local",
+                "agentPubkey": "Agent11111111111111111111111111111111111111",
+                "registrationUri": "http://insecure.example/a.json",
+            }))
+            .await
+            .expect_err("plain http must be rejected before any signer round-trip");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("registrationUri")));
+    }
+
+    #[tokio::test]
+    async fn identity_register_builds_and_signs_with_valid_args() {
+        let cfg = enabled_all();
+        let tool = metaplex_tool(
+            &cfg,
+            "metaplex.identity.register",
+            Arc::new(NullDas),
+            Some(Arc::new(CapturingSigner)),
+        )
+        .unwrap();
+        let ok = tool
+            .call(json!({
+                "agentLabel": "agent@local",
+                "agentPubkey": "Agent11111111111111111111111111111111111111",
+                "registrationUri": "https://opencovenant.org/agents/covenant.json",
+            }))
+            .await
+            .unwrap();
+        assert!(!ok.is_error);
+    }
+
+    #[tokio::test]
+    async fn identity_register_requires_agent_pubkey() {
+        let cfg = enabled_all();
+        let tool = metaplex_tool(
+            &cfg,
+            "metaplex.identity.register",
+            Arc::new(NullDas),
+            Some(Arc::new(CapturingSigner)),
+        )
+        .unwrap();
+        let err = tool
+            .call(json!({ "agentLabel": "agent@local" }))
+            .await
+            .expect_err("missing agentPubkey");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("agentPubkey")));
+    }
+
+    #[tokio::test]
+    async fn search_passes_args_through_to_das() {
+        let cfg = enabled_reads();
+        let tool = metaplex_tool(&cfg, "metaplex.das.search", Arc::new(EchoDas), None).unwrap();
+        let res = tool
+            .call(json!({ "ownerAddress": "owner", "page": 2 }))
+            .await
+            .unwrap();
+        assert!(!res.is_error);
+        assert_eq!(
+            res.content,
+            vec![Content::json(json!({ "ownerAddress": "owner", "page": 2 }))]
+        );
+    }
+
+    #[tokio::test]
+    async fn assets_by_owner_defaults_limit_and_page() {
+        let cfg = enabled_reads();
+        let tool = metaplex_tool(
+            &cfg,
+            "metaplex.das.assets_by_owner",
+            Arc::new(EchoDas),
+            None,
+        )
+        .unwrap();
+        let res = tool.call(json!({ "owner": "wallet" })).await.unwrap();
+        assert_eq!(
+            res.content,
+            vec![Content::json(
+                json!({ "owner": "wallet", "limit": 100, "page": 1 })
+            )]
+        );
+        let res = tool
+            .call(json!({ "owner": "wallet", "limit": 5, "page": 3 }))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.content,
+            vec![Content::json(
+                json!({ "owner": "wallet", "limit": 5, "page": 3 })
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn das_error_surfaces_as_non_throwing_error_result() {
+        let cfg = enabled_reads();
+        let tool = metaplex_tool(&cfg, "metaplex.das.get_asset", Arc::new(ErrDas), None).unwrap();
+        let res = tool
+            .call(json!({ "id": "abc" }))
+            .await
+            .expect("a DAS rpc error is a tool-error result, not a protocol error");
+        assert!(res.is_error);
     }
 }

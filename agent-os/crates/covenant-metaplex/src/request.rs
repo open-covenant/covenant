@@ -51,7 +51,9 @@ pub fn validate_registration_uri(s: &str) -> Result<(), String> {
         return Err("registrationUri must start with https:// or ar://".to_string());
     }
     if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err("registrationUri must not contain whitespace or control characters".to_string());
+        return Err(
+            "registrationUri must not contain whitespace or control characters".to_string(),
+        );
     }
     Ok(())
 }
@@ -142,7 +144,13 @@ mod tests {
     #[test]
     fn attest_request_round_trips_tagged() {
         let req = SignerRequest::AttestAuditRoot {
-            payload: AttestationPayload::new("a".repeat(64), "v0.1.0", "covenant", "audit", 1_700_000_000),
+            payload: AttestationPayload::new(
+                "a".repeat(64),
+                "v0.1.0",
+                "covenant",
+                "audit",
+                1_700_000_000,
+            ),
             asset: None,
             collection: Some("Coll1111111111111111111111111111111111111111".into()),
         };
@@ -158,7 +166,10 @@ mod tests {
         validate_root_hash_hex(&"a".repeat(64)).expect("64 lowercase hex");
         validate_root_hash_hex(&"abcdef0123456789".repeat(4)).expect("mixed lowercase hex");
         assert!(validate_root_hash_hex("deadbeef").is_err(), "too short");
-        assert!(validate_root_hash_hex(&"A".repeat(64)).is_err(), "uppercase");
+        assert!(
+            validate_root_hash_hex(&"A".repeat(64)).is_err(),
+            "uppercase"
+        );
         assert!(validate_root_hash_hex(&"g".repeat(64)).is_err(), "non-hex");
         assert!(validate_root_hash_hex(&"a".repeat(65)).is_err(), "too long");
     }
@@ -182,9 +193,18 @@ mod tests {
         validate_registration_uri("https://opencovenant.org/agents/covenant.json")
             .expect("https URI");
         validate_registration_uri("ar://abc123").expect("arweave URI");
-        assert!(validate_registration_uri("http://example.org/a.json").is_err(), "plain http");
-        assert!(validate_registration_uri("covenant://agent/abc").is_err(), "covenant scheme is the default, not an override");
-        assert!(validate_registration_uri("https://a.example/with space").is_err(), "whitespace");
+        assert!(
+            validate_registration_uri("http://example.org/a.json").is_err(),
+            "plain http"
+        );
+        assert!(
+            validate_registration_uri("covenant://agent/abc").is_err(),
+            "covenant scheme is the default, not an override"
+        );
+        assert!(
+            validate_registration_uri("https://a.example/with space").is_err(),
+            "whitespace"
+        );
         assert!(
             validate_registration_uri(&format!("https://a.example/{}", "x".repeat(200))).is_err(),
             "over length"

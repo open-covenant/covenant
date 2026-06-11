@@ -103,6 +103,49 @@ function extractBlock(reply) {
   return reply.slice(a, b + END.length);
 }
 
+// Function-level splice: replace one named fn item (attrs + body) in the
+// kernel source. The function lane lets a proposer return a single small
+// function instead of reproducing the whole multi-thousand-line block.
+function itemEnd(src, braceStart) {
+  let depth = 0;
+  for (let i = braceStart; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"') { i++; while (i < src.length && src[i] !== '"') i += src[i] === "\\" ? 2 : 1; }
+    else if (c === "/" && src[i + 1] === "/") { while (i < src.length && src[i] !== "\n") i++; }
+    else if (c === "{") depth++;
+    else if (c === "}") { depth--; if (depth === 0) return i + 1; }
+  }
+  throw new Error("unbalanced braces in target function");
+}
+function itemStart(src, fnIdx) {
+  let lineStart = src.lastIndexOf("\n", fnIdx) + 1;
+  while (true) {
+    const prevStart = src.lastIndexOf("\n", lineStart - 2) + 1;
+    const prev = src.slice(prevStart, lineStart).trim();
+    if (prev.startsWith("#[") || prev.startsWith("///") || prev.startsWith("//")) lineStart = prevStart;
+    else break;
+  }
+  return lineStart;
+}
+function spliceFn(source, name, item) {
+  const hits = [...source.matchAll(new RegExp(`\\bfn\\s+${name}\\s*[(<]`, "g"))];
+  if (!hits.length) throw new Error(`function ${name} not found in kernel`);
+  const fnIdx = hits[0].index;
+  const start = itemStart(source, fnIdx);
+  const end = itemEnd(source, source.indexOf("{", fnIdx));
+  const indent = "    ";
+  const indented = item.split("\n").map((l) => (l.trim() ? indent + l : l)).join("\n").replace(/^ +/, indent);
+  return source.slice(0, start) + indented + "\n" + source.slice(end).replace(/^\n/, "");
+}
+function extractFn(reply) {
+  const fnMatch = reply.match(/FN:\s*([A-Za-z0-9_]+)/);
+  const fence = reply.match(/```(?:rust)?\n([\s\S]*?)```/);
+  if (!fnMatch) throw new Error(`function reply missing "FN: <name>" line: ${reply.trim().slice(0, 120)}…`);
+  const body = (fence ? fence[1] : reply).trim();
+  if (!body.includes(`fn ${fnMatch[1]}`)) throw new Error(`returned code does not define fn ${fnMatch[1]}`);
+  return { name: fnMatch[1], body };
+}
+
 const task = JSON.parse(readFileSync(taskJsonPath, "utf8"));
 const ledger = existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, "utf8")) : { versions: [] };
 mkdirSync(archiveDir, { recursive: true });
@@ -139,12 +182,44 @@ Current code:
 ${block}
 `;
 
+  // Function lane: Codex regresses on whole-block rewrites of a 3k-line SIMD
+  // kernel (it cannot reproduce-and-edit it faithfully, confirmed by a
+  // preserve-structure prompt test that still failed the gates). It instead
+  // improves ONE function it picks; the bench scores the whole kernel with
+  // that function swapped, same gates and margin as the block lane.
+  const functionPrompt = `You are optimizing a single Rust function for minimum wasmtime fuel (deterministic instruction count) on wasm32-wasip1, release profile. The incumbent kernel below is already heavily optimized over many rounds — do NOT rewrite the whole thing.
+
+Do this:
+1. Pick ONE function below whose fuel cost you can reduce. The hot paths run over every byte and line of a 50k-event corpus: byte scanning, line splitting, sha256, hex encoding, JSON field scanning.
+2. Return ONLY an improved replacement for that single function.
+
+Output format, exactly:
+- First line: \`FN: <function_name>\` — the exact name you are replacing.
+- Then the complete replacement function inside one \`\`\`rust fence, including any #[cfg(...)] / #[target_feature(...)] attributes and doc comments. Same signature.
+
+Rules:
+- Behavior bit-identical. Functions behind #[cfg(target_arch = "wasm32")] are what the fuel meter runs; replace the wasm variant and keep its behavior identical. Gates: unit tests, a held-out differential suite, and a frozen 50k-event corpus digest catch any drift.
+- Safe Rust only. Deps frozen: sha2, serde_json, serde, std::arch::wasm32. No new deps.
+- You must beat the incumbent scalar ${incumbent.metrics.scalar} by >=${margin} (whole-kernel fuel with your function swapped in).
+
+Recent attempts:
+${history}
+
+Kernel (pick one function to improve):
+
+${block}
+`;
+
   const stamp = `k${ledger.versions.reduce((m, v) => Math.max(m, parseInt(v.version.match(/^k(\d+)/)?.[1] ?? 0, 10)), 0) + 1}`;
+  const blockBuild = (reply) => pre + extractBlock(reply) + post;
+  const fnBuild = (reply) => { const { name, body } = extractFn(reply); return spliceFn(baseSrc.out, name, body); };
 
   const proposers = [
     {
       name: "grok",
       model: grokModel,
+      mode: "block",
+      build: blockBuild,
       // Multi-turn chat: feedback goes back as user turns.
       call: (messages, attempt) => {
         if (!xaiKey) throw new Error("XAI_API_KEY not set");
@@ -161,6 +236,9 @@ ${block}
     {
       name: "codex",
       model: codexModel,
+      mode: "function",
+      seedPrompt: functionPrompt,
+      build: fnBuild,
       call: (messages, attempt) => {
         if (!openaiKey) throw new Error("OPENAI_API_KEY not set");
         const bodyFile = join(archiveDir, `${stamp}-codex-request-${attempt}.json`);
@@ -180,6 +258,8 @@ ${block}
     {
       name: "fable",
       model: proposerModel,
+      mode: "block",
+      build: blockBuild,
       // Empty scratch cwd: the CLI proposer is an agent with tools and will
       // otherwise edit the kernel in the live repo instead of printing the
       // block (observed round 10). stdout is its only channel back. The CLI
@@ -203,7 +283,7 @@ ${block}
   const entries = [];
   for (const p of proposers) {
     const label = `${stamp}:${p.name}`;
-    const messages = [{ role: "user", content: prompt }];
+    const messages = [{ role: "user", content: p.seedPrompt ?? prompt }];
     const tries = [];
     let bestResult = null;
     for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -215,19 +295,20 @@ ${block}
         for (let fix = 0; fix <= 2; fix++) {
           const reply = p.call(messages, attempt);
           messages.push({ role: "assistant", content: reply });
-          let block;
+          let src;
           try {
-            block = extractBlock(reply);
+            src = p.build(reply);
           } catch (e) {
             if (fix === 2) throw e;
-            messages.push({ role: "user", content: "That reply did not contain a complete EVOLVE block. Resend the entire block, from the START marker to the END marker, nothing else." });
+            messages.push({ role: "user", content: p.mode === "function"
+              ? `Could not apply your reply: ${e.message}. Resend with a "FN: <name>" line then the single replacement function in a rust fence.`
+              : "That reply did not contain a complete EVOLVE block. Resend the entire block, from the START marker to the END marker, nothing else." });
             continue;
           }
-          const src = pre + block + post;
           const err = compileCheck(src);
           if (err) {
             if (fix === 2) throw new Error(`does not compile after fixups: ${err.slice(0, 200)}`);
-            messages.push({ role: "user", content: `Your block does not compile:\n${err}\nFix it and resend the entire EVOLVE block.` });
+            messages.push({ role: "user", content: `Your code does not compile:\n${err}\nFix it and resend.` });
             continue;
           }
           candidateSrc = src;
@@ -248,11 +329,12 @@ ${block}
       console.log(`[${iter + 1}/${iters}] ${p.name} attempt ${attempt}/${attempts}: scalar=${result.scalar}${result.failure ? ` FAILED ${result.failure.slice(0, 100)}` : ""}`);
       if (result.scalar > 0 && gainNow >= margin) break;
       if (attempt < attempts) {
+        const unit = p.mode === "function" ? "function (with its FN: line)" : "EVOLVE block";
         const feedback = result.failure
-          ? `That attempt failed before scoring: ${result.failure}. Output the complete EVOLVE block this time, nothing else.`
+          ? `That attempt failed before scoring: ${result.failure}. Output the complete ${unit} this time, nothing else.`
           : result.scored.correctness !== 1
-            ? `Your block failed the gates (${result.scored.gaming?.length ? `gaming: ${result.scored.gaming.join("; ")}` : result.scored.error ? `error: ${result.scored.error.slice(0, 300)}` : "a correctness gate: unit, differential, sha, wasm-tests, or corpus digest"}). Fix correctness first, then optimize. Output the full corrected EVOLVE block.`
-            : `Your block passed all gates and scored scalar ${result.scalar}; the incumbent is ${incumbent.metrics.scalar} and you need at least ${round(incumbent.metrics.scalar + margin)}. Find more fuel: look for remaining per-line allocations, schedule work, branchy scans, or redundant passes. Output the full improved EVOLVE block.`;
+            ? `Your code failed the gates (${result.scored.gaming?.length ? `gaming: ${result.scored.gaming.join("; ")}` : result.scored.error ? `error: ${result.scored.error.slice(0, 300)}` : "a correctness gate: unit, differential, sha, wasm-tests, or corpus digest"}). Fix correctness first, then optimize. Output the full corrected ${unit}.`
+            : `Your code passed all gates and scored scalar ${result.scalar}; the incumbent is ${incumbent.metrics.scalar} and you need at least ${round(incumbent.metrics.scalar + margin)}. Find more fuel: remaining per-line allocations, schedule work, branchy scans, or redundant passes. Output the full improved ${unit}.`;
         messages.push({ role: "user", content: feedback });
       }
     }

@@ -301,8 +301,15 @@ fn assert_pinned(name: &str, linked: &str, pinned: &str) -> Result<()> {
 }
 
 fn collection_from_env() -> Result<Option<Pubkey>> {
-    match std::env::var("COVENANT_METAPLEX_COLLECTION") {
-        Ok(c) if !c.is_empty() => Ok(Some(
+    parse_collection(std::env::var("COVENANT_METAPLEX_COLLECTION").ok())
+}
+
+/// Resolve the optional collection pin from its raw env value. Split from the
+/// env read so the parse, empty-as-unset, and error arms are unit-testable
+/// without mutating process-global state.
+fn parse_collection(raw: Option<String>) -> Result<Option<Pubkey>> {
+    match raw {
+        Some(c) if !c.is_empty() => Ok(Some(
             parse_pubkey(&c).context("COVENANT_METAPLEX_COLLECTION")?,
         )),
         _ => Ok(None),
@@ -644,6 +651,25 @@ mod tests {
                 + CORE_PROTOCOL_FEE_LAMPORTS
                 + IDENTITY_PDA_LAMPORTS
                 + LAMPORTS_PER_DATA_BYTE * uri.len() as u64
+        );
+    }
+
+    #[test]
+    fn parse_collection_parses_a_pubkey_and_treats_unset_or_empty_as_none() {
+        assert_eq!(parse_collection(None).unwrap(), None, "unset -> no pin");
+        assert_eq!(
+            parse_collection(Some(String::new())).unwrap(),
+            None,
+            "empty -> treated as unset, not an error"
+        );
+        let pin = Pubkey::new_unique();
+        assert_eq!(parse_collection(Some(pin.to_string())).unwrap(), Some(pin));
+        let err = parse_collection(Some("not-base58!!".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("COVENANT_METAPLEX_COLLECTION"),
+            "a bad pubkey is a hard error tagged with the env var: {err}"
         );
     }
 }

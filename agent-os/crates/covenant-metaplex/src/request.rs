@@ -212,6 +212,76 @@ mod tests {
     }
 
     #[test]
+    fn attest_audit_root_omits_asset_and_collection_as_none() {
+        // The daemon's minimal "mint a fresh attestation, no collection pin"
+        // request is just {action, payload}: asset=None mints fresh, the
+        // collection default means no group. Both rely on #[serde(default)];
+        // without it this wire shape fails to deserialize in the sidecar and
+        // every audit-root write breaks.
+        let wire = serde_json::json!({
+            "action": "attest-audit-root",
+            "payload": {
+                "schema": ATTESTATION_SCHEMA,
+                "rootHashHex": "a".repeat(64),
+                "releaseTarget": "v0.1.0",
+                "releaseSubject": "covenant",
+                "releaseScope": "audit",
+                "recordedAt": 1_700_000_000u64,
+            },
+        });
+        let back: SignerRequest = serde_json::from_value(wire).expect("minimal attest request");
+        match back {
+            SignerRequest::AttestAuditRoot {
+                asset, collection, ..
+            } => {
+                assert_eq!(asset, None, "omitted asset mints a fresh attestation asset");
+                assert_eq!(
+                    collection, None,
+                    "omitted collection means no collection pin"
+                );
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attestation_payload_serializes_camelcase_appdata_keys() {
+        // The payload is written verbatim into an on-chain MPL Core AppData
+        // plugin and read back by DAS consumers as JSON, so the camelCase key
+        // names are a public wire contract the symmetric round-trip test does
+        // not pin (it only checks `schema`, identical in either case).
+        let payload =
+            AttestationPayload::new("a".repeat(64), "v0.1.0", "covenant", "audit", 1_700_000_000);
+        let wire = serde_json::to_value(&payload).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("payload serializes to a JSON object");
+        for key in [
+            "schema",
+            "rootHashHex",
+            "releaseTarget",
+            "releaseSubject",
+            "releaseScope",
+            "recordedAt",
+        ] {
+            assert!(obj.contains_key(key), "AppData payload must expose `{key}`");
+        }
+        for snake in [
+            "root_hash_hex",
+            "release_target",
+            "release_subject",
+            "release_scope",
+            "recorded_at",
+        ] {
+            assert!(
+                !obj.contains_key(snake),
+                "snake_case `{snake}` would break DAS consumers"
+            );
+        }
+        assert_eq!(obj.len(), 6, "exactly the six AppData fields, no extras");
+    }
+
+    #[test]
     fn identity_request_registration_uri_defaults_to_none() {
         let wire = serde_json::json!({
             "action": "register-identity",

@@ -153,10 +153,10 @@ function DailyBars({ data }: { data: { date: string; count: number }[] }) {
   return (
     <div className="mt-5 flex h-28 items-end gap-[3px]">
       {data.map((d, i) => (
-        <div key={i} className="group relative flex-1">
+        <div key={i} className="group relative flex h-full flex-1 items-end">
           <div
-            className="w-full bg-neutral-700 transition-colors group-hover:bg-emerald-400"
-            style={{ height: `${Math.max(2, (d.count / max) * 100)}%` }}
+            className="w-full rounded-sm bg-emerald-500/55 transition-colors group-hover:bg-emerald-300"
+            style={{ height: `${Math.max(3, (d.count / max) * 100)}%` }}
           >
             <title>{`${d.date}: ${d.count} integrated`}</title>
           </div>

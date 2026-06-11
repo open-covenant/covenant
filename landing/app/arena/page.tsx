@@ -136,8 +136,8 @@ function Curve({ points }: { points: Arena["curve"] }) {
           cy={y}
           r="3.5"
           fill="#030303"
-          stroke="#f5f5f5"
-          strokeWidth="1.5"
+          stroke={ACCENT[points[i].proposer ?? ""] ?? NEUTRAL}
+          strokeWidth="2"
           className="arena-pop"
           style={{ animationDelay: `${0.25 + i * 0.12}s` }}
         >
@@ -155,7 +155,7 @@ function DailyBars({ data }: { data: { date: string; count: number }[] }) {
       {data.map((d, i) => (
         <div key={i} className="group relative flex h-full flex-1 items-end">
           <div
-            className="arena-grow-y w-full rounded-sm bg-neutral-300/70 transition-colors group-hover:bg-white"
+            className="arena-grow-y w-full rounded-sm bg-neutral-200 transition-colors group-hover:bg-white"
             style={{ height: `${Math.max(3, (d.count / max) * 100)}%`, animationDelay: `${0.3 + i * 0.04}s` }}
           >
             <title>{`${d.date}: ${d.count} integrated`}</title>
@@ -220,13 +220,13 @@ export default async function ArenaPage() {
 
       <div className="page-container">
         <div className="mb-10 flex items-center gap-4 sm:mb-14">
-          <h1 className="text-[11px] uppercase tracking-[0.4em] text-neutral-400">
+          <h1 className="text-[11px] uppercase tracking-[0.4em] text-white">
             Arena
           </h1>
-          <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-neutral-300">
+          <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-emerald-300/90">
             <span className="relative flex h-[7px] w-[7px]">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-50" />
-              <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-white" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+              <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-emerald-400" />
             </span>
             Live
           </span>
@@ -284,7 +284,7 @@ export default async function ArenaPage() {
                 </div>
                 <div className={`${stat} arena-rise`} style={{ animationDelay: "0.26s" }}>
                   <div className={statLabel}>Compute cut</div>
-                  <div className={`${statValue} text-white`}>
+                  <div className={`${statValue} text-emerald-300`}>
                     {arena.incumbent.fuelCutPct}%
                   </div>
                 </div>
@@ -318,7 +318,7 @@ export default async function ArenaPage() {
                   href={`${GITHUB_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-neutral-100 underline underline-offset-4 transition-colors hover:text-white"
+                  className="text-emerald-300 underline underline-offset-4 transition-colors hover:text-emerald-200"
                 >
                   Enter
                 </a>
@@ -468,7 +468,7 @@ export default async function ArenaPage() {
 
                 <div className="mt-6 border border-neutral-800/80 px-5 py-4">
                   <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">In flight</div>
-                  <div className="mt-2 truncate font-light text-neutral-100" title={loop.inFlight?.task ?? "idle"}>
+                  <div className="mt-2 truncate font-light text-emerald-300" title={loop.inFlight?.task ?? "idle"}>
                     {loop.inFlight ? loop.inFlight.task : "idle"}
                   </div>
                   {loop.inFlight && (
@@ -500,7 +500,7 @@ export default async function ArenaPage() {
                         <span className="w-28 shrink-0 truncate text-neutral-300">{a.name}</span>
                         <div className="h-2 flex-1 bg-neutral-900">
                           <div
-                            className="arena-grow-x h-2 bg-neutral-300/80"
+                            className="arena-grow-x h-2 bg-neutral-600"
                             style={{ width: `${(a.count / max) * 100}%`, animationDelay: `${0.4 + i * 0.08}s` }}
                           />
                         </div>

@@ -1,27 +1,246 @@
 {
-  "updatedAt": "2026-06-11T21:47:27.161Z",
+  "updatedAt": "2026-06-11T22:34:40.682Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8069,
-    "tasks": 962,
-    "integrated": 962
+    "events": 8110,
+    "tasks": 966,
+    "integrated": 967
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 170
+    "last24h": 8,
+    "last7d": 174,
+    "velocity": 24.9
   },
+  "daily": [
+    {
+      "date": "05-22",
+      "count": 0
+    },
+    {
+      "date": "05-23",
+      "count": 220
+    },
+    {
+      "date": "05-24",
+      "count": 64
+    },
+    {
+      "date": "05-25",
+      "count": 0
+    },
+    {
+      "date": "05-26",
+      "count": 3
+    },
+    {
+      "date": "05-27",
+      "count": 6
+    },
+    {
+      "date": "05-28",
+      "count": 11
+    },
+    {
+      "date": "05-29",
+      "count": 10
+    },
+    {
+      "date": "05-30",
+      "count": 19
+    },
+    {
+      "date": "05-31",
+      "count": 47
+    },
+    {
+      "date": "06-01",
+      "count": 4
+    },
+    {
+      "date": "06-02",
+      "count": 35
+    },
+    {
+      "date": "06-03",
+      "count": 91
+    },
+    {
+      "date": "06-04",
+      "count": 107
+    },
+    {
+      "date": "06-05",
+      "count": 50
+    },
+    {
+      "date": "06-06",
+      "count": 42
+    },
+    {
+      "date": "06-07",
+      "count": 50
+    },
+    {
+      "date": "06-08",
+      "count": 15
+    },
+    {
+      "date": "06-09",
+      "count": 0
+    },
+    {
+      "date": "06-10",
+      "count": 0
+    },
+    {
+      "date": "06-11",
+      "count": 8
+    }
+  ],
+  "cumulative": [
+    {
+      "date": "05-22",
+      "total": 185
+    },
+    {
+      "date": "05-23",
+      "total": 405
+    },
+    {
+      "date": "05-24",
+      "total": 469
+    },
+    {
+      "date": "05-25",
+      "total": 469
+    },
+    {
+      "date": "05-26",
+      "total": 472
+    },
+    {
+      "date": "05-27",
+      "total": 478
+    },
+    {
+      "date": "05-28",
+      "total": 489
+    },
+    {
+      "date": "05-29",
+      "total": 499
+    },
+    {
+      "date": "05-30",
+      "total": 518
+    },
+    {
+      "date": "05-31",
+      "total": 565
+    },
+    {
+      "date": "06-01",
+      "total": 569
+    },
+    {
+      "date": "06-02",
+      "total": 604
+    },
+    {
+      "date": "06-03",
+      "total": 695
+    },
+    {
+      "date": "06-04",
+      "total": 802
+    },
+    {
+      "date": "06-05",
+      "total": 852
+    },
+    {
+      "date": "06-06",
+      "total": 894
+    },
+    {
+      "date": "06-07",
+      "total": 944
+    },
+    {
+      "date": "06-08",
+      "total": 959
+    },
+    {
+      "date": "06-09",
+      "total": 959
+    },
+    {
+      "date": "06-10",
+      "total": 959
+    },
+    {
+      "date": "06-11",
+      "total": 967
+    }
+  ],
   "states": {
-    "integrated": 957,
+    "integrated": 962,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
-  "inFlight": {
-    "task": "zauth-challenge-select-payment-gating-coverage",
-    "state": "in_progress",
-    "since": "2026-06-11T21:46:28.490Z"
-  },
+  "areas": [
+    {
+      "name": "ipc",
+      "count": 137
+    },
+    {
+      "name": "covenant",
+      "count": 95
+    },
+    {
+      "name": "audit",
+      "count": 89
+    },
+    {
+      "name": "live",
+      "count": 88
+    },
+    {
+      "name": "detect",
+      "count": 84
+    },
+    {
+      "name": "validate",
+      "count": 62
+    }
+  ],
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-11T22:33:27.362Z",
+      "task": "metaplex-signer-collection-from-env-coverage",
+      "note": "Committed + pushed to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-11T22:24:48.262Z",
+      "task": "zauth-challenge-malformed-rejection-arms-coverage",
+      "note": "Committed 7de461c8, pushed to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-11T22:20:29.016Z",
+      "task": "metaplex-tools-write-request-build-coverage",
+      "note": "Committed 6a5370fa, pushed 618e8ab3..6a5370fa to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-11T22:11:45.217Z",
+      "task": "metaplex-config-from-env-and-truthy-coverage",
+      "note": "Committed 618e8ab3 and pushed 523f7b4d..618e8ab3 to origin/loop/main-track. test(metaplex): MetaplexConfig::from_env + truthy() coverage. Al"
+    },
+    {
+      "at": "2026-06-11T21:50:51.746Z",
+      "task": "zauth-challenge-select-payment-gating-coverage",
+      "note": "Committed e2a91cad, pushed to origin/loop/main-track. 3 select()/to_payment_requirements tests; independently security-reviewed (APPROVE)."
+    },
     {
       "at": "2026-06-11T21:46:03.141Z",
       "task": "metaplex-signer-build-request-coverage",
@@ -61,6 +280,41 @@
       "at": "2026-06-08T08:44:11.248Z",
       "task": "covenantd-verify-memory-record-metadata-stale-context-shape",
       "note": "Integrated as 74bcde8f, pushed to origin/main (28c01b10..74bcde8f). Two within-row drift arms (memory_record_metadata_stale_context_non_obje"
+    },
+    {
+      "at": "2026-06-08T08:19:43.311Z",
+      "task": "covenantd-verify-memory-record-metadata-receipt-id-unparseab",
+      "note": "Pushed 28c01b10 to origin/main (e0b39377..28c01b10). 2 within-row memory metadata.receipt_id drift arms (unparseable + nil) + test + docs. F"
+    },
+    {
+      "at": "2026-06-08T08:06:53.614Z",
+      "task": "covenantd-verify-memory-record-metadata-agent-id-charset",
+      "note": "Pushed e0b39377 to origin/main (e28caccd..e0b39377). 2 within-row memory metadata.agent_id drift arms + test + docs. Full covenantd --lib 67"
+    },
+    {
+      "at": "2026-06-08T07:32:35.524Z",
+      "task": "covenantd-verify-memory-record-metadata-status-not-ok",
+      "note": "Pushed e28caccd to origin/main. Two within-row Check-5 arms (memory_record_metadata_status_{empty,not_ok}) mirroring audit_intent_dispatched"
+    },
+    {
+      "at": "2026-06-08T06:50:12.442Z",
+      "task": "covenantd-verify-audit-peer-self-revoke-blocked-pubkey-trust",
+      "note": "shipped on main: audit_peer_self_revoke_blocked_peer_pubkey_b58_not_daemon_trust_root drift kind + test + docs"
+    },
+    {
+      "at": "2026-06-08T03:18:07.682Z",
+      "task": "covenantd-verify-audit-budget-requested-not-intent-dispatch",
+      "note": "Committed d2b9da77 and pushed to origin/main. Two audit-log carriers (BudgetExhausted, BudgetUnseeded) of the flat-dispatch-cost invariant. "
+    },
+    {
+      "at": "2026-06-08T02:55:05.989Z",
+      "task": "covenantd-verify-budget-debit-credits-zero",
+      "note": "Committed 9f3c0c1e and pushed to origin/main (dad998f2..9f3c0c1e). budget_debit_credits_zero within-row drift arm + test + docs. Security re"
+    },
+    {
+      "at": "2026-06-08T02:19:43.405Z",
+      "task": "covenantd-verify-operator-token-rotated-issuer-not-trust-roo",
+      "note": "Committed dad998f2, pushed to origin/main (7348fe34..dad998f2); all identity/push guards green. SECURITY GATE (recorded here as cross_review"
     }
   ]
 }

@@ -63,8 +63,11 @@ type LoopData = {
   updatedAt: string;
   branch: string;
   totals: { events: number; tasks: number; integrated: number };
-  throughput: { last24h: number; last7d: number };
+  throughput: { last24h: number; last7d: number; velocity: number };
+  daily: { date: string; count: number }[];
+  cumulative: { date: string; total: number }[];
   states: Record<string, number>;
+  areas: { name: string; count: number }[];
   inFlight: { task: string; state: string; since: string } | null;
   recent: { at: string; task: string; note: string }[];
 };
@@ -145,6 +148,42 @@ function Curve({ points }: { points: Arena["curve"] }) {
   );
 }
 
+function DailyBars({ data }: { data: { date: string; count: number }[] }) {
+  const max = Math.max(1, ...data.map((d) => d.count));
+  return (
+    <div className="mt-5 flex h-28 items-end gap-[3px]">
+      {data.map((d, i) => (
+        <div key={i} className="group relative flex-1">
+          <div
+            className="w-full bg-neutral-700 transition-colors group-hover:bg-emerald-400"
+            style={{ height: `${Math.max(2, (d.count / max) * 100)}%` }}
+          >
+            <title>{`${d.date}: ${d.count} integrated`}</title>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CumulativeLine({ data }: { data: { date: string; total: number }[] }) {
+  const w = 320;
+  const h = 70;
+  const lo = data[0].total;
+  const hi = data[data.length - 1].total;
+  const span = Math.max(1, hi - lo);
+  const step = data.length > 1 ? w / (data.length - 1) : 0;
+  const pts = data.map((d, i) => [i * step, h - ((d.total - lo) / span) * (h - 4) - 2]);
+  const path = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const area = `${path} L${w},${h} L0,${h} Z`;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="mt-4 w-full" preserveAspectRatio="none" aria-label="Cumulative tasks integrated">
+      <path d={area} fill="#10b98118" />
+      <path d={path} fill="none" stroke="#6ee7b7" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
 export default async function ArenaPage() {
   const [arena, loop] = await Promise.all([loadArena(), loadLoop()]);
   const stat =
@@ -187,7 +226,7 @@ export default async function ArenaPage() {
 
         <div className="lg:grid lg:grid-cols-2 lg:gap-14">
           <div>
-            <div className="lg:sticky lg:top-24">
+            <div className="arena-scroll lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto lg:pr-4">
               <h2 className="text-balance text-[2.6rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[3rem]">
                 <span style={{ color: ACCENT.Claude }}>Claude</span>{" "}
                 <span className="text-neutral-500">vs</span>{" "}
@@ -402,46 +441,86 @@ export default async function ArenaPage() {
               clock. Live from its ledger.
             </p>
 
-            <div className="mt-10 grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className="border border-neutral-800/80 px-5 py-5 text-center">
-                <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Tasks integrated</div>
-                <div className="mt-2 text-3xl font-extralight tabular-nums text-white">{loop.totals.integrated}</div>
-              </div>
-              <div className="border border-neutral-800/80 px-5 py-5 text-center">
-                <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Last 7 days</div>
-                <div className="mt-2 text-3xl font-extralight tabular-nums text-white">{loop.throughput.last7d}</div>
-              </div>
-              <div className="border border-neutral-800/80 px-5 py-5 text-center">
-                <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Ledger events</div>
-                <div className="mt-2 text-3xl font-extralight tabular-nums text-white">{loop.totals.events}</div>
-              </div>
-              <div className="border border-neutral-800/80 px-5 py-5 text-center">
-                <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">In flight</div>
-                <div className="mt-2 truncate text-sm font-light text-emerald-300" title={loop.inFlight?.task ?? "idle"}>
-                  {loop.inFlight ? loop.inFlight.task : "idle"}
+            <div className="mt-12 lg:grid lg:grid-cols-2 lg:gap-14">
+              <div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="border border-neutral-800/80 px-4 py-4 text-center">
+                    <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">Integrated</div>
+                    <div className="mt-2 text-2xl font-extralight tabular-nums text-white">{loop.totals.integrated}</div>
+                  </div>
+                  <div className="border border-neutral-800/80 px-4 py-4 text-center">
+                    <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">Per active day</div>
+                    <div className="mt-2 text-2xl font-extralight tabular-nums text-white">{loop.throughput.velocity}</div>
+                  </div>
+                  <div className="border border-neutral-800/80 px-4 py-4 text-center">
+                    <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">Ledger events</div>
+                    <div className="mt-2 text-2xl font-extralight tabular-nums text-white">{loop.totals.events}</div>
+                  </div>
                 </div>
-                <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
-                  {loop.inFlight?.state.replace("_", " ") ?? ""}
+
+                <div className="mt-6 border border-neutral-800/80 px-5 py-4">
+                  <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">In flight</div>
+                  <div className="mt-2 truncate font-light text-emerald-300" title={loop.inFlight?.task ?? "idle"}>
+                    {loop.inFlight ? loop.inFlight.task : "idle"}
+                  </div>
+                  {loop.inFlight && (
+                    <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                      {loop.inFlight.state.replace("_", " ")} · since{" "}
+                      {new Date(loop.inFlight.since).toUTCString().slice(5, 22)}
+                    </div>
+                  )}
                 </div>
+
+                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                  Integrations per day, last 21 days
+                </p>
+                <DailyBars data={loop.daily} />
+
+                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                  Cumulative shipped
+                </p>
+                <CumulativeLine data={loop.cumulative} />
+
+                <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                  Where it has been working
+                </p>
+                <div className="mt-4 space-y-2">
+                  {loop.areas.map((a) => {
+                    const max = loop.areas[0].count;
+                    return (
+                      <div key={a.name} className="flex items-center gap-3 text-sm font-light">
+                        <span className="w-28 shrink-0 truncate text-neutral-300">{a.name}</span>
+                        <div className="h-2 flex-1 bg-neutral-900">
+                          <div className="h-2 bg-neutral-600" style={{ width: `${(a.count / max) * 100}%` }} />
+                        </div>
+                        <span className="w-8 shrink-0 text-right tabular-nums text-neutral-500">{a.count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-12 lg:mt-0">
+                <p className="text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+                  Recent integrations
+                </p>
+                <ul className="arena-scroll mt-4 space-y-4 lg:max-h-[36rem] lg:overflow-y-auto lg:pr-4">
+                  {loop.recent.map((r, i) => (
+                    <li key={i} className="border-l border-neutral-800/80 pl-5">
+                      <div className="flex flex-wrap items-baseline gap-x-3">
+                        <span className="text-sm text-neutral-100">{r.task}</span>
+                        <span className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                          {new Date(r.at).toUTCString().slice(5, 16)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[13px] leading-relaxed text-neutral-500">{r.note}…</p>
+                    </li>
+                  ))}
+                </ul>
               </div>
             </div>
 
-            <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
-              Recent integrations
-            </p>
-            <ul className="mt-4 max-w-3xl space-y-3">
-              {loop.recent.map((r, i) => (
-                <li key={i} className="flex flex-wrap items-baseline gap-x-3 text-sm font-light text-neutral-300">
-                  <span className="text-neutral-100">{r.task}</span>
-                  <span className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-                    {new Date(r.at).toUTCString().slice(5, 16)}
-                  </span>
-                  <span className="w-full text-[13px] leading-relaxed text-neutral-500">{r.note}…</span>
-                </li>
-              ))}
-            </ul>
-
-            <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-600">
+            <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-neutral-600">
               Snapshot {new Date(loop.updatedAt).toUTCString()} · sanitized
               aggregates from the loop&apos;s task ledger
             </p>

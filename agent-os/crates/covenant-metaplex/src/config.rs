@@ -207,4 +207,106 @@ mod tests {
         assert_eq!(c.per_action_cap_lamports, 0);
         assert!(c.allow.is_none());
     }
+
+    #[test]
+    fn truthy_accepts_only_canonical_affirmatives() {
+        for s in ["1", "true", "yes", "on", "TRUE", " On ", "YES", "  true"] {
+            assert!(truthy(s), "{s:?} should enable");
+        }
+        for s in ["0", "false", "no", "off", "", "2", "maybe", "t", "enable"] {
+            assert!(!truthy(s), "{s:?} should not enable");
+        }
+    }
+
+    #[test]
+    fn from_env_parses_gates_and_falls_back_to_safe_defaults() {
+        // from_env() reads process-global COVENANT_METAPLEX_* vars, which is
+        // racy under parallel tests. All env mutation is confined to this one
+        // test (no sibling touches these keys), and every scenario restores
+        // the prior values so the suite leaves the environment as it found it.
+        const KEYS: [&str; 8] = [
+            "COVENANT_METAPLEX_ENABLED",
+            "COVENANT_METAPLEX_CLUSTER",
+            "COVENANT_METAPLEX_RPC_URL",
+            "COVENANT_METAPLEX_DAS_URL",
+            "COVENANT_METAPLEX_SIGNER_BIN",
+            "COVENANT_METAPLEX_COLLECTION",
+            "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS",
+            "COVENANT_METAPLEX_ALLOW",
+        ];
+        let resolve = |pairs: &[(&str, &str)]| -> MetaplexConfig {
+            let saved: Vec<Option<String>> = KEYS.iter().map(|k| std::env::var(k).ok()).collect();
+            for k in KEYS {
+                std::env::remove_var(k);
+            }
+            for (k, v) in pairs {
+                std::env::set_var(k, v);
+            }
+            let cfg = MetaplexConfig::from_env();
+            for (k, v) in KEYS.into_iter().zip(saved) {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+            cfg
+        };
+
+        assert_eq!(
+            resolve(&[]),
+            MetaplexConfig::default(),
+            "every var unset resolves to the read-only devnet default"
+        );
+
+        // An explicitly empty var is treated as unset so the safe default holds.
+        let blanked = resolve(&[
+            ("COVENANT_METAPLEX_ENABLED", ""),
+            ("COVENANT_METAPLEX_CLUSTER", ""),
+        ]);
+        assert!(!blanked.enabled);
+        assert_eq!(blanked.cluster, DEFAULT_CLUSTER);
+
+        let on = resolve(&[
+            ("COVENANT_METAPLEX_ENABLED", "yes"),
+            ("COVENANT_METAPLEX_CLUSTER", "mainnet-beta"),
+        ]);
+        assert!(on.enabled);
+        assert_eq!(on.cluster, "mainnet-beta");
+
+        // A numeric cap parses; a non-numeric cap defers to the sidecar (0).
+        assert_eq!(
+            resolve(&[("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS", "123")])
+                .per_action_cap_lamports,
+            123
+        );
+        assert_eq!(
+            resolve(&[("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS", "abc")])
+                .per_action_cap_lamports,
+            0
+        );
+
+        // The allowlist is comma-split with per-entry trim and empty-filter.
+        let allow = resolve(&[(
+            "COVENANT_METAPLEX_ALLOW",
+            "das.get_asset, attest.audit_root ,,",
+        )])
+        .allow
+        .expect("allow set");
+        assert_eq!(allow, vec!["das.get_asset", "attest.audit_root"]);
+
+        // Non-gating string fields pass through verbatim.
+        let strings = resolve(&[
+            ("COVENANT_METAPLEX_RPC_URL", "https://rpc.example"),
+            ("COVENANT_METAPLEX_DAS_URL", "https://das.example"),
+            (
+                "COVENANT_METAPLEX_SIGNER_BIN",
+                "/bin/covenant-metaplex-signer",
+            ),
+            ("COVENANT_METAPLEX_COLLECTION", "Coll1111"),
+        ]);
+        assert_eq!(strings.rpc_url, "https://rpc.example");
+        assert_eq!(strings.das_url, "https://das.example");
+        assert_eq!(strings.signer_binary, "/bin/covenant-metaplex-signer");
+        assert_eq!(strings.collection, "Coll1111");
+    }
 }

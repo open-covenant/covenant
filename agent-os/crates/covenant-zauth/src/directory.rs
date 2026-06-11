@@ -306,4 +306,31 @@ mod tests {
             "expected DecodeDirectory carrying the raw body"
         );
     }
+
+    #[tokio::test]
+    async fn list_passes_offset_and_verified_false() {
+        // list_passes_query_params leaves the pagination offset arm and the
+        // verified=false stringification unexercised; this mock only matches if
+        // both reach the server with these exact values.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/directory"))
+            .and(query_param("verified", "false"))
+            .and(query_param("offset", "40"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(LIVE_SAMPLE))
+            .mount(&server)
+            .await;
+
+        let client = DirectoryClient::with_base_url(reqwest::Client::new(), server.uri());
+        let page = client
+            .list(ListQuery {
+                verified: Some(false),
+                network: None,
+                limit: None,
+                offset: Some(40),
+            })
+            .await
+            .expect("offset and verified=false must both reach the server");
+        assert_eq!(page.endpoints.len(), 1);
+    }
 }

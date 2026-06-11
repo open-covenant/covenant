@@ -3,13 +3,16 @@
 // into the incumbent kernel and runs it through the full gate stack in an
 // isolated worktree. Score-only — promotion stays with the operator.
 //
-//   node bench-submission.mjs <submission.rs> [--fn find_newline]
-//     [--occurrence 1] [--handle @someone]
+//   node bench-submission.mjs <submission.rs> [--handle @someone]
+//     [--fn name] [--occurrence 1] [--block]
 //
-// The submission file must contain the complete replacement item including
-// any attributes (e.g. #[cfg(target_arch = "wasm32")]). Occurrence 1 of a
-// name is the first definition in the file (for find_newline: the wasm path
-// the fuel meter actually measures).
+// Three submission shapes:
+//   default: every `fn name` defined in the file replaces occurrence 1 of
+//            the same-named item in the kernel (the wasm/metered path);
+//   --fn:    replace exactly one named function (--occurrence to pick twins);
+//   --block: the file is a complete EVOLVE block, spliced on the markers.
+// Replacement items must be complete, including attributes
+// (e.g. #[cfg(target_arch = "wasm32")]).
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -25,8 +28,9 @@ const archiveDir = join(here, "kernel-archive");
 const argv = process.argv.slice(2);
 const file = argv[0];
 const opt = (f, d) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : d; };
-const fnName = opt("--fn", "find_newline");
+const fnName = opt("--fn", null);
 const occurrence = parseInt(opt("--occurrence", "1"), 10);
+const blockMode = argv.includes("--block");
 const handle = opt("--handle", "community");
 if (!file) { console.error("usage: bench-submission.mjs <submission.rs> [--fn name] [--occurrence n] [--handle @x]"); process.exit(2); }
 
@@ -73,25 +77,63 @@ const baseSrc = sh("git", ["-C", repoRoot, "show", `${task.base}:${task.evolveFi
 if (!baseSrc.ok) { console.error(`cannot read kernel at base ${task.base}`); process.exit(1); }
 const src = baseSrc.out;
 
-const needle = new RegExp(`\\bfn\\s+${fnName}\\s*[(<]`, "g");
-const hits = [...src.matchAll(needle)];
-if (hits.length < occurrence) { console.error(`found ${hits.length} definition(s) of ${fnName}, wanted occurrence ${occurrence}`); process.exit(1); }
-const fnIdx = hits[occurrence - 1].index;
-const start = itemStart(src, fnIdx);
-const end = itemEnd(src, src.indexOf("{", fnIdx));
-
 const submission = readFileSync(file, "utf8").trim();
-if (!submission.includes(`fn ${fnName}`)) { console.error(`submission does not define fn ${fnName}`); process.exit(1); }
-const indent = "    ";
-const indented = submission.split("\n").map((l) => (l.trim() ? indent + l : l)).join("\n").replace(/^ +/, indent);
-const candidateSrc = src.slice(0, start) + indented + "\n" + src.slice(end).replace(/^\n/, "");
+
+function spliceFn(source, name, item, occ) {
+  const needle = new RegExp(`\\bfn\\s+${name}\\s*[(<]`, "g");
+  const hits = [...source.matchAll(needle)];
+  if (hits.length < occ) throw new Error(`found ${hits.length} definition(s) of ${name}, wanted occurrence ${occ}`);
+  const fnIdx = hits[occ - 1].index;
+  const start = itemStart(source, fnIdx);
+  const end = itemEnd(source, source.indexOf("{", fnIdx));
+  const indent = "    ";
+  const indented = item.split("\n").map((l) => (l.trim() ? indent + l : l)).join("\n").replace(/^ +/, indent);
+  return source.slice(0, start) + indented + "\n" + source.slice(end).replace(/^\n/, "");
+}
+
+// Split the submission file into top-level fn items (attrs + body).
+function submissionItems(text) {
+  const items = [];
+  const needle = /(^|\n)\s*(#\[|\/\/\/|\/\/)?/;
+  const fnRe = /\bfn\s+([A-Za-z0-9_]+)\s*[(<]/g;
+  let m;
+  const starts = [];
+  while ((m = fnRe.exec(text))) starts.push({ name: m[1], idx: m.index });
+  for (let i = 0; i < starts.length; i++) {
+    const start = itemStart(text, starts[i].idx);
+    const end = itemEnd(text, text.indexOf("{", starts[i].idx));
+    // skip fns nested inside a previous item
+    if (items.length && start < items[items.length - 1].end) continue;
+    items.push({ name: starts[i].name, start, end });
+  }
+  return items.map((it) => ({ name: it.name, text: text.slice(it.start, it.end), end: it.end }));
+}
+
+let candidateSrc;
+if (blockMode) {
+  const START = "// EVOLVE-BLOCK-START";
+  const END = "// EVOLVE-BLOCK-END";
+  const sa = src.indexOf(START), sb = src.indexOf(END);
+  const ba = submission.indexOf(START), bb = submission.lastIndexOf(END);
+  if (ba < 0 || bb <= ba) { console.error("submission is not a complete EVOLVE block"); process.exit(1); }
+  candidateSrc = src.slice(0, sa) + submission.slice(ba, bb + END.length) + src.slice(sb + END.length);
+} else if (fnName) {
+  if (!submission.includes(`fn ${fnName}`)) { console.error(`submission does not define fn ${fnName}`); process.exit(1); }
+  candidateSrc = spliceFn(src, fnName, submission, occurrence);
+} else {
+  const items = submissionItems(submission);
+  if (!items.length) { console.error("no fn definitions found in submission"); process.exit(1); }
+  candidateSrc = src;
+  for (const it of items) candidateSrc = spliceFn(candidateSrc, it.name, it.text, 1);
+  console.log(`replacing: ${items.map((i) => i.name).join(", ")}`);
+}
 
 mkdirSync(archiveDir, { recursive: true });
 const stampSafe = handle.replace(/[^a-z0-9_-]/gi, "");
 const candidateFile = join(archiveDir, `community-${stampSafe}-${Date.now()}.rs`);
 writeFileSync(candidateFile, candidateSrc);
 
-console.log(`scoring submission from ${handle} (replacing ${fnName} #${occurrence}, base ${task.base.slice(0, 8)})…`);
+console.log(`scoring submission from ${handle} (${blockMode ? "full block" : fnName ? `${fnName} #${occurrence}` : "auto-detected fns"}, base ${task.base.slice(0, 8)})…`);
 const r = sh("node", [benchRun, "--task", "audit-kernel-fuel", "--solver", `cmd:cp ${candidateFile} ${task.evolveFile}`, "--json"]);
 if (!r.ok) { console.error(`bench failed: ${r.out.slice(-400)}`); process.exit(1); }
 const result = JSON.parse(r.out.slice(r.out.indexOf("{"))).results[0];

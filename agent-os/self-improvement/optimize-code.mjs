@@ -27,6 +27,7 @@ const argv = process.argv.slice(2);
 const opt = (f, d) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : d; };
 const proposerModel = opt("--model", "claude-fable-5");
 const grokModel = opt("--grok-model", "grok-4.3");
+const codexModel = opt("--codex-model", "gpt-5.5");
 // 0.005 since 2026-06-10 (was 0.02): the fuel metric is deterministic, so
 // any measured gain is real; the old margin systematically killed small-gain
 // styles. Disclosed in docs/arena-challenge.md, applied prospectively.
@@ -47,6 +48,7 @@ function dotenv(name) {
   }
 }
 const xaiKey = dotenv("XAI_API_KEY");
+const openaiKey = dotenv("OPENAI_API_KEY");
 
 function sh(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...opts });
@@ -157,6 +159,21 @@ ${block}
       },
     },
     {
+      name: "codex",
+      model: codexModel,
+      call: (messages, attempt) => {
+        if (!openaiKey) throw new Error("OPENAI_API_KEY not set");
+        const bodyFile = join(archiveDir, `${stamp}-codex-request-${attempt}.json`);
+        writeFileSync(bodyFile, JSON.stringify({ model: codexModel, messages, max_completion_tokens: 100000, reasoning_effort: "high" }));
+        const r = sh("curl", ["-s", "-m", "1800", "-X", "POST", "https://api.openai.com/v1/chat/completions", "-H", `Authorization: Bearer ${openaiKey}`, "-H", "Content-Type: application/json", "--data", `@${bodyFile}`]);
+        if (!r.ok) throw new Error(`openai request failed: ${r.out.slice(-200)}`);
+        const d = JSON.parse(r.out);
+        if (!d.choices) throw new Error(`openai error: ${JSON.stringify(d).slice(0, 300)}`);
+        if (d.choices[0].finish_reason === "length") throw new Error("openai output truncated at max_completion_tokens");
+        return d.choices[0].message.content;
+      },
+    },
+    {
       name: "fable",
       model: proposerModel,
       // Empty scratch cwd: the CLI proposer is an agent with tools and will
@@ -174,7 +191,7 @@ ${block}
         return r.out;
       },
     },
-  ].filter((p) => p.name !== "grok" || xaiKey);
+  ].filter((p) => (p.name !== "grok" || xaiKey) && (p.name !== "codex" || openaiKey));
 
   // v2 rules: every proposer gets up to `attempts` tries with gate/fuel
   // feedback between tries, stopping early once it holds a promotable

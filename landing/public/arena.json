@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-06-11T18:07:43.002Z",
+  "updatedAt": "2026-06-11T22:23:42.517Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
@@ -9,6 +9,7 @@
   "tally": {
     "Claude": 6,
     "Grok": 0,
+    "Codex": 0,
     "rejectedRounds": 1
   },
   "curve": [

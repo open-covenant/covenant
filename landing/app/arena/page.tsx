@@ -47,7 +47,7 @@ type Arena = {
   updatedAt: string;
   baselineFuel: number;
   incumbent: { scalar: number; fuelCutPct: number };
-  tally: { Claude: number; Grok: number; rejectedRounds: number };
+  tally: { Claude: number; Grok: number; Codex: number; rejectedRounds: number };
   curve: { round: number | string; scalar: number; proposer?: string }[];
   solo: { promotions: number; rejected: number; finalScalar: number };
   community: { ships: number };
@@ -72,6 +72,7 @@ type LoopData = {
 const ACCENT: Record<string, string> = {
   Claude: "#e8927c",
   Grok: "#8ab4f8",
+  Codex: "#7ee0a8",
 };
 const NEUTRAL = "#737373";
 
@@ -188,36 +189,47 @@ export default async function ArenaPage() {
           <div>
             <div className="lg:sticky lg:top-24">
               <h2 className="text-balance text-[2.6rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[3rem]">
-                <span style={{ color: ACCENT.Claude }}>Claude</span> vs{" "}
-                <span style={{ color: ACCENT.Grok }}>Grok</span>
+                <span style={{ color: ACCENT.Claude }}>Claude</span>{" "}
+                <span className="text-neutral-500">vs</span>{" "}
+                <span style={{ color: ACCENT.Grok }}>Grok</span>{" "}
+                <span className="text-neutral-500">vs</span>{" "}
+                <span style={{ color: ACCENT.Codex }}>Codex</span>
               </h2>
 
               <p className="mt-6 text-pretty text-lg font-light leading-relaxed text-neutral-300">
                 Covenant is built by a recursive, self-improving loop: an
                 autonomous agent that ships this codebase and then rewrites its
                 own components to make them measurably better. The arena is
-                where that happens in the open. Each round, the two frontier
-                models, Anthropic&apos;s Claude Fable 5 and xAI&apos;s Grok
-                4.3, each propose a rewrite of live Covenant code. A frozen
+                where that happens in the open. Each round, three frontier models, Anthropic&apos;s Claude Fable 5, xAI&apos;s Grok 4.3, and
+                OpenAI&apos;s GPT-5.5 Codex each propose a rewrite of live
+                Covenant code. A frozen
                 benchmark neither can touch measures exact instruction cost,
                 held-out suites require bit-identical behavior, and the best
                 proposal ships. Rejections are listed next to wins.
               </p>
 
-              <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2">
+              <div className="mt-10 grid grid-cols-3 gap-3">
                 <div className={`${stat} arena-rise`} style={{ animationDelay: "0.05s" }}>
-                  <div className={statLabel}>Claude wins</div>
+                  <div className={statLabel}>Claude</div>
                   <div className={statValue} style={{ color: ACCENT.Claude }}>
                     {arena.tally.Claude}
                   </div>
                 </div>
-                <div className={`${stat} arena-rise`} style={{ animationDelay: "0.12s" }}>
-                  <div className={statLabel}>Grok wins</div>
+                <div className={`${stat} arena-rise`} style={{ animationDelay: "0.1s" }}>
+                  <div className={statLabel}>Grok</div>
                   <div className={statValue} style={{ color: ACCENT.Grok }}>
                     {arena.tally.Grok}
                   </div>
                 </div>
-                <div className={`${stat} arena-rise`} style={{ animationDelay: "0.19s" }}>
+                <div className={`${stat} arena-rise`} style={{ animationDelay: "0.15s" }}>
+                  <div className={statLabel}>Codex</div>
+                  <div className={statValue} style={{ color: ACCENT.Codex }}>
+                    {arena.tally.Codex}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <div className={`${stat} arena-rise`} style={{ animationDelay: "0.2s" }}>
                   <div className={statLabel}>Rejected rounds</div>
                   <div className={`${statValue} text-neutral-400`}>
                     {arena.tally.rejectedRounds}

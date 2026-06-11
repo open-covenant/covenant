@@ -702,4 +702,141 @@ mod tests {
             .expect("a DAS rpc error is a tool-error result, not a protocol error");
         assert!(res.is_error);
     }
+
+    struct RecordingSigner {
+        seen: std::sync::Mutex<Option<SignerRequest>>,
+    }
+    #[async_trait]
+    impl MetaplexSigner for RecordingSigner {
+        async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
+            *self.seen.lock().unwrap() = Some(request);
+            Ok(SignerResponse {
+                signature: "sig".into(),
+                asset: "asset".into(),
+                cluster: "devnet".into(),
+            })
+        }
+    }
+
+    /// Drive a write tool through the real `tool.call()` path and return the
+    /// `SignerRequest` `build_request` handed to the signer.
+    async fn captured_request(cfg: &MetaplexConfig, name: &str, args: Value) -> SignerRequest {
+        let rec = Arc::new(RecordingSigner {
+            seen: std::sync::Mutex::new(None),
+        });
+        let signer: Arc<dyn MetaplexSigner> = rec.clone();
+        let tool = metaplex_tool(cfg, name, Arc::new(NullDas), Some(signer)).unwrap();
+        tool.call(args).await.unwrap();
+        let req = rec.seen.lock().unwrap().clone();
+        req.expect("signer received a request")
+    }
+
+    fn attest_args() -> Value {
+        json!({
+            "rootHashHex": "a".repeat(64),
+            "releaseTarget": "v0.1.0",
+            "releaseSubject": "covenant",
+            "releaseScope": "audit",
+            "recordedAt": 1_700_000_000u64,
+        })
+    }
+
+    #[tokio::test]
+    async fn attest_build_request_pins_asset_none_and_collection_precedence() {
+        // config.collection empty + a caller collection arg: the arg is used,
+        // and asset stays None (v1 mints fresh, never appends to a caller asset).
+        let mut args = attest_args();
+        args["collection"] = json!("ArgColl1111111111111111111111111111111111111");
+        // A caller-supplied asset must be dropped: appending to an existing
+        // asset is not wired, so a passed `asset` must never reach the request.
+        args["asset"] = json!("CallerAsset111111111111111111111111111111111");
+        match captured_request(&enabled_all(), "metaplex.attest.audit_root", args).await {
+            SignerRequest::AttestAuditRoot {
+                payload,
+                asset,
+                collection,
+            } => {
+                assert_eq!(
+                    asset, None,
+                    "a caller-supplied asset must never reach the request"
+                );
+                assert_eq!(
+                    collection.as_deref(),
+                    Some("ArgColl1111111111111111111111111111111111111")
+                );
+                assert_eq!(payload.root_hash_hex, "a".repeat(64));
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+
+        // config.collection set: it overrides the caller's collection arg.
+        let mut cfg = enabled_all();
+        cfg.collection = "ConfigColl11111111111111111111111111111111".into();
+        let mut args = attest_args();
+        args["collection"] = json!("ArgColl1111111111111111111111111111111111111");
+        match captured_request(&cfg, "metaplex.attest.audit_root", args).await {
+            SignerRequest::AttestAuditRoot { collection, .. } => assert_eq!(
+                collection.as_deref(),
+                Some("ConfigColl11111111111111111111111111111111"),
+                "operator config collection overrides the caller arg"
+            ),
+            other => panic!("unexpected request: {other:?}"),
+        }
+
+        // config empty + no arg: no collection pin, asset still None.
+        match captured_request(&enabled_all(), "metaplex.attest.audit_root", attest_args()).await {
+            SignerRequest::AttestAuditRoot {
+                collection, asset, ..
+            } => {
+                assert_eq!(collection, None);
+                assert_eq!(asset, None);
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn identity_build_request_pins_asset_none_and_uri_fallback() {
+        // A caller-supplied asset must be dropped here too.
+        let args = json!({
+            "agentLabel": "agent@local",
+            "agentPubkey": "Agent11111111111111111111111111111111111111",
+            "asset": "CallerAsset111111111111111111111111111111111",
+        });
+        match captured_request(&enabled_all(), "metaplex.identity.register", args).await {
+            SignerRequest::RegisterIdentity {
+                agent_label,
+                agent_pubkey,
+                asset,
+                registration_uri,
+            } => {
+                assert_eq!(
+                    asset, None,
+                    "a caller-supplied asset must never reach the request"
+                );
+                assert_eq!(
+                    registration_uri, None,
+                    "an omitted uri stays None here; the covenant:// fallback is derived downstream, not an empty string"
+                );
+                assert_eq!(agent_label, "agent@local");
+                assert_eq!(agent_pubkey, "Agent11111111111111111111111111111111111111");
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_asset_proof_dispatches_through_read_tool() {
+        let cfg = enabled_reads();
+        let tool = metaplex_tool(
+            &cfg,
+            "metaplex.das.get_asset_proof",
+            Arc::new(EchoDas),
+            None,
+        )
+        .unwrap();
+        let res = tool.call(json!({ "id": "cnft-1" })).await.unwrap();
+        assert!(!res.is_error);
+        assert_eq!(res.content, vec![Content::json(json!({ "id": "cnft-1" }))]);
+    }
 }

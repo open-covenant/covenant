@@ -226,4 +226,32 @@ mod tests {
             other => panic!("unexpected request: {other:?}"),
         }
     }
+
+    #[test]
+    fn registration_uri_rejects_non_whitespace_control_chars() {
+        // The whitespace test covers is_whitespace(); these are control but not
+        // whitespace, exercising the is_control() half on its own. A NUL/ESC/DEL
+        // inscribed into an on-chain URI is a render-injection risk.
+        for uri in [
+            "https://a.example/\u{0}",
+            "https://a.example/\u{1b}",
+            "https://a.example/\u{7f}",
+        ] {
+            assert!(
+                validate_registration_uri(uri).is_err(),
+                "control char in {uri:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn registration_uri_length_cap_is_inclusive_at_200_bytes() {
+        // "https://" is 8 bytes, so 8 + 192 = 200 is the accepted maximum.
+        validate_registration_uri(&format!("https://{}", "a".repeat(192)))
+            .expect("exactly 200 bytes is within the cap");
+        assert!(
+            validate_registration_uri(&format!("https://{}", "a".repeat(193))).is_err(),
+            "201 bytes is over the cap"
+        );
+    }
 }

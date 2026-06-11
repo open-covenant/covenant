@@ -17,6 +17,7 @@ export const DOCS_PUBLISHED_DATE = "2026-05-13";
 
 export const NAV_LINKS = [
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
+  { label: "arena", href: "/arena", external: false as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
   { label: "roadmap", href: "/roadmap", external: false as const },
   { label: "about", href: "/about", external: false as const },

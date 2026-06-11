@@ -116,6 +116,8 @@ impl DasClient for HttpDasClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn empty_endpoint_is_not_configured() {
@@ -141,5 +143,74 @@ mod tests {
             c.search_assets(json!({})).await.expect_err("search"),
             DasError::NotConfigured
         ));
+    }
+
+    async fn das_returning(body: ResponseTemplate) -> (MockServer, HttpDasClient) {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(body)
+            .mount(&server)
+            .await;
+        let client = HttpDasClient::new(server.uri());
+        (server, client)
+    }
+
+    #[tokio::test]
+    async fn rpc_returns_the_result_value() {
+        let (_s, c) = das_returning(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": "covenant-metaplex",
+            "result": { "id": "asset-1", "ownership": { "owner": "wallet" } }
+        })))
+        .await;
+        let v = c.get_asset("asset-1").await.expect("result");
+        assert_eq!(
+            v,
+            json!({ "id": "asset-1", "ownership": { "owner": "wallet" } })
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_surfaces_a_jsonrpc_error_as_rpc_error() {
+        let (_s, c) = das_returning(ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "error": { "code": -32000, "message": "asset not found" }
+        })))
+        .await;
+        let err = c.get_asset("missing").await.expect_err("rpc error");
+        assert!(
+            matches!(err, DasError::Rpc(m) if m.contains("asset not found")),
+            "an rpc error must not read as a successful empty result"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_treats_an_explicit_null_error_as_success() {
+        // Some providers always include the "error" key; a null error is not an
+        // error and must not discard a valid result.
+        let (_s, c) = das_returning(ResponseTemplate::new(200).set_body_json(json!({
+            "error": null,
+            "result": { "ok": 1 }
+        })))
+        .await;
+        let v = c.get_asset("x").await.expect("null error is not an error");
+        assert_eq!(v, json!({ "ok": 1 }));
+    }
+
+    #[tokio::test]
+    async fn rpc_missing_result_field_is_null() {
+        let (_s, c) =
+            das_returning(ResponseTemplate::new(200).set_body_json(json!({ "jsonrpc": "2.0" })))
+                .await;
+        let v = c.get_asset("x").await.expect("no result field");
+        assert_eq!(v, Value::Null);
+    }
+
+    #[tokio::test]
+    async fn rpc_non_json_body_is_a_transport_error() {
+        let (_s, c) =
+            das_returning(ResponseTemplate::new(200).set_body_string("<html>gateway</html>")).await;
+        let err = c.get_asset("x").await.expect_err("non-json");
+        assert!(matches!(err, DasError::Transport(_)));
     }
 }

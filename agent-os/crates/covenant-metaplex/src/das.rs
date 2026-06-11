@@ -214,6 +214,36 @@ mod tests {
         assert!(matches!(err, DasError::Transport(_)));
     }
 
+    #[tokio::test]
+    async fn rpc_non_json_error_body_carries_the_http_status() {
+        // DAS providers behind a gateway return a non-JSON HTML page on a 5xx.
+        // The transport error must carry the HTTP status so an operator can
+        // tell an outage apart from a malformed payload.
+        let (_s, c) =
+            das_returning(ResponseTemplate::new(503).set_body_string("<html>gateway</html>")).await;
+        let err = c.get_asset("x").await.expect_err("503 html");
+        assert!(
+            matches!(err, DasError::Transport(ref m) if m.contains("503")),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_jsonrpc_error_body_wins_over_a_5xx_status() {
+        // A structured JSON-RPC error body is surfaced as an Rpc error even on
+        // a 5xx status: the body error is not masked into a generic transport
+        // error by the HTTP status.
+        let (_s, c) = das_returning(ResponseTemplate::new(500).set_body_json(json!({
+            "error": { "code": -32000, "message": "boom" }
+        })))
+        .await;
+        let err = c.get_asset("x").await.expect_err("500 rpc error");
+        assert!(
+            matches!(err, DasError::Rpc(ref m) if m.contains("boom")),
+            "got {err:?}"
+        );
+    }
+
     /// Mount a server that only answers when the request body is exactly
     /// `expected`, so a drifted method name or param key 404s into an error.
     async fn das_expecting(expected: Value) -> (MockServer, HttpDasClient) {

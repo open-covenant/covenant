@@ -151,11 +151,11 @@ function Curve({ points }: { points: Arena["curve"] }) {
 function DailyBars({ data }: { data: { date: string; count: number }[] }) {
   const max = Math.max(1, ...data.map((d) => d.count));
   return (
-    <div className="mt-5 flex h-28 items-end gap-[3px]">
+    <div className="mt-5 flex h-28 items-end justify-between gap-[6px]">
       {data.map((d, i) => (
-        <div key={i} className="group relative flex h-full flex-1 items-end">
+        <div key={i} className="group relative flex h-full w-[3px] items-end">
           <div
-            className="arena-grow-y w-full rounded-sm bg-neutral-200 transition-colors group-hover:bg-white"
+            className="arena-grow-y w-full bg-neutral-600 transition-colors group-hover:bg-neutral-300"
             style={{ height: `${Math.max(3, (d.count / max) * 100)}%`, animationDelay: `${0.3 + i * 0.04}s` }}
           >
             <title>{`${d.date}: ${d.count} integrated`}</title>

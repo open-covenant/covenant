@@ -602,6 +602,40 @@ mod tests {
     }
 
     #[test]
+    fn build_attest_rejects_a_malformed_request_collection() {
+        // The request-collection arm parses the caller-supplied pin before the
+        // env fallback; a bad value is a hard error tagged "request collection"
+        // so it is distinguishable from a bad COVENANT_METAPLEX_COLLECTION.
+        let req = SignerRequest::AttestAuditRoot {
+            payload: valid_payload(),
+            collection: Some("not-base58!!".into()),
+            asset: None,
+        };
+        let err = build_err(&req);
+        assert!(err.contains("request collection"), "{err}");
+    }
+
+    #[test]
+    fn build_attest_accepts_a_valid_request_collection() {
+        // A valid caller-supplied collection parses and builds the same two
+        // instructions at the same payload-sized cost as the no-collection
+        // case: a collection account does not perturb the cost estimate.
+        let payload = valid_payload();
+        let req = SignerRequest::AttestAuditRoot {
+            payload: payload.clone(),
+            collection: Some(Pubkey::new_unique().to_string()),
+            asset: None,
+        };
+        let built = build(&req, &Keypair::new()).unwrap();
+        assert_eq!(built.instructions.len(), 2);
+        let data_len = serde_json::to_vec(&payload).unwrap().len() as u64;
+        assert_eq!(
+            built.est_lamports,
+            ASSET_BASE_LAMPORTS + CORE_PROTOCOL_FEE_LAMPORTS + LAMPORTS_PER_DATA_BYTE * data_len
+        );
+    }
+
+    #[test]
     fn build_register_falls_back_to_the_covenant_uri_and_prices_it() {
         let agent_pubkey = Pubkey::new_unique().to_string();
         let req = SignerRequest::RegisterIdentity {

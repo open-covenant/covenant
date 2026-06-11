@@ -796,6 +796,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attest_rejects_missing_or_non_integer_recorded_at() {
+        // recordedAt must be an integer; build_request refuses before any
+        // signer round-trip so a missing or non-integer timestamp never lands
+        // on-chain. Value::as_u64 yields None for a JSON string or a float.
+        let tool = metaplex_tool(
+            &enabled_all(),
+            "metaplex.attest.audit_root",
+            Arc::new(NullDas),
+            Some(Arc::new(CapturingSigner)),
+        )
+        .unwrap();
+
+        let mut absent = attest_args();
+        absent.as_object_mut().unwrap().remove("recordedAt");
+        let mut as_string = attest_args();
+        as_string["recordedAt"] = json!("1700000000");
+        let mut as_float = attest_args();
+        as_float["recordedAt"] = json!(1.5);
+
+        for (label, args) in [
+            ("absent", absent),
+            ("string", as_string),
+            ("float", as_float),
+        ] {
+            let err = tool
+                .call(args)
+                .await
+                .expect_err("a non-integer recordedAt must be refused before signing");
+            assert!(
+                matches!(err, ToolError::InvalidArguments(ref m) if m.contains("recordedAt")),
+                "{label}: got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn attest_rejects_an_empty_required_string_field() {
+        // str_arg treats an empty string as missing, so an empty releaseTarget
+        // is refused before it can be signed into an attestation's provenance
+        // fields — a distinct branch from an absent key.
+        let tool = metaplex_tool(
+            &enabled_all(),
+            "metaplex.attest.audit_root",
+            Arc::new(NullDas),
+            Some(Arc::new(CapturingSigner)),
+        )
+        .unwrap();
+        let mut args = attest_args();
+        args["releaseTarget"] = json!("");
+        let err = tool
+            .call(args)
+            .await
+            .expect_err("an empty releaseTarget must be rejected");
+        assert!(
+            matches!(err, ToolError::InvalidArguments(ref m) if m.contains("releaseTarget")),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn identity_build_request_pins_asset_none_and_uri_fallback() {
         // A caller-supplied asset must be dropped here too.
         let args = json!({

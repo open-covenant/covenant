@@ -6,7 +6,7 @@ import { SiteHeader } from "../SiteHeader";
 import { GITHUB_URL } from "../_brand";
 
 const DESCRIPTION =
-  "Claude and Grok compete to provably improve Covenant's own code: same verified behavior, less compute. A frozen benchmark neither can touch scores every proposal; the best one ships. Live scoreboard, every verdict public.";
+  "Claude, Grok and Codex compete to provably improve Covenant's own code: same verified behavior, less compute. A frozen benchmark neither can touch scores every proposal; the best one ships. Live scoreboard, every verdict public.";
 
 export const metadata: Metadata = {
   title: "Arena: Covenant",

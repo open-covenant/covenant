@@ -164,7 +164,11 @@ ${block}
       call: (messages, attempt) => {
         if (!openaiKey) throw new Error("OPENAI_API_KEY not set");
         const bodyFile = join(archiveDir, `${stamp}-codex-request-${attempt}.json`);
-        writeFileSync(bodyFile, JSON.stringify({ model: codexModel, messages, max_completion_tokens: 100000, reasoning_effort: "high" }));
+        // 128k is gpt-5.x max output. The EVOLVE block alone is ~37k tokens to
+        // echo, and reasoning_effort:high spends tens of thousands thinking, so
+        // anything tighter truncates the block — an unfair disadvantage the
+        // no-cap CLI proposer never faces as the kernel grows.
+        writeFileSync(bodyFile, JSON.stringify({ model: codexModel, messages, max_completion_tokens: 128000, reasoning_effort: "high" }));
         const r = sh("curl", ["-s", "-m", "1800", "-X", "POST", "https://api.openai.com/v1/chat/completions", "-H", `Authorization: Bearer ${openaiKey}`, "-H", "Content-Type: application/json", "--data", `@${bodyFile}`]);
         if (!r.ok) throw new Error(`openai request failed: ${r.out.slice(-200)}`);
         const d = JSON.parse(r.out);

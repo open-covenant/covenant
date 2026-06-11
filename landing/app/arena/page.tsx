@@ -160,6 +160,10 @@ export default async function ArenaPage() {
         .arena-draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: arenaDraw 1.8s cubic-bezier(0.4, 0, 0.2, 1) 0.2s forwards; }
         .arena-pop { opacity: 0; animation: arenaPop 0.5s ease-out forwards; }
         .arena-rise { opacity: 0; animation: arenaRise 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .arena-scroll { scrollbar-width: thin; scrollbar-color: #404040 transparent; }
+        .arena-scroll::-webkit-scrollbar { width: 4px; }
+        .arena-scroll::-webkit-scrollbar-thumb { background: #404040; border-radius: 2px; }
+        .arena-scroll::-webkit-scrollbar-track { background: transparent; }
         @media (prefers-reduced-motion: reduce) {
           .arena-draw, .arena-pop, .arena-rise { animation: none; opacity: 1; stroke-dashoffset: 0; transform: none; }
         }
@@ -281,6 +285,7 @@ export default async function ArenaPage() {
           </div>
 
           <div className="mt-16 lg:mt-0">
+            <div className="arena-scroll lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto lg:pr-4">
             <ol className="relative">
               {arena.rounds.map((r, i) => {
                 const isLast = i === arena.rounds.length - 1;
@@ -370,6 +375,7 @@ export default async function ArenaPage() {
             <p className="mt-12 text-[11px] uppercase tracking-[0.25em] text-neutral-600 lg:hidden">
               Updated {new Date(arena.updatedAt).toUTCString()}
             </p>
+            </div>
           </div>
         </div>
         {loop && (

@@ -116,7 +116,7 @@ impl DasClient for HttpDasClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::method;
+    use wiremock::matchers::{body_json, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -212,5 +212,74 @@ mod tests {
             das_returning(ResponseTemplate::new(200).set_body_string("<html>gateway</html>")).await;
         let err = c.get_asset("x").await.expect_err("non-json");
         assert!(matches!(err, DasError::Transport(_)));
+    }
+
+    /// Mount a server that only answers when the request body is exactly
+    /// `expected`, so a drifted method name or param key 404s into an error.
+    async fn das_expecting(expected: Value) -> (MockServer, HttpDasClient) {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_json(expected))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "result": "ok" })))
+            .mount(&server)
+            .await;
+        let client = HttpDasClient::new(server.uri());
+        (server, client)
+    }
+
+    #[tokio::test]
+    async fn get_asset_sends_the_getasset_envelope() {
+        let (_s, c) = das_expecting(json!({
+            "jsonrpc": "2.0",
+            "id": "covenant-metaplex",
+            "method": "getAsset",
+            "params": { "id": "a" }
+        }))
+        .await;
+        c.get_asset("a")
+            .await
+            .expect("getAsset envelope must match");
+    }
+
+    #[tokio::test]
+    async fn get_asset_proof_sends_the_getassetproof_envelope() {
+        let (_s, c) = das_expecting(json!({
+            "jsonrpc": "2.0",
+            "id": "covenant-metaplex",
+            "method": "getAssetProof",
+            "params": { "id": "a" }
+        }))
+        .await;
+        c.get_asset_proof("a")
+            .await
+            .expect("getAssetProof envelope must match");
+    }
+
+    #[tokio::test]
+    async fn get_assets_by_owner_sends_owneraddress_limit_page() {
+        let (_s, c) = das_expecting(json!({
+            "jsonrpc": "2.0",
+            "id": "covenant-metaplex",
+            "method": "getAssetsByOwner",
+            "params": { "ownerAddress": "wallet", "limit": 25, "page": 3 }
+        }))
+        .await;
+        c.get_assets_by_owner("wallet", 25, 3)
+            .await
+            .expect("getAssetsByOwner envelope must match");
+    }
+
+    #[tokio::test]
+    async fn search_assets_passes_params_through_verbatim() {
+        let (_s, c) = das_expecting(json!({
+            "jsonrpc": "2.0",
+            "id": "covenant-metaplex",
+            "method": "searchAssets",
+            "params": { "ownerAddress": "w", "compressed": true }
+        }))
+        .await;
+        c.search_assets(json!({ "ownerAddress": "w", "compressed": true }))
+            .await
+            .expect("searchAssets params pass through verbatim");
     }
 }

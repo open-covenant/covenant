@@ -56,6 +56,18 @@ type Arena = {
 
 const RAW_URL =
   "https://raw.githubusercontent.com/open-covenant/covenant/feat/self-improvement/landing/public/arena.json";
+const LOOP_RAW_URL =
+  "https://raw.githubusercontent.com/open-covenant/covenant/feat/self-improvement/landing/public/loop.json";
+
+type LoopData = {
+  updatedAt: string;
+  branch: string;
+  totals: { events: number; tasks: number; integrated: number };
+  throughput: { last24h: number; last7d: number };
+  states: Record<string, number>;
+  inFlight: { task: string; state: string; since: string } | null;
+  recent: { at: string; task: string; note: string }[];
+};
 
 const ACCENT: Record<string, string> = {
   Claude: "#e8927c",
@@ -71,6 +83,19 @@ async function loadArena(): Promise<Arena> {
   return JSON.parse(
     readFileSync(join(process.cwd(), "public", "arena.json"), "utf8"),
   ) as Arena;
+}
+
+async function loadLoop(): Promise<LoopData | null> {
+  try {
+    const res = await fetch(LOOP_RAW_URL, { next: { revalidate: 60 } });
+    if (res.ok) return (await res.json()) as LoopData;
+  } catch {}
+  try {
+    return JSON.parse(
+      readFileSync(join(process.cwd(), "public", "loop.json"), "utf8"),
+    ) as LoopData;
+  } catch {}
+  return null;
 }
 
 function Curve({ points }: { points: Arena["curve"] }) {
@@ -120,7 +145,7 @@ function Curve({ points }: { points: Arena["curve"] }) {
 }
 
 export default async function ArenaPage() {
-  const arena = await loadArena();
+  const [arena, loop] = await Promise.all([loadArena(), loadLoop()]);
   const stat =
     "border border-neutral-800/80 px-5 py-5 text-center transition-colors duration-300 hover:border-neutral-600";
   const statLabel = "text-[10px] uppercase tracking-[0.3em] text-neutral-500";
@@ -347,6 +372,63 @@ export default async function ArenaPage() {
             </p>
           </div>
         </div>
+        {loop && (
+          <div className="mt-24 border-t border-neutral-800/80 pt-14 sm:mt-28">
+            <h2 className="text-balance text-[1.8rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[2rem]">
+              The loop
+            </h2>
+            <p className="mt-5 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300">
+              The arena optimizes one kernel. This is the loop that builds the
+              rest of Covenant: an autonomous agent working a task ledger
+              through plan, review, validation and integration, around the
+              clock. Live from its ledger.
+            </p>
+
+            <div className="mt-10 grid max-w-3xl grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="border border-neutral-800/80 px-5 py-5 text-center">
+                <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Tasks integrated</div>
+                <div className="mt-2 text-3xl font-extralight tabular-nums text-white">{loop.totals.integrated}</div>
+              </div>
+              <div className="border border-neutral-800/80 px-5 py-5 text-center">
+                <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Last 7 days</div>
+                <div className="mt-2 text-3xl font-extralight tabular-nums text-white">{loop.throughput.last7d}</div>
+              </div>
+              <div className="border border-neutral-800/80 px-5 py-5 text-center">
+                <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">Ledger events</div>
+                <div className="mt-2 text-3xl font-extralight tabular-nums text-white">{loop.totals.events}</div>
+              </div>
+              <div className="border border-neutral-800/80 px-5 py-5 text-center">
+                <div className="text-[10px] uppercase tracking-[0.3em] text-neutral-500">In flight</div>
+                <div className="mt-2 truncate text-sm font-light text-emerald-300" title={loop.inFlight?.task ?? "idle"}>
+                  {loop.inFlight ? loop.inFlight.task : "idle"}
+                </div>
+                <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                  {loop.inFlight?.state.replace("_", " ") ?? ""}
+                </div>
+              </div>
+            </div>
+
+            <p className="mt-10 text-[11px] uppercase tracking-[0.25em] text-neutral-500">
+              Recent integrations
+            </p>
+            <ul className="mt-4 max-w-3xl space-y-3">
+              {loop.recent.map((r, i) => (
+                <li key={i} className="flex flex-wrap items-baseline gap-x-3 text-sm font-light text-neutral-300">
+                  <span className="text-neutral-100">{r.task}</span>
+                  <span className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+                    {new Date(r.at).toUTCString().slice(5, 16)}
+                  </span>
+                  <span className="w-full text-[13px] leading-relaxed text-neutral-500">{r.note}…</span>
+                </li>
+              ))}
+            </ul>
+
+            <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-600">
+              Snapshot {new Date(loop.updatedAt).toUTCString()} · sanitized
+              aggregates from the loop&apos;s task ledger
+            </p>
+          </div>
+        )}
       </div>
 
       <SiteFooter />

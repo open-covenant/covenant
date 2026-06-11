@@ -56,5 +56,12 @@ const r = spawnSync("node", [join(here, "optimize-code.mjs"), "--iters", "1", "-
 appendFileSync(logPath, `${r.stdout ?? ""}${r.stderr ?? ""}`);
 log(`round finished (exit ${r.status})`);
 
+const loop = spawnSync("node", [join(here, "gen-loop.mjs")], { encoding: "utf8" });
+log(loop.status === 0 ? `loop.json refreshed: ${(loop.stdout ?? "").trim()}` : "loop.json refresh failed (non-fatal)");
+if (loop.status === 0) {
+  spawnSync("git", ["-C", repoRoot, "add", "landing/public/loop.json"], { encoding: "utf8" });
+  spawnSync("git", ["-C", repoRoot, "-c", "user.name=Covenant", "-c", "user.email=covenant@users.noreply.github.com", "commit", "-m", "arena: loop observatory snapshot", "--only", "landing/public/loop.json"], { encoding: "utf8" });
+}
+
 const push = spawnSync("git", ["-C", repoRoot, "push", "origin", "feat/self-improvement"], { encoding: "utf8" });
 log(push.status === 0 ? "pushed feat/self-improvement" : `PUSH FAILED: ${(push.stderr ?? "").slice(-200)}`);

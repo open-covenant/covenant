@@ -236,11 +236,8 @@ export default async function ArenaPage() {
           <div>
             <div className="arena-scroll lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto lg:pr-4">
               <h2 className="text-balance text-[2.6rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[3rem]">
-                <span style={{ color: ACCENT.Claude }}>Claude</span>{" "}
-                <span className="text-neutral-500">vs</span>{" "}
-                <span style={{ color: ACCENT.Grok }}>Grok</span>{" "}
-                <span className="text-neutral-500">vs</span>{" "}
-                <span style={{ color: ACCENT.Codex }}>Codex</span>
+                Claude <span className="text-neutral-500">vs</span> Grok{" "}
+                <span className="text-neutral-500">vs</span> Codex
               </h2>
 
               <p className="mt-6 text-pretty text-lg font-light leading-relaxed text-neutral-300">

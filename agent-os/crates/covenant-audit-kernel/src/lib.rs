@@ -223,6 +223,57 @@ mod imp {
         state[7] = state[7].wrapping_add(h);
     }
 
+    /// `compress_tail` over a byte-typed schedule: same rounds, with each
+    /// `w + K` word loaded as a constant-offset 4-byte chunk so the producer
+    /// can store whole u64 lanes.
+    #[cfg(target_arch = "wasm32")]
+    macro_rules! octtb {
+        ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:ident, $i:literal) => {
+            macro_rules! wkb {
+                ($j:expr) => {
+                    u32::from_le_bytes($wk[4 * $j..4 * $j + 4].try_into().expect("4-byte chunk"))
+                };
+            }
+            let x0 = $b ^ $c;
+            roundt!($a, $b, $c, $d, $e, $f, $g, $h, wkb!($i), x0, x1);
+            roundt!($h, $a, $b, $c, $d, $e, $f, $g, wkb!($i + 1), x1, x2);
+            roundt!($g, $h, $a, $b, $c, $d, $e, $f, wkb!($i + 2), x2, x3);
+            roundt!($f, $g, $h, $a, $b, $c, $d, $e, wkb!($i + 3), x3, x4);
+            roundt!($e, $f, $g, $h, $a, $b, $c, $d, wkb!($i + 4), x4, x5);
+            roundt!($d, $e, $f, $g, $h, $a, $b, $c, wkb!($i + 5), x5, x6);
+            roundt!($c, $d, $e, $f, $g, $h, $a, $b, wkb!($i + 6), x6, x7);
+            roundt!($b, $c, $d, $e, $f, $g, $h, $a, wkb!($i + 7), x7, _x8);
+        };
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn compress_tail_b(state: &mut [u32; 8], wk: &[u8; 256]) {
+        let mut a = state[0];
+        let mut b = state[1];
+        let mut c = state[2];
+        let mut d = state[3];
+        let mut e = state[4];
+        let mut f = state[5];
+        let mut g = state[6];
+        let mut h = state[7];
+        octtb!(a, b, c, d, e, f, g, h, wk, 0);
+        octtb!(a, b, c, d, e, f, g, h, wk, 8);
+        octtb!(a, b, c, d, e, f, g, h, wk, 16);
+        octtb!(a, b, c, d, e, f, g, h, wk, 24);
+        octtb!(a, b, c, d, e, f, g, h, wk, 32);
+        octtb!(a, b, c, d, e, f, g, h, wk, 40);
+        octtb!(a, b, c, d, e, f, g, h, wk, 48);
+        octtb!(a, b, c, d, e, f, g, h, wk, 56);
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+        state[5] = state[5].wrapping_add(f);
+        state[6] = state[6].wrapping_add(g);
+        state[7] = state[7].wrapping_add(h);
+    }
+
     /// Loop-based scalar SHA-256 for native builds (unit tests and the
     /// differential suite); the metered wasm path lives in the simd module.
     #[cfg(not(target_arch = "wasm32"))]
@@ -826,14 +877,14 @@ mod imp {
             out
         }
 
-        /// Four-message round whose `w + K` term is gathered per lane from a
-        /// precomputed tail schedule.
-        macro_rules! roundg {
-            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $i:expr, $t0:ident, $t1:ident, $t2:ident, $t3:ident) => {
-                let wk = u32x4($t0[$i], $t1[$i], $t2[$i], $t3[$i]);
+        /// Four-message round with the `w + K` term as a prebuilt vector;
+        /// octg transposes eight table rows at a time so the gather runs on
+        /// v128 loads instead of four scalar loads per round.
+        macro_rules! roundw {
+            ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:expr) => {
                 let t1v = u32x4_add(
                     u32x4_add(u32x4_add($h, big_sigma1($e)), v128_bitselect($f, $g, $e)),
-                    wk,
+                    $wk,
                 );
                 let t2v = u32x4_add(big_sigma0($a), v128_bitselect($c, $a, v128_xor($a, $b)));
                 $d = u32x4_add($d, t1v);
@@ -842,14 +893,26 @@ mod imp {
         }
         macro_rules! octg {
             ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $i:literal, $t0:ident, $t1:ident, $t2:ident, $t3:ident) => {
-                roundg!($a, $b, $c, $d, $e, $f, $g, $h, $i, $t0, $t1, $t2, $t3);
-                roundg!($h, $a, $b, $c, $d, $e, $f, $g, $i + 1, $t0, $t1, $t2, $t3);
-                roundg!($g, $h, $a, $b, $c, $d, $e, $f, $i + 2, $t0, $t1, $t2, $t3);
-                roundg!($f, $g, $h, $a, $b, $c, $d, $e, $i + 3, $t0, $t1, $t2, $t3);
-                roundg!($e, $f, $g, $h, $a, $b, $c, $d, $i + 4, $t0, $t1, $t2, $t3);
-                roundg!($d, $e, $f, $g, $h, $a, $b, $c, $i + 5, $t0, $t1, $t2, $t3);
-                roundg!($c, $d, $e, $f, $g, $h, $a, $b, $i + 6, $t0, $t1, $t2, $t3);
-                roundg!($b, $c, $d, $e, $f, $g, $h, $a, $i + 7, $t0, $t1, $t2, $t3);
+                let r0 = transpose32(
+                    u32x4($t0[$i], $t0[$i + 1], $t0[$i + 2], $t0[$i + 3]),
+                    u32x4($t1[$i], $t1[$i + 1], $t1[$i + 2], $t1[$i + 3]),
+                    u32x4($t2[$i], $t2[$i + 1], $t2[$i + 2], $t2[$i + 3]),
+                    u32x4($t3[$i], $t3[$i + 1], $t3[$i + 2], $t3[$i + 3]),
+                );
+                let r1 = transpose32(
+                    u32x4($t0[$i + 4], $t0[$i + 5], $t0[$i + 6], $t0[$i + 7]),
+                    u32x4($t1[$i + 4], $t1[$i + 5], $t1[$i + 6], $t1[$i + 7]),
+                    u32x4($t2[$i + 4], $t2[$i + 5], $t2[$i + 6], $t2[$i + 7]),
+                    u32x4($t3[$i + 4], $t3[$i + 5], $t3[$i + 6], $t3[$i + 7]),
+                );
+                roundw!($a, $b, $c, $d, $e, $f, $g, $h, r0[0]);
+                roundw!($h, $a, $b, $c, $d, $e, $f, $g, r0[1]);
+                roundw!($g, $h, $a, $b, $c, $d, $e, $f, r0[2]);
+                roundw!($f, $g, $h, $a, $b, $c, $d, $e, r0[3]);
+                roundw!($e, $f, $g, $h, $a, $b, $c, $d, r1[0]);
+                roundw!($d, $e, $f, $g, $h, $a, $b, $c, r1[1]);
+                roundw!($c, $d, $e, $f, $g, $h, $a, $b, r1[2]);
+                roundw!($b, $c, $d, $e, $f, $g, $h, $a, r1[3]);
             };
         }
 
@@ -963,7 +1026,7 @@ mod imp {
         /// like the constant tail block. Lanes past the slice reuse the
         /// first hex and are never read.
         #[target_feature(enable = "simd128")]
-        pub(super) fn mid_wk_quad(hexes: &[[u8; 64]], out: &mut [[u32; 64]; 4]) {
+        pub(super) fn mid_wk_quad(hexes: &[[u8; 64]], out: &mut [[u8; 256]; 4]) {
             let first = &hexes[0];
             let hx: [&[u8; 64]; 4] = [
                 first,
@@ -984,6 +1047,10 @@ mod imp {
             let [mut w4, mut w5, mut w6, mut w7] = q1;
             let [mut w8, mut w9, mut w10, mut w11] = q2;
             let [mut w12, mut w13, mut w14, mut w15] = q3;
+            // Each transposed row holds one lane's next four schedule
+            // words; two u64 lane extracts store them as 8-byte chunks, and
+            // the byte-typed table makes that an i64 store instead of four
+            // u32 extract/store pairs.
             macro_rules! emit {
                 ($i:literal, $a:ident, $b:ident, $c:ident, $d:ident) => {
                     let r = transpose32(
@@ -992,22 +1059,22 @@ mod imp {
                         u32x4_add($c, u32x4_splat(K[$i + 2])),
                         u32x4_add($d, u32x4_splat(K[$i + 3])),
                     );
-                    out[0][$i] = u32x4_extract_lane::<0>(r[0]);
-                    out[0][$i + 1] = u32x4_extract_lane::<1>(r[0]);
-                    out[0][$i + 2] = u32x4_extract_lane::<2>(r[0]);
-                    out[0][$i + 3] = u32x4_extract_lane::<3>(r[0]);
-                    out[1][$i] = u32x4_extract_lane::<0>(r[1]);
-                    out[1][$i + 1] = u32x4_extract_lane::<1>(r[1]);
-                    out[1][$i + 2] = u32x4_extract_lane::<2>(r[1]);
-                    out[1][$i + 3] = u32x4_extract_lane::<3>(r[1]);
-                    out[2][$i] = u32x4_extract_lane::<0>(r[2]);
-                    out[2][$i + 1] = u32x4_extract_lane::<1>(r[2]);
-                    out[2][$i + 2] = u32x4_extract_lane::<2>(r[2]);
-                    out[2][$i + 3] = u32x4_extract_lane::<3>(r[2]);
-                    out[3][$i] = u32x4_extract_lane::<0>(r[3]);
-                    out[3][$i + 1] = u32x4_extract_lane::<1>(r[3]);
-                    out[3][$i + 2] = u32x4_extract_lane::<2>(r[3]);
-                    out[3][$i + 3] = u32x4_extract_lane::<3>(r[3]);
+                    out[0][4 * $i..4 * $i + 8]
+                        .copy_from_slice(&u64x2_extract_lane::<0>(r[0]).to_le_bytes());
+                    out[0][4 * $i + 8..4 * $i + 16]
+                        .copy_from_slice(&u64x2_extract_lane::<1>(r[0]).to_le_bytes());
+                    out[1][4 * $i..4 * $i + 8]
+                        .copy_from_slice(&u64x2_extract_lane::<0>(r[1]).to_le_bytes());
+                    out[1][4 * $i + 8..4 * $i + 16]
+                        .copy_from_slice(&u64x2_extract_lane::<1>(r[1]).to_le_bytes());
+                    out[2][4 * $i..4 * $i + 8]
+                        .copy_from_slice(&u64x2_extract_lane::<0>(r[2]).to_le_bytes());
+                    out[2][4 * $i + 8..4 * $i + 16]
+                        .copy_from_slice(&u64x2_extract_lane::<1>(r[2]).to_le_bytes());
+                    out[3][4 * $i..4 * $i + 8]
+                        .copy_from_slice(&u64x2_extract_lane::<0>(r[3]).to_le_bytes());
+                    out[3][4 * $i + 8..4 * $i + 16]
+                        .copy_from_slice(&u64x2_extract_lane::<1>(r[3]).to_le_bytes());
                 };
             }
             emit!(0, w0, w1, w2, w3);
@@ -1082,13 +1149,13 @@ mod imp {
         #[target_feature(enable = "simd128")]
         pub(super) fn link_hex_mid(
             previous: &[u8; 64],
-            mid_wk: &[u32; 64],
+            mid_wk: &[u8; 256],
             last: u8,
             tail: &[[u32; 64]; 16],
         ) -> [u8; 64] {
             let mut state = H0;
             compress_block(&mut state, previous);
-            super::compress_tail(&mut state, mid_wk);
+            super::compress_tail_b(&mut state, mid_wk);
             super::compress_tail(&mut state, &tail[super::tail_idx(last)]);
             hex_state(&state)
         }
@@ -1272,63 +1339,6 @@ mod imp {
         out
     }
 
-    #[cfg(target_arch = "wasm32")]
-    #[target_feature(enable = "simd128")]
-    fn find_newline(bytes: &[u8], mut i: usize) -> usize {
-        use std::arch::wasm32::*;
-        let n = bytes.len();
-        let nl = u8x16_splat(b'\n');
-        while i + 64 <= n {
-            let b: &[u8; 64] = bytes[i..i + 64].try_into().expect("64-byte chunk");
-            let w = |lo: &[u8], hi: &[u8]| {
-                u64x2(
-                    u64::from_le_bytes(lo.try_into().expect("8-byte chunk")),
-                    u64::from_le_bytes(hi.try_into().expect("8-byte chunk")),
-                )
-            };
-            let e0 = u8x16_eq(w(&b[0..8], &b[8..16]), nl);
-            if v128_any_true(e0) {
-                let mask = u64::from(i8x16_bitmask(e0) as u16);
-                return i + mask.trailing_zeros() as usize;
-            }
-            let e1 = u8x16_eq(w(&b[16..24], &b[24..32]), nl);
-            if v128_any_true(e1) {
-                let mask = u64::from(i8x16_bitmask(e1) as u16);
-                return i + 16 + mask.trailing_zeros() as usize;
-            }
-            let e2 = u8x16_eq(w(&b[32..40], &b[40..48]), nl);
-            if v128_any_true(e2) {
-                let mask = u64::from(i8x16_bitmask(e2) as u16);
-                return i + 32 + mask.trailing_zeros() as usize;
-            }
-            let e3 = u8x16_eq(w(&b[48..56], &b[56..64]), nl);
-            if v128_any_true(e3) {
-                let mask = u64::from(i8x16_bitmask(e3) as u16);
-                return i + 48 + mask.trailing_zeros() as usize;
-            }
-            i += 64;
-        }
-        while i + 16 <= n {
-            let c: &[u8; 16] = bytes[i..i + 16].try_into().expect("16-byte chunk");
-            let v = u64x2(
-                u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
-                u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
-            );
-            let mask = i8x16_bitmask(u8x16_eq(v, nl));
-            if mask != 0 {
-                return i + mask.trailing_zeros() as usize;
-            }
-            i += 16;
-        }
-        while i < n {
-            if bytes[i] == b'\n' {
-                return i;
-            }
-            i += 1;
-        }
-        n
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     fn find_newline(bytes: &[u8], mut i: usize) -> usize {
         const NL: u64 = 0x0a0a0a0a0a0a0a0a;
@@ -1353,6 +1363,72 @@ mod imp {
         n
     }
 
+    /// One pass over the buffer: each 64-byte SIMD chunk folds to a single
+    /// u64 newline bitmask, so chunks without a newline cost one test and a
+    /// found line never re-scans its partial chunk the way a per-line
+    /// restart would.
+    #[cfg(target_arch = "wasm32")]
+    #[target_feature(enable = "simd128")]
+    fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
+        use std::arch::wasm32::*;
+        let n = bytes.len();
+        let mut lines = Vec::with_capacity(n / 192 + 4);
+        let nl = u8x16_splat(b'\n');
+        let mut start = 0;
+        let mut i = 0;
+        while i + 64 <= n {
+            let b: &[u8; 64] = bytes[i..i + 64].try_into().expect("64-byte chunk");
+            let w = |lo: &[u8], hi: &[u8]| {
+                u64x2(
+                    u64::from_le_bytes(lo.try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes(hi.try_into().expect("8-byte chunk")),
+                )
+            };
+            let m0 = u64::from(i8x16_bitmask(u8x16_eq(w(&b[0..8], &b[8..16]), nl)) as u16);
+            let m1 = u64::from(i8x16_bitmask(u8x16_eq(w(&b[16..24], &b[24..32]), nl)) as u16);
+            let m2 = u64::from(i8x16_bitmask(u8x16_eq(w(&b[32..40], &b[40..48]), nl)) as u16);
+            let m3 = u64::from(i8x16_bitmask(u8x16_eq(w(&b[48..56], &b[56..64]), nl)) as u16);
+            let mut mask = m0 | (m1 << 16) | (m2 << 32) | (m3 << 48);
+            while mask != 0 {
+                let end = i + mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                let mut line = &bytes[start..end];
+                if let [head @ .., b'\r'] = line {
+                    line = head;
+                }
+                if !line.is_empty() {
+                    lines.push(line);
+                }
+                start = end + 1;
+            }
+            i += 64;
+        }
+        while i < n {
+            if bytes[i] == b'\n' {
+                let mut line = &bytes[start..i];
+                if let [head @ .., b'\r'] = line {
+                    line = head;
+                }
+                if !line.is_empty() {
+                    lines.push(line);
+                }
+                start = i + 1;
+            }
+            i += 1;
+        }
+        if start < n {
+            let mut line = &bytes[start..n];
+            if let [head @ .., b'\r'] = line {
+                line = head;
+            }
+            if !line.is_empty() {
+                lines.push(line);
+            }
+        }
+        lines
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
         let mut lines = Vec::with_capacity(bytes.len() / 192 + 4);
         let mut start = 0;
@@ -1465,6 +1541,240 @@ mod imp {
         i
     }
 
+    /// `Scan::lit` in position-passing form: the new position on a match,
+    /// 0 otherwise (tags are non-empty, so 0 is never a valid result). Keeps
+    /// the cursor in a register instead of a memory-resident scanner.
+    #[inline(always)]
+    fn tag<const N: usize>(buf: &[u8], pos: usize, s: &[u8; N]) -> usize {
+        let end = pos + N;
+        let Some(a) = buf.get(pos..end) else {
+            return 0;
+        };
+        let a: &[u8; N] = a.try_into().expect("length-checked slice");
+        let mut acc = 0u64;
+        let mut i = 0;
+        while i + 8 <= N {
+            acc |= u64::from_le_bytes(a[i..i + 8].try_into().expect("8-byte chunk"))
+                ^ u64::from_le_bytes(s[i..i + 8].try_into().expect("8-byte chunk"));
+            i += 8;
+        }
+        if i + 4 <= N {
+            acc |= u64::from(
+                u32::from_le_bytes(a[i..i + 4].try_into().expect("4-byte chunk"))
+                    ^ u32::from_le_bytes(s[i..i + 4].try_into().expect("4-byte chunk")),
+            );
+            i += 4;
+        }
+        if i + 2 <= N {
+            acc |= u64::from(
+                u16::from_le_bytes(a[i..i + 2].try_into().expect("2-byte chunk"))
+                    ^ u16::from_le_bytes(s[i..i + 2].try_into().expect("2-byte chunk")),
+            );
+            i += 2;
+        }
+        if i < N {
+            acc |= u64::from(a[i] ^ s[i]);
+        }
+        if acc == 0 {
+            end
+        } else {
+            0
+        }
+    }
+
+    /// `Scan::bytes` in position-passing form: word-wise compare of a
+    /// variable-length span, new position on match, 0 otherwise.
+    #[inline(always)]
+    fn span(buf: &[u8], pos: usize, s: &[u8]) -> usize {
+        let end = pos + s.len();
+        let Some(a) = buf.get(pos..end) else {
+            return 0;
+        };
+        if bytes_eq(a, s) {
+            end
+        } else {
+            0
+        }
+    }
+
+    /// String body after the opening quote, position-passing: printable
+    /// ASCII with no escapes. Returns the position after the closing quote
+    /// (the body is `buf[start..ret - 1]`), or 0 on a non-quote stop byte or
+    /// end of input. Stop lanes are quote, backslash, control (signed < 0x20
+    /// also catches >= 0x80), or DEL; the first flagged lane is re-checked
+    /// exactly by the scalar arm.
+    #[cfg(target_arch = "wasm32")]
+    #[inline]
+    #[target_feature(enable = "simd128")]
+    fn str_end(buf: &[u8], start: usize) -> usize {
+        use std::arch::wasm32::*;
+        let mut i = start;
+        while i + 16 <= buf.len() {
+            let c: &[u8; 16] = buf[i..i + 16].try_into().expect("16-byte chunk");
+            let v = u64x2(
+                u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
+            );
+            let stop = v128_or(
+                v128_or(
+                    u8x16_eq(v, u8x16_splat(b'"')),
+                    u8x16_eq(v, u8x16_splat(b'\\')),
+                ),
+                v128_or(
+                    i8x16_lt(v, i8x16_splat(0x20)),
+                    u8x16_eq(v, u8x16_splat(0x7f)),
+                ),
+            );
+            let mask = i8x16_bitmask(stop);
+            if mask != 0 {
+                i += mask.trailing_zeros() as usize;
+                if buf[i] == b'"' {
+                    return i + 1;
+                }
+                return 0;
+            }
+            i += 16;
+        }
+        while let Some(&c) = buf.get(i) {
+            if c == b'"' {
+                return i + 1;
+            }
+            if !(0x20..0x7f).contains(&c) || c == b'\\' {
+                return 0;
+            }
+            i += 1;
+        }
+        0
+    }
+
+    /// SWAR form of the same detector. Every spurious flag either sits on a
+    /// byte with the high bit set (a true hit via the `| x` term) or lands
+    /// strictly above a true hit through borrow/carry propagation, so the
+    /// lowest flagged byte is always a genuine stop byte and is re-checked
+    /// exactly by the scalar arm.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn str_end(buf: &[u8], start: usize) -> usize {
+        const LO: u64 = 0x0101010101010101;
+        const HI: u64 = 0x8080808080808080;
+        let mut i = start;
+        while i + 8 <= buf.len() {
+            let x = u64::from_le_bytes(buf[i..i + 8].try_into().expect("8-byte chunk"));
+            let quote = (x ^ (LO * 0x22)).wrapping_sub(LO);
+            let slash = (x ^ (LO * 0x5c)).wrapping_sub(LO);
+            let hit = (quote | slash | x.wrapping_sub(LO * 0x20) | x.wrapping_add(LO) | x) & HI;
+            if hit != 0 {
+                i += (hit.trailing_zeros() >> 3) as usize;
+                if buf[i] == b'"' {
+                    return i + 1;
+                }
+                return 0;
+            }
+            i += 8;
+        }
+        while let Some(&c) = buf.get(i) {
+            if c == b'"' {
+                return i + 1;
+            }
+            if !(0x20..0x7f).contains(&c) || c == b'\\' {
+                return 0;
+            }
+            i += 1;
+        }
+        0
+    }
+
+    /// Speculative fixed-width string: when the closing quote sits exactly
+    /// at `pos + N` and the N-byte body has no stop byte, this is what
+    /// `str_end` would return; any miss falls back to the exact scan, so
+    /// acceptance is identical by construction. N must be >= 16; the last
+    /// partial chunk re-checks up to 15 already-clean bytes.
+    #[cfg(target_arch = "wasm32")]
+    #[inline]
+    #[target_feature(enable = "simd128")]
+    fn qstr<const N: usize>(buf: &[u8], pos: usize) -> usize {
+        use std::arch::wasm32::*;
+        let end = pos + N;
+        if buf.get(end) == Some(&b'"') {
+            let body: &[u8; N] = buf[pos..end].try_into().expect("length-checked slice");
+            let stops = |c: &[u8]| {
+                let v = u64x2(
+                    u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
+                );
+                v128_or(
+                    v128_or(
+                        u8x16_eq(v, u8x16_splat(b'"')),
+                        u8x16_eq(v, u8x16_splat(b'\\')),
+                    ),
+                    v128_or(
+                        i8x16_lt(v, i8x16_splat(0x20)),
+                        u8x16_eq(v, u8x16_splat(0x7f)),
+                    ),
+                )
+            };
+            let mut acc = stops(&body[0..16]);
+            let mut i = 16;
+            while i + 16 <= N {
+                acc = v128_or(acc, stops(&body[i..i + 16]));
+                i += 16;
+            }
+            if i < N {
+                acc = v128_or(acc, stops(&body[N - 16..N]));
+            }
+            if !v128_any_true(acc) {
+                return end + 1;
+            }
+        }
+        str_end(buf, pos)
+    }
+
+    /// Native builds keep the exact scan; `qstr` only re-orders work, so the
+    /// accepted set is the same on both arches.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[inline]
+    fn qstr<const N: usize>(buf: &[u8], pos: usize) -> usize {
+        str_end(buf, pos)
+    }
+
+    /// Canonical unsigned decimal span in position-passing form: end of a
+    /// 1..=19 digit run with no leading zero, or 0. 20+ digit runs bail to
+    /// the serde fallback, which parses in-range values identically and
+    /// rejects the rest.
+    #[inline(always)]
+    fn digits_end(buf: &[u8], start: usize) -> usize {
+        let end = digit_run(buf, start);
+        let len = end - start;
+        if len == 0 || len > 19 || (buf[start] == b'0' && len > 1) {
+            return 0;
+        }
+        end
+    }
+
+    /// `Scan::number` in position-passing form: 0 when the span is not a
+    /// canonical non-scientific JSON number.
+    fn num_end(buf: &[u8], mut pos: usize) -> usize {
+        if buf.get(pos) == Some(&b'-') {
+            pos += 1;
+        }
+        let start = pos;
+        pos = digit_run(buf, start);
+        let len = pos - start;
+        if len == 0 || len > 17 || (buf[start] == b'0' && len > 1) {
+            return 0;
+        }
+        if buf.get(pos) == Some(&b'.') {
+            let frac = pos + 1;
+            pos = digit_run(buf, frac);
+            if pos == frac || pos - frac > 17 {
+                return 0;
+            }
+        }
+        if matches!(buf.get(pos), Some(b'e' | b'E')) {
+            return 0;
+        }
+        pos
+    }
+
     /// Strict scanner over the compact JSON this chain emits. It accepts only
     /// inputs serde_json provably accepts with identical extracted values;
     /// anything unusual bails out to the serde fallback, which remains the
@@ -1514,144 +1824,25 @@ mod imp {
             }
         }
 
-        /// String body after the opening quote: printable ASCII, no escapes.
-        /// Stop lanes are quote, backslash, control (signed < 0x20 also
-        /// catches >= 0x80), or DEL; the first flagged lane is re-checked
-        /// exactly by the scalar arm.
-        #[cfg(target_arch = "wasm32")]
-        #[target_feature(enable = "simd128")]
         fn string_body(&mut self) -> Option<&'a [u8]> {
-            use std::arch::wasm32::*;
             let start = self.pos;
-            let buf = self.buf;
-            let mut i = self.pos;
-            while i + 16 <= buf.len() {
-                let c: &[u8; 16] = buf[i..i + 16].try_into().expect("16-byte chunk");
-                let v = u64x2(
-                    u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
-                    u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
-                );
-                let stop = v128_or(
-                    v128_or(
-                        u8x16_eq(v, u8x16_splat(b'"')),
-                        u8x16_eq(v, u8x16_splat(b'\\')),
-                    ),
-                    v128_or(
-                        i8x16_lt(v, i8x16_splat(0x20)),
-                        u8x16_eq(v, u8x16_splat(0x7f)),
-                    ),
-                );
-                let mask = i8x16_bitmask(stop);
-                if mask != 0 {
-                    i += mask.trailing_zeros() as usize;
-                    if buf[i] == b'"' {
-                        let body = &buf[start..i];
-                        self.pos = i + 1;
-                        return Some(body);
-                    }
-                    self.pos = i;
-                    return None;
+            match str_end(self.buf, start) {
+                0 => None,
+                p => {
+                    self.pos = p;
+                    Some(&self.buf[start..p - 1])
                 }
-                i += 16;
             }
-            while let Some(&c) = buf.get(i) {
-                if c == b'"' {
-                    let body = &buf[start..i];
-                    self.pos = i + 1;
-                    return Some(body);
-                }
-                if !(0x20..0x7f).contains(&c) || c == b'\\' {
-                    self.pos = i;
-                    return None;
-                }
-                i += 1;
-            }
-            self.pos = i;
-            None
-        }
-
-        /// SWAR form of the same detector. Every spurious flag either sits on
-        /// a byte with the high bit set (a true hit via the `| x` term) or
-        /// lands strictly above a true hit through borrow/carry propagation,
-        /// so the lowest flagged byte is always a genuine stop byte and is
-        /// re-checked exactly by the scalar arm.
-        #[cfg(not(target_arch = "wasm32"))]
-        fn string_body(&mut self) -> Option<&'a [u8]> {
-            const LO: u64 = 0x0101010101010101;
-            const HI: u64 = 0x8080808080808080;
-            let start = self.pos;
-            let buf = self.buf;
-            let mut i = self.pos;
-            while i + 8 <= buf.len() {
-                let x = u64::from_le_bytes(buf[i..i + 8].try_into().expect("8-byte chunk"));
-                let quote = (x ^ (LO * 0x22)).wrapping_sub(LO);
-                let slash = (x ^ (LO * 0x5c)).wrapping_sub(LO);
-                let hit = (quote | slash | x.wrapping_sub(LO * 0x20) | x.wrapping_add(LO) | x) & HI;
-                if hit != 0 {
-                    i += (hit.trailing_zeros() >> 3) as usize;
-                    let c = buf[i];
-                    if c == b'"' {
-                        let body = &buf[start..i];
-                        self.pos = i + 1;
-                        return Some(body);
-                    }
-                    self.pos = i;
-                    return None;
-                }
-                i += 8;
-            }
-            while let Some(&c) = buf.get(i) {
-                if c == b'"' {
-                    let body = &buf[start..i];
-                    self.pos = i + 1;
-                    return Some(body);
-                }
-                if !(0x20..0x7f).contains(&c) || c == b'\\' {
-                    self.pos = i;
-                    return None;
-                }
-                i += 1;
-            }
-            self.pos = i;
-            None
-        }
-
-        /// Canonical unsigned decimal span: 1..=19 digits, no leading zero;
-        /// 20+ digit runs bail to the serde fallback, which parses in-range
-        /// values identically and rejects the rest.
-        fn digits(&mut self) -> Option<&'a [u8]> {
-            let start = self.pos;
-            self.pos = digit_run(self.buf, start);
-            let len = self.pos - start;
-            if len == 0 || len > 19 || (self.buf[start] == b'0' && len > 1) {
-                return None;
-            }
-            Some(&self.buf[start..self.pos])
-        }
-
-        fn uint(&mut self) -> Option<u64> {
-            self.digits().map(fold_digits)
         }
 
         fn number(&mut self) -> bool {
-            if self.buf.get(self.pos) == Some(&b'-') {
-                self.pos += 1;
-            }
-            let start = self.pos;
-            self.pos = digit_run(self.buf, start);
-            let len = self.pos - start;
-            if len == 0 || len > 17 || (self.buf[start] == b'0' && len > 1) {
-                return false;
-            }
-            if self.buf.get(self.pos) == Some(&b'.') {
-                self.pos += 1;
-                let frac = self.pos;
-                self.pos = digit_run(self.buf, frac);
-                if self.pos == frac || self.pos - frac > 17 {
-                    return false;
+            match num_end(self.buf, self.pos) {
+                0 => false,
+                p => {
+                    self.pos = p;
+                    true
                 }
             }
-            !matches!(self.buf.get(self.pos), Some(b'e' | b'E'))
         }
 
         #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
@@ -1706,22 +1897,6 @@ mod imp {
             }
         }
 
-        fn done(&self) -> bool {
-            self.pos == self.buf.len()
-        }
-
-        fn bytes(&mut self, s: &[u8]) -> bool {
-            let end = self.pos + s.len();
-            let Some(a) = self.buf.get(self.pos..end) else {
-                return false;
-            };
-            if bytes_eq(a, s) {
-                self.pos = end;
-                true
-            } else {
-                false
-            }
-        }
     }
 
     fn ascii_str(bytes: &[u8]) -> Option<&str> {
@@ -1731,122 +1906,282 @@ mod imp {
     /// Audit `kind` payloads come from a small closed enum, so the common
     /// serialized shapes are matched literally before handing anything
     /// unusual to the generic tokenizer, which stays the acceptance
-    /// authority via the rewind.
+    /// authority via the position-0 rewind.
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
-    fn kind_value(s: &mut Scan) -> bool {
-        let start = s.pos;
+    fn kind_value(buf: &[u8], pos: usize) -> usize {
         // One-byte discriminators at the offsets where the tags diverge pick
         // the literal arm before any long compare runs.
-        let arm = match (
-            s.buf.get(s.pos + 9).copied(),
-            s.buf.get(s.pos + 21).copied(),
-        ) {
+        let arm = match (buf.get(pos + 9).copied(), buf.get(pos + 21).copied()) {
             (Some(b'i'), _) => 0u32,
             (Some(b'h'), Some(b'i')) => 1,
             (Some(b'h'), Some(b'c')) => 2,
             _ => 3,
         };
-        if arm == 0 && s.lit(b"{\"type\":\"intent_dispatched\",\"intent_id\":\"") {
-            if s.string_body().is_some()
-                && s.lit(b",\"intent_text\":\"")
-                && s.string_body().is_some()
-                && s.lit(b",\"matched_agent\":")
-                && (s.lit(b"null") || (s.lit(b"\"") && s.string_body().is_some()))
-                && s.lit(b",\"result_hash_hex\":\"")
-                && s.string_body().is_some()
-                && s.lit(b",\"status\":\"")
-                && s.string_body().is_some()
-                && s.lit(b"}")
-            {
-                return true;
+        'fast: {
+            if arm == 0 {
+                let mut p = tag(buf, pos, b"{\"type\":\"intent_dispatched\",\"intent_id\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = qstr::<36>(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"intent_text\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = qstr::<17>(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"matched_agent\":");
+                if p == 0 {
+                    break 'fast;
+                }
+                let q = tag(buf, p, b"null");
+                if q != 0 {
+                    p = q;
+                } else {
+                    p = tag(buf, p, b"\"");
+                    if p == 0 {
+                        break 'fast;
+                    }
+                    p = str_end(buf, p);
+                    if p == 0 {
+                        break 'fast;
+                    }
+                }
+                p = tag(buf, p, b",\"result_hash_hex\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = qstr::<64>(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"status\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = str_end(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b"}");
+                if p == 0 {
+                    break 'fast;
+                }
+                return p;
+            } else if arm == 1 {
+                let mut p = tag(buf, pos, b"{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = qstr::<36>(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"run_id\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = qstr::<16>(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"tool\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = str_end(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"preview_hash_hex\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = qstr::<64>(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b"}");
+                if p == 0 {
+                    break 'fast;
+                }
+                return p;
+            } else if arm == 2 {
+                let mut p = tag(buf, pos, b"{\"type\":\"hermes_tool_completed\",\"intent_id\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = qstr::<36>(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"run_id\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = qstr::<16>(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"tool\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = str_end(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"duration_ms\":");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = num_end(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"error\":");
+                if p == 0 {
+                    break 'fast;
+                }
+                let q = tag(buf, p, b"true");
+                if q != 0 {
+                    p = q;
+                } else {
+                    p = tag(buf, p, b"false");
+                    if p == 0 {
+                        break 'fast;
+                    }
+                }
+                p = tag(buf, p, b"}");
+                if p == 0 {
+                    break 'fast;
+                }
+                return p;
             }
-        } else if arm == 1 && s.lit(b"{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"") {
-            if s.string_body().is_some()
-                && s.lit(b",\"run_id\":\"")
-                && s.string_body().is_some()
-                && s.lit(b",\"tool\":\"")
-                && s.string_body().is_some()
-                && s.lit(b",\"preview_hash_hex\":\"")
-                && s.string_body().is_some()
-                && s.lit(b"}")
-            {
-                return true;
-            }
-        } else if arm == 2
-            && s.lit(b"{\"type\":\"hermes_tool_completed\",\"intent_id\":\"")
-            && s.string_body().is_some()
-            && s.lit(b",\"run_id\":\"")
-            && s.string_body().is_some()
-            && s.lit(b",\"tool\":\"")
-            && s.string_body().is_some()
-            && s.lit(b",\"duration_ms\":")
-            && s.number()
-            && s.lit(b",\"error\":")
-            && (s.lit(b"true") || s.lit(b"false"))
-            && s.lit(b"}")
-        {
-            return true;
         }
-        s.pos = start;
-        s.value(0)
-    }
-
-    /// Issuer payloads are usually a fixed two-field object; one literal arm
-    /// covers that shape before the generic tokenizer, which stays the
-    /// acceptance authority via the rewind.
-    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
-    fn issuer_value(s: &mut Scan) -> bool {
-        if s.buf.get(s.pos) == Some(&b'{') {
-            let start = s.pos;
-            if s.lit(b"{\"display\":\"")
-                && s.string_body().is_some()
-                && s.lit(b",\"pubkey_b58\":\"")
-                && s.string_body().is_some()
-                && s.lit(b"}")
-            {
-                return true;
-            }
-            s.pos = start;
-        }
-        s.value(0)
-    }
-
-    /// Borrowed spans from a strict-scanned event line. `id` is printable
-    /// ASCII with no escapes, `ts` is a canonical decimal span, so both embed
-    /// verbatim in anchor JSON.
-    struct EventSpans<'a> {
-        id: &'a [u8],
-        ts: &'a [u8],
-    }
-
-    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
-    fn fast_event(line: &[u8]) -> Option<EventSpans<'_>> {
-        let mut s = Scan { buf: line, pos: 0 };
-        if !s.lit(b"{\"id\":\"") {
-            return None;
-        }
-        let id = s.string_body()?;
-        if !s.lit(b",\"timestamp_ms\":") {
-            return None;
-        }
-        let ts = s.digits()?;
-        if s.lit(b",\"issuer\":")
-            && issuer_value(&mut s)
-            && s.lit(b",\"kind\":")
-            && kind_value(&mut s)
-            && s.lit(b"}")
-            && s.done()
-        {
-            Some(EventSpans { id, ts })
+        let mut s = Scan { buf, pos };
+        if s.value(0) {
+            s.pos
         } else {
-            None
+            0
         }
+    }
+
+    /// Issuer payloads are a bare display string or a fixed two-field
+    /// object; both get a literal arm before the generic tokenizer, which
+    /// stays the acceptance authority via the position-0 rewind. The string
+    /// arm IS the tokenizer's string rule, so it returns directly.
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    fn issuer_value(buf: &[u8], pos: usize) -> usize {
+        if buf.get(pos) == Some(&b'"') {
+            return str_end(buf, pos + 1);
+        }
+        if buf.get(pos) == Some(&b'{') {
+            'fast: {
+                let mut p = tag(buf, pos, b"{\"display\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = str_end(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b",\"pubkey_b58\":\"");
+                if p == 0 {
+                    break 'fast;
+                }
+                p = str_end(buf, p);
+                if p == 0 {
+                    break 'fast;
+                }
+                p = tag(buf, p, b"}");
+                if p != 0 {
+                    return p;
+                }
+            }
+        }
+        let mut s = Scan { buf, pos };
+        if s.value(0) {
+            s.pos
+        } else {
+            0
+        }
+    }
+
+    /// Spans of a strict-scanned event line, packed into one register: the
+    /// id starts at the constant offset 7 and the timestamp span position is
+    /// derivable, so `id_len << 5 | ts_len` pins both (`ts_len <= 19`, and
+    /// oversized ids defer to serde); 0 means not fast-path JSON. The id is printable ASCII with
+    /// no escapes and the timestamp is a canonical decimal span, so both
+    /// embed verbatim in anchor JSON.
+    #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    fn fast_event(line: &[u8]) -> u32 {
+        let mut p = tag(line, 0, b"{\"id\":\"");
+        if p == 0 {
+            return 0;
+        }
+        p = qstr::<36>(line, p);
+        if p == 0 {
+            return 0;
+        }
+        let id_len = p - 1 - 7;
+        p = tag(line, p, b",\"timestamp_ms\":");
+        if p == 0 {
+            return 0;
+        }
+        let ts_start = p;
+        p = digits_end(line, ts_start);
+        if p == 0 {
+            return 0;
+        }
+        let ts_len = p - ts_start;
+        p = tag(line, p, b",\"issuer\":");
+        if p == 0 {
+            return 0;
+        }
+        p = issuer_value(line, p);
+        if p == 0 {
+            return 0;
+        }
+        p = tag(line, p, b",\"kind\":");
+        if p == 0 {
+            return 0;
+        }
+        p = kind_value(line, p);
+        if p == 0 {
+            return 0;
+        }
+        p = tag(line, p, b"}");
+        if p != 0 && p == line.len() && id_len < 1 << 27 {
+            (id_len as u32) << 5 | ts_len as u32
+        } else {
+            0
+        }
+    }
+
+    /// Decode `fast_event`'s packed spans against the same line.
+    #[inline(always)]
+    fn event_spans(line: &[u8], packed: u32) -> (&[u8], &[u8]) {
+        let id_len = (packed >> 5) as usize;
+        let ts_start = 7 + id_len + 17;
+        let ts_len = (packed & 31) as usize;
+        (
+            &line[7..7 + id_len],
+            &line[ts_start..ts_start + ts_len],
+        )
     }
 
     fn parse_event(line: &[u8]) -> Result<(Cow<'_, str>, u64), ()> {
-        if let Some(ev) = fast_event(line) {
-            if let Some(id) = ascii_str(ev.id) {
-                return Ok((Cow::Borrowed(id), fold_digits(ev.ts)));
+        let packed = fast_event(line);
+        if packed != 0 {
+            let (id, ts) = event_spans(line, packed);
+            if let Some(id) = ascii_str(id) {
+                return Ok((Cow::Borrowed(id), fold_digits(ts)));
             }
         }
         match serde_json::from_slice::<EventFields>(line) {
@@ -1857,32 +2192,68 @@ mod imp {
 
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn fast_anchor(line: &[u8]) -> Option<AnchorFields<'_>> {
-        let mut s = Scan { buf: line, pos: 0 };
-        if !s.lit(b"{\"index\":") {
+        let mut p = tag(line, 0, b"{\"index\":");
+        if p == 0 {
             return None;
         }
-        let index = s.uint()?;
-        if !s.lit(b",\"event_id\":\"") {
+        let idx_start = p;
+        p = digits_end(line, idx_start);
+        if p == 0 {
             return None;
         }
-        let event_id = s.string_body()?;
-        if !s.lit(b",\"timestamp_ms\":") {
+        let index = fold_digits(&line[idx_start..p]);
+        p = tag(line, p, b",\"event_id\":\"");
+        if p == 0 {
             return None;
         }
-        let timestamp_ms = s.uint()?;
-        if !s.lit(b",\"event_hash_hex\":\"") {
+        let id_start = p;
+        p = qstr::<36>(line, p);
+        if p == 0 {
             return None;
         }
-        let event_hash_hex = s.string_body()?;
-        if !s.lit(b",\"previous_hash_hex\":\"") {
+        let event_id = &line[id_start..p - 1];
+        p = tag(line, p, b",\"timestamp_ms\":");
+        if p == 0 {
             return None;
         }
-        let previous_hash_hex = s.string_body()?;
-        if !s.lit(b",\"chain_hash_hex\":\"") {
+        let ts_start = p;
+        p = digits_end(line, ts_start);
+        if p == 0 {
             return None;
         }
-        let chain_hash_hex = s.string_body()?;
-        if !(s.lit(b"}") && s.done()) {
+        let timestamp_ms = fold_digits(&line[ts_start..p]);
+        p = tag(line, p, b",\"event_hash_hex\":\"");
+        if p == 0 {
+            return None;
+        }
+        let ev_start = p;
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return None;
+        }
+        let event_hash_hex = &line[ev_start..p - 1];
+        p = tag(line, p, b",\"previous_hash_hex\":\"");
+        if p == 0 {
+            return None;
+        }
+        let prev_start = p;
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return None;
+        }
+        let previous_hash_hex = &line[prev_start..p - 1];
+        p = tag(line, p, b",\"chain_hash_hex\":\"");
+        if p == 0 {
+            return None;
+        }
+        let chain_start = p;
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return None;
+        }
+        let chain_hash_hex = &line[chain_start..p - 1];
+        p = tag(line, p, b"}");
+        if p == 0 || p != line.len() {
             return None;
         }
         Some(AnchorFields {
@@ -1902,21 +2273,56 @@ mod imp {
     /// canonical 85-byte tail match), so the walk only validates.
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn anchor_shape(line: &[u8]) -> bool {
-        let mut s = Scan { buf: line, pos: 0 };
-        s.lit(b"{\"index\":")
-            && s.uint().is_some()
-            && s.lit(b",\"event_id\":\"")
-            && s.string_body().is_some()
-            && s.lit(b",\"timestamp_ms\":")
-            && s.uint().is_some()
-            && s.lit(b",\"event_hash_hex\":\"")
-            && s.string_body().is_some()
-            && s.lit(b",\"previous_hash_hex\":\"")
-            && s.string_body().is_some()
-            && s.lit(b",\"chain_hash_hex\":\"")
-            && s.string_body().is_some()
-            && s.lit(b"}")
-            && s.done()
+        let mut p = tag(line, 0, b"{\"index\":");
+        if p == 0 {
+            return false;
+        }
+        p = digits_end(line, p);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b",\"event_id\":\"");
+        if p == 0 {
+            return false;
+        }
+        p = qstr::<36>(line, p);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b",\"timestamp_ms\":");
+        if p == 0 {
+            return false;
+        }
+        p = digits_end(line, p);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b",\"event_hash_hex\":\"");
+        if p == 0 {
+            return false;
+        }
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b",\"previous_hash_hex\":\"");
+        if p == 0 {
+            return false;
+        }
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b",\"chain_hash_hex\":\"");
+        if p == 0 {
+            return false;
+        }
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b"}");
+        p != 0 && p == line.len()
     }
 
     fn parse_anchor(line: &[u8]) -> Option<AnchorFields<'_>> {
@@ -1941,32 +2347,68 @@ mod imp {
         previous: &[u8; 64],
         chain: &[u8; 64],
     ) -> Option<bool> {
-        let mut s = Scan { buf: line, pos: 0 };
-        if !s.lit(b"{\"index\":") {
+        let mut p = tag(line, 0, b"{\"index\":");
+        if p == 0 {
             return None;
         }
-        let a_index = s.uint()?;
-        if !s.lit(b",\"event_id\":\"") {
+        let idx_start = p;
+        p = digits_end(line, idx_start);
+        if p == 0 {
             return None;
         }
-        let a_id = ascii_str(s.string_body()?)?;
-        if !s.lit(b",\"timestamp_ms\":") {
+        let a_index = fold_digits(&line[idx_start..p]);
+        p = tag(line, p, b",\"event_id\":\"");
+        if p == 0 {
             return None;
         }
-        let a_ts = s.uint()?;
-        if !s.lit(b",\"event_hash_hex\":\"") {
+        let id_start = p;
+        p = qstr::<36>(line, p);
+        if p == 0 {
             return None;
         }
-        let a_event = s.string_body()?;
-        if !s.lit(b",\"previous_hash_hex\":\"") {
+        let a_id = ascii_str(&line[id_start..p - 1])?;
+        p = tag(line, p, b",\"timestamp_ms\":");
+        if p == 0 {
             return None;
         }
-        let a_previous = s.string_body()?;
-        if !s.lit(b",\"chain_hash_hex\":\"") {
+        let ts_start = p;
+        p = digits_end(line, ts_start);
+        if p == 0 {
             return None;
         }
-        let a_chain = s.string_body()?;
-        if !(s.lit(b"}") && s.done()) {
+        let a_ts = fold_digits(&line[ts_start..p]);
+        p = tag(line, p, b",\"event_hash_hex\":\"");
+        if p == 0 {
+            return None;
+        }
+        let ev_start = p;
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return None;
+        }
+        let a_event = &line[ev_start..p - 1];
+        p = tag(line, p, b",\"previous_hash_hex\":\"");
+        if p == 0 {
+            return None;
+        }
+        let prev_start = p;
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return None;
+        }
+        let a_previous = &line[prev_start..p - 1];
+        p = tag(line, p, b",\"chain_hash_hex\":\"");
+        if p == 0 {
+            return None;
+        }
+        let chain_start = p;
+        p = qstr::<64>(line, p);
+        if p == 0 {
+            return None;
+        }
+        let a_chain = &line[chain_start..p - 1];
+        p = tag(line, p, b"}");
+        if p == 0 || p != line.len() {
             return None;
         }
         Some(
@@ -1995,25 +2437,53 @@ mod imp {
         event_hex: &[u8; 64],
         previous: &[u8; 64],
     ) -> bool {
-        let mut s = Scan { buf: line, pos: 0 };
+        let mut p = tag(line, 0, b"{\"index\":");
+        if p == 0 {
+            return false;
+        }
+        p = span(line, p, idx_digits);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b",\"event_id\":\"");
+        if p == 0 {
+            return false;
+        }
         // Corpus ids are uuid-shaped; a const-length arm lets the compare
         // unroll like the hex fields.
-        let id_eq = |s: &mut Scan| match <&[u8; 36]>::try_from(id) {
-            Ok(arr) => s.lit(arr),
-            Err(_) => s.bytes(id),
+        p = match <&[u8; 36]>::try_from(id) {
+            Ok(arr) => tag(line, p, arr),
+            Err(_) => span(line, p, id),
         };
-        s.lit(b"{\"index\":")
-            && s.bytes(idx_digits)
-            && s.lit(b",\"event_id\":\"")
-            && id_eq(&mut s)
-            && s.lit(b"\",\"timestamp_ms\":")
-            && s.bytes(ts_digits)
-            && s.lit(b",\"event_hash_hex\":\"")
-            && s.lit(event_hex)
-            && s.lit(b"\",\"previous_hash_hex\":\"")
-            && s.lit(previous)
-            && s.lit(b"\"")
-            && s.pos == line.len() - 85
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b"\",\"timestamp_ms\":");
+        if p == 0 {
+            return false;
+        }
+        p = span(line, p, ts_digits);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b",\"event_hash_hex\":\"");
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, event_hex);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b"\",\"previous_hash_hex\":\"");
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, previous);
+        if p == 0 {
+            return false;
+        }
+        p = tag(line, p, b"\"");
+        p != 0 && p == line.len() - 85
     }
 
     /// Best-effort extraction of the trailing `chain_hash_hex` value from an
@@ -2080,7 +2550,7 @@ mod imp {
         #[cfg(target_arch = "wasm32")]
         let mut spec_buf = [[0u8; 64]; 4];
         #[cfg(target_arch = "wasm32")]
-        let mut seq_wk = [[0u32; 64]; 4];
+        let mut seq_wk = [[0u8; 256]; 4];
         #[cfg(target_arch = "wasm32")]
         let mut pre_hit: Option<bool> = None;
         // Canonical decimal of the running entry index, incremented in place;
@@ -2161,7 +2631,7 @@ mod imp {
             // without re-scanning the event line.
             let mut slow: Option<Option<(Cow<'_, str>, u64)>> = None;
             match fast_event(line) {
-                Some(ev) => match anchor_lines.get(index) {
+                packed if packed != 0 => match anchor_lines.get(index) {
                     Some(aline) => {
                         #[cfg(target_arch = "wasm32")]
                         let tail_ok = {
@@ -2177,16 +2647,17 @@ mod imp {
                         #[cfg(not(target_arch = "wasm32"))]
                         let tail_ok = matches!(chain_span(aline), Some(c) if eq64(c, &chain));
                         if tail_ok {
+                            let (id, ts) = event_spans(line, packed);
                             if !anchor_line_matches(
                                 aline,
                                 &idx_buf[idx_start..],
-                                ev.id,
-                                ev.ts,
+                                id,
+                                ts,
                                 event_hex,
                                 &previous,
                             ) {
-                                slow = Some(match ascii_str(ev.id) {
-                                    Some(id) => Some((Cow::Borrowed(id), fold_digits(ev.ts))),
+                                slow = Some(match ascii_str(id) {
+                                    Some(id) => Some((Cow::Borrowed(id), fold_digits(ts))),
                                     None => parse_event(line).ok(),
                                 });
                             }
@@ -2195,8 +2666,9 @@ mod imp {
                                 index: index as u64,
                             });
                         } else {
-                            slow = Some(match ascii_str(ev.id) {
-                                Some(id) => Some((Cow::Borrowed(id), fold_digits(ev.ts))),
+                            let (id, ts) = event_spans(line, packed);
+                            slow = Some(match ascii_str(id) {
+                                Some(id) => Some((Cow::Borrowed(id), fold_digits(ts))),
                                 None => parse_event(line).ok(),
                             });
                         }
@@ -2205,7 +2677,7 @@ mod imp {
                         index: index as u64,
                     }),
                 },
-                None => match serde_json::from_slice::<EventFields>(line) {
+                _ => match serde_json::from_slice::<EventFields>(line) {
                     Ok(event) => slow = Some(Some((event.id, event.timestamp_ms))),
                     Err(_) => slow = Some(None),
                 },

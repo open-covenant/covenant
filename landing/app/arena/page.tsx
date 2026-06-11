@@ -222,7 +222,21 @@ export default async function ArenaPage() {
               </p>
               <Curve points={arena.curve} />
 
-              <p className="mt-8 text-[11px] leading-relaxed tracking-[0.15em] text-neutral-600">
+              <p className="mt-8 text-[12px] leading-relaxed text-neutral-300">
+                Open challenge: beat the kernel, any function or the whole
+                block. Humans, models, agents. Clear the margin and your code
+                ships, attributed.{" "}
+                <a
+                  href={`${GITHUB_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-emerald-300 underline underline-offset-4 transition-colors hover:text-emerald-200"
+                >
+                  Enter
+                </a>
+              </p>
+
+              <p className="mt-4 text-[11px] leading-relaxed tracking-[0.15em] text-neutral-600">
                 Promotion margin +0.005 scalar since round 4 (was +0.02; the
                 metric is deterministic, so any measured gain is real).{" "}
                 <a

@@ -197,7 +197,10 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
                 .payer(payer.pubkey())
                 .collection(collection)
                 .data_state(DataState::AccountState)
-                .name(truncate(&format!("Covenant root {}", payload.release_target)))
+                .name(truncate(&format!(
+                    "Covenant root {}",
+                    payload.release_target
+                )))
                 .uri(String::new())
                 .external_plugin_adapters(vec![ExternalPluginAdapterInitInfo::AppData(
                     AppDataInitInfo {
@@ -219,9 +222,11 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
                 .collection(collection)
                 .payer(payer.pubkey())
                 .authority(Some(payer.pubkey()))
-                .key(ExternalPluginAdapterKey::AppData(PluginAuthority::Address {
-                    address: payer.pubkey(),
-                }))
+                .key(ExternalPluginAdapterKey::AppData(
+                    PluginAuthority::Address {
+                        address: payer.pubkey(),
+                    },
+                ))
                 .data(data.clone())
                 .instruction();
             let est = ASSET_BASE_LAMPORTS
@@ -297,9 +302,9 @@ fn assert_pinned(name: &str, linked: &str, pinned: &str) -> Result<()> {
 
 fn collection_from_env() -> Result<Option<Pubkey>> {
     match std::env::var("COVENANT_METAPLEX_COLLECTION") {
-        Ok(c) if !c.is_empty() => {
-            Ok(Some(parse_pubkey(&c).context("COVENANT_METAPLEX_COLLECTION")?))
-        }
+        Ok(c) if !c.is_empty() => Ok(Some(
+            parse_pubkey(&c).context("COVENANT_METAPLEX_COLLECTION")?,
+        )),
         _ => Ok(None),
     }
 }
@@ -337,8 +342,10 @@ async fn rpc(
         .send()
         .await
         .with_context(|| format!("rpc {method}"))?;
-    let value: serde_json::Value =
-        resp.json().await.with_context(|| format!("rpc {method} decode"))?;
+    let value: serde_json::Value = resp
+        .json()
+        .await
+        .with_context(|| format!("rpc {method} decode"))?;
     if let Some(err) = value.get("error").filter(|e| !e.is_null()) {
         bail!("rpc {method} error: {err}");
     }
@@ -412,4 +419,113 @@ async fn confirm_signature(http: &reqwest::Client, url: &str, signature: &str) -
         }
     }
     bail!("transaction {signature} not confirmed within timeout; check it on-chain")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "covenant-metaplex-signer-{}-{tag}.json",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn assert_pinned_accepts_a_pinned_allowlisted_id() {
+        assert_pinned("mpl-core", MPL_CORE_PROGRAM_ID, MPL_CORE_PROGRAM_ID).unwrap();
+    }
+
+    #[test]
+    fn assert_pinned_rejects_a_mismatched_id() {
+        let err = assert_pinned(
+            "mpl-core",
+            &Pubkey::new_unique().to_string(),
+            MPL_CORE_PROGRAM_ID,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("is not the pinned"), "{err}");
+    }
+
+    #[test]
+    fn assert_pinned_rejects_a_matching_but_unallowlisted_id() {
+        // linked == pinned, so the equality check passes; an id absent from
+        // ALLOWED_PROGRAM_IDS must still be refused.
+        let rogue = Pubkey::new_unique().to_string();
+        let err = assert_pinned("mpl-core", &rogue, &rogue)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("is not the pinned"), "{err}");
+    }
+
+    #[test]
+    fn parse_pubkey_round_trips_a_valid_key() {
+        let key = Pubkey::new_unique();
+        assert_eq!(parse_pubkey(&key.to_string()).unwrap(), key);
+    }
+
+    #[test]
+    fn parse_pubkey_rejects_garbage() {
+        let err = parse_pubkey("not-base58!!").unwrap_err().to_string();
+        assert!(err.contains("invalid pubkey"), "{err}");
+    }
+
+    #[test]
+    fn truncate_caps_at_name_max_on_a_char_boundary() {
+        assert_eq!(truncate(&"a".repeat(40)).chars().count(), NAME_MAX);
+        assert_eq!(truncate("short"), "short");
+        // multibyte chars must cap at NAME_MAX chars without panicking on a byte split.
+        assert_eq!(truncate(&"é".repeat(40)).chars().count(), NAME_MAX);
+    }
+
+    #[test]
+    fn load_keypair_round_trips_a_written_key() {
+        let key = Keypair::new();
+        let path = temp_path("valid");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&key.to_bytes().to_vec()).unwrap(),
+        )
+        .unwrap();
+        let loaded = load_keypair(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.pubkey(), key.pubkey());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_keypair_reports_a_missing_file() {
+        let path = temp_path("absent");
+        let _ = std::fs::remove_file(&path);
+        let err = load_keypair(path.to_str().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("read keypair"), "{err}");
+    }
+
+    #[test]
+    fn load_keypair_rejects_non_array_json() {
+        let path = temp_path("badjson");
+        std::fs::write(&path, "not json").unwrap();
+        let err = load_keypair(path.to_str().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("keypair file must be a JSON byte array"),
+            "{err}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_keypair_rejects_a_wrong_length_byte_array() {
+        let path = temp_path("short");
+        std::fs::write(&path, "[1,2,3,4,5,6,7,8,9,10]").unwrap();
+        let err = load_keypair(path.to_str().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("load keypair"), "{err}");
+        let _ = std::fs::remove_file(&path);
+    }
 }

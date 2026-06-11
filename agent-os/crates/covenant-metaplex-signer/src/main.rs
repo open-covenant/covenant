@@ -424,6 +424,7 @@ async fn confirm_signature(http: &reqwest::Client, url: &str, signature: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use covenant_metaplex::AttestationPayload;
 
     fn temp_path(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -527,5 +528,122 @@ mod tests {
             .to_string();
         assert!(err.contains("load keypair"), "{err}");
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn valid_payload() -> AttestationPayload {
+        AttestationPayload::new("a".repeat(64), "v0.1.0", "covenant", "audit", 1_700_000_000)
+    }
+
+    // BuiltTx is intentionally not Debug (it carries a Keypair), so .unwrap_err()
+    // is unavailable; surface the error message without printing the Ok value.
+    fn build_err(req: &SignerRequest) -> String {
+        match build(req, &Keypair::new()) {
+            Ok(_) => panic!("expected build() to reject the request"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn build_rejects_attest_on_an_existing_asset() {
+        let req = SignerRequest::AttestAuditRoot {
+            payload: valid_payload(),
+            collection: None,
+            asset: Some(Pubkey::new_unique().to_string()),
+        };
+        let err = build_err(&req);
+        assert!(err.contains("not supported"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_register_on_an_existing_asset() {
+        let req = SignerRequest::RegisterIdentity {
+            agent_label: "agent".into(),
+            agent_pubkey: Pubkey::new_unique().to_string(),
+            asset: Some(Pubkey::new_unique().to_string()),
+            registration_uri: None,
+        };
+        let err = build_err(&req);
+        assert!(err.contains("not supported"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_attest_with_a_malformed_root_hash() {
+        let req = SignerRequest::AttestAuditRoot {
+            payload: AttestationPayload::new("zz".repeat(32), "v0.1.0", "covenant", "audit", 1),
+            collection: None,
+            asset: None,
+        };
+        let err = build_err(&req);
+        assert!(err.contains("hex"), "{err}");
+    }
+
+    #[test]
+    fn build_attest_emits_two_instructions_and_a_payload_sized_cost() {
+        let payload = valid_payload();
+        let req = SignerRequest::AttestAuditRoot {
+            payload: payload.clone(),
+            collection: None,
+            asset: None,
+        };
+        let built = build(&req, &Keypair::new()).unwrap();
+        assert_eq!(built.instructions.len(), 2);
+        let data_len = serde_json::to_vec(&payload).unwrap().len() as u64;
+        assert_eq!(
+            built.est_lamports,
+            ASSET_BASE_LAMPORTS + CORE_PROTOCOL_FEE_LAMPORTS + LAMPORTS_PER_DATA_BYTE * data_len
+        );
+    }
+
+    #[test]
+    fn build_register_falls_back_to_the_covenant_uri_and_prices_it() {
+        let agent_pubkey = Pubkey::new_unique().to_string();
+        let req = SignerRequest::RegisterIdentity {
+            agent_label: "agent".into(),
+            agent_pubkey: agent_pubkey.clone(),
+            asset: None,
+            registration_uri: None,
+        };
+        let built = build(&req, &Keypair::new()).unwrap();
+        assert_eq!(built.instructions.len(), 2);
+        let uri_len = format!("covenant://agent/{agent_pubkey}").len() as u64;
+        assert_eq!(
+            built.est_lamports,
+            ASSET_BASE_LAMPORTS
+                + CORE_PROTOCOL_FEE_LAMPORTS
+                + IDENTITY_PDA_LAMPORTS
+                + LAMPORTS_PER_DATA_BYTE * uri_len
+        );
+    }
+
+    #[test]
+    fn build_register_rejects_a_plain_http_uri() {
+        let req = SignerRequest::RegisterIdentity {
+            agent_label: "agent".into(),
+            agent_pubkey: Pubkey::new_unique().to_string(),
+            asset: None,
+            registration_uri: Some("http://example.org/a.json".into()),
+        };
+        let err = build_err(&req);
+        assert!(err.contains("registrationUri"), "{err}");
+    }
+
+    #[test]
+    fn build_register_accepts_an_https_uri_and_prices_it() {
+        let uri = "https://example.org/agent.json";
+        let req = SignerRequest::RegisterIdentity {
+            agent_label: "agent".into(),
+            agent_pubkey: Pubkey::new_unique().to_string(),
+            asset: None,
+            registration_uri: Some(uri.into()),
+        };
+        let built = build(&req, &Keypair::new()).unwrap();
+        assert_eq!(built.instructions.len(), 2);
+        assert_eq!(
+            built.est_lamports,
+            ASSET_BASE_LAMPORTS
+                + CORE_PROTOCOL_FEE_LAMPORTS
+                + IDENTITY_PDA_LAMPORTS
+                + LAMPORTS_PER_DATA_BYTE * uri.len() as u64
+        );
     }
 }

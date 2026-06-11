@@ -412,4 +412,33 @@ mod tests {
         assert_eq!(pr.amount, "abc", "raw amount string is preserved");
         assert_eq!(pr.amount_usdc, 0.0, "unparseable amount degrades to 0");
     }
+
+    #[test]
+    fn select_rejects_a_matching_accept_with_an_unparseable_amount() {
+        // A pinned accept on the right (network, asset) whose amount is not a
+        // u128 must hard-fail: to_payment_requirements coerces a bad amount to
+        // 0, but select runs first and must never let garbage reach the cap
+        // check and get signed for.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![mk_accept("solana", "usdc", "abc", pinned)];
+        let err = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect_err("unparseable amount on a matching pinned accept");
+        assert!(
+            matches!(err, ZauthError::DecodeChallenge(ref m) if m.contains("amount: abc")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn non_ascii_header_value_errors() {
+        // obs-text bytes (0x80-0xff) are a legal header value but not visible
+        // ASCII, so to_str() rejects them before any base64/json decode.
+        let mut h = HeaderMap::new();
+        h.insert(HEADER, HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap());
+        let err = decode_from_headers(&h).expect_err("non-ascii header");
+        assert!(
+            matches!(err, ZauthError::DecodeChallenge(ref m) if m.contains("not ascii")),
+            "got {err:?}"
+        );
+    }
 }

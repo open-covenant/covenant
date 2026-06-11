@@ -1,0 +1,66 @@
+{
+  "updatedAt": "2026-06-11T21:47:27.161Z",
+  "branch": "loop/main-track",
+  "totals": {
+    "events": 8069,
+    "tasks": 962,
+    "integrated": 962
+  },
+  "throughput": {
+    "last24h": 3,
+    "last7d": 170
+  },
+  "states": {
+    "integrated": 957,
+    "proposed": 1,
+    "blocked": 3,
+    "in_progress": 1
+  },
+  "inFlight": {
+    "task": "zauth-challenge-select-payment-gating-coverage",
+    "state": "in_progress",
+    "since": "2026-06-11T21:46:28.490Z"
+  },
+  "recent": [
+    {
+      "at": "2026-06-11T21:46:03.141Z",
+      "task": "metaplex-signer-build-request-coverage",
+      "note": "Committed 9873b9a4, pushed to origin/loop/main-track. 7 build() tests; independently security-reviewed (APPROVE)."
+    },
+    {
+      "at": "2026-06-11T21:39:44.228Z",
+      "task": "metaplex-signer-guard-and-io-coverage",
+      "note": "Committed d40de71a, pushed 53e93ce8..d40de71a to origin/loop/main-track. 10 pure-logic tests for the metaplex-signer guards/IO; security-rev"
+    },
+    {
+      "at": "2026-06-11T21:04:51.421Z",
+      "task": "metaplex-tool-gating-and-request-build-coverage",
+      "note": "Pushed in 53e93ce8 to origin/loop/main-track. Bundled with the branch --scripts gate repair (line-ref realignment + 2 validator anchor syncs"
+    },
+    {
+      "at": "2026-06-08T17:08:43.523Z",
+      "task": "covenantd-verify-memory-record-metadata-receipt-id-non-strin",
+      "note": "Integrated as ca346733, pushed 7f904d33..ca346733 main->main (clean ff). New drift kind memory_record_metadata_receipt_id_non_string is the "
+    },
+    {
+      "at": "2026-06-08T16:30:16.601Z",
+      "task": "covenantd-verify-memory-record-metadata-stale-context-unexpe",
+      "note": "Integrated as 7f904d33, pushed c8d09eac..7f904d33 main->main. New drift kind memory_record_metadata_stale_context_unexpected_key completes s"
+    },
+    {
+      "at": "2026-06-08T09:49:33.598Z",
+      "task": "covenantd-verify-memory-record-metadata-stale-context-reason",
+      "note": "pushed to origin/main as 75922cbd (ff from 65b7c103). Security gate: independent adversarial review verdict SAFE TO INTEGRATE (invariant sin"
+    },
+    {
+      "at": "2026-06-08T08:53:49.599Z",
+      "task": "covenantd-verify-memory-record-metadata-stale-context-marked",
+      "note": "Integrated as 8008caa6, pushed to origin/main (74bcde8f..8008caa6). marked_at_ms missing + non_integer arms complete the metadata.stale_cont"
+    },
+    {
+      "at": "2026-06-08T08:44:11.248Z",
+      "task": "covenantd-verify-memory-record-metadata-stale-context-shape",
+      "note": "Integrated as 74bcde8f, pushed to origin/main (28c01b10..74bcde8f). Two within-row drift arms (memory_record_metadata_stale_context_non_obje"
+    }
+  ]
+}

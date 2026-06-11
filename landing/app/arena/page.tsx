@@ -136,8 +136,8 @@ function Curve({ points }: { points: Arena["curve"] }) {
           cy={y}
           r="3.5"
           fill="#030303"
-          stroke={ACCENT[points[i].proposer ?? ""] ?? NEUTRAL}
-          strokeWidth="2"
+          stroke="#f5f5f5"
+          strokeWidth="1.5"
           className="arena-pop"
           style={{ animationDelay: `${0.25 + i * 0.12}s` }}
         >
@@ -155,8 +155,8 @@ function DailyBars({ data }: { data: { date: string; count: number }[] }) {
       {data.map((d, i) => (
         <div key={i} className="group relative flex h-full flex-1 items-end">
           <div
-            className="w-full rounded-sm bg-emerald-500/55 transition-colors group-hover:bg-emerald-300"
-            style={{ height: `${Math.max(3, (d.count / max) * 100)}%` }}
+            className="arena-grow-y w-full rounded-sm bg-neutral-300/70 transition-colors group-hover:bg-white"
+            style={{ height: `${Math.max(3, (d.count / max) * 100)}%`, animationDelay: `${0.3 + i * 0.04}s` }}
           >
             <title>{`${d.date}: ${d.count} integrated`}</title>
           </div>
@@ -178,8 +178,8 @@ function CumulativeLine({ data }: { data: { date: string; total: number }[] }) {
   const area = `${path} L${w},${h} L0,${h} Z`;
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="mt-4 w-full" preserveAspectRatio="none" aria-label="Cumulative tasks integrated">
-      <path d={area} fill="#10b98118" />
-      <path d={path} fill="none" stroke="#6ee7b7" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+      <path className="arena-fade" d={area} fill="#ffffff10" />
+      <path className="arena-draw" d={path} fill="none" stroke="#f5f5f5" strokeWidth="1.5" pathLength={1} vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }
@@ -195,17 +195,25 @@ export default async function ArenaPage() {
     <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
       <style>{`
         @keyframes arenaDraw { to { stroke-dashoffset: 0; } }
-        @keyframes arenaPop { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes arenaPop { from { opacity: 0; transform: scale(0.2); } to { opacity: 1; transform: scale(1); } }
         @keyframes arenaRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+        @keyframes arenaGrowY { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+        @keyframes arenaGrowX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+        @keyframes arenaFade { from { opacity: 0; } to { opacity: 1; } }
         .arena-draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: arenaDraw 1.8s cubic-bezier(0.4, 0, 0.2, 1) 0.2s forwards; }
-        .arena-pop { opacity: 0; animation: arenaPop 0.5s ease-out forwards; }
+        .arena-pop { opacity: 0; transform-box: fill-box; transform-origin: center; animation: arenaPop 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         .arena-rise { opacity: 0; animation: arenaRise 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .arena-grow-y { transform: scaleY(0); transform-origin: bottom; animation: arenaGrowY 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .arena-grow-x { transform: scaleX(0); transform-origin: left; animation: arenaGrowX 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .arena-fade { opacity: 0; animation: arenaFade 1s ease-out 1.6s forwards; }
         .arena-scroll { scrollbar-width: thin; scrollbar-color: #404040 transparent; }
         .arena-scroll::-webkit-scrollbar { width: 4px; }
         .arena-scroll::-webkit-scrollbar-thumb { background: #404040; border-radius: 2px; }
         .arena-scroll::-webkit-scrollbar-track { background: transparent; }
         @media (prefers-reduced-motion: reduce) {
-          .arena-draw, .arena-pop, .arena-rise { animation: none; opacity: 1; stroke-dashoffset: 0; transform: none; }
+          .arena-draw, .arena-pop, .arena-rise, .arena-grow-y, .arena-grow-x, .arena-fade {
+            animation: none; opacity: 1; stroke-dashoffset: 0; transform: none;
+          }
         }
       `}</style>
       <SiteHeader />
@@ -215,10 +223,10 @@ export default async function ArenaPage() {
           <h1 className="text-[11px] uppercase tracking-[0.4em] text-neutral-400">
             Arena
           </h1>
-          <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-emerald-300/90">
+          <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.3em] text-neutral-300">
             <span className="relative flex h-[7px] w-[7px]">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-              <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-emerald-400" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-50" />
+              <span className="relative inline-flex h-[7px] w-[7px] rounded-full bg-white" />
             </span>
             Live
           </span>
@@ -276,7 +284,7 @@ export default async function ArenaPage() {
                 </div>
                 <div className={`${stat} arena-rise`} style={{ animationDelay: "0.26s" }}>
                   <div className={statLabel}>Compute cut</div>
-                  <div className={`${statValue} text-emerald-300`}>
+                  <div className={`${statValue} text-white`}>
                     {arena.incumbent.fuelCutPct}%
                   </div>
                 </div>
@@ -310,7 +318,7 @@ export default async function ArenaPage() {
                   href={`${GITHUB_URL}/blob/feat/self-improvement/docs/arena-challenge.md`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-emerald-300 underline underline-offset-4 transition-colors hover:text-emerald-200"
+                  className="text-neutral-100 underline underline-offset-4 transition-colors hover:text-white"
                 >
                   Enter
                 </a>
@@ -460,7 +468,7 @@ export default async function ArenaPage() {
 
                 <div className="mt-6 border border-neutral-800/80 px-5 py-4">
                   <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">In flight</div>
-                  <div className="mt-2 truncate font-light text-emerald-300" title={loop.inFlight?.task ?? "idle"}>
+                  <div className="mt-2 truncate font-light text-neutral-100" title={loop.inFlight?.task ?? "idle"}>
                     {loop.inFlight ? loop.inFlight.task : "idle"}
                   </div>
                   {loop.inFlight && (
@@ -485,13 +493,16 @@ export default async function ArenaPage() {
                   Where it has been working
                 </p>
                 <div className="mt-4 space-y-2">
-                  {loop.areas.map((a) => {
+                  {loop.areas.map((a, i) => {
                     const max = loop.areas[0].count;
                     return (
                       <div key={a.name} className="flex items-center gap-3 text-sm font-light">
                         <span className="w-28 shrink-0 truncate text-neutral-300">{a.name}</span>
                         <div className="h-2 flex-1 bg-neutral-900">
-                          <div className="h-2 bg-neutral-600" style={{ width: `${(a.count / max) * 100}%` }} />
+                          <div
+                            className="arena-grow-x h-2 bg-neutral-300/80"
+                            style={{ width: `${(a.count / max) * 100}%`, animationDelay: `${0.4 + i * 0.08}s` }}
+                          />
                         </div>
                         <span className="w-8 shrink-0 text-right tabular-nums text-neutral-500">{a.count}</span>
                       </div>
@@ -528,7 +539,7 @@ export default async function ArenaPage() {
         )}
       </div>
 
-      <SiteFooter />
+      <SiteFooter className="pb-8" />
     </main>
   );
 }

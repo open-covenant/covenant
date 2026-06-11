@@ -14,7 +14,7 @@
 Covenant sits below agent applications and above the host operating system. It owns the state, authority, and accountability concerns that recur across agent frameworks — scoped capabilities, durable memory, runtime isolation, append-only audit, and commit-scoped provenance — so individual frameworks can stop reinventing them.
 
 <!-- METRICS:START -->
-**Status.** Local control plane is real and live-tested (27 Rust crates, ~197k lines, 2633 source-discovered Rust tests including 390 live boundary tests). Production-grade sandboxing for hostile agent code, networked multi-peer operation, and daemon-driven on-chain settlement are roadmap. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
+**Status.** Local control plane is real and live-tested (27 Rust crates, ~197k lines, 2636 source-discovered Rust tests including 390 live boundary tests). Production-grade sandboxing for hostile agent code, networked multi-peer operation, and daemon-driven on-chain settlement are roadmap. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
 <!-- METRICS:END -->
 
 - **Web:** [opencovenant.org](https://opencovenant.org)

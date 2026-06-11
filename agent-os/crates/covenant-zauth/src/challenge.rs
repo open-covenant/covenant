@@ -441,4 +441,58 @@ mod tests {
             "got {err:?}"
         );
     }
+
+    #[test]
+    fn select_skips_a_non_exact_scheme_on_the_matching_pair() {
+        // Only the "exact" scheme is honoured. A non-exact offer (e.g. a
+        // variable-amount "upto" scheme) on the pinned (network, asset, payTo)
+        // and within cap is skipped before it is even counted as a chain-asset
+        // match, so the caller sees "no accept on" rather than an over-cap or
+        // unpinned-payTo error: nothing variable-amount reaches signing.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![Accept {
+            scheme: "upto".into(),
+            ..mk_accept("solana", "usdc", "1000", pinned)
+        }];
+        let err = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect_err("a non-exact scheme is not a match");
+        assert!(
+            matches!(err, ZauthError::NoMatch(ref m) if m.contains("no accept on")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn select_does_not_let_a_non_exact_scheme_shadow_a_later_exact_accept() {
+        // The scheme filter is per-accept, not a short-circuit: a leading
+        // non-exact offer must not block a valid later exact accept on the
+        // same pair, or a payable challenge degrades into a spurious NoMatch.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![
+            Accept {
+                scheme: "upto".into(),
+                ..mk_accept("solana", "usdc", "1000", pinned)
+            },
+            mk_accept("solana", "usdc", "2000", pinned),
+        ];
+        let picked = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect("the later exact accept is selected");
+        assert_eq!(picked.scheme, "exact");
+        assert_eq!(picked.amount, "2000");
+    }
+
+    #[test]
+    fn select_rejects_a_wrong_asset_on_the_right_network() {
+        // (network, asset) is a conjunction: an accept on the right network
+        // carrying a different asset is no match, independently of the network
+        // arm already covered by select_rejects_wrong_network.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![mk_accept("solana", "other-mint", "1000", pinned)];
+        let err = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect_err("wrong asset on the right network");
+        assert!(
+            matches!(err, ZauthError::NoMatch(ref m) if m.contains("no accept on")),
+            "got {err:?}"
+        );
+    }
 }

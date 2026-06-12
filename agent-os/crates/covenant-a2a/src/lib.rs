@@ -457,6 +457,11 @@ fn validate_repair_request(request: &A2ARepairRequest) -> Result<(), A2AError> {
 }
 
 fn validate_task(task: &A2ATask) -> Result<(), A2AError> {
+    if task.intent_text.trim().is_empty() {
+        return Err(A2AError::InvalidTask(
+            "intent_text must not be empty".into(),
+        ));
+    }
     if task
         .task_kind
         .as_deref()
@@ -4666,6 +4671,34 @@ mod tests {
             t.idempotency = Some(A2AIdempotency::new(safety, "k"));
             assert!(validate_task(&t).is_ok());
         }
+    }
+
+    #[test]
+    fn validate_task_rejects_empty_intent_text() {
+        // intent_text is a required wire field and the router's primary
+        // routing signal; an empty or whitespace-only value yields an
+        // unroutable task and collapses the idempotency_cache_key
+        // discriminator fallback used when task_kind is absent. Reject it at
+        // the send boundary like task_kind. trim() is required so a
+        // whitespace-only value cannot bypass the check.
+        for empty in ["", "   ", "\t\n"] {
+            let mut t = dummy_task();
+            t.intent_text = empty.into();
+            let err = validate_task(&t).unwrap_err();
+            match err {
+                A2AError::InvalidTask(message) => assert!(
+                    message.contains("intent_text must not be empty"),
+                    "unexpected InvalidTask payload: {message:?}",
+                ),
+                other => panic!("expected InvalidTask, got {other:?}"),
+            }
+        }
+
+        // A non-empty intent_text validates. An inverted trim().is_empty()
+        // check would block every legitimate send, so pin the accept path.
+        let mut ok = dummy_task();
+        ok.intent_text = "find recent papers".into();
+        assert!(validate_task(&ok).is_ok());
     }
 
     #[test]

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T12:41:42.779Z",
+  "updatedAt": "2026-06-12T13:01:46.564Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8614,
-    "tasks": 1023,
-    "integrated": 1024
+    "events": 8623,
+    "tasks": 1024,
+    "integrated": 1025
   },
   "throughput": {
-    "last24h": 65,
+    "last24h": 66,
     "last7d": 190,
     "velocity": 27.1
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 47
+      "count": 48
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1024
+      "total": 1025
     }
   ],
   "states": {
-    "integrated": 1019,
+    "integrated": 1020,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T12:58:23.143Z",
+      "task": "harden-hermes-gateway-error-truncate-char-boundary",
+      "note": "Integrating to loop/main-track: truncate() now walks to the largest UTF-8 char boundary at or below max before slicing, closing the panic ax"
+    },
     {
       "at": "2026-06-12T12:01:52.288Z",
       "task": "bound-mcp-stdio-transport-line-reads",
@@ -310,11 +315,6 @@
       "at": "2026-06-12T07:17:18.402Z",
       "task": "harden-zauth-directory-http-read-timeout",
       "note": "Committed c2b1cdf8, pushed origin/loop/main-track. zauth directory CLI read now bounded at 20s; test pins it. README 2699->2700."
-    },
-    {
-      "at": "2026-06-12T07:06:37.190Z",
-      "task": "harden-x402-paid-client-http-timeout",
-      "note": "Committed 0b7f27e9, pushed origin/loop/main-track. Daemon x402 pay path now bounded at 120s via covenant_x402::http_client(); test pins it. "
     }
   ]
 }

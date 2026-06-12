@@ -429,7 +429,7 @@ impl PeerRegistry for InMemoryPeerRegistry {
             .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
             .filter(|s| summary_matches(s, pubkey_prefix))
             .filter(|s| summary_passes_status(s, status_filter))
-            .take(limit + 1)
+            .take(limit.saturating_add(1))
             .collect();
         let truncated = peeked.len() > limit;
         if truncated {
@@ -468,7 +468,7 @@ impl PeerRegistry for InMemoryPeerRegistry {
         let mut matched: Vec<&PeerEntry> = entries
             .iter()
             .filter(|e| e.token.to_b58().starts_with(prefix))
-            .take(limit + 1)
+            .take(limit.saturating_add(1))
             .collect();
         if matched.is_empty() {
             return Ok(RevokeOutcome::NotFound);
@@ -665,7 +665,7 @@ impl PeerRegistry for JsonlPeerRegistry {
             .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
             .filter(|s| summary_matches(s, pubkey_prefix))
             .filter(|s| summary_passes_status(s, status_filter))
-            .take(limit + 1)
+            .take(limit.saturating_add(1))
             .collect();
         let truncated = peeked.len() > limit;
         if truncated {
@@ -764,7 +764,7 @@ impl PeerRegistry for JsonlPeerRegistry {
             let mut matched: Vec<&PeerEntry> = entries
                 .iter()
                 .filter(|e| e.token.to_b58().starts_with(prefix))
-                .take(limit + 1)
+                .take(limit.saturating_add(1))
                 .collect();
             if matched.is_empty() {
                 return Ok(RevokeOutcome::NotFound);
@@ -2762,6 +2762,85 @@ mod tests {
         let (rows, truncated) = r.list_summaries(2, None, None).await.unwrap();
         assert_eq!(rows.len(), 2);
         assert!(truncated);
+    }
+
+    /// Regression: a `usize::MAX` limit must not overflow the peek
+    /// increment. `limit + 1` panics under `[profile.release]
+    /// overflow-checks`, so the increment saturates; at the ceiling no
+    /// real row count can exceed `limit`, so `truncated` is `false` and
+    /// the caller sees every resident row.
+    #[tokio::test]
+    async fn list_summaries_usize_max_limit_does_not_overflow() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e1) = entry("a@local");
+        let (_, e2) = entry("b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let (rows, truncated) = r.list_summaries(usize::MAX, None, None).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(!truncated, "all rows fit under a saturating limit");
+    }
+
+    /// JSONL mirror: the production registry must survive the same
+    /// `usize::MAX` limit without panicking.
+    #[tokio::test]
+    async fn jsonl_list_summaries_usize_max_limit_does_not_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (_, e1) = entry("a@local");
+        let (_, e2) = entry("b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let (rows, truncated) = r.list_summaries(usize::MAX, None, None).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(!truncated);
+    }
+
+    /// Regression: `revoke_by_token_prefix` peeks `limit + 1` for its
+    /// ambiguity check; a `usize::MAX` match_limit must saturate rather
+    /// than overflow. Two prefix matches stay `Ambiguous { truncated:
+    /// false }` and the registry is left unchanged.
+    #[tokio::test]
+    async fn revoke_by_token_prefix_usize_max_limit_does_not_overflow() {
+        let r = InMemoryPeerRegistry::new();
+        let (t1, e1) = entry_with_token_b58_starting_with("1", "a@local");
+        let (t2, e2) = entry_with_token_b58_starting_with("1", "b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let outcome = r.revoke_by_token_prefix("1", usize::MAX).await.unwrap();
+        match outcome {
+            RevokeOutcome::Ambiguous { matches, truncated } => {
+                assert_eq!(matches.len(), 2);
+                assert!(!truncated, "both matches fit under a saturating limit");
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        assert!(r.resolve(&t1).await.unwrap().is_some());
+        assert!(r.resolve(&t2).await.unwrap().is_some());
+    }
+
+    /// JSONL mirror of the revoke overflow guard.
+    #[tokio::test]
+    async fn jsonl_revoke_by_token_prefix_usize_max_limit_does_not_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (t1, e1) = entry_with_token_b58_starting_with("1", "a@local");
+        let (t2, e2) = entry_with_token_b58_starting_with("1", "b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let outcome = r.revoke_by_token_prefix("1", usize::MAX).await.unwrap();
+        match outcome {
+            RevokeOutcome::Ambiguous { matches, truncated } => {
+                assert_eq!(matches.len(), 2);
+                assert!(!truncated);
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        // Ambiguous refuses to mutate: both tokens still resolve.
+        assert!(r.resolve(&t1).await.unwrap().is_some());
+        assert!(r.resolve(&t2).await.unwrap().is_some());
     }
 
     /// Stale callers that don't know about `truncated` still

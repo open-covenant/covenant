@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-12T02:39:52.527Z",
+  "updatedAt": "2026-06-12T02:59:56.014Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8245,
-    "tasks": 982,
+    "events": 8246,
+    "tasks": 983,
     "integrated": 983
   },
   "throughput": {
@@ -185,7 +185,7 @@
   ],
   "states": {
     "integrated": 978,
-    "proposed": 1,
+    "proposed": 2,
     "blocked": 3
   },
   "areas": [

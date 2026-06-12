@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T15:02:12.607Z",
+  "updatedAt": "2026-06-12T15:22:16.839Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8645,
-    "tasks": 1027,
-    "integrated": 1028
+    "events": 8654,
+    "tasks": 1028,
+    "integrated": 1029
   },
   "throughput": {
-    "last24h": 69,
+    "last24h": 70,
     "last7d": 191,
     "velocity": 27.3
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 51
+      "count": 52
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1028
+      "total": 1029
     }
   ],
   "states": {
-    "integrated": 1022,
+    "integrated": 1023,
     "proposed": 1,
     "blocked": 3,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "bound-covenantd-signer-dispatch-subprocess-output",
+    "task": "bound-covenant-cli-x402-signer-subprocess-output",
     "state": "in_progress",
-    "since": "2026-06-12T14:57:32.860Z"
+    "since": "2026-06-12T15:19:54.549Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T15:17:33.330Z",
+      "task": "bound-covenantd-signer-dispatch-subprocess-output",
+      "note": "Pushed 51acac7a to origin/loop/main-track (84d085b1..51acac7a). Bounds both covenantd signer subprocess dispatches (metaplex.rs sign, x402.r"
+    },
     {
       "at": "2026-06-12T14:48:02.258Z",
       "task": "bound-sap-bridge-worker-subprocess-output",
@@ -315,11 +320,6 @@
       "at": "2026-06-12T07:54:52.087Z",
       "task": "harden-zauth-directory-response-size",
       "note": "Committed. directory.rs read_capped over the listing read; README 2704; scripts gate green; independent review SHIP."
-    },
-    {
-      "at": "2026-06-12T07:49:13.336Z",
-      "task": "harden-x402-client-challenge-response-size",
-      "note": "Committed. client.rs read_capped over the 402 challenge; README 2703; scripts gate green; independent review SHIP."
     }
   ]
 }

@@ -503,4 +503,75 @@ mod tests {
             .expect_err("empty");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("empty header")));
     }
+
+    #[tokio::test]
+    async fn pay_and_record_refuses_when_budget_would_exceed() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(4);
+        budget.set_capacity(&payer, 5).await.unwrap(); // 5 < 8 credits
+
+        let ctx = SettlementContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let config = X402Config {
+            enabled: true,
+            ..Default::default()
+        };
+        let err = pay_and_record(
+            &ctx,
+            &config,
+            &Client::new(reqwest::Client::new()),
+            &covenant_x402::MockSigner,
+            &payer,
+            &sample_call(),
+        )
+        .await
+        .expect_err("over budget");
+        assert!(matches!(err, X402DaemonError::BudgetExceeded));
+
+        // The pre-check is read-only: a refusal must not spend or record.
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pay_and_record_refuses_when_payer_has_no_capacity() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(5);
+        // No set_capacity: would_exceed resolves to NoCapacity.
+
+        let ctx = SettlementContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let config = X402Config {
+            enabled: true,
+            ..Default::default()
+        };
+        let err = pay_and_record(
+            &ctx,
+            &config,
+            &Client::new(reqwest::Client::new()),
+            &covenant_x402::MockSigner,
+            &payer,
+            &sample_call(),
+        )
+        .await
+        .expect_err("no capacity");
+        assert!(matches!(err, X402DaemonError::NoCapacity));
+
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
+    }
 }

@@ -1071,8 +1071,8 @@ mod imp {
             tail: &[[u32; 64]; 16],
             out: &mut [[u8; 64]; 4],
         ) {
-            let zero = super::zero_hash();
-            let mut prevs: [&[u8; 64]; 4] = [&zero; 4];
+            const ZERO_HEX: [u8; 64] = [b'0'; 64];
+            let mut prevs: [&[u8; 64]; 4] = [&ZERO_HEX; 4];
             let mut hx: [&[u8; 64]; 4] = [&hexes[0]; 4];
             let mut l = 0;
             while l < 4 {
@@ -2261,49 +2261,6 @@ mod imp {
         }
     }
 
-    /// Stop-byte-free check of exactly `$n` string-body bytes (no quote,
-    /// backslash, control, or DEL), the last chunk overlapping; `$n` >= 16.
-    /// `qstr` semantics minus the closing-quote check, which callers fold
-    /// into the following literal. A macro so every use expands inline and
-    /// the stop-class constants hoist across chunks.
-    #[cfg(target_arch = "wasm32")]
-    macro_rules! clean_at {
-        ($buf:expr, $pos:expr, $n:literal) => {{
-            use std::arch::wasm32::*;
-            match $buf.get($pos..$pos + $n) {
-                None => false,
-                Some(b) => {
-                    let stops = |c: &[u8]| {
-                        let v = u64x2(
-                            u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
-                            u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
-                        );
-                        v128_or(
-                            v128_or(
-                                u8x16_eq(v, u8x16_splat(b'"')),
-                                u8x16_eq(v, u8x16_splat(b'\\')),
-                            ),
-                            v128_or(
-                                i8x16_lt(v, i8x16_splat(0x20)),
-                                u8x16_eq(v, u8x16_splat(0x7f)),
-                            ),
-                        )
-                    };
-                    let mut acc = stops(&b[0..16]);
-                    let mut i = 16;
-                    while i + 16 <= $n {
-                        acc = v128_or(acc, stops(&b[i..i + 16]));
-                        i += 16;
-                    }
-                    if i < $n {
-                        acc = v128_or(acc, stops(&b[$n - 16..$n]));
-                    }
-                    !v128_any_true(acc)
-                }
-            }
-        }};
-    }
-
     /// Stop-byte class vector for one 16-byte chunk of a fixed-size line:
     /// lanes flag quote, backslash, control (signed < 0x20 also catches
     /// >= 0x80), or DEL, exactly the `str_end` stop set.
@@ -2325,6 +2282,18 @@ mod imp {
         }};
     }
 
+    /// One unaligned 16-byte window of a fixed-size line as a v128.
+    #[cfg(target_arch = "wasm32")]
+    macro_rules! ldw {
+        ($a:expr, $p:expr) => {{
+            let c: &[u8; 16] = $a[$p..$p + 16].try_into().expect("16-byte chunk");
+            u64x2(
+                u64::from_le_bytes(c[0..8].try_into().expect("8-byte chunk")),
+                u64::from_le_bytes(c[8..16].try_into().expect("8-byte chunk")),
+            )
+        }};
+    }
+
     /// Branch-light digit predicate for one 8-byte chunk (every byte in
     /// '0'..='9'), the SWAR form of `digit_run`'s probe.
     #[cfg(target_arch = "wasm32")]
@@ -2341,33 +2310,38 @@ mod imp {
     #[target_feature(enable = "simd128")]
     fn tmpl_k0n(a: &[u8; 339]) -> bool {
         use std::arch::wasm32::*;
-        let mut bad = u32x4(0, 0, 0, 0);
-        let mut ok = true;
-        ok &= eq_n::<7>(a[0..7].try_into().expect("lit"), b"{\"id\":\"");
+        let mut bad = v128_and(v128_xor(ldw!(a, 0), u8x16(123, 34, 105, 100, 34, 58, 34, 0, 0, 0, 0, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0));
         bad = v128_or(bad, stops_at!(a, 7));
         bad = v128_or(bad, stops_at!(a, 23));
         bad = v128_or(bad, stops_at!(a, 27));
-        ok &= eq_n::<17>(a[43..60].try_into().expect("lit"), b"\",\"timestamp_ms\":");
-        ok &= all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
+        bad = v128_or(bad, v128_xor(ldw!(a, 43), u8x16(34, 44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 44), u8x16(44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34, 58)));
+        let mut ok = all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
         ok &= all_digits8(u64::from_le_bytes(a[65..73].try_into().expect("8-byte chunk")));
         ok &= a[60] != b'0';
-        ok &= eq_n::<11>(a[73..84].try_into().expect("lit"), b",\"issuer\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0)));
-        ok &= eq_n::<50>(a[96..146].try_into().expect("lit"), b"\",\"kind\":{\"type\":\"intent_dispatched\",\"intent_id\":\"");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 73), u8x16(44, 34, 105, 115, 115, 117, 101, 114, 34, 58, 34, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 96), u8x16(34, 44, 34, 107, 105, 110, 100, 34, 58, 123, 34, 116, 121, 112, 101, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 112), u8x16(58, 34, 105, 110, 116, 101, 110, 116, 95, 100, 105, 115, 112, 97, 116, 99)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 128), u8x16(104, 101, 100, 34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 105, 100, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 130), u8x16(100, 34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 105, 100, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 146));
         bad = v128_or(bad, stops_at!(a, 162));
         bad = v128_or(bad, stops_at!(a, 166));
-        ok &= eq_n::<17>(a[182..199].try_into().expect("lit"), b"\",\"intent_text\":\"");
+        bad = v128_or(bad, v128_xor(ldw!(a, 182), u8x16(34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 116, 101, 120, 116, 34, 58)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 183), u8x16(44, 34, 105, 110, 116, 101, 110, 116, 95, 116, 101, 120, 116, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 199));
         bad = v128_or(bad, stops_at!(a, 200));
-        ok &= eq_n::<42>(a[216..258].try_into().expect("lit"), b"\",\"matched_agent\":null,\"result_hash_hex\":\"");
+        bad = v128_or(bad, v128_xor(ldw!(a, 216), u8x16(34, 44, 34, 109, 97, 116, 99, 104, 101, 100, 95, 97, 103, 101, 110, 116)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 232), u8x16(34, 58, 110, 117, 108, 108, 44, 34, 114, 101, 115, 117, 108, 116, 95, 104)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 242), u8x16(115, 117, 108, 116, 95, 104, 97, 115, 104, 95, 104, 101, 120, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 258));
         bad = v128_or(bad, stops_at!(a, 274));
         bad = v128_or(bad, stops_at!(a, 290));
         bad = v128_or(bad, stops_at!(a, 306));
-        ok &= eq_n::<12>(a[322..334].try_into().expect("lit"), b"\",\"status\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 323), u8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0)));
-        ok &= eq_n::<3>(a[336..339].try_into().expect("lit"), b"\"}}");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 322), u8x16(34, 44, 34, 115, 116, 97, 116, 117, 115, 34, 58, 34, 0, 0, 34, 125)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 255, 255)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 323), u8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 0)));
+        ok &= a[338] == b'}';
         ok && !v128_any_true(bad)
     }
 
@@ -2376,35 +2350,40 @@ mod imp {
     #[target_feature(enable = "simd128")]
     fn tmpl_k0a(a: &[u8; 347]) -> bool {
         use std::arch::wasm32::*;
-        let mut bad = u32x4(0, 0, 0, 0);
-        let mut ok = true;
-        ok &= eq_n::<7>(a[0..7].try_into().expect("lit"), b"{\"id\":\"");
+        let mut bad = v128_and(v128_xor(ldw!(a, 0), u8x16(123, 34, 105, 100, 34, 58, 34, 0, 0, 0, 0, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0));
         bad = v128_or(bad, stops_at!(a, 7));
         bad = v128_or(bad, stops_at!(a, 23));
         bad = v128_or(bad, stops_at!(a, 27));
-        ok &= eq_n::<17>(a[43..60].try_into().expect("lit"), b"\",\"timestamp_ms\":");
-        ok &= all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
+        bad = v128_or(bad, v128_xor(ldw!(a, 43), u8x16(34, 44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 44), u8x16(44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34, 58)));
+        let mut ok = all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
         ok &= all_digits8(u64::from_le_bytes(a[65..73].try_into().expect("8-byte chunk")));
         ok &= a[60] != b'0';
-        ok &= eq_n::<11>(a[73..84].try_into().expect("lit"), b",\"issuer\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0)));
-        ok &= eq_n::<50>(a[96..146].try_into().expect("lit"), b"\",\"kind\":{\"type\":\"intent_dispatched\",\"intent_id\":\"");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 73), u8x16(44, 34, 105, 115, 115, 117, 101, 114, 34, 58, 34, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 96), u8x16(34, 44, 34, 107, 105, 110, 100, 34, 58, 123, 34, 116, 121, 112, 101, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 112), u8x16(58, 34, 105, 110, 116, 101, 110, 116, 95, 100, 105, 115, 112, 97, 116, 99)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 128), u8x16(104, 101, 100, 34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 105, 100, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 130), u8x16(100, 34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 105, 100, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 146));
         bad = v128_or(bad, stops_at!(a, 162));
         bad = v128_or(bad, stops_at!(a, 166));
-        ok &= eq_n::<17>(a[182..199].try_into().expect("lit"), b"\",\"intent_text\":\"");
+        bad = v128_or(bad, v128_xor(ldw!(a, 182), u8x16(34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 116, 101, 120, 116, 34, 58)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 183), u8x16(44, 34, 105, 110, 116, 101, 110, 116, 95, 116, 101, 120, 116, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 199));
         bad = v128_or(bad, stops_at!(a, 200));
-        ok &= eq_n::<19>(a[216..235].try_into().expect("lit"), b"\",\"matched_agent\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 235), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0, 0)));
-        ok &= eq_n::<21>(a[245..266].try_into().expect("lit"), b"\",\"result_hash_hex\":\"");
+        bad = v128_or(bad, v128_xor(ldw!(a, 216), u8x16(34, 44, 34, 109, 97, 116, 99, 104, 101, 100, 95, 97, 103, 101, 110, 116)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 219), u8x16(109, 97, 116, 99, 104, 101, 100, 95, 97, 103, 101, 110, 116, 34, 58, 34)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 235), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 245), u8x16(34, 44, 34, 114, 101, 115, 117, 108, 116, 95, 104, 97, 115, 104, 95, 104)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 250), u8x16(115, 117, 108, 116, 95, 104, 97, 115, 104, 95, 104, 101, 120, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 266));
         bad = v128_or(bad, stops_at!(a, 282));
         bad = v128_or(bad, stops_at!(a, 298));
         bad = v128_or(bad, stops_at!(a, 314));
-        ok &= eq_n::<12>(a[330..342].try_into().expect("lit"), b"\",\"status\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 331), u8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0)));
-        ok &= eq_n::<3>(a[344..347].try_into().expect("lit"), b"\"}}");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 330), u8x16(34, 44, 34, 115, 116, 97, 116, 117, 115, 34, 58, 34, 0, 0, 34, 125)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 255, 255)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 331), u8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 0)));
+        ok &= a[346] == b'}';
         ok && !v128_any_true(bad)
     }
 
@@ -2413,32 +2392,35 @@ mod imp {
     #[target_feature(enable = "simd128")]
     fn tmpl_k1(a: &[u8; 322]) -> bool {
         use std::arch::wasm32::*;
-        let mut bad = u32x4(0, 0, 0, 0);
-        let mut ok = true;
-        ok &= eq_n::<7>(a[0..7].try_into().expect("lit"), b"{\"id\":\"");
+        let mut bad = v128_and(v128_xor(ldw!(a, 0), u8x16(123, 34, 105, 100, 34, 58, 34, 0, 0, 0, 0, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0));
         bad = v128_or(bad, stops_at!(a, 7));
         bad = v128_or(bad, stops_at!(a, 23));
         bad = v128_or(bad, stops_at!(a, 27));
-        ok &= eq_n::<17>(a[43..60].try_into().expect("lit"), b"\",\"timestamp_ms\":");
-        ok &= all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
+        bad = v128_or(bad, v128_xor(ldw!(a, 43), u8x16(34, 44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 44), u8x16(44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34, 58)));
+        let mut ok = all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
         ok &= all_digits8(u64::from_le_bytes(a[65..73].try_into().expect("8-byte chunk")));
         ok &= a[60] != b'0';
-        ok &= eq_n::<11>(a[73..84].try_into().expect("lit"), b",\"issuer\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0)));
-        ok &= eq_n::<52>(a[96..148].try_into().expect("lit"), b"\",\"kind\":{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 73), u8x16(44, 34, 105, 115, 115, 117, 101, 114, 34, 58, 34, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 96), u8x16(34, 44, 34, 107, 105, 110, 100, 34, 58, 123, 34, 116, 121, 112, 101, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 112), u8x16(58, 34, 104, 101, 114, 109, 101, 115, 95, 116, 111, 111, 108, 95, 105, 110)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 128), u8x16(118, 111, 107, 101, 100, 34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 105)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 132), u8x16(100, 34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 105, 100, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 148));
         bad = v128_or(bad, stops_at!(a, 164));
         bad = v128_or(bad, stops_at!(a, 168));
-        ok &= eq_n::<12>(a[184..196].try_into().expect("lit"), b"\",\"run_id\":\"");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 184), u8x16(34, 44, 34, 114, 117, 110, 95, 105, 100, 34, 58, 34, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0)));
         bad = v128_or(bad, stops_at!(a, 196));
-        ok &= eq_n::<10>(a[212..222].try_into().expect("lit"), b"\",\"tool\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 222), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0)));
-        ok &= eq_n::<22>(a[233..255].try_into().expect("lit"), b"\",\"preview_hash_hex\":\"");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 212), u8x16(34, 44, 34, 116, 111, 111, 108, 34, 58, 34, 0, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 222), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 233), u8x16(34, 44, 34, 112, 114, 101, 118, 105, 101, 119, 95, 104, 97, 115, 104, 95)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 239), u8x16(118, 105, 101, 119, 95, 104, 97, 115, 104, 95, 104, 101, 120, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 255));
         bad = v128_or(bad, stops_at!(a, 271));
         bad = v128_or(bad, stops_at!(a, 287));
         bad = v128_or(bad, stops_at!(a, 303));
-        ok &= eq_n::<3>(a[319..322].try_into().expect("lit"), b"\"}}");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 306), u8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 34, 125, 125)), u8x16(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255)));
         ok && !v128_any_true(bad)
     }
 
@@ -2449,27 +2431,29 @@ mod imp {
     #[target_feature(enable = "simd128")]
     fn tmpl_k2<const D: usize, const ERR: bool, const L: usize>(a: &[u8; L]) -> bool {
         use std::arch::wasm32::*;
-        let mut bad = u32x4(0, 0, 0, 0);
-        let mut ok = true;
-        ok &= eq_n::<7>(a[0..7].try_into().expect("lit"), b"{\"id\":\"");
+        let mut bad = v128_and(v128_xor(ldw!(a, 0), u8x16(123, 34, 105, 100, 34, 58, 34, 0, 0, 0, 0, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0));
         bad = v128_or(bad, stops_at!(a, 7));
         bad = v128_or(bad, stops_at!(a, 23));
         bad = v128_or(bad, stops_at!(a, 27));
-        ok &= eq_n::<17>(a[43..60].try_into().expect("lit"), b"\",\"timestamp_ms\":");
-        ok &= all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
+        bad = v128_or(bad, v128_xor(ldw!(a, 43), u8x16(34, 44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 44), u8x16(44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34, 58)));
+        let mut ok = all_digits8(u64::from_le_bytes(a[60..68].try_into().expect("8-byte chunk")));
         ok &= all_digits8(u64::from_le_bytes(a[65..73].try_into().expect("8-byte chunk")));
         ok &= a[60] != b'0';
-        ok &= eq_n::<11>(a[73..84].try_into().expect("lit"), b",\"issuer\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0)));
-        ok &= eq_n::<54>(a[96..150].try_into().expect("lit"), b"\",\"kind\":{\"type\":\"hermes_tool_completed\",\"intent_id\":\"");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 73), u8x16(44, 34, 105, 115, 115, 117, 101, 114, 34, 58, 34, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 84), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 96), u8x16(34, 44, 34, 107, 105, 110, 100, 34, 58, 123, 34, 116, 121, 112, 101, 34)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 112), u8x16(58, 34, 104, 101, 114, 109, 101, 115, 95, 116, 111, 111, 108, 95, 99, 111)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 128), u8x16(109, 112, 108, 101, 116, 101, 100, 34, 44, 34, 105, 110, 116, 101, 110, 116)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 134), u8x16(100, 34, 44, 34, 105, 110, 116, 101, 110, 116, 95, 105, 100, 34, 58, 34)));
         bad = v128_or(bad, stops_at!(a, 150));
         bad = v128_or(bad, stops_at!(a, 166));
         bad = v128_or(bad, stops_at!(a, 170));
-        ok &= eq_n::<12>(a[186..198].try_into().expect("lit"), b"\",\"run_id\":\"");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 186), u8x16(34, 44, 34, 114, 117, 110, 95, 105, 100, 34, 58, 34, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0)));
         bad = v128_or(bad, stops_at!(a, 198));
-        ok &= eq_n::<10>(a[214..224].try_into().expect("lit"), b"\",\"tool\":\"");
-        bad = v128_or(bad, v128_and(stops_at!(a, 224), u8x16(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0)));
-        ok &= eq_n::<16>(a[235..251].try_into().expect("lit"), b"\",\"duration_ms\":");
+        bad = v128_or(bad, v128_and(v128_xor(ldw!(a, 214), u8x16(34, 44, 34, 116, 111, 111, 108, 34, 58, 34, 0, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_and(stops_at!(a, 224), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0)));
+        bad = v128_or(bad, v128_xor(ldw!(a, 235), u8x16(34, 44, 34, 100, 117, 114, 97, 116, 105, 111, 110, 95, 109, 115, 34, 58)));
         let mut q = 251;
         while q < 251 + D {
             ok &= a[q].is_ascii_digit();
@@ -2478,11 +2462,14 @@ mod imp {
         if D > 1 {
             ok &= a[251] != b'0';
         }
-        ok &= if ERR {
-            eq_n::<15>(a[251 + D..266 + D].try_into().expect("lit"), b",\"error\":true}}")
+        if ERR {
+            bad = v128_or(
+                bad,
+                v128_and(v128_xor(ldw!(a, 250 + D), u8x16(0, 44, 34, 101, 114, 114, 111, 114, 34, 58, 116, 114, 117, 101, 125, 125)), u8x16(0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255)),
+            );
         } else {
-            eq_n::<16>(a[251 + D..267 + D].try_into().expect("lit"), b",\"error\":false}}")
-        };
+            bad = v128_or(bad, v128_xor(ldw!(a, 251 + D), u8x16(44, 34, 101, 114, 114, 111, 114, 34, 58, 102, 97, 108, 115, 101, 125, 125)));
+        }
         ok && !v128_any_true(bad)
     }
 
@@ -2694,27 +2681,49 @@ mod imp {
     /// exact walk on any deviation.
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn anchor_shape(line: &[u8]) -> bool {
+        // Speculative arm: derive the two digit-run ends first, then check
+        // every literal, span, and the closing brace in one or-folded pass;
+        // any deviation falls back to the exact walk.
         #[cfg(target_arch = "wasm32")]
         {
-            if tag(line, 0, b"{\"index\":") == 0 {
-                return false;
-            }
+            use std::arch::wasm32::*;
             let il_end = digits_end(line, 9);
-            if il_end != 0 && tag(line, il_end, b",\"event_id\":\"") != 0 {
-                let id = il_end + 13;
-                if clean_at!(line, id, 36) && tag(line, id + 36, b"\",\"timestamp_ms\":") != 0 {
-                    let ts_end = digits_end(line, id + 53);
-                    if ts_end != 0 && line.len() == ts_end + 256 {
-                        let mut ok = tag(line, ts_end, b",\"event_hash_hex\":\"") != 0;
-                        ok &= clean_at!(line, ts_end + 19, 64);
-                        ok &= tag(line, ts_end + 83, b"\",\"previous_hash_hex\":\"") != 0;
-                        ok &= clean_at!(line, ts_end + 106, 64);
-                        ok &= tag(line, ts_end + 170, b"\",\"chain_hash_hex\":\"") != 0;
-                        ok &= clean_at!(line, ts_end + 190, 64);
-                        ok &= tag(line, ts_end + 254, b"\"}") != 0;
-                        if ok {
-                            return true;
-                        }
+            if il_end != 0 {
+                let ts_end = digits_end(line, il_end + 66);
+                if ts_end != 0 && line.len() == ts_end + 256 {
+                    let id = il_end + 13;
+                    let mut bad = v128_and(v128_xor(ldw!(line, 0), u8x16(123, 34, 105, 110, 100, 101, 120, 34, 58, 0, 0, 0, 0, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0));
+                    bad = v128_or(
+                        bad,
+                        v128_and(v128_xor(ldw!(line, il_end), u8x16(44, 34, 101, 118, 101, 110, 116, 95, 105, 100, 34, 58, 34, 0, 0, 0)), u8x16(255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0)),
+                    );
+                    bad = v128_or(bad, stops_at!(line, id));
+                    bad = v128_or(bad, stops_at!(line, id + 16));
+                    bad = v128_or(bad, stops_at!(line, id + 20));
+                    bad = v128_or(bad, v128_xor(ldw!(line, id + 36), u8x16(34, 44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34)));
+                    bad = v128_or(bad, v128_xor(ldw!(line, id + 37), u8x16(44, 34, 116, 105, 109, 101, 115, 116, 97, 109, 112, 95, 109, 115, 34, 58)));
+                    bad = v128_or(bad, v128_xor(ldw!(line, ts_end), u8x16(44, 34, 101, 118, 101, 110, 116, 95, 104, 97, 115, 104, 95, 104, 101, 120)));
+                    bad = v128_or(bad, v128_xor(ldw!(line, ts_end + 3), u8x16(118, 101, 110, 116, 95, 104, 97, 115, 104, 95, 104, 101, 120, 34, 58, 34)));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 19));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 35));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 51));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 67));
+                    bad = v128_or(bad, v128_xor(ldw!(line, ts_end + 83), u8x16(34, 44, 34, 112, 114, 101, 118, 105, 111, 117, 115, 95, 104, 97, 115, 104)));
+                    bad = v128_or(bad, v128_xor(ldw!(line, ts_end + 90), u8x16(105, 111, 117, 115, 95, 104, 97, 115, 104, 95, 104, 101, 120, 34, 58, 34)));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 106));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 122));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 138));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 154));
+                    bad = v128_or(bad, v128_xor(ldw!(line, ts_end + 170), u8x16(34, 44, 34, 99, 104, 97, 105, 110, 95, 104, 97, 115, 104, 95, 104, 101)));
+                    bad = v128_or(bad, v128_xor(ldw!(line, ts_end + 174), u8x16(104, 97, 105, 110, 95, 104, 97, 115, 104, 95, 104, 101, 120, 34, 58, 34)));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 190));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 206));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 222));
+                    bad = v128_or(bad, stops_at!(line, ts_end + 238));
+                    let tail2 =
+                        u32::from(line[ts_end + 254] ^ b'"') | u32::from(line[ts_end + 255] ^ b'}');
+                    if tail2 == 0 && !v128_any_true(bad) {
+                        return true;
                     }
                 }
             }
@@ -2874,28 +2883,130 @@ mod imp {
 
     /// One-pass byte comparison of an anchor line against the entry this
     /// chain position expects, in the canonical field order and compact
-    /// formatting `fold_chain` serializes. The caller has already pinned the
-    /// 85-byte tail `,"chain_hash_hex":"<chain>"}` via `chain_span`, so one
-    /// total-length check fixes every field offset and the field compares
-    /// run branch-free into a single accept test. Byte equality implies the
-    /// anchor parses to exactly the expected field values; any difference
-    /// falls back to the parse + field-compare slow path.
+    /// formatting `fold_chain` serializes. `prefix` is the expected
+    /// `{"index":<idx>,"event_id":"` head the caller maintains, so the index
+    /// digits and both leading literals collapse into two overlapping chunk
+    /// compares. The caller has already pinned the 85-byte tail
+    /// `,"chain_hash_hex":"<chain>"}` via `chain_span`, so one total-length
+    /// check fixes every field offset and the field compares run branch-free
+    /// into a single accept test. Byte equality implies the anchor parses to
+    /// exactly the expected field values; any difference falls back to the
+    /// parse + field-compare slow path.
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
     fn anchor_line_matches(
         line: &[u8],
-        idx_digits: &[u8],
+        prefix: &[u8],
         id: &[u8],
         ts_digits: &[u8],
         event_hex: &[u8; 64],
         previous: &[u8; 64],
     ) -> bool {
-        let il = idx_digits.len();
+        let pl = prefix.len();
+        let il = pl - 22;
         let idl = id.len();
         let tl = ts_digits.len();
         if line.len() != 295 + il + idl + tl {
             return false;
         }
-        let p_id = 22 + il;
+        // Dominant shape: uuid-width id, up-to-ten-digit index, and an
+        // 8..=16 digit timestamp let every span pair into overlapping
+        // chunks, or-folded to one accept test with no per-field branches.
+        // The length gate keeps every window in bounds.
+        #[cfg(target_arch = "wasm32")]
+        if idl == 36 && (8..=16).contains(&tl) && pl <= 32 {
+            use std::arch::wasm32::*;
+            let ld = |b: &[u8], o: usize| {
+                u64x2(
+                    u64::from_le_bytes(b[o..o + 8].try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes(b[o + 8..o + 16].try_into().expect("8-byte chunk")),
+                )
+            };
+            let lu =
+                |b: &[u8], o: usize| u64::from_le_bytes(b[o..o + 8].try_into().expect("8-byte chunk"));
+            let mut acc = v128_xor(ld(line, 0), ld(prefix, 0));
+            acc = v128_or(acc, v128_xor(ld(line, pl - 16), ld(prefix, pl - 16)));
+            acc = v128_or(acc, v128_xor(ld(line, pl), ld(id, 0)));
+            acc = v128_or(acc, v128_xor(ld(line, pl + 16), ld(id, 16)));
+            acc = v128_or(acc, v128_xor(ld(line, pl + 20), ld(id, 20)));
+            acc = v128_or(
+                acc,
+                v128_xor(
+                    ld(line, pl + 36),
+                    u8x16(
+                        b'"', b',', b'"', b't', b'i', b'm', b'e', b's', b't', b'a', b'm', b'p',
+                        b'_', b'm', b's', b'"',
+                    ),
+                ),
+            );
+            acc = v128_or(
+                acc,
+                v128_xor(
+                    ld(line, pl + 37),
+                    u8x16(
+                        b',', b'"', b't', b'i', b'm', b'e', b's', b't', b'a', b'm', b'p', b'_',
+                        b'm', b's', b'"', b':',
+                    ),
+                ),
+            );
+            let p_ts = pl + 53;
+            let mut acc64 = lu(line, p_ts) ^ lu(ts_digits, 0);
+            acc64 |= lu(line, p_ts + tl - 8) ^ lu(ts_digits, tl - 8);
+            let p = p_ts + tl;
+            acc = v128_or(
+                acc,
+                v128_xor(
+                    ld(line, p),
+                    u8x16(
+                        b',', b'"', b'e', b'v', b'e', b'n', b't', b'_', b'h', b'a', b's', b'h',
+                        b'_', b'h', b'e', b'x',
+                    ),
+                ),
+            );
+            acc = v128_or(
+                acc,
+                v128_xor(
+                    ld(line, p + 3),
+                    u8x16(
+                        b'v', b'e', b'n', b't', b'_', b'h', b'a', b's', b'h', b'_', b'h', b'e',
+                        b'x', b'"', b':', b'"',
+                    ),
+                ),
+            );
+            let p_ev = p + 19;
+            acc = v128_or(acc, v128_xor(ld(line, p_ev), ld(event_hex, 0)));
+            acc = v128_or(acc, v128_xor(ld(line, p_ev + 16), ld(event_hex, 16)));
+            acc = v128_or(acc, v128_xor(ld(line, p_ev + 32), ld(event_hex, 32)));
+            acc = v128_or(acc, v128_xor(ld(line, p_ev + 48), ld(event_hex, 48)));
+            let q = p_ev + 64;
+            acc = v128_or(
+                acc,
+                v128_xor(
+                    ld(line, q),
+                    u8x16(
+                        b'"', b',', b'"', b'p', b'r', b'e', b'v', b'i', b'o', b'u', b's', b'_',
+                        b'h', b'a', b's', b'h',
+                    ),
+                ),
+            );
+            acc = v128_or(
+                acc,
+                v128_xor(
+                    ld(line, q + 7),
+                    u8x16(
+                        b'i', b'o', b'u', b's', b'_', b'h', b'a', b's', b'h', b'_', b'h', b'e',
+                        b'x', b'"', b':', b'"',
+                    ),
+                ),
+            );
+            let p_pr = q + 23;
+            acc = v128_or(acc, v128_xor(ld(line, p_pr), ld(previous, 0)));
+            acc = v128_or(acc, v128_xor(ld(line, p_pr + 16), ld(previous, 16)));
+            acc = v128_or(acc, v128_xor(ld(line, p_pr + 32), ld(previous, 32)));
+            acc = v128_or(acc, v128_xor(ld(line, p_pr + 48), ld(previous, 48)));
+            acc64 |= u64::from(line[p_pr + 64] ^ b'"');
+            return !v128_any_true(acc) && acc64 == 0;
+        }
+        let p_id = pl;
         let p_ts = p_id + idl + 17;
         let p_ev = p_ts + tl + 19;
         let p_pr = p_ev + 87;
@@ -2903,12 +3014,7 @@ mod imp {
             return false;
         };
         let lit = |pos: usize| -> &[u8] { &line[pos..] };
-        let mut ok = eq_n::<9>(line[0..9].try_into().expect("9-byte slice"), b"{\"index\":");
-        ok &= bytes_eq(&line[9..9 + il], idx_digits);
-        ok &= eq_n::<13>(
-            lit(9 + il)[..13].try_into().expect("13-byte slice"),
-            b",\"event_id\":\"",
-        );
+        let mut ok = bytes_eq(&line[..pl], prefix);
         // Corpus ids are uuid-shaped; a const-length arm lets the compare
         // run as four overlapping vector chunks.
         ok &= match <&[u8; 36]>::try_from(id) {
@@ -3011,23 +3117,34 @@ mod imp {
         let mut seq_wk = [[0u8; 256]; 4];
         #[cfg(target_arch = "wasm32")]
         let mut pre_hit: Option<bool> = None;
-        // Canonical decimal of the running entry index, incremented in place;
-        // replaces a per-event itoa in the anchor fast compare.
-        let mut idx_buf = [0u8; 20];
-        let mut idx_start = idx_buf.len() - 1;
-        idx_buf[idx_start] = b'0';
+        // Expected anchor-line head `{"index":<idx>,"event_id":"`, digits
+        // incremented in place; the rare digit-width rollover rewrites the
+        // trailing literal one byte further right. Replaces a per-event itoa
+        // in the anchor fast compare.
+        const IDX_LIT: &[u8; 13] = b",\"event_id\":\"";
+        let mut pre = [0u8; 48];
+        pre[..9].copy_from_slice(b"{\"index\":");
+        pre[9] = b'0';
+        pre[10..23].copy_from_slice(IDX_LIT);
+        let mut il = 1usize;
         for (index, line) in event_lines.iter().enumerate() {
             if index > 0 {
-                let mut p = idx_buf.len() - 1;
+                let mut p = 8 + il;
                 loop {
-                    if idx_buf[p] < b'9' {
-                        idx_buf[p] += 1;
+                    if pre[p] < b'9' {
+                        pre[p] += 1;
                         break;
                     }
-                    idx_buf[p] = b'0';
-                    if p == idx_start {
-                        idx_start -= 1;
-                        idx_buf[idx_start] = b'1';
+                    pre[p] = b'0';
+                    if p == 9 {
+                        il += 1;
+                        pre[9] = b'1';
+                        let mut z = 10;
+                        while z < 9 + il {
+                            pre[z] = b'0';
+                            z += 1;
+                        }
+                        pre[9 + il..22 + il].copy_from_slice(IDX_LIT);
                         break;
                     }
                     p -= 1;
@@ -3035,7 +3152,9 @@ mod imp {
             }
             let event_hex = &event_hexes[index];
             #[cfg(target_arch = "wasm32")]
-            let chain = {
+            let chain_store: [u8; 64];
+            #[cfg(target_arch = "wasm32")]
+            let chain: &[u8; 64] = {
                 if index & 3 == 0 {
                     spec_batch = spec_on;
                     if spec_on {
@@ -3062,23 +3181,26 @@ mod imp {
                 match spec_span[index & 3] {
                     Some(c) if cached.unwrap_or_else(|| eq64(c, &previous)) => {
                         spec_miss = 0;
-                        spec_buf[index & 3]
+                        &spec_buf[index & 3]
                     }
                     _ => {
                         spec_miss += 1;
                         if spec_miss >= 8 {
                             spec_on = false;
                         }
-                        if spec_batch {
+                        chain_store = if spec_batch {
                             link_hex(&previous, event_hex, &tail)
                         } else {
                             link_hex_mid(&previous, &seq_wk[index & 3], event_hex[63], &tail)
-                        }
+                        };
+                        &chain_store
                     }
                 }
             };
             #[cfg(not(target_arch = "wasm32"))]
-            let chain = link_hex(&previous, event_hex, &tail);
+            let chain_store = link_hex(&previous, event_hex, &tail);
+            #[cfg(not(target_arch = "wasm32"))]
+            let chain = &chain_store;
             // The strict scanner accepting the event guarantees the id and
             // timestamp spans embed verbatim in anchor JSON, making byte
             // equality sufficient. The anchor's trailing chain hash is
@@ -3098,17 +3220,17 @@ mod imp {
                             } else {
                                 chain_span(aline)
                             };
-                            let ok = matches!(cs, Some(c) if eq64(c, &chain));
+                            let ok = matches!(cs, Some(c) if eq64(c, chain));
                             pre_hit = Some(ok);
                             ok
                         };
                         #[cfg(not(target_arch = "wasm32"))]
-                        let tail_ok = matches!(chain_span(aline), Some(c) if eq64(c, &chain));
+                        let tail_ok = matches!(chain_span(aline), Some(c) if eq64(c, chain));
                         if tail_ok {
                             let (id, ts) = event_spans(line, packed);
                             if !anchor_line_matches(
                                 aline,
-                                &idx_buf[idx_start..],
+                                &pre[..22 + il],
                                 id,
                                 ts,
                                 event_hex,
@@ -3150,7 +3272,7 @@ mod imp {
                         timestamp_ms,
                         event_hex,
                         &previous,
-                        &chain,
+                        chain,
                     )
                     .or_else(|| {
                         serde_json::from_slice::<AnchorFields>(aline).ok().map(|a| {
@@ -3159,7 +3281,7 @@ mod imp {
                                 && a.timestamp_ms == timestamp_ms
                                 && bytes_eq(a.event_hash_hex.as_bytes(), event_hex)
                                 && bytes_eq(a.previous_hash_hex.as_bytes(), &previous)
-                                && bytes_eq(a.chain_hash_hex.as_bytes(), &chain)
+                                && bytes_eq(a.chain_hash_hex.as_bytes(), chain)
                         })
                     }) {
                         Some(true) => {}
@@ -3189,7 +3311,7 @@ mod imp {
                                 if actual.index == index as u64
                                     && bytes_eq(actual.event_hash_hex.as_bytes(), event_hex)
                                     && bytes_eq(actual.previous_hash_hex.as_bytes(), &previous)
-                                    && bytes_eq(actual.chain_hash_hex.as_bytes(), &chain) => {}
+                                    && bytes_eq(actual.chain_hash_hex.as_bytes(), chain) => {}
                             Some(_) => failures.push(Failure::EntryMismatch {
                                 index: index as u64,
                             }),
@@ -3208,7 +3330,7 @@ mod imp {
                     }
                 }
             }
-            previous = chain;
+            previous = *chain;
         }
 
         for (index, aline) in anchor_lines.iter().enumerate().skip(event_lines.len()) {

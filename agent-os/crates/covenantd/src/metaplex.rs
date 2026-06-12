@@ -40,7 +40,10 @@ impl MetaplexState {
         if !self.config.writes_enabled() {
             return None;
         }
-        Some(Arc::new(SubprocessMetaplexSigner::from_config(&self.config)) as Arc<dyn MetaplexSigner>)
+        Some(
+            Arc::new(SubprocessMetaplexSigner::from_config(&self.config))
+                as Arc<dyn MetaplexSigner>,
+        )
     }
 }
 
@@ -57,8 +60,14 @@ pub struct SubprocessMetaplexSigner {
 impl SubprocessMetaplexSigner {
     pub fn from_config(config: &MetaplexConfig) -> Self {
         let mut env = vec![
-            ("COVENANT_METAPLEX_RPC_URL".to_string(), config.rpc_url.clone()),
-            ("COVENANT_METAPLEX_CLUSTER".to_string(), config.cluster.clone()),
+            (
+                "COVENANT_METAPLEX_RPC_URL".to_string(),
+                config.rpc_url.clone(),
+            ),
+            (
+                "COVENANT_METAPLEX_CLUSTER".to_string(),
+                config.cluster.clone(),
+            ),
         ];
         if !config.collection.is_empty() {
             env.push((
@@ -88,8 +97,7 @@ impl SubprocessMetaplexSigner {
 #[async_trait::async_trait]
 impl MetaplexSigner for SubprocessMetaplexSigner {
     async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
-        let payload =
-            serde_json::to_vec(&request).map_err(|e| format!("encode request: {e}"))?;
+        let payload = serde_json::to_vec(&request).map_err(|e| format!("encode request: {e}"))?;
 
         let mut child = Command::new(&self.program)
             .env_clear()
@@ -157,6 +165,10 @@ fn action_label(request: &SignerRequest) -> &'static str {
 mod tests {
     use super::*;
 
+    fn env_get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
     #[test]
     fn state_without_signer_surface_has_no_signer() {
         let state = MetaplexState::new(MetaplexConfig {
@@ -164,7 +176,10 @@ mod tests {
             das_url: "https://das.example".into(),
             ..Default::default()
         });
-        assert!(state.signer().is_none(), "reads-only config exposes no signer");
+        assert!(
+            state.signer().is_none(),
+            "reads-only config exposes no signer"
+        );
     }
 
     #[tokio::test]
@@ -185,5 +200,73 @@ mod tests {
         // The real path is exercised end-to-end on devnet; here we only
         // pin that the program field is wired.
         let _ = &signer.program;
+    }
+
+    #[test]
+    fn from_config_forwards_rpc_and_cluster_and_pins_program() {
+        let signer = SubprocessMetaplexSigner::from_config(&MetaplexConfig {
+            enabled: true,
+            cluster: "mainnet-beta".into(),
+            rpc_url: "https://rpc.example".into(),
+            signer_binary: "/opt/covenant-metaplex-signer".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            signer.program,
+            PathBuf::from("/opt/covenant-metaplex-signer")
+        );
+        assert_eq!(
+            env_get(&signer.env, "COVENANT_METAPLEX_RPC_URL"),
+            Some("https://rpc.example")
+        );
+        assert_eq!(
+            env_get(&signer.env, "COVENANT_METAPLEX_CLUSTER"),
+            Some("mainnet-beta")
+        );
+        assert_eq!(
+            env_get(&signer.env, "COVENANT_METAPLEX_COLLECTION"),
+            None,
+            "empty collection must not be forwarded to the sidecar"
+        );
+        assert_eq!(
+            env_get(&signer.env, "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS"),
+            None,
+            "a 0 cap must defer to the sidecar default, not forward 0"
+        );
+    }
+
+    #[test]
+    fn from_config_forwards_collection_and_cap_when_set() {
+        let signer = SubprocessMetaplexSigner::from_config(&MetaplexConfig {
+            enabled: true,
+            rpc_url: "https://rpc.example".into(),
+            signer_binary: "/opt/signer".into(),
+            collection: "CoLLECT1onMintGroup11111111111111111111111".into(),
+            per_action_cap_lamports: 5_000_000,
+            ..Default::default()
+        });
+        assert_eq!(
+            env_get(&signer.env, "COVENANT_METAPLEX_COLLECTION"),
+            Some("CoLLECT1onMintGroup11111111111111111111111")
+        );
+        assert_eq!(
+            env_get(&signer.env, "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS"),
+            Some("5000000")
+        );
+    }
+
+    #[test]
+    fn signer_present_when_write_surface_configured() {
+        let state = MetaplexState::new(MetaplexConfig {
+            enabled: true,
+            rpc_url: "https://rpc.example".into(),
+            signer_binary: "/opt/signer".into(),
+            das_url: "https://das.example".into(),
+            ..Default::default()
+        });
+        assert!(
+            state.signer().is_some(),
+            "a config with enabled + signer_binary + rpc_url must expose a signer"
+        );
     }
 }

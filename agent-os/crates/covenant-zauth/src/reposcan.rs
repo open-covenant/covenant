@@ -283,4 +283,44 @@ mod tests {
         assert_eq!(result.status, 402);
         assert!(result.paid_amount.is_none());
     }
+
+    #[tokio::test]
+    async fn signer_failure_surfaces_as_typed_sign_error() {
+        // The money path must fail closed: if the signer cannot build the
+        // payment header (custody key offline, blockhash expired), scan() must
+        // return a typed ZauthError::Sign and stop, never panic and never fall
+        // through to the paid POST for a payment that was never signed.
+        struct FailingSigner;
+        #[async_trait::async_trait]
+        impl Signer for FailingSigner {
+            async fn build_payment(
+                &self,
+                _requirements: &covenant_x402::PaymentRequirements,
+            ) -> covenant_x402::Result<String> {
+                Err(covenant_x402::X402Error::Sign(
+                    "funding key unavailable".into(),
+                ))
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/x402/reposcan"))
+            .respond_with(
+                ResponseTemplate::new(402)
+                    .insert_header("payment-required", challenge_header().as_str())
+                    .set_body_string("{}"),
+            )
+            .mount(&server)
+            .await;
+        let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
+        let err = client
+            .scan(&req(), &FailingSigner)
+            .await
+            .expect_err("a signer failure must abort the scan");
+        assert!(
+            matches!(err, ZauthError::Sign(ref m) if m.contains("funding key unavailable")),
+            "got {err:?}",
+        );
+    }
 }

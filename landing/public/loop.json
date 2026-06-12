@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T04:40:14.230Z",
+  "updatedAt": "2026-06-12T05:00:17.776Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8353,
-    "tasks": 994,
-    "integrated": 995
+    "events": 8368,
+    "tasks": 996,
+    "integrated": 996
   },
   "throughput": {
-    "last24h": 36,
+    "last24h": 37,
     "last7d": 172,
     "velocity": 24.6
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 18
+      "count": 19
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-12",
-      "total": 995
+      "total": 996
     }
   ],
   "states": {
-    "integrated": 990,
+    "integrated": 991,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "cross_review": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "harden-hyre-manifest-checked-price-arithmetic",
+    "state": "cross_review",
+    "since": "2026-06-12T04:59:04.540Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-12T04:46:06.190Z",
+      "task": "harden-hyre-manifest-reject-zero-price",
+      "note": "Shipped as 68d5baf0, pushed to origin/loop/main-track. usd_to_micro now rejects zero-price paid endpoints; tests usd_to_micro_rejects_zero_p"
+    },
     {
       "at": "2026-06-12T04:33:13.130Z",
       "task": "harden-x402-pick-requirement-reject-zero-amount",
@@ -310,11 +320,6 @@
       "at": "2026-06-11T23:23:42.824Z",
       "task": "metaplex-signer-register-pda-derivation-coverage",
       "note": "Committed 44a4bc44 + pushed to origin/loop/main-track. Test-only signer register PDA-derivation coverage; README metrics 2644->2645."
-    },
-    {
-      "at": "2026-06-11T23:19:39.551Z",
-      "task": "metaplex-das-http-status-error-coverage",
-      "note": "Committed 24418eb9 + pushed to origin/loop/main-track. Test-only DAS non-2xx HTTP-status coverage; README metrics 2642->2644."
     }
   ]
 }

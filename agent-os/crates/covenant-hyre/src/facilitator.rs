@@ -192,21 +192,30 @@ impl FacilitatorClient {
         path: &str,
         req: &FacilitatorRequest,
     ) -> Result<R> {
+        self.post_with_limits(path, req, crate::http::MAX_RESPONSE_BYTES)
+            .await
+    }
+
+    async fn post_with_limits<R: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        req: &FacilitatorRequest,
+        max_bytes: usize,
+    ) -> Result<R> {
         let url = format!("{}{}", self.base_url, path);
         let resp = self.http.post(&url).json(req).send().await?;
         let status = resp.status();
-        let bytes = resp.bytes().await?;
+        let body = crate::http::read_capped(resp, max_bytes, |msg| {
+            HyreError::Execute(format!("facilitator {path}: {msg}"))
+        })
+        .await?;
         if !status.is_success() {
             return Err(HyreError::Execute(format!(
-                "facilitator {path}: HTTP {status} — {}",
-                String::from_utf8_lossy(&bytes)
+                "facilitator {path}: HTTP {status} — {body}"
             )));
         }
-        serde_json::from_slice(&bytes).map_err(|e| {
-            HyreError::Execute(format!(
-                "facilitator {path} decode: {e} — body: {}",
-                String::from_utf8_lossy(&bytes)
-            ))
+        serde_json::from_str(&body).map_err(|e| {
+            HyreError::Execute(format!("facilitator {path} decode: {e} — body: {body}"))
         })
     }
 }
@@ -356,5 +365,80 @@ mod tests {
         assert_eq!(req.network, "solana", "rail is forwarded from the source");
         assert_eq!(req.resource, "https://mpp.hyreagent.fun/defi/tvl");
         assert_eq!(req.description, "TVL snapshot");
+    }
+
+    fn sample_request() -> FacilitatorRequest {
+        FacilitatorRequest::new(
+            FacilitatorPayload::new("solana", "BASE64TX"),
+            FacilitatorRequirements::from_x402(
+                &covenant_x402::PaymentRequirements {
+                    network: "solana".into(),
+                    asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".into(),
+                    amount: "80000".into(),
+                    amount_usdc: 0.08,
+                    pay_to: "7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC".into(),
+                    scheme: "exact".into(),
+                    extra: None,
+                },
+                "https://mpp.hyreagent.fun/defi/tvl",
+                "TVL snapshot",
+                "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4",
+            ),
+        )
+    }
+
+    #[tokio::test]
+    async fn verify_decodes_an_under_cap_facilitator_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/verify"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "isValid": true,
+                "payer": "7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = FacilitatorClient::new(reqwest::Client::new()).with_base_url(server.uri());
+        let resp = client
+            .verify(&sample_request())
+            .await
+            .expect("under-cap body deserializes through the bounded reader");
+        assert!(resp.is_valid);
+        assert_eq!(
+            resp.payer.as_deref(),
+            Some("7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC")
+        );
+    }
+
+    #[tokio::test]
+    async fn post_rejects_an_oversized_facilitator_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A compromised or MITM facilitator returning a body past the cap must
+        // fail with the path-prefixed Execute error rather than buffering the
+        // whole response and OOMing the caller. wiremock always sets
+        // Content-Length, so this exercises the early-reject branch; the running
+        // accumulation guard in read_capped is inspection-verified.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/verify"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+
+        let client = FacilitatorClient::new(reqwest::Client::new()).with_base_url(server.uri());
+        let err = client
+            .post_with_limits::<VerifyResponse>("/verify", &sample_request(), 64)
+            .await
+            .expect_err("must reject an oversized body");
+        assert!(
+            matches!(&err, HyreError::Execute(m) if m.contains("/verify") && m.contains("cap")),
+            "expected a cap-breach Execute error naming the facilitator path, got {err:?}",
+        );
     }
 }

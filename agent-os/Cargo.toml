@@ -13,6 +13,7 @@ members = [
     "crates/covenant-identity",
     "crates/covenant-audit",
     "crates/covenant-audit-kernel",
+    "crates/covenant-merkle",
     "crates/covenant-permissions",
     "crates/covenant-mcp",
     "crates/covenant-a2a",

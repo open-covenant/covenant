@@ -1,0 +1,11 @@
+[package]
+name = "covenant-merkle"
+version = "0.1.0"
+description = "Off-chain merkle tree builder and inclusion-proof generator for receipt batches. Domain-separated (CT-style) sha256 over receipt hashes, power-of-two padded. The reference the on-chain verifier must agree with bit-for-bit; also the proof source for the CU bench corpus."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+sha2 = { workspace = true }

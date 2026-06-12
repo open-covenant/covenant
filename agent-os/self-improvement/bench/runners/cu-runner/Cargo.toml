@@ -1,0 +1,16 @@
+[package]
+name = "cu-runner"
+version = "0.1.0"
+edition = "2021"
+
+# Pinned: CU accounting must stay frozen across toolchain bumps or baselines
+# stop being comparable (mirrors the wasmtime fuel-runner's pin).
+[dependencies]
+litesvm = "=0.6.1"
+solana-sdk = "=2.2.1"
+covenant-merkle = { path = "../../../../crates/covenant-merkle" }
+
+[workspace]
+
+[profile.release]
+debug = false

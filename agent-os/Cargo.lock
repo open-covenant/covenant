@@ -1304,6 +1304,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-merkle"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "covenant-peer-auth"
 version = "0.1.0"
 dependencies = [

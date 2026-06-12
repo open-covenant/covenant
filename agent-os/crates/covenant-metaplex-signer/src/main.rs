@@ -339,6 +339,34 @@ fn load_keypair(path: &str) -> Result<Keypair> {
     Keypair::try_from(bytes.as_slice()).map_err(|e| anyhow!("load keypair: {e}"))
 }
 
+/// Maximum RPC response body the signer buffers into memory. The Solana RPC
+/// is operator-configured but remote, so it controls its own response; an
+/// unbounded read lets a compromised or MITM'd endpoint exhaust the sidecar
+/// that holds the minting key. 16 MiB sits far above any blockhash or
+/// signature-status result yet stops a runaway stream — the memory-axis
+/// sibling of covenant-x402's signer response cap.
+const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Reads a response body into bytes, refusing anything past `max`. The
+/// `Content-Length` check rejects an oversized declared body before it is
+/// streamed; the running accumulation check is the real guard, since the
+/// header is optional and remote-controlled.
+async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            bail!("rpc response declares {len} bytes, over the {max}-byte cap");
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.context("rpc response chunk")? {
+        if buf.len() + chunk.len() > max {
+            bail!("rpc response stream over the {max}-byte cap");
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 async fn rpc(
     http: &reqwest::Client,
     url: &str,
@@ -357,10 +385,11 @@ async fn rpc(
         .send()
         .await
         .with_context(|| format!("rpc {method}"))?;
-    let value: serde_json::Value = resp
-        .json()
+    let raw = read_capped(resp, MAX_RPC_RESPONSE_BYTES)
         .await
-        .with_context(|| format!("rpc {method} decode"))?;
+        .with_context(|| format!("rpc {method}"))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&raw).with_context(|| format!("rpc {method} decode"))?;
     if let Some(err) = value.get("error").filter(|e| !e.is_null()) {
         bail!("rpc {method} error: {err}");
     }
@@ -766,5 +795,68 @@ mod tests {
             err.contains("COVENANT_METAPLEX_COLLECTION"),
             "a bad pubkey is a hard error tagged with the env var: {err}"
         );
+    }
+
+    /// Serves one canned raw HTTP response on a fresh ephemeral port and
+    /// returns its URL. A blocking std listener on a background thread keeps
+    /// the signer's tokio dependency free of the `net` feature.
+    fn serve_once(raw: Vec<u8>) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let _ = sock.read(&mut [0u8; 1024]);
+            let _ = sock.write_all(&raw);
+            let _ = sock.flush();
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn read_capped_rejects_oversized_declared_body() {
+        let body = vec![b'a'; 5000];
+        let mut raw =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        raw.extend_from_slice(&body);
+        let url = serve_once(raw);
+        let resp = reqwest::Client::new().get(&url).send().await.unwrap();
+        let err = read_capped(resp, 64).await.unwrap_err().to_string();
+        assert!(
+            err.contains("declares 5000 bytes, over the 64-byte cap"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_capped_rejects_oversized_streamed_body() {
+        // Chunked framing leaves Content-Length unset, so only the running
+        // accumulation guard can stop the body.
+        let body = vec![b'b'; 200];
+        let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        raw.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
+        raw.extend_from_slice(&body);
+        raw.extend_from_slice(b"\r\n0\r\n\r\n");
+        let url = serve_once(raw);
+        let resp = reqwest::Client::new().get(&url).send().await.unwrap();
+        assert!(
+            resp.content_length().is_none(),
+            "chunked body has no length"
+        );
+        let err = read_capped(resp, 64).await.unwrap_err().to_string();
+        assert!(err.contains("stream over the 64-byte cap"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn read_capped_decodes_a_small_body() {
+        let body = br#"{"jsonrpc":"2.0","id":"x","result":"ok"}"#.to_vec();
+        let mut raw =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        raw.extend_from_slice(&body);
+        let url = serve_once(raw);
+        let resp = reqwest::Client::new().get(&url).send().await.unwrap();
+        let bytes = read_capped(resp, MAX_RPC_RESPONSE_BYTES).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value.get("result").and_then(|r| r.as_str()), Some("ok"));
     }
 }

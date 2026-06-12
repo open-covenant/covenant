@@ -2518,11 +2518,40 @@ struct SubprocessSigner {
     rpc_url: String,
 }
 
-#[async_trait::async_trait]
-impl covenant_x402::Signer for SubprocessSigner {
-    async fn build_payment(
+/// Maximum bytes the CLI buffers from the x402 signer sidecar's stdout or
+/// stderr. The sidecar relays Solana RPC output, so an unbounded read lets a
+/// runaway or hostile-RPC-fed signer exhaust the CLI process's memory;
+/// `wait_with_output()` had no size cap and no deadline. The header is a single
+/// line, so 16 MiB sits far above any real payload while still capping a flood —
+/// the same bound the daemon's signer dispatches use.
+const SIGNER_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Wall-clock budget applied to the signer read phase and, again, to the reap,
+/// bounding a sidecar that stalls with a pipe held open.
+const SIGNER_OUTPUT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Reads up to `max` bytes from a signer stream, reporting whether it had more
+/// to give. `take` stops the read at the cap instead of buffering an unbounded
+/// body; one extra byte distinguishes an exact-fit payload from a flood. The
+/// returned buffer is clamped to `max`.
+async fn read_signer_stream_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    reader.take(max as u64 + 1).read_to_end(&mut buf).await?;
+    let overflowed = buf.len() > max;
+    buf.truncate(max);
+    Ok((buf, overflowed))
+}
+
+impl SubprocessSigner {
+    async fn build_payment_with_limits(
         &self,
         requirements: &covenant_x402::PaymentRequirements,
+        max_output_bytes: usize,
+        deadline: std::time::Duration,
     ) -> covenant_x402::Result<String> {
         use tokio::io::AsyncWriteExt;
         let body = serde_json::to_vec(requirements)
@@ -2536,6 +2565,9 @@ impl covenant_x402::Signer for SubprocessSigner {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            // An over-cap flood or an elapsed deadline returns early, dropping
+            // the Child; kill_on_drop reaps the sidecar instead of leaking it.
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| {
                 covenant_x402::X402Error::Sign(format!(
@@ -2544,22 +2576,85 @@ impl covenant_x402::Signer for SubprocessSigner {
                 ))
             })?;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(&body).await.map_err(|e| {
-                covenant_x402::X402Error::Sign(format!("write sidecar stdin: {e}"))
-            })?;
+            stdin
+                .write_all(&body)
+                .await
+                .map_err(|e| covenant_x402::X402Error::Sign(format!("write sidecar stdin: {e}")))?;
         }
-        let out = child
-            .wait_with_output()
-            .await
-            .map_err(|e| covenant_x402::X402Error::Sign(format!("wait sidecar: {e}")))?;
-        if !out.status.success() {
+
+        // wait_with_output() buffered stdout and stderr unbounded with no
+        // deadline; cap each read and bound the wall clock so a flooding or
+        // stalled sidecar cannot OOM or hang the CLI. Read concurrently so a
+        // sidecar that fills its stderr pipe before closing stdout cannot
+        // starve the stdout read.
+        let mut stdout = child.stdout.take().expect("stdout piped");
+        let mut stderr = child.stderr.take().expect("stderr piped");
+        let read_both = async {
+            tokio::join!(
+                read_signer_stream_capped(&mut stdout, max_output_bytes),
+                read_signer_stream_capped(&mut stderr, max_output_bytes),
+            )
+        };
+        let (out_res, err_res) = match tokio::time::timeout(deadline, read_both).await {
+            Ok(pair) => pair,
+            Err(_) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(covenant_x402::X402Error::Sign(format!(
+                    "signer did not finish within {}s",
+                    deadline.as_secs()
+                )));
+            }
+        };
+        let (stdout_bytes, stdout_overflowed) = out_res
+            .map_err(|e| covenant_x402::X402Error::Sign(format!("read sidecar stdout: {e}")))?;
+        let (stderr_bytes, _stderr_overflowed) = err_res
+            .map_err(|e| covenant_x402::X402Error::Sign(format!("read sidecar stderr: {e}")))?;
+
+        // On overflow the sidecar may keep writing into a now-unread pipe and
+        // will not exit on its own, so kill it before the bounded wait.
+        if stdout_overflowed {
+            let _ = child.start_kill();
+        }
+        let status = match tokio::time::timeout(deadline, child.wait()).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(e)) => return Err(covenant_x402::X402Error::Sign(format!("wait sidecar: {e}"))),
+            Err(_) => {
+                let _ = child.start_kill();
+                return Err(covenant_x402::X402Error::Sign(format!(
+                    "signer did not finish within {}s",
+                    deadline.as_secs()
+                )));
+            }
+        };
+        if stdout_overflowed {
             return Err(covenant_x402::X402Error::Sign(format!(
-                "sidecar exit {}: {}",
-                out.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&out.stderr)
+                "signer stdout exceeded the {max_output_bytes}-byte cap"
             )));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        if !status.success() {
+            return Err(covenant_x402::X402Error::Sign(format!(
+                "sidecar exit {}: {}",
+                status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&stderr_bytes)
+            )));
+        }
+        Ok(String::from_utf8_lossy(&stdout_bytes).trim().to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl covenant_x402::Signer for SubprocessSigner {
+    async fn build_payment(
+        &self,
+        requirements: &covenant_x402::PaymentRequirements,
+    ) -> covenant_x402::Result<String> {
+        self.build_payment_with_limits(
+            requirements,
+            SIGNER_MAX_OUTPUT_BYTES,
+            SIGNER_OUTPUT_DEADLINE,
+        )
+        .await
     }
 }
 
@@ -11356,5 +11451,71 @@ mod tests {
                 "timeout_ms must serialize as u64, not string: {value}"
             );
         }
+    }
+
+    fn signer_requirements() -> covenant_x402::PaymentRequirements {
+        covenant_x402::PaymentRequirements {
+            network: "solana:mainnet".into(),
+            asset: "usdc-sol".into(),
+            amount: "80000".into(),
+            amount_usdc: 0.08,
+            pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
+            scheme: "exact".into(),
+            extra: None,
+        }
+    }
+
+    fn fake_signer_bin(dir: &tempfile::TempDir, body: &str) -> SubprocessSigner {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.path().join("fake-x402-signer.sh");
+        // `cat >/dev/null` drains the requirements on stdin first so the CLI's
+        // write does not race a broken pipe before the body runs.
+        std::fs::write(&script, format!("#!/bin/sh\ncat >/dev/null\n{body}\n"))
+            .expect("write script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        SubprocessSigner {
+            bin_path: script.to_string_lossy().into_owned(),
+            keypair_path: dir.path().join("keypair.json"),
+            rpc_url: "http://127.0.0.1:1".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cli_signer_rejects_oversized_signer_stdout() {
+        // The x402 signer sidecar relays Solana RPC output; a stdout flood past
+        // the cap must surface a Sign error naming the cap instead of buffering
+        // the whole stream and OOMing the CLI. A 64-byte cap against 200 bytes
+        // of output forces the overflow branch.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let signer = fake_signer_bin(&dir, "head -c 200 /dev/zero");
+        let err = signer
+            .build_payment_with_limits(
+                &signer_requirements(),
+                64,
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            .expect_err("over cap");
+        assert!(
+            matches!(&err, covenant_x402::X402Error::Sign(m) if m.contains("exceeded") && m.contains("cap")),
+            "an over-cap signer stdout must surface as a cap-breach Sign error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cli_signer_returns_under_cap_header() {
+        // A normal header under the cap must still return, proving the bounded
+        // read did not regress the happy path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let signer = fake_signer_bin(&dir, "printf 'mock-x-payment-header'");
+        let header = signer
+            .build_payment_with_limits(
+                &signer_requirements(),
+                4096,
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            .expect("under-cap header returns");
+        assert_eq!(header, "mock-x-payment-header");
     }
 }

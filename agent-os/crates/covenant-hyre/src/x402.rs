@@ -367,6 +367,38 @@ mod tests {
     }
 
     #[test]
+    fn select_rejects_non_exact_scheme_and_unparseable_amount() {
+        // select() ANDs four guards before an option is signed. Two have no
+        // other coverage: the scheme must be "exact", and the amount must parse
+        // to u128. Corrupt each on a copy of the live option that otherwise
+        // matches network, asset, and cap, so only the guard under test can
+        // make select() return None.
+        let base = parse_challenge(LIVE_DEFI_TVL_402).expect("parse")[0].clone();
+        assert!(
+            select(std::slice::from_ref(&base), NETWORK, ASSET, 10_000).is_some(),
+            "the pinned live option must select before either corruption",
+        );
+
+        let mut non_exact = base.clone();
+        non_exact.scheme = "upto".into();
+        assert!(
+            select(std::slice::from_ref(&non_exact), NETWORK, ASSET, 10_000).is_none(),
+            "a non-exact scheme must never be selected even when network, asset, and cap all match — the Hyre profile only settles exact",
+        );
+
+        let mut bad_amount = base.clone();
+        bad_amount.amount = None;
+        bad_amount.max_amount_required = Some("not-a-number".into());
+        // If this guard ever lets a non-numeric amount through, to_requirements
+        // renders amount_usdc as unwrap_or(0)/1e6 == 0.0 USD while still signing
+        // the raw string, so select is the real guard against a garbage price.
+        assert!(
+            select(std::slice::from_ref(&bad_amount), NETWORK, ASSET, 10_000).is_none(),
+            "an unparseable amount must be filtered out before it can reach to_requirements",
+        );
+    }
+
+    #[test]
     fn to_requirements_rejects_unpinned_payee_sponsor_and_missing_amount() {
         // to_requirements normalises a selected 402 option into the signer's
         // input. Before any signature is produced it must pin the payee and

@@ -9,6 +9,9 @@ export const dynamic = "force-dynamic";
 
 const REPO = "open-covenant/covenant";
 const BRANCH = "main";
+// The strip counts only the autonomous loop's own commits — the work the
+// agent shipped, not human or merge commits. The loop authors as "Covenant".
+const LOOP_AUTHOR = "covenant@users.noreply.github.com";
 // The loop's first commit — the moment Covenant began building in the open.
 // Immutable history, so a constant is authoritative.
 const ALPHA_SINCE = "2026-05-09T20:43:52+02:00";
@@ -41,15 +44,15 @@ function ghHeaders() {
 // is frozen at deploy time and shallow, so its own git can't tell. per_page=1
 // returns the latest sha; the Link header's last page is the commit total.
 async function githubHead(signal: AbortSignal) {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/commits?sha=${BRANCH}&per_page=1`, {
-    headers: ghHeaders(),
-    signal,
-    cache: "no-store",
-  });
+  const res = await fetch(
+    `https://api.github.com/repos/${REPO}/commits?sha=${BRANCH}&author=${encodeURIComponent(LOOP_AUTHOR)}&per_page=1`,
+    { headers: ghHeaders(), signal, cache: "no-store" },
+  );
   if (!res.ok) throw new Error(`gh ${res.status}`);
   const arr = (await res.json()) as Array<{ sha?: string }>;
   const last = (res.headers.get("link") ?? "").match(/[?&]page=(\d+)>;\s*rel="last"/i);
   return {
+    // Latest loop commit, so the "committed" link points at the agent's own work.
     head: arr[0]?.sha?.slice(0, 7) ?? null,
     commits: last ? Number(last[1]) : arr.length ? 1 : null,
   };
@@ -87,12 +90,12 @@ export async function GET() {
   if (root) {
     if (head === null) {
       try {
-        head = git(root, ["rev-parse", "--short", "HEAD"]) || null;
+        head = git(root, ["log", `--author=${LOOP_AUTHOR}`, "-1", "--format=%h"]) || null;
       } catch {}
     }
     if (commits === null) {
       try {
-        commits = Number(git(root, ["rev-list", "--count", "HEAD"])) || null;
+        commits = Number(git(root, ["rev-list", "--count", `--author=${LOOP_AUTHOR}`, "HEAD"])) || null;
       } catch {}
     }
     if (metrics.tests === null) {

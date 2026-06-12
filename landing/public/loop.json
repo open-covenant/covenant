@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T05:00:17.776Z",
+  "updatedAt": "2026-06-12T05:20:21.416Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8368,
-    "tasks": 996,
-    "integrated": 996
+    "events": 8389,
+    "tasks": 998,
+    "integrated": 999
   },
   "throughput": {
-    "last24h": 37,
-    "last7d": 172,
-    "velocity": 24.6
+    "last24h": 40,
+    "last7d": 174,
+    "velocity": 24.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 19
+      "count": 22
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 996
+      "total": 999
     }
   ],
   "states": {
-    "integrated": 991,
+    "integrated": 994,
     "proposed": 1,
-    "blocked": 3,
-    "cross_review": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,23 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "harden-hyre-manifest-checked-price-arithmetic",
-    "state": "cross_review",
-    "since": "2026-06-12T04:59:04.540Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T05:19:41.014Z",
+      "task": "harden-hyre-manifest-saturate-credits-cast",
+      "note": "Integrated as 49bf9dfd, pushed to origin/loop/main-track. credits() saturates instead of truncating; closes the silent under-charge both pri"
+    },
+    {
+      "at": "2026-06-12T05:14:21.562Z",
+      "task": "harden-hyre-config-checked-resale-markup",
+      "note": "Integrated as b96c0641, pushed to origin/loop/main-track (30e8cf80..b96c0641). marked_up now returns Option and publishable drops overflowin"
+    },
+    {
+      "at": "2026-06-12T05:03:04.716Z",
+      "task": "harden-hyre-manifest-checked-price-arithmetic",
+      "note": "Integrated as 30e8cf80, pushed to origin/loop/main-track (68d5baf0..30e8cf80). usd_to_micro now rejects overflowing untrusted prices via che"
+    },
     {
       "at": "2026-06-12T04:46:06.190Z",
       "task": "harden-hyre-manifest-reject-zero-price",
@@ -305,21 +315,6 @@
       "at": "2026-06-12T00:19:51.012Z",
       "task": "covenantd-hyre-executor-budget-would-exceed-refusal",
       "note": "Committed aea560ab + pushed to origin/loop/main-track. Test-only: 1 test pins covenantd hyre DaemonHyreExecutor over-budget would_exceed ref"
-    },
-    {
-      "at": "2026-06-12T00:16:07.210Z",
-      "task": "covenantd-x402-pay-and-record-budget-precheck-refusals",
-      "note": "Committed 62709c68 + pushed to origin/loop/main-track. Test-only: 2 tests pin covenantd x402 pay_and_record BudgetExceeded + NoCapacity pre-"
-    },
-    {
-      "at": "2026-06-12T00:08:11.504Z",
-      "task": "covenantd-metaplex-write-surface-env-construction",
-      "note": "Committed d386cc9e + pushed to origin/loop/main-track (44a4bc44..d386cc9e). Test-only: 3 tests pin covenantd metaplex SubprocessMetaplexSign"
-    },
-    {
-      "at": "2026-06-11T23:23:42.824Z",
-      "task": "metaplex-signer-register-pda-derivation-coverage",
-      "note": "Committed 44a4bc44 + pushed to origin/loop/main-track. Test-only signer register PDA-derivation coverage; README metrics 2644->2645."
     }
   ]
 }

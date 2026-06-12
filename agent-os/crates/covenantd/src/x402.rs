@@ -188,6 +188,11 @@ pub enum X402DaemonError {
     Settlement(String),
     #[error("audit: {0}")]
     Audit(String),
+    /// The paid endpoint's response body exceeded the in-memory read cap
+    /// ([`MAX_RESPONSE_BYTES`]). Holds the offending byte count — the declared
+    /// `Content-Length` or the count observed before the guard tripped.
+    #[error("upstream response body of {0} bytes exceeds the in-memory cap")]
+    ResponseTooLarge(u64),
 }
 
 fn epoch_ms() -> u64 {
@@ -334,6 +339,42 @@ pub async fn pay_and_record(
         response,
         receipt_id,
     })
+}
+
+/// Maximum paid-call response body the daemon will buffer into memory. The
+/// endpoint that answered the paid request is untrusted, so a hostile or
+/// compromised one must not be able to exhaust a worker with an unbounded
+/// success body — the memory-axis ceiling mirroring the x402 client's bounded
+/// 402-challenge read.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read a paid-call response body into a string, refusing anything past
+/// [`MAX_RESPONSE_BYTES`]. [`PaidOutcome::response`] is handed back unread by
+/// the x402 client, so the daemon — not the client — bounds it here.
+pub(crate) async fn read_response_body(resp: Response) -> Result<String, X402DaemonError> {
+    read_capped(resp, MAX_RESPONSE_BYTES).await
+}
+
+/// The `Content-Length` check rejects an oversized declared body before it is
+/// streamed; the running accumulation check is the real guard, since the
+/// header is optional and endpoint-controlled. The body is forwarded as an
+/// opaque string, so the bounded bytes are decoded lossily.
+async fn read_capped(mut resp: Response, max: usize) -> Result<String, X402DaemonError> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(X402DaemonError::ResponseTooLarge(len));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(X402Error::from)? {
+        if buf.len() + chunk.len() > max {
+            return Err(X402DaemonError::ResponseTooLarge(
+                (buf.len() + chunk.len()) as u64,
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[cfg(test)]
@@ -573,5 +614,50 @@ mod tests {
 
         assert!(settlement.recent(10).await.unwrap().is_empty());
         assert!(audit.recent(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn paid_response_body_read_is_bounded() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        // The paid endpoint is untrusted: a normal body reads back whole, but a
+        // success body past the cap is refused, not buffered into a worker's
+        // memory after the payment already settled.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let ok = http
+            .get(format!("{}/ok", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(read_capped(ok, 64).await.expect("under cap"), "hello");
+
+        // wiremock always emits Content-Length, so this trips the early
+        // declared-length reject; the running accumulation guard for an absent
+        // or understated header is inspection-verified (same as the x402
+        // client's sibling test).
+        let big = http
+            .get(format!("{}/big", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        let err = read_capped(big, 64).await.expect_err("over cap");
+        assert!(
+            matches!(err, X402DaemonError::ResponseTooLarge(_)),
+            "got {err:?}"
+        );
     }
 }

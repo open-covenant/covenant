@@ -5831,7 +5831,7 @@ impl Server {
                 }
             };
         let status = outcome.response.status().as_u16();
-        let body_text = match outcome.response.text().await {
+        let body_text = match x402::read_response_body(outcome.response).await {
             Ok(t) => t,
             Err(e) => {
                 return Response::Error {

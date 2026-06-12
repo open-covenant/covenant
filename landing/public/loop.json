@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T06:00:28.598Z",
+  "updatedAt": "2026-06-12T06:20:32.139Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8411,
+    "events": 8416,
     "tasks": 1001,
-    "integrated": 1001
+    "integrated": 1002
   },
   "throughput": {
-    "last24h": 42,
-    "last7d": 174,
-    "velocity": 24.9
+    "last24h": 43,
+    "last7d": 175,
+    "velocity": 25
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 24
+      "count": 25
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1001
+      "total": 1002
     }
   ],
   "states": {
-    "integrated": 996,
+    "integrated": 997,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "harden-metaplex-onchain-string-bidi-zerowidth-rejection",
-    "state": "in_progress",
-    "since": "2026-06-12T05:59:58.308Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T06:06:39.787Z",
+      "task": "harden-metaplex-onchain-string-bidi-zerowidth-rejection",
+      "note": "Committed 1b601da6 on loop/main-track: shared is_unsafe_onchain_char rejects bidi-override + zero-width + LS/PS chars in validate_registrati"
+    },
     {
       "at": "2026-06-12T05:58:14.059Z",
       "task": "harden-metaplex-attestation-field-onchain-validation",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T00:48:53.568Z",
       "task": "covenant-hyre-catalog-summary-fallback-coverage",
       "note": "committed to loop/main-track: test(covenant-hyre) to_x402_catalog summary/description fallback; README 2655->2656"
-    },
-    {
-      "at": "2026-06-12T00:40:01.322Z",
-      "task": "covenantd-metaplex-from-config-and-action-label-coverage",
-      "note": "committed to loop/main-track: test(covenantd-metaplex) from_config unset-omission + action_label slugs; README 2653->2655"
     }
   ]
 }

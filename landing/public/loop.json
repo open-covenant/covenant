@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T16:42:32.466Z",
+  "updatedAt": "2026-06-12T17:02:36.155Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8673,
+    "events": 8677,
     "tasks": 1030,
-    "integrated": 1031
+    "integrated": 1032
   },
   "throughput": {
-    "last24h": 72,
-    "last7d": 190,
-    "velocity": 27.1
+    "last24h": 73,
+    "last7d": 191,
+    "velocity": 27.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 54
+      "count": 55
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1031
+      "total": 1032
     }
   ],
   "states": {
-    "integrated": 1025,
+    "integrated": 1026,
     "proposed": 1,
-    "blocked": 3,
-    "self_review": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "bound-peer-auth-pagination-limit-take-overflow",
-    "state": "self_review",
-    "since": "2026-06-12T16:40:33.718Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T16:46:23.667Z",
+      "task": "bound-peer-auth-pagination-limit-take-overflow",
+      "note": "Committed c03eaa02 and pushed to origin/loop/main-track (8108b6c4..c03eaa02). Made the peer-auth pagination peek increment saturating at all"
+    },
     {
       "at": "2026-06-12T16:13:27.958Z",
       "task": "a2a-validate-inbound-task-intent-text-non-empty",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T08:44:02.586Z",
       "task": "bound-covenantd-x402-paid-response-body",
       "note": "Integrated as e3e02157 on loop/main-track (pushed 516ae861..e3e02157). Bounds the last unbounded untrusted reqwest body read in the http-res"
-    },
-    {
-      "at": "2026-06-12T08:13:53.707Z",
-      "task": "consolidate-hyre-bounded-read-helper",
-      "note": "Committed. Shared crate::http::read_capped; both local copies removed; 70 tests; scripts gate green; review SHIP."
     }
   ]
 }

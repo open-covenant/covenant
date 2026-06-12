@@ -10,11 +10,18 @@ use covenant_x402::{Catalog, PaymentRequirements, RegistryEntry};
 
 use crate::config::HyreConfig;
 use crate::manifest::{self, Endpoint};
-use crate::Result;
+use crate::{HyreError, Result};
 
 /// Server title every Hyre entry carries in the gateway catalog, used
 /// to disambiguate a slug shared with another provider.
 pub const SERVER_TITLE: &str = "Hyre";
+
+/// Maximum manifest body the refresh poll will buffer into memory. The
+/// daemon polls an operator-configured manifest host unattended, so a
+/// compromised or malicious one must not be able to exhaust a worker's
+/// memory with an unbounded body. 16 MiB sits far above the Hyre manifest
+/// yet stops a runaway stream.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 pub struct HyreCatalog {
     endpoints: Vec<Endpoint>,
@@ -46,13 +53,20 @@ impl HyreCatalog {
     /// Fetch the live manifest and rebuild. The daemon polls this on a
     /// refresh interval so a Hyre catalog change needs no rebuild.
     pub async fn refresh(http: &reqwest::Client, config: &HyreConfig) -> Result<Self> {
-        let body = http
+        Self::refresh_with_limits(http, config, MAX_RESPONSE_BYTES).await
+    }
+
+    async fn refresh_with_limits(
+        http: &reqwest::Client,
+        config: &HyreConfig,
+        max_bytes: usize,
+    ) -> Result<Self> {
+        let resp = http
             .get(config.manifest_url())
             .send()
             .await?
-            .error_for_status()?
-            .text()
-            .await?;
+            .error_for_status()?;
+        let body = read_capped(resp, max_bytes).await?;
         Self::from_manifest(&body, config)
     }
 
@@ -102,6 +116,31 @@ impl HyreCatalog {
             .collect();
         Catalog::new(entries)
     }
+}
+
+/// Read the manifest body into a string, refusing anything past `max`. The
+/// `Content-Length` check rejects an oversized declared body before it is
+/// streamed; the running accumulation check is the real guard, since the
+/// header is optional and provider-controlled. The manifest is JSON, so the
+/// bounded bytes are decoded lossily rather than via charset-aware `.text()`.
+async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<String> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(HyreError::Manifest(format!(
+                "manifest body of {len} bytes exceeds the {max}-byte cap"
+            )));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if buf.len() + chunk.len() > max {
+            return Err(HyreError::Manifest(format!(
+                "manifest body exceeds the {max}-byte cap"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[cfg(test)]
@@ -210,6 +249,28 @@ mod tests {
         assert!(
             matches!(result, Err(crate::HyreError::Http(_))),
             "expected HyreError::Http on a non-2xx manifest host",
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_oversized_manifest_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/openapi.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let config = HyreConfig {
+            base_url: server.uri(),
+            ..HyreConfig::default()
+        };
+        let result = HyreCatalog::refresh_with_limits(&reqwest::Client::new(), &config, 64).await;
+        assert!(
+            matches!(result, Err(crate::HyreError::Manifest(_))),
+            "expected HyreError::Manifest on an oversized manifest body",
         );
     }
 

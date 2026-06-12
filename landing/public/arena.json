@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T02:30:09.986Z",
+  "updatedAt": "2026-06-12T12:03:46.104Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
-    "scalar": 6.492,
+    "scalar": 6.499,
     "fuelCutPct": 84.6
   },
   "tally": {
-    "Claude": 7,
+    "Claude": 8,
     "Grok": 0,
     "Codex": 1,
     "rejectedRounds": 1
@@ -96,6 +96,11 @@
       "round": "k17",
       "scalar": 6.492,
       "proposer": "Codex"
+    },
+    {
+      "round": "k18",
+      "scalar": 6.499,
+      "proposer": "Claude"
     }
   ],
   "solo": {
@@ -107,6 +112,46 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k18",
+      "display": "Round 9",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.492,
+          "gain": -6.492,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.498,
+          "incumbent": 6.492,
+          "gain": 0.006,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "lost tournament to fable (6.498 vs 6.499)"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 6.499,
+          "incumbent": 6.492,
+          "gain": 0.007,
+          "promoted": true,
+          "commit": "2be4865e18c1e8591384ded33ae354e529bc440e",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
     {
       "round": "k17",
       "display": "Round 8",

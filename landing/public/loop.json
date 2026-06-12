@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-12T14:01:57.677Z",
+  "updatedAt": "2026-06-12T14:22:01.642Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8631,
-    "tasks": 1025,
+    "events": 8637,
+    "tasks": 1026,
     "integrated": 1026
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1021,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "cross_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "bound-sap-bridge-worker-subprocess-output",
+    "state": "cross_review",
+    "since": "2026-06-12T14:21:01.448Z"
+  },
   "recent": [
     {
       "at": "2026-06-12T13:45:47.683Z",

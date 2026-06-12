@@ -25,7 +25,7 @@ use std::sync::Arc;
 // returns the guard directly.
 use parking_lot::Mutex as StdMutex;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -74,6 +74,43 @@ pub struct JsonRpcError {
 const TRANSPORT_CLOSED_CODE: i64 = -32099;
 const TRANSPORT_CLOSED_MESSAGE: &str = "transport closed";
 const SERVER_CRASHED_MESSAGE: &str = "server crashed";
+
+/// Largest single newline-delimited line the transport buffers from a
+/// spawned MCP server's stdout or stderr. Real JSON-RPC messages and log
+/// lines are far smaller; a server is external, so a buggy or hostile one
+/// emitting a newline-less unbounded line would exhaust daemon memory if
+/// the read were not capped. A line past this closes the transport rather
+/// than buffering it.
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read one `\n`-terminated line into `buf` (newline stripped), refusing to
+/// buffer more than `max` bytes. Returns `Ok(true)` for a complete line,
+/// `Ok(false)` at clean EOF, and an `InvalidData` error for a line that
+/// reaches the cap without a newline — the caller closes the transport
+/// instead of letting one unbounded line exhaust memory.
+async fn read_capped_line<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    max: usize,
+) -> std::io::Result<bool> {
+    buf.clear();
+    let read = (&mut *reader)
+        .take(max as u64 + 1)
+        .read_until(b'\n', buf)
+        .await?;
+    if read == 0 {
+        return Ok(false);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        Ok(true)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "mcp server line exceeds maximum length",
+        ))
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpClientError {
@@ -249,19 +286,22 @@ impl StdioMcpClient {
         let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(child)));
         let reader_child = child.clone();
         let reader = tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
+            let mut reader = BufReader::new(stdout);
+            let mut buf = Vec::new();
             loop {
-                match lines.next_line().await {
-                    Ok(Some(line)) => {
-                        if line.trim().is_empty() {
+                match read_capped_line(&mut reader, &mut buf, MAX_LINE_BYTES).await {
+                    Ok(true) => {
+                        let line = String::from_utf8_lossy(&buf);
+                        let line = line.trim();
+                        if line.is_empty() {
                             continue;
                         }
-                        match serde_json::from_str::<JsonRpcResponse>(&line) {
+                        match serde_json::from_str::<JsonRpcResponse>(line) {
                             Ok(resp) => deliver_response(&reader_pending, resp),
-                            Err(e) => warn!(error = %e, line, "mcp: bad json on stdout"),
+                            Err(e) => warn!(error = %e, "mcp: bad json on stdout"),
                         }
                     }
-                    Ok(None) => break,
+                    Ok(false) => break,
                     Err(e) => {
                         warn!(error = %e, "mcp: stdout read failed");
                         break;
@@ -342,9 +382,12 @@ fn deliver_response(pending: &Pending, resp: JsonRpcResponse) {
 
 fn spawn_stderr_logger(stderr: tokio::process::ChildStderr) {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if !line.trim().is_empty() {
+        let mut reader = BufReader::new(stderr);
+        let mut buf = Vec::new();
+        while let Ok(true) = read_capped_line(&mut reader, &mut buf, MAX_LINE_BYTES).await {
+            let line = String::from_utf8_lossy(&buf);
+            let line = line.trim();
+            if !line.is_empty() {
                 debug!(target: "mcp.stderr", "{line}");
             }
         }
@@ -1080,6 +1123,35 @@ mod tests {
         let n = c.notifications();
         assert_eq!(n.len(), 1);
         assert_eq!(n[0].0, "notifications/initialized");
+    }
+
+    #[tokio::test]
+    async fn read_capped_line_bounds_strips_and_signals_eof() {
+        // Sequential complete lines: content returned with the newline
+        // stripped, in order, then a clean EOF.
+        let data: &[u8] = b"first\nsecond\n";
+        let mut r = BufReader::new(data);
+        let mut buf = Vec::new();
+        assert!(read_capped_line(&mut r, &mut buf, 64).await.unwrap());
+        assert_eq!(buf, b"first");
+        assert!(read_capped_line(&mut r, &mut buf, 64).await.unwrap());
+        assert_eq!(buf, b"second");
+        assert!(!read_capped_line(&mut r, &mut buf, 64).await.unwrap());
+
+        // A line of exactly `max` content bytes plus its newline is accepted.
+        let exact: &[u8] = b"aaaa\n";
+        let mut r = BufReader::new(exact);
+        let mut buf = Vec::new();
+        assert!(read_capped_line(&mut r, &mut buf, 4).await.unwrap());
+        assert_eq!(buf, b"aaaa");
+
+        // A line past the cap with no newline inside max+1 bytes is refused
+        // rather than buffered, so one unbounded line cannot exhaust memory.
+        let big: &[u8] = b"aaaaaaaa\n";
+        let mut r = BufReader::new(big);
+        let mut buf = Vec::new();
+        let err = read_capped_line(&mut r, &mut buf, 4).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

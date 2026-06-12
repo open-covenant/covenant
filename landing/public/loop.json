@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T17:02:36.155Z",
+  "updatedAt": "2026-06-12T17:22:39.673Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8677,
-    "tasks": 1030,
-    "integrated": 1032
+    "events": 8686,
+    "tasks": 1031,
+    "integrated": 1033
   },
   "throughput": {
-    "last24h": 73,
+    "last24h": 74,
     "last7d": 191,
     "velocity": 27.3
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 55
+      "count": 56
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1032
+      "total": 1033
     }
   ],
   "states": {
-    "integrated": 1026,
+    "integrated": 1027,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T17:17:01.755Z",
+      "task": "bound-hermes-sse-event-stream-buffer",
+      "note": "Committed dce8e60b and pushed to origin/loop/main-track (c03eaa02..dce8e60b). Bounded the Hermes SSE event-stream buffer: extracted drain_ss"
+    },
     {
       "at": "2026-06-12T16:46:23.667Z",
       "task": "bound-peer-auth-pagination-limit-take-overflow",
@@ -310,11 +315,6 @@
       "at": "2026-06-12T08:57:32.692Z",
       "task": "bound-hermes-gateway-response-body",
       "note": "Integrated as 6a485544 on loop/main-track (pushed e3e02157..6a485544). Bounds the 3 Hermes gateway response reads (submit/poll/probe) — the "
-    },
-    {
-      "at": "2026-06-12T08:44:02.586Z",
-      "task": "bound-covenantd-x402-paid-response-body",
-      "note": "Integrated as e3e02157 on loop/main-track (pushed 516ae861..e3e02157). Bounds the last unbounded untrusted reqwest body read in the http-res"
     }
   ]
 }

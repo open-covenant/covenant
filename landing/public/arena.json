@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T12:03:46.104Z",
+  "updatedAt": "2026-06-12T21:36:55.631Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
-    "scalar": 6.499,
+    "scalar": 6.505,
     "fuelCutPct": 84.6
   },
   "tally": {
     "Claude": 8,
     "Grok": 0,
-    "Codex": 1,
+    "Codex": 2,
     "rejectedRounds": 1
   },
   "curve": [
@@ -101,6 +101,11 @@
       "round": "k18",
       "scalar": 6.499,
       "proposer": "Claude"
+    },
+    {
+      "round": "k19",
+      "scalar": 6.505,
+      "proposer": "Codex"
     }
   ],
   "solo": {
@@ -112,6 +117,46 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k19",
+      "display": "Round 10",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.499,
+          "gain": -6.499,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.499,
+          "gain": -6.499,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): You've hit your session limit · resets 1:30am (Europe/Copenhagen)\n"
+        },
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.505,
+          "incumbent": 6.499,
+          "gain": 0.006,
+          "promoted": true,
+          "commit": "c02425cbded322fdc8839fce7760e3e3c199b688",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
     {
       "round": "k18",
       "display": "Round 9",

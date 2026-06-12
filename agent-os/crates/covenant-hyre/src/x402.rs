@@ -399,6 +399,24 @@ mod tests {
     }
 
     #[test]
+    fn truncate_caps_long_bodies_with_an_ellipsis() {
+        // truncate bounds the upstream body inlined into a HyreError::Execute
+        // message. Short and exactly-200-char inputs pass through verbatim; only
+        // once it actually cuts does it append the ellipsis marker.
+        assert_eq!(truncate("short body"), "short body");
+        let exactly_200 = "a".repeat(200);
+        assert_eq!(
+            truncate(&exactly_200),
+            exactly_200,
+            "the 200th char is kept whole, no marker",
+        );
+        let cut = truncate(&"a".repeat(250));
+        assert_eq!(cut.chars().count(), 201, "200 kept chars plus the ellipsis");
+        assert!(cut.starts_with(&"a".repeat(200)));
+        assert!(cut.ends_with('…'));
+    }
+
+    #[test]
     fn to_requirements_rejects_unpinned_payee_sponsor_and_missing_amount() {
         // to_requirements normalises a selected 402 option into the signer's
         // input. Before any signature is produced it must pin the payee and

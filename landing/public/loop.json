@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T05:40:25.059Z",
+  "updatedAt": "2026-06-12T06:00:28.598Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8397,
-    "tasks": 999,
-    "integrated": 999
+    "events": 8411,
+    "tasks": 1001,
+    "integrated": 1001
   },
   "throughput": {
-    "last24h": 40,
-    "last7d": 173,
-    "velocity": 24.7
+    "last24h": 42,
+    "last7d": 174,
+    "velocity": 24.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 22
+      "count": 24
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-12",
-      "total": 999
+      "total": 1001
     }
   ],
   "states": {
-    "integrated": 994,
+    "integrated": 996,
     "proposed": 1,
     "blocked": 3,
-    "ready": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "harden-metaplex-das-pagination-bounds",
-    "state": "ready",
-    "since": "2026-06-12T05:39:56.730Z"
+    "task": "harden-metaplex-onchain-string-bidi-zerowidth-rejection",
+    "state": "in_progress",
+    "since": "2026-06-12T05:59:58.308Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T05:58:14.059Z",
+      "task": "harden-metaplex-attestation-field-onchain-validation",
+      "note": "Committed 5ffcc854 on loop/main-track: validate_attestation_field guards releaseTarget/Subject/Scope (len<=200 + control-char rejection) at "
+    },
+    {
+      "at": "2026-06-12T05:40:46.336Z",
+      "task": "harden-metaplex-das-pagination-bounds",
+      "note": "Committed bd37c6c2 on loop/main-track: bounded_u32_arg enforces das.assets_by_owner limit (1..=1000) and page (1..=u32::MAX) per the publish"
+    },
     {
       "at": "2026-06-12T05:19:41.014Z",
       "task": "harden-hyre-manifest-saturate-credits-cast",
@@ -310,16 +320,6 @@
       "at": "2026-06-12T00:40:01.322Z",
       "task": "covenantd-metaplex-from-config-and-action-label-coverage",
       "note": "committed to loop/main-track: test(covenantd-metaplex) from_config unset-omission + action_label slugs; README 2653->2655"
-    },
-    {
-      "at": "2026-06-12T00:34:39.557Z",
-      "task": "covenantd-http-sap-stats-coverage",
-      "note": "committed to loop/main-track: test(covenantd-http) pin sap-stats path resolution and read fallback; README 2651->2653"
-    },
-    {
-      "at": "2026-06-12T00:19:51.012Z",
-      "task": "covenantd-hyre-executor-budget-would-exceed-refusal",
-      "note": "Committed aea560ab + pushed to origin/loop/main-track. Test-only: 1 test pins covenantd hyre DaemonHyreExecutor over-budget would_exceed ref"
     }
   ]
 }

@@ -92,8 +92,10 @@ impl Client {
 
 /// Picks the first requirement that matches the capability.
 ///
-/// Returns None when no requirement is on the right chain + asset
-/// or all matching requirements exceed the per-call cap.
+/// Returns None when no requirement is on the right chain + asset,
+/// or every matching requirement is priced at zero or above the
+/// per-call cap — a zero price is a malformed challenge, not a free
+/// call, and must never be signed.
 fn pick_requirement<'a>(
     requirements: &'a [PaymentRequirements],
     capability: &Capability,
@@ -103,7 +105,7 @@ fn pick_requirement<'a>(
             return false;
         }
         match r.amount.parse::<u128>() {
-            Ok(n) => n <= capability.per_call_cap,
+            Ok(n) => n > 0 && n <= capability.per_call_cap,
             Err(_) => {
                 warn!(amount = %r.amount, "x402 requirement has unparseable amount");
                 false
@@ -156,6 +158,17 @@ mod tests {
     #[test]
     fn pick_rejects_amount_over_cap() {
         let reqs = vec![req("solana:mainnet", "usdc-sol", "200000")];
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+        assert!(pick_requirement(&reqs, &c).is_none());
+    }
+
+    #[test]
+    fn pick_rejects_zero_amount() {
+        // A "0" amount parses cleanly and is trivially <= any cap, so without a
+        // positive lower bound pick_requirement would hand it to build_payment
+        // and sign a zero-price authorization — the zero-transfer hazard the
+        // pick_skips_unparseable_amount comment names but does not itself cover.
+        let reqs = vec![req("solana:mainnet", "usdc-sol", "0")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         assert!(pick_requirement(&reqs, &c).is_none());
     }

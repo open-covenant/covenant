@@ -1,21 +1,17 @@
 {
-  "updatedAt": "2026-06-11T23:59:23.486Z",
+  "updatedAt": "2026-06-12T00:19:27.565Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8195,
-    "tasks": 977,
-    "integrated": 977
+    "events": 8214,
+    "tasks": 979,
+    "integrated": 979
   },
   "throughput": {
-    "last24h": 18,
+    "last24h": 20,
     "last7d": 175,
     "velocity": 25
   },
   "daily": [
-    {
-      "date": "05-22",
-      "count": 0
-    },
     {
       "date": "05-23",
       "count": 220
@@ -95,13 +91,13 @@
     {
       "date": "06-11",
       "count": 18
+    },
+    {
+      "date": "06-12",
+      "count": 2
     }
   ],
   "cumulative": [
-    {
-      "date": "05-22",
-      "total": 185
-    },
     {
       "date": "05-23",
       "total": 405
@@ -181,13 +177,17 @@
     {
       "date": "06-11",
       "total": 977
+    },
+    {
+      "date": "06-12",
+      "total": 979
     }
   ],
   "states": {
-    "integrated": 972,
+    "integrated": 974,
     "proposed": 1,
     "blocked": 3,
-    "in_progress": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "covenantd-metaplex-write-surface-env-construction",
-    "state": "in_progress",
-    "since": "2026-06-11T23:55:51.598Z"
+    "task": "covenantd-hyre-executor-budget-would-exceed-refusal",
+    "state": "self_review",
+    "since": "2026-06-12T00:18:36.473Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T00:16:07.210Z",
+      "task": "covenantd-x402-pay-and-record-budget-precheck-refusals",
+      "note": "Committed 62709c68 + pushed to origin/loop/main-track. Test-only: 2 tests pin covenantd x402 pay_and_record BudgetExceeded + NoCapacity pre-"
+    },
+    {
+      "at": "2026-06-12T00:08:11.504Z",
+      "task": "covenantd-metaplex-write-surface-env-construction",
+      "note": "Committed d386cc9e + pushed to origin/loop/main-track (44a4bc44..d386cc9e). Test-only: 3 tests pin covenantd metaplex SubprocessMetaplexSign"
+    },
     {
       "at": "2026-06-11T23:23:42.824Z",
       "task": "metaplex-signer-register-pda-derivation-coverage",
@@ -310,16 +320,6 @@
       "at": "2026-06-11T21:04:51.421Z",
       "task": "metaplex-tool-gating-and-request-build-coverage",
       "note": "Pushed in 53e93ce8 to origin/loop/main-track. Bundled with the branch --scripts gate repair (line-ref realignment + 2 validator anchor syncs"
-    },
-    {
-      "at": "2026-06-08T17:08:43.523Z",
-      "task": "covenantd-verify-memory-record-metadata-receipt-id-non-strin",
-      "note": "Integrated as ca346733, pushed 7f904d33..ca346733 main->main (clean ff). New drift kind memory_record_metadata_receipt_id_non_string is the "
-    },
-    {
-      "at": "2026-06-08T16:30:16.601Z",
-      "task": "covenantd-verify-memory-record-metadata-stale-context-unexpe",
-      "note": "Integrated as 7f904d33, pushed c8d09eac..7f904d33 main->main. New drift kind memory_record_metadata_stale_context_unexpected_key completes s"
     }
   ]
 }

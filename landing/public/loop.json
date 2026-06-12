@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T02:59:56.014Z",
+  "updatedAt": "2026-06-12T03:19:59.579Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8246,
-    "tasks": 983,
-    "integrated": 983
+    "events": 8276,
+    "tasks": 986,
+    "integrated": 986
   },
   "throughput": {
-    "last24h": 24,
-    "last7d": 168,
-    "velocity": 24
+    "last24h": 27,
+    "last7d": 171,
+    "velocity": 24.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 6
+      "count": 9
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-12",
-      "total": 983
+      "total": 986
     }
   ],
   "states": {
-    "integrated": 978,
-    "proposed": 2,
-    "blocked": 3
+    "integrated": 981,
+    "proposed": 1,
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,27 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "stake-keeper-jupiter-quote-amount-parse-coverage",
+    "state": "in_progress",
+    "since": "2026-06-12T03:17:07.169Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-12T03:16:22.443Z",
+      "task": "hyre-tool-arg-coercion-coverage",
+      "note": "Pushed 6cd32b1e to origin/loop/main-track. Two tests pin arg_str coercion in tools.rs; README metrics current at 2668."
+    },
+    {
+      "at": "2026-06-12T03:13:49.826Z",
+      "task": "hyre-manifest-param-body-filter-coverage",
+      "note": "Pushed 8647de85 to origin/loop/main-track. Five tests pin manifest.rs param/body filtering robustness; README metrics current at 2666."
+    },
+    {
+      "at": "2026-06-12T03:04:41.797Z",
+      "task": "sap-bridge-config-worker-spawn-resolution",
+      "note": "Pushed 9af9aec7 to origin/loop/main-track. Five tests pin worker_timeout and worker_command env resolution in covenant-sap-bridge config.rs;"
+    },
     {
       "at": "2026-06-12T00:48:53.568Z",
       "task": "covenant-hyre-catalog-summary-fallback-coverage",
@@ -300,21 +320,6 @@
       "at": "2026-06-11T22:33:27.362Z",
       "task": "metaplex-signer-collection-from-env-coverage",
       "note": "Committed + pushed to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-11T22:24:48.262Z",
-      "task": "zauth-challenge-malformed-rejection-arms-coverage",
-      "note": "Committed 7de461c8, pushed to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-11T22:20:29.016Z",
-      "task": "metaplex-tools-write-request-build-coverage",
-      "note": "Committed 6a5370fa, pushed 618e8ab3..6a5370fa to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-11T22:11:45.217Z",
-      "task": "metaplex-config-from-env-and-truthy-coverage",
-      "note": "Committed 618e8ab3 and pushed 523f7b4d..618e8ab3 to origin/loop/main-track. test(metaplex): MetaplexConfig::from_env + truthy() coverage. Al"
     }
   ]
 }

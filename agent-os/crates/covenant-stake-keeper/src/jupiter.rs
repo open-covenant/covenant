@@ -30,6 +30,13 @@ pub const JUPITER_SWAP_URL: &str = "https://lite-api.jup.ag/swap/v1/swap";
 
 pub const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
 
+/// Maximum Jupiter response body the client will buffer into memory. The
+/// quote/swap endpoints are third-party; a compromised or malicious response
+/// must not be able to exhaust the keeper's memory with an unbounded body.
+/// 16 MiB sits far above any real route response yet stops a runaway stream —
+/// the memory-axis sibling of the 20s request timeout.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JupiterQuote {
@@ -53,9 +60,12 @@ impl JupiterQuote {
     }
 
     pub fn other_amount_threshold_u64(&self) -> Result<u64> {
-        self.other_amount_threshold
-            .parse()
-            .with_context(|| format!("parse otherAmountThreshold: {}", self.other_amount_threshold))
+        self.other_amount_threshold.parse().with_context(|| {
+            format!(
+                "parse otherAmountThreshold: {}",
+                self.other_amount_threshold
+            )
+        })
     }
 }
 
@@ -76,8 +86,33 @@ struct SwapResponse {
     swap_transaction: String,
 }
 
+/// Buffer a response body, refusing anything past `max`. The `Content-Length`
+/// check rejects an oversized declared body before it is streamed; the running
+/// accumulation check is the real guard, since the header is optional and
+/// provider-controlled.
+async fn read_body_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(anyhow!(
+                "response body of {len} bytes exceeds the {max}-byte cap"
+            ));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.context("jupiter response chunk")? {
+        if buf.len() + chunk.len() > max {
+            return Err(anyhow!("response body exceeds the {max}-byte cap"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 pub struct JupiterClient {
     http: Client,
+    quote_url: String,
+    swap_url: String,
+    max_bytes: usize,
 }
 
 impl Default for JupiterClient {
@@ -88,11 +123,22 @@ impl Default for JupiterClient {
 
 impl JupiterClient {
     pub fn new() -> Self {
+        Self::with_limits(JUPITER_QUOTE_URL, JUPITER_SWAP_URL, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        quote_url: impl Into<String>,
+        swap_url: impl Into<String>,
+        max_bytes: usize,
+    ) -> Self {
         Self {
             http: Client::builder()
                 .timeout(std::time::Duration::from_secs(20))
                 .build()
                 .expect("reqwest client"),
+            quote_url: quote_url.into(),
+            swap_url: swap_url.into(),
+            max_bytes,
         }
     }
 
@@ -105,7 +151,7 @@ impl JupiterClient {
     ) -> Result<(JupiterQuote, serde_json::Value)> {
         let url = format!(
             "{base}?inputMint={input}&outputMint={output}&amount={amount}&slippageBps={slippage}&swapMode=ExactIn&onlyDirectRoutes=false",
-            base = JUPITER_QUOTE_URL,
+            base = self.quote_url,
             input = input_mint,
             output = output_mint,
             slippage = slippage_bps,
@@ -119,10 +165,17 @@ impl JupiterClient {
             .context("jupiter quote send")?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(anyhow!("jupiter quote http {status}: {body}"));
         }
-        let raw: serde_json::Value = resp.json().await.context("jupiter quote json")?;
+        let bytes = read_body_capped(resp, self.max_bytes)
+            .await
+            .context("jupiter quote read")?;
+        let raw: serde_json::Value =
+            serde_json::from_slice(&bytes).context("jupiter quote json")?;
         let quote: JupiterQuote =
             serde_json::from_value(raw.clone()).context("jupiter quote decode")?;
         Ok((quote, raw))
@@ -143,17 +196,24 @@ impl JupiterClient {
         };
         let resp = self
             .http
-            .post(JUPITER_SWAP_URL)
+            .post(&self.swap_url)
             .json(&body)
             .send()
             .await
             .context("jupiter swap send")?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(anyhow!("jupiter swap http {status}: {body}"));
         }
-        let swap_resp: SwapResponse = resp.json().await.context("jupiter swap json")?;
+        let bytes = read_body_capped(resp, self.max_bytes)
+            .await
+            .context("jupiter swap read")?;
+        let swap_resp: SwapResponse =
+            serde_json::from_slice(&bytes).context("jupiter swap json")?;
         let raw = B64
             .decode(&swap_resp.swap_transaction)
             .context("decode jupiter swap_transaction base64")?;
@@ -299,6 +359,72 @@ mod tests {
             err.contains("parse otherAmountThreshold")
                 && err.contains("99999999999999999999999999"),
             "error must name the otherAmountThreshold field and echo the bad value: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn quote_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // quote() and swap() buffer the whole Jupiter response into memory.
+        // The 20s timeout bounds the time axis; read_body_capped bounds the
+        // memory axis so a compromised or buggy endpoint cannot OOM the
+        // keeper with a multi-GB body. A valid quote body is served to every
+        // GET: a generous cap reads and parses it, a tiny cap rejects it.
+        // with_limits points the client at the wiremock server.
+        //
+        // wiremock always sets Content-Length, so the over-cap assertion
+        // exercises the early-reject branch; the running chunk-accumulation
+        // guard (the real defense against an omitted/understated header) is
+        // inspection-verified, mirroring the das.rs precedent.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"inputMint":"So11111111111111111111111111111111111111112","outputMint":"2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump","inAmount":"1000000000","outAmount":"12345678","otherAmountThreshold":"12000000","swapMode":"ExactIn","slippageBps":200,"priceImpactPct":"0.42"}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let input = Pubkey::new_unique();
+        let output = Pubkey::new_unique();
+
+        let (quote, _raw) = JupiterClient::with_limits(server.uri(), server.uri(), 16 * 1024)
+            .quote(&input, &output, 1_000_000_000, 200)
+            .await
+            .expect("an under-cap quote body must read back through read_body_capped");
+        assert_eq!(quote.out_amount_u64().unwrap(), 12_345_678);
+
+        let err = JupiterClient::with_limits(server.uri(), server.uri(), 8)
+            .quote(&input, &output, 1_000_000_000, 200)
+            .await
+            .expect_err("an over-cap quote body must be rejected, not buffered");
+        assert!(
+            format!("{err:#}").contains("cap"),
+            "over-cap quote read must surface the byte-cap error so a malicious endpoint cannot OOM the keeper; got {err:#}",
+        );
+    }
+
+    #[tokio::test]
+    async fn swap_caps_oversized_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("x".repeat(4096)))
+            .mount(&server)
+            .await;
+
+        let user = Pubkey::new_unique();
+        let quote_raw = serde_json::json!({ "outAmount": "1" });
+        let err = JupiterClient::with_limits(server.uri(), server.uri(), 8)
+            .swap(&quote_raw, &user)
+            .await
+            .expect_err("an over-cap swap body must be rejected, not buffered");
+        assert!(
+            format!("{err:#}").contains("cap"),
+            "over-cap swap read must surface the byte-cap error so a malicious endpoint cannot OOM the keeper; got {err:#}",
         );
     }
 }

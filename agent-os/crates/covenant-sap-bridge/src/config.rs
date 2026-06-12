@@ -249,6 +249,29 @@ mod tests {
     }
 
     #[test]
+    fn cluster_specific_enabled_and_rpc_url_beat_global() {
+        // enabled, program_id, and rpc_url share one cluster-specific-beats-global
+        // .or_else(global) rule, but only program_id's is pinned above. Set a global
+        // and a disagreeing devnet-specific value for enabled and rpc_url so only the
+        // layering decides the outcome: a global-only read would flip both.
+        let cfg = Config::from_env(env(&[
+            ("COVENANT_SOLANA_CLUSTER", "devnet"),
+            ("COVENANT_SAP_ENABLED", "false"),
+            ("COVENANT_SAP_DEVNET_ENABLED", "true"),
+            ("COVENANT_SAP_RPC_URL", "https://global.example"),
+            ("COVENANT_SAP_DEVNET_RPC_URL", "https://devnet.example"),
+        ]));
+        assert!(
+            cfg.enabled,
+            "cluster-specific COVENANT_SAP_DEVNET_ENABLED=true must beat the global =false opt-out",
+        );
+        assert_eq!(
+            cfg.rpc_url, "https://devnet.example",
+            "cluster-specific COVENANT_SAP_DEVNET_RPC_URL must beat the global RPC url",
+        );
+    }
+
+    #[test]
     fn falls_back_to_cluster_default_rpc() {
         let cfg = Config::from_env(env(&[
             ("COVENANT_SOLANA_CLUSTER", "mainnet"),

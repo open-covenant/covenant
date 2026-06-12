@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T14:42:08.687Z",
+  "updatedAt": "2026-06-12T15:02:12.607Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8638,
-    "tasks": 1026,
-    "integrated": 1026
+    "events": 8645,
+    "tasks": 1027,
+    "integrated": 1028
   },
   "throughput": {
-    "last24h": 67,
-    "last7d": 189,
-    "velocity": 27
+    "last24h": 69,
+    "last7d": 191,
+    "velocity": 27.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 49
+      "count": 51
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-12",
-      "total": 1026
+      "total": 1028
     }
   ],
   "states": {
-    "integrated": 1021,
+    "integrated": 1022,
     "proposed": 1,
     "blocked": 3,
-    "validation": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "bound-sap-bridge-worker-subprocess-output",
-    "state": "validation",
-    "since": "2026-06-12T14:40:04.985Z"
+    "task": "bound-covenantd-signer-dispatch-subprocess-output",
+    "state": "in_progress",
+    "since": "2026-06-12T14:57:32.860Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T14:48:02.258Z",
+      "task": "bound-sap-bridge-worker-subprocess-output",
+      "note": "noop check"
+    },
+    {
+      "at": "2026-06-12T14:43:26.655Z",
+      "task": "bound-sap-bridge-worker-subprocess-output",
+      "note": "Committed 84d085b1 and pushed to origin/loop/main-track. Bounds SAP worker subprocess stdout/stderr via capped concurrent read (16 MiB), clo"
+    },
     {
       "at": "2026-06-12T13:45:47.683Z",
       "task": "bound-hyre-facilitator-response-body",
@@ -310,16 +320,6 @@
       "at": "2026-06-12T07:49:13.336Z",
       "task": "harden-x402-client-challenge-response-size",
       "note": "Committed. client.rs read_capped over the 402 challenge; README 2703; scripts gate green; independent review SHIP."
-    },
-    {
-      "at": "2026-06-12T07:43:16.126Z",
-      "task": "harden-hyre-paid-http-response-size",
-      "note": "Committed e22cf407. x402.rs read_capped over all 4 paid-loop reads; README 2702; scripts gate green; independent review SHIP."
-    },
-    {
-      "at": "2026-06-12T07:34:15.977Z",
-      "task": "harden-metaplex-das-http-response-size",
-      "note": "Committed 9243e964. das.rs response-size cap + regression test; README metrics 2701; scripts gate green; independent security review SHIP."
     }
   ]
 }

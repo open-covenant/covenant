@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T16:02:24.614Z",
+  "updatedAt": "2026-06-12T16:22:28.574Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8663,
+    "events": 8668,
     "tasks": 1029,
-    "integrated": 1030
+    "integrated": 1031
   },
   "throughput": {
-    "last24h": 71,
+    "last24h": 72,
     "last7d": 191,
     "velocity": 27.3
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 53
+      "count": 54
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1030
+      "total": 1031
     }
   ],
   "states": {
-    "integrated": 1024,
+    "integrated": 1025,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "a2a-validate-inbound-task-intent-text-non-empty",
-    "state": "in_progress",
-    "since": "2026-06-12T16:02:21.630Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T16:13:27.958Z",
+      "task": "a2a-validate-inbound-task-intent-text-non-empty",
+      "note": "Committed 8108b6c4 and pushed to origin/loop/main-track (a5ddd11e..8108b6c4). Files: agent-os/crates/covenant-a2a/src/lib.rs (intent_text no"
+    },
     {
       "at": "2026-06-12T15:43:30.543Z",
       "task": "bound-covenant-cli-x402-signer-subprocess-output",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T08:13:53.707Z",
       "task": "consolidate-hyre-bounded-read-helper",
       "note": "Committed. Shared crate::http::read_capped; both local copies removed; 70 tests; scripts gate green; review SHIP."
-    },
-    {
-      "at": "2026-06-12T08:06:45.294Z",
-      "task": "harden-hyre-catalog-manifest-response-size",
-      "note": "Committed. catalog.rs read_capped over the manifest read; README 2705; scripts gate green; review SHIP."
     }
   ]
 }

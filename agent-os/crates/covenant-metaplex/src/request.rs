@@ -58,6 +58,29 @@ pub fn validate_registration_uri(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate an attestation identifier string (`releaseTarget`,
+/// `releaseSubject`, `releaseScope`) before it is inscribed into the
+/// on-chain AppData JSON. The payload is rendered verbatim by DAS
+/// consumers, wallets, and explorers, so these get the same length cap and
+/// control-character guard as [`validate_registration_uri`]: a NUL/ESC/newline
+/// inscribed on-chain is a render-injection risk, and an unbounded value
+/// bloats the attestation. Whitespace is allowed — unlike a URI, a release
+/// subject may legitimately contain spaces. Shared by the daemon-side tool
+/// and the signer sidecar, which does not trust its stdin.
+pub fn validate_attestation_field(name: &str, s: &str) -> Result<(), String> {
+    const MAX_LEN: usize = 200;
+    if s.len() > MAX_LEN {
+        return Err(format!(
+            "{name} must be at most {MAX_LEN} bytes, got {}",
+            s.len()
+        ));
+    }
+    if s.chars().any(|c| c.is_control()) {
+        return Err(format!("{name} must not contain control characters"));
+    }
+    Ok(())
+}
+
 /// JSON payload written into an MPL Core AppData plugin as a Covenant
 /// attestation. Mirrors the daemon's audit-root attestation envelope:
 /// identifiers and the 32-byte root only, never audit-log contents.
@@ -321,6 +344,36 @@ mod tests {
             .expect("exactly 200 bytes is within the cap");
         assert!(
             validate_registration_uri(&format!("https://{}", "a".repeat(193))).is_err(),
+            "201 bytes is over the cap"
+        );
+    }
+
+    #[test]
+    fn attestation_field_accepts_a_plain_label_including_spaces() {
+        validate_attestation_field("releaseTarget", "v0.1.0").expect("version tag");
+        validate_attestation_field("releaseSubject", "covenant control plane")
+            .expect("a subject may contain spaces, unlike a URI");
+        validate_attestation_field("releaseScope", &"a".repeat(200))
+            .expect("exactly 200 bytes is within the cap");
+    }
+
+    #[test]
+    fn attestation_field_rejects_control_characters() {
+        // The payload is inscribed verbatim into the on-chain AppData JSON and
+        // rendered by wallets/explorers/DAS, so a NUL/ESC/newline is the same
+        // render-injection risk that registration_uri already rejects.
+        for bad in ["audit\u{0}", "v0.1.0\u{1b}", "covenant\n", "scope\u{7f}"] {
+            assert!(
+                validate_attestation_field("releaseScope", bad).is_err(),
+                "control char in {bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn attestation_field_rejects_over_length() {
+        assert!(
+            validate_attestation_field("releaseSubject", &"a".repeat(201)).is_err(),
             "201 bytes is over the cap"
         );
     }

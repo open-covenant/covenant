@@ -257,16 +257,29 @@ impl WriteTool {
                 let root = str_arg(args, "rootHashHex")?;
                 crate::request::validate_root_hash_hex(root)
                     .map_err(ToolError::InvalidArguments)?;
-                let payload = AttestationPayload::new(
-                    root,
-                    str_arg(args, "releaseTarget")?,
-                    str_arg(args, "releaseSubject")?,
-                    str_arg(args, "releaseScope")?,
+                let release_target = str_arg(args, "releaseTarget")?;
+                let release_subject = str_arg(args, "releaseSubject")?;
+                let release_scope = str_arg(args, "releaseScope")?;
+                for (name, value) in [
+                    ("releaseTarget", release_target),
+                    ("releaseSubject", release_subject),
+                    ("releaseScope", release_scope),
+                ] {
+                    crate::request::validate_attestation_field(name, value)
+                        .map_err(ToolError::InvalidArguments)?;
+                }
+                let recorded_at =
                     args.get("recordedAt")
                         .and_then(Value::as_u64)
                         .ok_or_else(|| {
                             ToolError::InvalidArguments("recordedAt (integer) is required".into())
-                        })?,
+                        })?;
+                let payload = AttestationPayload::new(
+                    root,
+                    release_target,
+                    release_subject,
+                    release_scope,
+                    recorded_at,
                 );
                 // `asset` (append to an existing attestation asset) is not
                 // wired yet — v1 always mints a fresh asset, so we never
@@ -979,6 +992,31 @@ mod tests {
             .expect_err("an empty releaseTarget must be rejected");
         assert!(
             matches!(err, ToolError::InvalidArguments(ref m) if m.contains("releaseTarget")),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attest_rejects_a_control_char_in_a_release_field() {
+        // A release_* field is inscribed verbatim into the on-chain AppData
+        // JSON; a NUL/ESC/newline is the same render-injection risk
+        // registration_uri rejects, so build_request must refuse it before any
+        // signer round-trip rather than inscribe it on-chain.
+        let tool = metaplex_tool(
+            &enabled_all(),
+            "metaplex.attest.audit_root",
+            Arc::new(NullDas),
+            Some(Arc::new(CapturingSigner)),
+        )
+        .unwrap();
+        let mut args = attest_args();
+        args["releaseSubject"] = json!("covenant\u{0}");
+        let err = tool
+            .call(args)
+            .await
+            .expect_err("a control char in releaseSubject must be rejected");
+        assert!(
+            matches!(err, ToolError::InvalidArguments(ref m) if m.contains("releaseSubject")),
             "got {err:?}"
         );
     }

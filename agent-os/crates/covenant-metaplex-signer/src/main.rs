@@ -186,6 +186,14 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
             }
             covenant_metaplex::validate_root_hash_hex(&payload.root_hash_hex)
                 .map_err(|e| anyhow!("{e}"))?;
+            for (name, value) in [
+                ("releaseTarget", &payload.release_target),
+                ("releaseSubject", &payload.release_subject),
+                ("releaseScope", &payload.release_scope),
+            ] {
+                covenant_metaplex::validate_attestation_field(name, value)
+                    .map_err(|e| anyhow!("{e}"))?;
+            }
             let collection = match req_collection {
                 Some(c) => Some(parse_pubkey(c).context("request collection")?),
                 None => collection_from_env()?,
@@ -582,6 +590,26 @@ mod tests {
         };
         let err = build_err(&req);
         assert!(err.contains("hex"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_attest_with_a_control_char_in_a_release_field() {
+        // The signer re-validates the payload it is about to inscribe — it does
+        // not trust its stdin — so a control character in a release_* field is
+        // rejected here too, not only at the daemon tool boundary.
+        let req = SignerRequest::AttestAuditRoot {
+            payload: AttestationPayload::new(
+                "a".repeat(64),
+                "v0.1.0",
+                "covenant\u{1b}",
+                "audit",
+                1,
+            ),
+            collection: None,
+            asset: None,
+        };
+        let err = build_err(&req);
+        assert!(err.contains("control characters"), "{err}");
     }
 
     #[test]

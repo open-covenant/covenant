@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T06:40:35.674Z",
+  "updatedAt": "2026-06-12T07:00:39.224Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8420,
-    "tasks": 1002,
-    "integrated": 1002
+    "events": 8438,
+    "tasks": 1004,
+    "integrated": 1004
   },
   "throughput": {
-    "last24h": 43,
-    "last7d": 175,
-    "velocity": 25
+    "last24h": 45,
+    "last7d": 177,
+    "velocity": 25.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 25
+      "count": 27
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1002
+      "total": 1004
     }
   ],
   "states": {
-    "integrated": 997,
+    "integrated": 999,
     "proposed": 1,
     "blocked": 3,
     "in_progress": 1
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "harden-metaplex-das-http-request-timeout",
+    "task": "harden-x402-paid-client-http-timeout",
     "state": "in_progress",
-    "since": "2026-06-12T06:40:23.927Z"
+    "since": "2026-06-12T07:00:38.800Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T06:58:38.236Z",
+      "task": "harden-hyre-paid-execution-http-timeout",
+      "note": "Committed 877cc852, pushed origin/loop/main-track. Daemon Hyre paid loop now bounded at 120s via covenant_hyre::http_client(); test pins it."
+    },
+    {
+      "at": "2026-06-12T06:47:02.546Z",
+      "task": "harden-metaplex-das-http-request-timeout",
+      "note": "Committed bdc1c579, pushed to origin/loop/main-track. DAS client now bounded at 20s; failure-mode test pins it. README metrics 2696->2697."
+    },
     {
       "at": "2026-06-12T06:06:39.787Z",
       "task": "harden-metaplex-onchain-string-bidi-zerowidth-rejection",
@@ -310,16 +320,6 @@
       "at": "2026-06-12T03:13:49.826Z",
       "task": "hyre-manifest-param-body-filter-coverage",
       "note": "Pushed 8647de85 to origin/loop/main-track. Five tests pin manifest.rs param/body filtering robustness; README metrics current at 2666."
-    },
-    {
-      "at": "2026-06-12T03:04:41.797Z",
-      "task": "sap-bridge-config-worker-spawn-resolution",
-      "note": "Pushed 9af9aec7 to origin/loop/main-track. Five tests pin worker_timeout and worker_command env resolution in covenant-sap-bridge config.rs;"
-    },
-    {
-      "at": "2026-06-12T00:48:53.568Z",
-      "task": "covenant-hyre-catalog-summary-fallback-coverage",
-      "note": "committed to loop/main-track: test(covenant-hyre) to_x402_catalog summary/description fallback; README 2655->2656"
     }
   ]
 }

@@ -528,4 +528,40 @@ mod tests {
             .unwrap();
         assert!(res.is_error);
     }
+
+    #[test]
+    fn arg_str_coerces_scalar_arguments_to_strings() {
+        // Tool arguments arrive as arbitrary JSON. A numeric id or a boolean
+        // flag must reach the request as its string form, not be dropped as a
+        // missing argument — otherwise a model that sends `{ "mint": 42 }`
+        // gets a spurious "missing required" failure.
+        let mut args = Map::new();
+        args.insert("count".into(), serde_json::json!(42));
+        args.insert("ratio".into(), serde_json::json!(3.5));
+        args.insert("flag".into(), serde_json::json!(false));
+        args.insert("name".into(), serde_json::json!("Mint1"));
+
+        assert_eq!(arg_str(&args, "count").as_deref(), Some("42"));
+        assert_eq!(arg_str(&args, "ratio").as_deref(), Some("3.5"));
+        assert_eq!(arg_str(&args, "flag").as_deref(), Some("false"));
+        assert_eq!(arg_str(&args, "name").as_deref(), Some("Mint1"));
+    }
+
+    #[test]
+    fn arg_str_treats_empty_structured_and_absent_as_missing() {
+        // An empty string, a non-scalar value, an explicit null, and an
+        // absent key all read as "not provided" so a blank or structured
+        // value never gets substituted into a path or query slot.
+        let mut args = Map::new();
+        args.insert("blank".into(), serde_json::json!(""));
+        args.insert("nested".into(), serde_json::json!({ "x": 1 }));
+        args.insert("list".into(), serde_json::json!([1, 2]));
+        args.insert("nullish".into(), Value::Null);
+
+        assert_eq!(arg_str(&args, "blank"), None, "empty string is absent");
+        assert_eq!(arg_str(&args, "nested"), None);
+        assert_eq!(arg_str(&args, "list"), None);
+        assert_eq!(arg_str(&args, "nullish"), None);
+        assert_eq!(arg_str(&args, "absent"), None);
+    }
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T09:41:08.923Z",
+  "updatedAt": "2026-06-12T10:01:12.690Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8546,
+    "events": 8551,
     "tasks": 1016,
-    "integrated": 1016
+    "integrated": 1017
   },
   "throughput": {
-    "last24h": 57,
-    "last7d": 189,
-    "velocity": 27
+    "last24h": 58,
+    "last7d": 190,
+    "velocity": 27.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 39
+      "count": 40
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1016
+      "total": 1017
     }
   ],
   "states": {
-    "integrated": 1011,
+    "integrated": 1012,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "bound-jupiter-swap-client-response-bodies",
-    "state": "in_progress",
-    "since": "2026-06-12T09:38:50.393Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T09:53:54.542Z",
+      "task": "bound-jupiter-swap-client-response-bodies",
+      "note": "Integrated as cd7ac5b1, pushed to origin/loop/main-track (3f800010..cd7ac5b1). Changed: jupiter.rs (read_body_capped 16 MiB cap, anyhow flav"
+    },
     {
       "at": "2026-06-12T09:34:58.966Z",
       "task": "bound-llm-provider-response-bodies",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T05:14:21.562Z",
       "task": "harden-hyre-config-checked-resale-markup",
       "note": "Integrated as b96c0641, pushed to origin/loop/main-track (30e8cf80..b96c0641). marked_up now returns Option and publishable drops overflowin"
-    },
-    {
-      "at": "2026-06-12T05:03:04.716Z",
-      "task": "harden-hyre-manifest-checked-price-arithmetic",
-      "note": "Integrated as 30e8cf80, pushed to origin/loop/main-track (68d5baf0..30e8cf80). usd_to_micro now rejects overflowing untrusted prices via che"
     }
   ]
 }

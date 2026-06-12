@@ -269,4 +269,62 @@ mod tests {
             "a config with enabled + signer_binary + rpc_url must expose a signer"
         );
     }
+
+    #[test]
+    fn from_config_omits_collection_and_cap_when_unset() {
+        // The mirror of `from_config_forwards_collection_and_cap_when_set`:
+        // an empty collection and a zero cap must NOT be forwarded. A
+        // regression that pushed them unconditionally would hand the
+        // sidecar COVENANT_METAPLEX_COLLECTION="" and a literal "0" cap,
+        // which it reads as a real (mis)configuration rather than "unset".
+        let signer = SubprocessMetaplexSigner::from_config(&MetaplexConfig {
+            enabled: true,
+            rpc_url: "https://rpc.example".into(),
+            signer_binary: "/opt/signer".into(),
+            collection: String::new(),
+            per_action_cap_lamports: 0,
+            ..Default::default()
+        });
+        assert_eq!(
+            env_get(&signer.env, "COVENANT_METAPLEX_RPC_URL"),
+            Some("https://rpc.example")
+        );
+        assert!(
+            env_get(&signer.env, "COVENANT_METAPLEX_COLLECTION").is_none(),
+            "an empty collection must not be forwarded as a blank env value"
+        );
+        assert!(
+            env_get(&signer.env, "COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS").is_none(),
+            "a zero cap must not be forwarded"
+        );
+    }
+
+    #[test]
+    fn action_label_pins_telemetry_slugs_for_both_signer_actions() {
+        use covenant_metaplex::AttestationPayload;
+
+        // Operator log/telemetry contract. The dotted slugs are distinct
+        // from the kebab-case `action` wire tags (attest-audit-root /
+        // register-identity); a copy-paste swap between the two would
+        // silently mislabel every confirmed on-chain write.
+        let attest = SignerRequest::AttestAuditRoot {
+            payload: AttestationPayload::new(
+                "a".repeat(64),
+                "v0.1.0",
+                "covenant",
+                "audit",
+                1_700_000_000,
+            ),
+            asset: None,
+            collection: None,
+        };
+        let register = SignerRequest::RegisterIdentity {
+            agent_label: "operator".into(),
+            agent_pubkey: "Agent1111111111111111111111111111111111111".into(),
+            asset: None,
+            registration_uri: None,
+        };
+        assert_eq!(action_label(&attest), "attest.audit_root");
+        assert_eq!(action_label(&register), "identity.register");
+    }
 }

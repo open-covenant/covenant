@@ -16,13 +16,6 @@ use crate::{HyreError, Result};
 /// to disambiguate a slug shared with another provider.
 pub const SERVER_TITLE: &str = "Hyre";
 
-/// Maximum manifest body the refresh poll will buffer into memory. The
-/// daemon polls an operator-configured manifest host unattended, so a
-/// compromised or malicious one must not be able to exhaust a worker's
-/// memory with an unbounded body. 16 MiB sits far above the Hyre manifest
-/// yet stops a runaway stream.
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-
 pub struct HyreCatalog {
     endpoints: Vec<Endpoint>,
     network: String,
@@ -53,7 +46,7 @@ impl HyreCatalog {
     /// Fetch the live manifest and rebuild. The daemon polls this on a
     /// refresh interval so a Hyre catalog change needs no rebuild.
     pub async fn refresh(http: &reqwest::Client, config: &HyreConfig) -> Result<Self> {
-        Self::refresh_with_limits(http, config, MAX_RESPONSE_BYTES).await
+        Self::refresh_with_limits(http, config, crate::http::MAX_RESPONSE_BYTES).await
     }
 
     async fn refresh_with_limits(
@@ -66,7 +59,7 @@ impl HyreCatalog {
             .send()
             .await?
             .error_for_status()?;
-        let body = read_capped(resp, max_bytes).await?;
+        let body = crate::http::read_capped(resp, max_bytes, HyreError::Manifest).await?;
         Self::from_manifest(&body, config)
     }
 
@@ -116,31 +109,6 @@ impl HyreCatalog {
             .collect();
         Catalog::new(entries)
     }
-}
-
-/// Read the manifest body into a string, refusing anything past `max`. The
-/// `Content-Length` check rejects an oversized declared body before it is
-/// streamed; the running accumulation check is the real guard, since the
-/// header is optional and provider-controlled. The manifest is JSON, so the
-/// bounded bytes are decoded lossily rather than via charset-aware `.text()`.
-async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<String> {
-    if let Some(len) = resp.content_length() {
-        if len > max as u64 {
-            return Err(HyreError::Manifest(format!(
-                "manifest body of {len} bytes exceeds the {max}-byte cap"
-            )));
-        }
-    }
-    let mut buf = Vec::new();
-    while let Some(chunk) = resp.chunk().await? {
-        if buf.len() + chunk.len() > max {
-            return Err(HyreError::Manifest(format!(
-                "manifest body exceeds the {max}-byte cap"
-            )));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[cfg(test)]

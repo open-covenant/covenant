@@ -40,13 +40,6 @@ use crate::{HyreError, Result};
 /// sits well above that to avoid aborting a legitimate settlement.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Maximum response body the paid loop will buffer into memory. The Hyre
-/// upstream and its x402 facilitator are untrusted; a compromised or
-/// malicious one must not be able to exhaust a daemon worker's memory with
-/// an unbounded body. 16 MiB sits far above any real paid API response yet
-/// stops a runaway stream — the memory-axis sibling of [`REQUEST_TIMEOUT`].
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-
 /// The reqwest client the daemon should drive [`execute_paid`] with —
 /// bounded so an unresponsive upstream cannot block a worker indefinitely.
 pub fn http_client() -> reqwest::Client {
@@ -209,7 +202,7 @@ pub async fn execute_paid(
     signer: &dyn Signer,
     plan: &PaidRequest,
 ) -> Result<PaidHttp> {
-    execute_paid_with_limits(http, signer, plan, MAX_RESPONSE_BYTES).await
+    execute_paid_with_limits(http, signer, plan, crate::http::MAX_RESPONSE_BYTES).await
 }
 
 async fn execute_paid_with_limits(
@@ -224,7 +217,7 @@ async fn execute_paid_with_limits(
     let first = send(http, &method, &plan.url, plan.body.as_ref(), None).await?;
     let status = first.status();
     if status.is_success() {
-        let body = read_capped(first, max_bytes).await?;
+        let body = crate::http::read_capped(first, max_bytes, HyreError::Execute).await?;
         return Ok(PaidHttp {
             status: status.as_u16(),
             body,
@@ -232,7 +225,9 @@ async fn execute_paid_with_limits(
         });
     }
     if status.as_u16() != 402 {
-        let body = read_capped(first, max_bytes).await.unwrap_or_default();
+        let body = crate::http::read_capped(first, max_bytes, HyreError::Execute)
+            .await
+            .unwrap_or_default();
         return Err(HyreError::Execute(format!(
             "{} returned {} (not 402): {}",
             plan.url,
@@ -241,7 +236,7 @@ async fn execute_paid_with_limits(
         )));
     }
 
-    let challenge = read_capped(first, max_bytes).await?;
+    let challenge = crate::http::read_capped(first, max_bytes, HyreError::Execute).await?;
     let accepts = parse_challenge(&challenge)?;
     let accept =
         select(&accepts, &plan.network, &plan.asset, plan.per_call_cap).ok_or_else(|| {
@@ -262,7 +257,7 @@ async fn execute_paid_with_limits(
 
     let paid = send(http, &method, &plan.url, plan.body.as_ref(), Some(&header)).await?;
     let status = paid.status();
-    let body = read_capped(paid, max_bytes).await?;
+    let body = crate::http::read_capped(paid, max_bytes, HyreError::Execute).await?;
     let paid_amount = if status.is_success() {
         Some(requirements.amount)
     } else {
@@ -299,31 +294,6 @@ fn truncate(s: &str) -> String {
     } else {
         cut
     }
-}
-
-/// Read a response body into a string, refusing anything past `max`. The
-/// `Content-Length` check rejects an oversized declared body before it is
-/// streamed; the running accumulation check is the real guard, since the
-/// header is optional and provider-controlled. x402 bodies are JSON, so the
-/// bounded bytes are decoded lossily rather than via charset-aware `.text()`.
-async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<String> {
-    if let Some(len) = resp.content_length() {
-        if len > max as u64 {
-            return Err(HyreError::Execute(format!(
-                "response body of {len} bytes exceeds the {max}-byte cap"
-            )));
-        }
-    }
-    let mut buf = Vec::new();
-    while let Some(chunk) = resp.chunk().await? {
-        if buf.len() + chunk.len() > max {
-            return Err(HyreError::Execute(format!(
-                "response body exceeds the {max}-byte cap"
-            )));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[cfg(test)]

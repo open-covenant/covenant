@@ -28,6 +28,7 @@
 pub mod catalog;
 pub mod config;
 pub mod facilitator;
+mod http;
 pub mod manifest;
 pub mod publish;
 pub mod tools;

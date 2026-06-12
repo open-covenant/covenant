@@ -26,10 +26,32 @@
 use covenant_x402::{PaymentRequirements, Signer};
 use serde::Deserialize;
 use serde_json::Value;
+use std::time::Duration;
 use tracing::debug;
 
 use crate::tools::PaidRequest;
 use crate::{HyreError, Result};
+
+/// Total per-request ceiling for the paid loop. The Hyre upstream and its
+/// x402 facilitator are untrusted, so a hung or never-completing response
+/// must not wedge the daemon worker forever. It is a safety ceiling, not
+/// an enforcement of the per-challenge `maxTimeoutSeconds`: the paid retry
+/// settles synchronously and Hyre advertises a 60s max, so the ceiling
+/// sits well above that to avoid aborting a legitimate settlement.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The reqwest client the daemon should drive [`execute_paid`] with —
+/// bounded so an unresponsive upstream cannot block a worker indefinitely.
+pub fn http_client() -> reqwest::Client {
+    http_client_with_timeout(REQUEST_TIMEOUT)
+}
+
+fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// One payment option from a Hyre 402 challenge.
 #[derive(Debug, Clone, Deserialize)]
@@ -482,6 +504,24 @@ mod tests {
             matches!(to_requirements(&no_amount, NETWORK), Err(HyreError::Challenge(m)) if m.contains("accept missing amount")),
             "an option carrying neither amount nor maxAmountRequired must be rejected, not signed for a zero price",
         );
+    }
+
+    #[tokio::test]
+    async fn slow_upstream_times_out_instead_of_hanging() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let err = execute_paid(
+            &http_client_with_timeout(Duration::from_millis(50)),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+        )
+        .await
+        .expect_err("must time out");
+        assert!(matches!(err, HyreError::Http(_)), "got {err:?}");
     }
 
     #[tokio::test]

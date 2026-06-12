@@ -99,7 +99,7 @@ impl PaidExecutor for DaemonHyreExecutor {
             signer = signer.env(k.clone(), v.clone());
         }
 
-        let http = reqwest::Client::new();
+        let http = covenant_hyre::http_client();
         let out = covenant_hyre::execute_paid(&http, &signer, &req)
             .await
             .map_err(|e| e.to_string())?;

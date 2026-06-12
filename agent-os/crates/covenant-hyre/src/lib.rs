@@ -41,7 +41,7 @@ pub use config::HyreConfig;
 // path keeps that visible at the call site.
 pub use manifest::Endpoint;
 pub use tools::{hyre_specs, hyre_tool, hyre_tools, PaidExecutor, PaidRequest, PaidResponse};
-pub use x402::{execute_paid, parse_challenge, PaidHttp};
+pub use x402::{execute_paid, http_client, parse_challenge, PaidHttp};
 
 /// Default Hyre OpenAPI manifest, vendored for offline startup.
 ///

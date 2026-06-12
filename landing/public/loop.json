@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T11:21:27.408Z",
+  "updatedAt": "2026-06-12T11:41:31.198Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8584,
-    "tasks": 1020,
-    "integrated": 1020
+    "events": 8591,
+    "tasks": 1021,
+    "integrated": 1021
   },
   "throughput": {
-    "last24h": 61,
+    "last24h": 62,
     "last7d": 192,
     "velocity": 27.4
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 43
+      "count": 44
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-12",
-      "total": 1020
+      "total": 1021
     }
   ],
   "states": {
-    "integrated": 1015,
+    "integrated": 1016,
     "proposed": 1,
     "blocked": 3,
-    "cross_review": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "bound-runtime-subprocess-agent-output",
-    "state": "cross_review",
-    "since": "2026-06-12T11:18:31.280Z"
+    "task": "bound-hermes-files-snapshot-response-body",
+    "state": "in_progress",
+    "since": "2026-06-12T11:38:52.860Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T11:23:56.960Z",
+      "task": "bound-runtime-subprocess-agent-output",
+      "note": "Committed 3f0d894c and pushed to origin/loop/main-track. Bounds agent subprocess stdout+stderr (both runners) at 16 MiB via AsyncReadExt::ta"
+    },
     {
       "at": "2026-06-12T11:06:54.817Z",
       "task": "bound-x402-solana-signer-response-bodies",
@@ -315,11 +320,6 @@
       "at": "2026-06-12T06:06:39.787Z",
       "task": "harden-metaplex-onchain-string-bidi-zerowidth-rejection",
       "note": "Committed 1b601da6 on loop/main-track: shared is_unsafe_onchain_char rejects bidi-override + zero-width + LS/PS chars in validate_registrati"
-    },
-    {
-      "at": "2026-06-12T05:58:14.059Z",
-      "task": "harden-metaplex-attestation-field-onchain-validation",
-      "note": "Committed 5ffcc854 on loop/main-track: validate_attestation_field guards releaseTarget/Subject/Scope (len<=200 + control-char rejection) at "
     }
   ]
 }

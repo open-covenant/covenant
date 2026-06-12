@@ -302,7 +302,14 @@ impl HermesRunner {
                 return Vec::new();
             }
         };
-        match resp.json::<HermesFilesResponse>().await {
+        let text = match read_capped(resp, MAX_RESPONSE_BYTES).await {
+            Ok(text) => text,
+            Err(e) => {
+                warn!(%run_id, error = %e, "hermes files read failed");
+                return Vec::new();
+            }
+        };
+        match serde_json::from_str::<HermesFilesResponse>(&text) {
             Ok(b) => b.files,
             Err(e) => {
                 warn!(%run_id, error = %e, "hermes files parse failed");
@@ -1984,6 +1991,50 @@ network = "off"
         assert!(
             matches!(err, RunnerError::Remote { status: 0, .. }),
             "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_files_is_bounded_and_best_effort() {
+        // The gateway is untrusted: a normal /files body reads back whole, a
+        // malformed one degrades to an empty list, and an oversized one is
+        // refused by the shared cap rather than buffered into the daemon's
+        // memory. fetch_files is best-effort, so every failure yields an empty
+        // list — the run trail and result still stand.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/runs/ok/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "files": [{ "path": "src/main.rs", "content": "fn main() {}", "truncated": false }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/bad/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/big/files"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("a".repeat(MAX_RESPONSE_BYTES + 1)),
+            )
+            .mount(&server)
+            .await;
+
+        let runner = runner(&server);
+
+        let files = runner.fetch_files("ok").await;
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "src/main.rs");
+
+        assert!(
+            runner.fetch_files("bad").await.is_empty(),
+            "a malformed files body must degrade to an empty list"
+        );
+        assert!(
+            runner.fetch_files("big").await.is_empty(),
+            "an oversized files body must be refused, not buffered into memory"
         );
     }
 }

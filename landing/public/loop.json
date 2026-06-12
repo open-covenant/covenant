@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T10:21:16.292Z",
+  "updatedAt": "2026-06-12T10:41:20.072Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8560,
-    "tasks": 1017,
-    "integrated": 1018
+    "events": 8569,
+    "tasks": 1018,
+    "integrated": 1019
   },
   "throughput": {
-    "last24h": 59,
-    "last7d": 191,
-    "velocity": 27.3
+    "last24h": 60,
+    "last7d": 192,
+    "velocity": 27.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 41
+      "count": 42
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1018
+      "total": 1019
     }
   ],
   "states": {
-    "integrated": 1013,
+    "integrated": 1014,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T10:38:59.357Z",
+      "task": "harden-zauth-reposcan-request-timeout",
+      "note": "Integrated as 3a26fad6, pushed to origin/loop/main-track (543400cf..3a26fad6). Changed: reposcan.rs (FIRST_REQUEST_TIMEOUT=20s client via ht"
+    },
     {
       "at": "2026-06-12T10:14:50.677Z",
       "task": "harden-zauth-reposcan-response-size",
@@ -310,11 +315,6 @@
       "at": "2026-06-12T05:40:46.336Z",
       "task": "harden-metaplex-das-pagination-bounds",
       "note": "Committed bd37c6c2 on loop/main-track: bounded_u32_arg enforces das.assets_by_owner limit (1..=1000) and page (1..=u32::MAX) per the publish"
-    },
-    {
-      "at": "2026-06-12T05:19:41.014Z",
-      "task": "harden-hyre-manifest-saturate-credits-cast",
-      "note": "Integrated as 49bf9dfd, pushed to origin/loop/main-track. credits() saturates instead of truncating; closes the silent under-charge both pri"
     }
   ]
 }

@@ -35,10 +35,32 @@ pub fn validate_root_hash_hex(s: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Refuse the characters that let an on-chain string render differently than
+/// its stored bytes: ASCII/Unicode control characters plus the
+/// bidirectional-override and zero-width / invisible format characters of the
+/// Trojan Source class (CVE-2021-42574). The attestation payload and the
+/// registration URI are both inscribed into public on-chain records that
+/// wallets, explorers, and DAS render, so a reordering or invisible glyph
+/// there is a provenance-spoofing vector. Whitespace is handled separately by
+/// callers that forbid it (a URI), since a release label may legitimately
+/// contain a space.
+fn is_unsafe_onchain_char(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{200B}'..='\u{200F}'   // ZWSP, ZWNJ, ZWJ, LRM, RLM
+            | '\u{2028}'..='\u{2029}' // line + paragraph separators (forced breaks)
+            | '\u{202A}'..='\u{202E}' // LRE, RLE, PDF, LRO, RLO
+            | '\u{2060}'..='\u{2064}' // word joiner + invisible operators
+            | '\u{2066}'..='\u{2069}' // LRI, RLI, FSI, PDI
+            | '\u{FEFF}'              // BOM / zero-width no-break space
+            | '\u{061C}',             // Arabic letter mark
+        )
+}
+
 /// Validate an ERC-8004 registration document URI before it is recorded
-/// on-chain: `https://` or `ar://` only, no whitespace/control characters,
-/// bounded length. Shared by the daemon-side tool and the signer sidecar
-/// so a malformed URI is rejected before any subprocess spawn or send.
+/// on-chain: `https://` or `ar://` only, no whitespace or control/format
+/// characters, bounded length. Shared by the daemon-side tool and the signer
+/// sidecar so a malformed URI is rejected before any subprocess spawn or send.
 pub fn validate_registration_uri(s: &str) -> Result<(), String> {
     const MAX_LEN: usize = 200;
     if s.len() > MAX_LEN {
@@ -50,9 +72,11 @@ pub fn validate_registration_uri(s: &str) -> Result<(), String> {
     if !(s.starts_with("https://") || s.starts_with("ar://")) {
         return Err("registrationUri must start with https:// or ar://".to_string());
     }
-    if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if s.chars()
+        .any(|c| c.is_whitespace() || is_unsafe_onchain_char(c))
+    {
         return Err(
-            "registrationUri must not contain whitespace or control characters".to_string(),
+            "registrationUri must not contain whitespace, control characters, or bidirectional/zero-width formatting".to_string(),
         );
     }
     Ok(())
@@ -75,8 +99,10 @@ pub fn validate_attestation_field(name: &str, s: &str) -> Result<(), String> {
             s.len()
         ));
     }
-    if s.chars().any(|c| c.is_control()) {
-        return Err(format!("{name} must not contain control characters"));
+    if s.chars().any(is_unsafe_onchain_char) {
+        return Err(format!(
+            "{name} must not contain control characters or bidirectional/zero-width formatting"
+        ));
     }
     Ok(())
 }
@@ -376,5 +402,41 @@ mod tests {
             validate_attestation_field("releaseSubject", &"a".repeat(201)).is_err(),
             "201 bytes is over the cap"
         );
+    }
+
+    #[test]
+    fn attestation_field_rejects_bidi_and_zero_width_chars() {
+        // Trojan Source (CVE-2021-42574): these pass char::is_control() but
+        // reorder or hide the rendered glyphs of an on-chain string, so an
+        // attestation could display a different subject/scope than its bytes.
+        for bad in [
+            "cove\u{202e}tnan", // RLO bidirectional override
+            "covenant\u{200b}", // zero-width space
+            "\u{feff}covenant", // byte-order mark
+            "cove\u{2069}nant", // pop directional isolate
+            "cove\u{2028}nant", // line separator (forced break, not is_control)
+        ] {
+            assert!(
+                validate_attestation_field("releaseScope", bad).is_err(),
+                "bidi/zero-width char in {bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn registration_uri_rejects_bidi_and_zero_width_chars() {
+        // The same Trojan-Source class applies to the on-chain registration
+        // URI: a bidi override could make a recorded https URI render as a
+        // different host than the bytes a client would actually fetch.
+        for bad in [
+            "https://example.org/\u{202e}",
+            "https://example.org/\u{200b}",
+            "ar://\u{feff}abc",
+        ] {
+            assert!(
+                validate_registration_uri(bad).is_err(),
+                "bidi/zero-width char in {bad:?} must be rejected"
+            );
+        }
     }
 }

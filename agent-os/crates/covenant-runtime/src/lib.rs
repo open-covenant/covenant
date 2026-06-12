@@ -213,6 +213,8 @@ pub enum RunnerError {
     Serde(#[from] serde_json::Error),
     #[error("timed out after {0:?}")]
     Timeout(Duration),
+    #[error("agent output exceeded the {limit}-byte cap")]
+    OutputTooLarge { limit: usize },
     #[error("agent exited non-zero: status={status}, stderr={stderr}")]
     NonZeroExit { status: i32, stderr: String },
     #[error("agent stdout was not a valid AgentResult JSON line: {source}")]
@@ -290,6 +292,30 @@ fn truncate_stderr_for_diagnostics(mut stderr: String) -> String {
         .unwrap_or(stderr.len());
     stderr.drain(..boundary);
     format!("...(truncated)\n{stderr}")
+}
+
+/// Maximum bytes the runner buffers from one agent subprocess stream. The
+/// subprocess is the agent — untrusted code — so an unbounded read lets a
+/// runaway or hostile agent exhaust the daemon worker's memory before the
+/// wall-clock timeout can fire. The agent result is a single JSON line and
+/// stderr is diagnostic, so 16 MiB sits far above any legitimate payload while
+/// still capping a flood; it is the memory-axis sibling of the run timeout.
+const MAX_AGENT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Reads up to `max` bytes from an agent stream, reporting whether the stream
+/// had more to give. `AsyncReadExt::take` stops the read at the cap instead of
+/// buffering an unbounded body; reading one extra byte lets the caller tell an
+/// exact-fit payload from a truncated flood. The returned buffer is always
+/// clamped to `max`.
+async fn read_agent_output_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut buf = Vec::new();
+    reader.take(max as u64 + 1).read_to_end(&mut buf).await?;
+    let overflowed = buf.len() > max;
+    buf.truncate(max);
+    Ok((buf, overflowed))
 }
 
 fn workspace_entry(entry: &str) -> String {
@@ -501,9 +527,18 @@ pub async fn preempt_subprocess_pg(_pid: u32, _grace: Duration) -> PreemptOutcom
     PreemptOutcome::UnsupportedPlatform
 }
 
-#[derive(Default)]
 pub struct SubprocessRunner {
     tracker: Option<Arc<SubprocessTracker>>,
+    max_output_bytes: usize,
+}
+
+impl Default for SubprocessRunner {
+    fn default() -> Self {
+        Self {
+            tracker: None,
+            max_output_bytes: MAX_AGENT_OUTPUT_BYTES,
+        }
+    }
 }
 
 /// RAII guard that keeps a [`SubprocessTracker`] entry alive for the
@@ -536,7 +571,14 @@ impl SubprocessRunner {
     pub fn with_tracker(tracker: Arc<SubprocessTracker>) -> Self {
         Self {
             tracker: Some(tracker),
+            ..Self::default()
         }
+    }
+
+    #[cfg(test)]
+    fn with_max_output_bytes(mut self, max: usize) -> Self {
+        self.max_output_bytes = max;
+        self
     }
 
     fn ensure_allowed(&self, card: &AgentCard) -> Result<(), RunnerError> {
@@ -658,25 +700,30 @@ impl Runner for SubprocessRunner {
         stdin.write_all(b"\n").await?;
         drop(stdin);
 
-        let read_stdout = async {
-            let mut buf = Vec::new();
-            stdout.read_to_end(&mut buf).await?;
-            Ok::<_, std::io::Error>(buf)
-        };
-
-        let stdout_buf = match tokio::time::timeout(timeout, read_stdout).await {
-            Ok(Ok(buf)) => buf,
-            Ok(Err(e)) => return Err(RunnerError::Io(e)),
-            Err(_) => {
-                warn!(agent = %card.id, ?timeout, "agent timed out — killing");
-                let _ = child.kill().await;
-                return Err(RunnerError::Timeout(timeout));
-            }
-        };
+        let max_output = self.max_output_bytes;
+        let (stdout_buf, stdout_overflowed) =
+            match tokio::time::timeout(timeout, read_agent_output_capped(&mut stdout, max_output))
+                .await
+            {
+                Ok(Ok(pair)) => pair,
+                Ok(Err(e)) => return Err(RunnerError::Io(e)),
+                Err(_) => {
+                    warn!(agent = %card.id, ?timeout, "agent timed out — killing");
+                    let _ = child.kill().await;
+                    return Err(RunnerError::Timeout(timeout));
+                }
+            };
+        if stdout_overflowed {
+            warn!(agent = %card.id, limit = max_output, "agent stdout exceeded cap — killing");
+            let _ = child.kill().await;
+            return Err(RunnerError::OutputTooLarge { limit: max_output });
+        }
 
         let status = child.wait().await?;
-        let mut stderr_buf = String::new();
-        let _ = stderr.read_to_string(&mut stderr_buf).await;
+        let stderr_buf = match read_agent_output_capped(&mut stderr, max_output).await {
+            Ok((bytes, _)) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(_) => String::new(),
+        };
         if !status.success() {
             return Err(RunnerError::NonZeroExit {
                 status: status.code().unwrap_or(-1),
@@ -975,14 +1022,13 @@ impl Runner for GvisorRunner {
         }
         drop(stdin);
 
-        let read_stdout = async {
-            let mut buf = Vec::new();
-            stdout.read_to_end(&mut buf).await?;
-            Ok::<_, std::io::Error>(buf)
-        };
-
-        let stdout_buf = match tokio::time::timeout(timeout, read_stdout).await {
-            Ok(Ok(buf)) => buf,
+        let (stdout_buf, stdout_overflowed) = match tokio::time::timeout(
+            timeout,
+            read_agent_output_capped(&mut stdout, MAX_AGENT_OUTPUT_BYTES),
+        )
+        .await
+        {
+            Ok(Ok(pair)) => pair,
             Ok(Err(e)) => {
                 Self::cleanup_bundle(&bundle_dir);
                 return Err(RunnerError::Io(e));
@@ -994,6 +1040,14 @@ impl Runner for GvisorRunner {
                 return Err(RunnerError::Timeout(timeout));
             }
         };
+        if stdout_overflowed {
+            warn!(agent = %card.id, limit = MAX_AGENT_OUTPUT_BYTES, "sandboxed agent stdout exceeded cap");
+            let _ = child.kill().await;
+            Self::cleanup_bundle(&bundle_dir);
+            return Err(RunnerError::OutputTooLarge {
+                limit: MAX_AGENT_OUTPUT_BYTES,
+            });
+        }
 
         let status = match child.wait().await {
             Ok(status) => status,
@@ -1002,8 +1056,10 @@ impl Runner for GvisorRunner {
                 return Err(RunnerError::Io(e));
             }
         };
-        let mut stderr_buf = String::new();
-        let _ = stderr.read_to_string(&mut stderr_buf).await;
+        let stderr_buf = match read_agent_output_capped(&mut stderr, MAX_AGENT_OUTPUT_BYTES).await {
+            Ok((bytes, _)) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(_) => String::new(),
+        };
         let stderr_buf =
             Self::redact_stderr(&stderr_buf, &[&bundle_dir, &card.package_dir, &self.rootfs]);
         if !status.success() {
@@ -1709,6 +1765,65 @@ cpu_ms_per_task = 5000
             Err(RunnerError::MalformedStdout { source, .. }) => {
                 assert!(source.is_syntax() || source.is_data());
             }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_agent_output_capped_clamps_and_flags_overflow() {
+        // Over the cap: buffer clamped to max, overflow reported so the caller
+        // can reject and kill rather than keep reading an unbounded flood.
+        let data = vec![b'x'; 100];
+        let (buf, overflowed) = read_agent_output_capped(&mut &data[..], 64).await.unwrap();
+        assert!(overflowed);
+        assert_eq!(buf.len(), 64);
+
+        // Exactly the cap: full payload, no overflow.
+        let data = vec![b'y'; 64];
+        let (buf, overflowed) = read_agent_output_capped(&mut &data[..], 64).await.unwrap();
+        assert!(!overflowed);
+        assert_eq!(buf.len(), 64);
+
+        // Under the cap: full payload returned verbatim.
+        let data = vec![b'z'; 10];
+        let (buf, overflowed) = read_agent_output_capped(&mut &data[..], 64).await.unwrap();
+        assert!(!overflowed);
+        assert_eq!(buf, data);
+    }
+
+    /// A flooding agent + a tight output cap → `OutputTooLarge`, child killed,
+    /// the worker never buffers the whole flood.
+    #[tokio::test]
+    async fn subprocess_runner_rejects_oversized_stdout() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("flood.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat >/dev/null\nhead -c 100000 /dev/zero\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let manifest_toml = r#"
+[agent]
+id = "flood"
+name = "Flood"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./flood.sh"
+
+[resources]
+cpu_ms_per_task = 5000
+"#;
+        let card = card_for(manifest_toml, dir.path().to_path_buf());
+        let result = SubprocessRunner::new()
+            .with_max_output_bytes(64)
+            .run(&card, &dummy_intent())
+            .await;
+        match result {
+            Err(RunnerError::OutputTooLarge { limit }) => assert_eq!(limit, 64),
             other => panic!("unexpected: {other:?}"),
         }
     }

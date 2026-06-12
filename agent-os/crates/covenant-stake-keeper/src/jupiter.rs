@@ -259,4 +259,46 @@ mod tests {
         assert_eq!(q.out_amount_u64().unwrap(), 12_345_678);
         assert_eq!(q.other_amount_threshold_u64().unwrap(), 12_000_000);
     }
+
+    fn quote(out_amount: &str, other_amount_threshold: &str) -> JupiterQuote {
+        JupiterQuote {
+            input_mint: SOL_MINT.into(),
+            output_mint: "2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump".into(),
+            in_amount: "1000000000".into(),
+            out_amount: out_amount.into(),
+            other_amount_threshold: other_amount_threshold.into(),
+            swap_mode: "ExactIn".into(),
+            slippage_bps: 200,
+            price_impact_pct: "0.42".into(),
+            extra: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn out_amount_u64_rejects_non_numeric_naming_the_field() {
+        // A garbled or schema-changed Jupiter response must fail loudly and
+        // name the field, never panic or coerce to a bogus amount the keeper
+        // would swap against.
+        let q = quote("not-a-number", "12000000");
+        let err = q.out_amount_u64().unwrap_err().to_string();
+        assert!(
+            err.contains("parse outAmount") && err.contains("not-a-number"),
+            "error must name the outAmount field and echo the bad value: {err}"
+        );
+        // The sibling field still parses, proving the failure is scoped.
+        assert_eq!(q.other_amount_threshold_u64().unwrap(), 12_000_000);
+    }
+
+    #[test]
+    fn other_amount_threshold_u64_rejects_overflow_naming_the_field() {
+        // otherAmountThreshold is the slippage floor; an over-range value
+        // must be rejected, not wrap or truncate into a wrong minimum-out.
+        let q = quote("12345678", "99999999999999999999999999");
+        let err = q.other_amount_threshold_u64().unwrap_err().to_string();
+        assert!(
+            err.contains("parse otherAmountThreshold")
+                && err.contains("99999999999999999999999999"),
+            "error must name the otherAmountThreshold field and echo the bad value: {err}"
+        );
+    }
 }

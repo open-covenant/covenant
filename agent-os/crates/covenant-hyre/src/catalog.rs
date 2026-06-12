@@ -212,4 +212,45 @@ mod tests {
             "expected HyreError::Http on a non-2xx manifest host",
         );
     }
+
+    #[test]
+    fn to_x402_catalog_uses_summary_then_falls_back_to_description() {
+        // The discovery `description` operators read for the pre-flight cap
+        // check is the endpoint summary when present, else the full
+        // description. The vendored fixture only exercises the summary-
+        // present arm; construct both so an inverted branch or a dropped
+        // is_empty() guard (which would publish a blank description) fails
+        // here.
+        let endpoint = |path: &str, summary: &str| Endpoint {
+            path: path.into(),
+            method: "POST".into(),
+            operation_id: path.trim_start_matches('/').into(),
+            summary: summary.into(),
+            description: "the full description".into(),
+            price_micro_usdc: 80_000,
+            params: vec![],
+            body: vec![],
+        };
+        let cat = HyreCatalog {
+            endpoints: vec![
+                endpoint("/with-summary", "a concise summary"),
+                endpoint("/no-summary", ""),
+            ],
+            network: "solana:mainnet".into(),
+            asset: "usdc-sol".into(),
+            base_url: "https://api.hyre.example".into(),
+        };
+
+        let x402 = cat.to_x402_catalog();
+        assert_eq!(
+            x402.by_slug("with-summary").expect("priced").description,
+            "a concise summary",
+            "a present summary is the discovery description"
+        );
+        assert_eq!(
+            x402.by_slug("no-summary").expect("priced").description,
+            "the full description",
+            "an empty summary falls back to the full description"
+        );
+    }
 }

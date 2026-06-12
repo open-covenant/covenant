@@ -79,9 +79,13 @@ impl Endpoint {
     }
 
     /// USD-pegged budget credits (cents). $0.08 → 8 credits, matching
-    /// the daemon's existing x402 accounting convention.
+    /// the daemon's existing x402 accounting convention. A price beyond
+    /// the u64 credit range saturates to `u64::MAX` rather than wrapping
+    /// to a smaller cost — an unrepresentable price is unaffordable, not
+    /// free — since the price is manifest-derived and only bounded to
+    /// `u128::MAX`.
     pub fn credits(&self) -> u64 {
-        (self.price_micro_usdc / 10_000) as u64
+        u64::try_from(self.price_micro_usdc / 10_000).unwrap_or(u64::MAX)
     }
 }
 
@@ -373,6 +377,25 @@ mod tests {
             body: vec![],
         };
         assert_eq!(ep.credits(), 8);
+    }
+
+    #[test]
+    fn credits_saturate_above_u64_range() {
+        // price_micro_usdc is manifest-derived and only bounded to u128::MAX,
+        // so a price whose cent value exceeds u64::MAX must saturate to
+        // u64::MAX (unaffordable) rather than wrap through `as u64` to a small
+        // cost the daemon would settle as a cheap tool.
+        let ep = Endpoint {
+            path: "/x".into(),
+            method: "GET".into(),
+            operation_id: String::new(),
+            summary: String::new(),
+            description: String::new(),
+            price_micro_usdc: u128::MAX,
+            params: vec![],
+            body: vec![],
+        };
+        assert_eq!(ep.credits(), u64::MAX);
     }
 
     #[test]

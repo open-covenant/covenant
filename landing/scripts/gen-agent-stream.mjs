@@ -33,19 +33,14 @@ if (!payload.lines.length || payload.commits < (existing.commits || 0)) {
   process.exit(0);
 }
 
-// Bake the autonomous loop's commit count so the stats route can show it even
-// when the runtime checkout is shallow (Render runtime git is depth=1). Counts
-// only commits the loop authored ("Covenant"), matching the route's filter.
-// Needs full history — present here because the build unshallows.
+// Bake the real total commit count so the stats route can show it even when the
+// runtime checkout is shallow (Render runtime git is depth=1). Needs full
+// history — present here because the build unshallows. Never lower a prior value.
 let totalCommits = 0;
 try {
-  totalCommits = Number(
-    execFileSync(
-      "git",
-      ["-C", repoRoot, "rev-list", "--count", "--author=covenant@users.noreply.github.com", "HEAD"],
-      { encoding: "utf8" },
-    ).trim(),
-  );
+  totalCommits = Number(execFileSync("git", ["-C", repoRoot, "rev-list", "--count", "HEAD"], {
+    encoding: "utf8",
+  }).trim());
 } catch {}
 totalCommits = Math.max(totalCommits || 0, existing.totalCommits || 0);
 

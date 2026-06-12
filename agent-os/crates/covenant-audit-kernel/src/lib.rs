@@ -2386,12 +2386,74 @@ mod imp {
     }
 
     #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+    #[inline]
     fn fast_event(line: &[u8]) -> u32 {
         #[cfg(target_arch = "wasm32")]
         {
-            let packed = fast_event_tmpl(line);
-            if packed != 0 {
-                return packed;
+            let hit = match line.len() {
+                267 => match <&[u8; 267]>::try_from(line) {
+                    Ok(a) => tmpl_k2::<1, true, 267>(a),
+                    Err(_) => false,
+                },
+                268 => {
+                    if line[264] == b'u' {
+                        match <&[u8; 268]>::try_from(line) {
+                            Ok(a) => tmpl_k2::<2, true, 268>(a),
+                            Err(_) => false,
+                        }
+                    } else {
+                        match <&[u8; 268]>::try_from(line) {
+                            Ok(a) => tmpl_k2::<1, false, 268>(a),
+                            Err(_) => false,
+                        }
+                    }
+                }
+                269 => {
+                    if line[265] == b'u' {
+                        match <&[u8; 269]>::try_from(line) {
+                            Ok(a) => tmpl_k2::<3, true, 269>(a),
+                            Err(_) => false,
+                        }
+                    } else {
+                        match <&[u8; 269]>::try_from(line) {
+                            Ok(a) => tmpl_k2::<2, false, 269>(a),
+                            Err(_) => false,
+                        }
+                    }
+                }
+                270 => {
+                    if line[266] == b'u' {
+                        match <&[u8; 270]>::try_from(line) {
+                            Ok(a) => tmpl_k2::<4, true, 270>(a),
+                            Err(_) => false,
+                        }
+                    } else {
+                        match <&[u8; 270]>::try_from(line) {
+                            Ok(a) => tmpl_k2::<3, false, 270>(a),
+                            Err(_) => false,
+                        }
+                    }
+                }
+                271 => match <&[u8; 271]>::try_from(line) {
+                    Ok(a) => tmpl_k2::<4, false, 271>(a),
+                    Err(_) => false,
+                },
+                322 => match <&[u8; 322]>::try_from(line) {
+                    Ok(a) => tmpl_k1(a),
+                    Err(_) => false,
+                },
+                339 => match <&[u8; 339]>::try_from(line) {
+                    Ok(a) => tmpl_k0n(a),
+                    Err(_) => false,
+                },
+                347 => match <&[u8; 347]>::try_from(line) {
+                    Ok(a) => tmpl_k0a(a),
+                    Err(_) => false,
+                },
+                _ => false,
+            };
+            if hit {
+                return 36 << 5 | 13;
             }
         }
         fast_event_cold(line)

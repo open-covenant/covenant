@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T04:20:10.585Z",
+  "updatedAt": "2026-06-12T04:40:14.230Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8335,
-    "tasks": 992,
-    "integrated": 993
+    "events": 8353,
+    "tasks": 994,
+    "integrated": 995
   },
   "throughput": {
-    "last24h": 34,
+    "last24h": 36,
     "last7d": 172,
     "velocity": 24.6
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 16
+      "count": 18
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 993
+      "total": 995
     }
   ],
   "states": {
-    "integrated": 988,
+    "integrated": 990,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T04:33:13.130Z",
+      "task": "harden-x402-pick-requirement-reject-zero-amount",
+      "note": "Shipped as ac6c84e9, pushed to origin/loop/main-track. pick_requirement now rejects zero-amount requirements; test pick_rejects_zero_amount "
+    },
+    {
+      "at": "2026-06-12T04:27:53.716Z",
+      "task": "harden-hyre-x402-select-reject-zero-amount",
+      "note": "Shipped as 1949b79e, pushed to origin/loop/main-track. select() now rejects zero-amount x402 options; test select_rejects_zero_amount_option"
+    },
     {
       "at": "2026-06-12T04:03:19.460Z",
       "task": "hyre-x402-truncate-error-body-bound-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-11T23:19:39.551Z",
       "task": "metaplex-das-http-status-error-coverage",
       "note": "Committed 24418eb9 + pushed to origin/loop/main-track. Test-only DAS non-2xx HTTP-status coverage; README metrics 2642->2644."
-    },
-    {
-      "at": "2026-06-11T23:15:23.889Z",
-      "task": "metaplex-signer-build-request-collection-coverage",
-      "note": "Committed a38e71a3 + pushed to origin/loop/main-track. Test-only signer build() request-collection coverage; README metrics 2640->2642."
-    },
-    {
-      "at": "2026-06-11T23:10:51.273Z",
-      "task": "metaplex-attest-tool-input-validation-coverage",
-      "note": "Committed 9469ca28 + pushed to origin/loop/main-track. Test-only attest.audit_root input-validation coverage; README metrics 2638->2640."
     }
   ]
 }

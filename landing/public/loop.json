@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T13:41:53.959Z",
+  "updatedAt": "2026-06-12T14:01:57.677Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8627,
+    "events": 8631,
     "tasks": 1025,
-    "integrated": 1025
+    "integrated": 1026
   },
   "throughput": {
-    "last24h": 66,
-    "last7d": 188,
-    "velocity": 26.9
+    "last24h": 67,
+    "last7d": 189,
+    "velocity": 27
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 48
+      "count": 49
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1025
+      "total": 1026
     }
   ],
   "states": {
-    "integrated": 1020,
+    "integrated": 1021,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "bound-hyre-facilitator-response-body",
-    "state": "in_progress",
-    "since": "2026-06-12T13:38:34.452Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T13:45:47.683Z",
+      "task": "bound-hyre-facilitator-response-body",
+      "note": "committed d0f9bd16 on loop/main-track; last un-capped untrusted reqwest read in the workspace now bounded — covenant-hyre http.rs every-body"
+    },
     {
       "at": "2026-06-12T12:58:23.143Z",
       "task": "harden-hermes-gateway-error-truncate-char-boundary",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T07:34:15.977Z",
       "task": "harden-metaplex-das-http-response-size",
       "note": "Committed 9243e964. das.rs response-size cap + regression test; README metrics 2701; scripts gate green; independent security review SHIP."
-    },
-    {
-      "at": "2026-06-12T07:17:18.402Z",
-      "task": "harden-zauth-directory-http-read-timeout",
-      "note": "Committed c2b1cdf8, pushed origin/loop/main-track. zauth directory CLI read now bounded at 20s; test pins it. README 2699->2700."
     }
   ]
 }

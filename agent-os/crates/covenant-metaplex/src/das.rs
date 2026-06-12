@@ -47,6 +47,7 @@ pub trait DasClient: Send + Sync {
 pub struct HttpDasClient {
     endpoint: String,
     http: reqwest::Client,
+    max_bytes: usize,
 }
 
 /// Total per-request timeout for DAS calls. The endpoint is an
@@ -55,12 +56,24 @@ pub struct HttpDasClient {
 /// precedent of the stake-keeper Jupiter client.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Maximum DAS response body the client will buffer into memory. The
+/// endpoint is an operator-configured third-party RPC; a compromised or
+/// malicious provider must not be able to exhaust a daemon worker's memory
+/// with an unbounded body. 16 MiB sits far above any real `getAssetsByOwner`
+/// page yet stops a runaway stream — the memory-axis sibling of
+/// [`REQUEST_TIMEOUT`].
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 impl HttpDasClient {
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self::with_timeout(endpoint, REQUEST_TIMEOUT)
     }
 
     fn with_timeout(endpoint: impl Into<String>, timeout: Duration) -> Self {
+        Self::with_limits(endpoint, timeout, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(endpoint: impl Into<String>, timeout: Duration, max_bytes: usize) -> Self {
         let http = reqwest::Client::builder()
             .timeout(timeout)
             .build()
@@ -68,6 +81,7 @@ impl HttpDasClient {
         Self {
             endpoint: endpoint.into(),
             http,
+            max_bytes,
         }
     }
 
@@ -89,15 +103,39 @@ impl HttpDasClient {
             .await
             .map_err(|e| DasError::Transport(e.to_string()))?;
         let status = resp.status();
-        let value: Value = resp
-            .json()
+        let bytes = read_body_capped(resp, self.max_bytes)
             .await
+            .map_err(|e| DasError::Transport(format!("{status}: {e}")))?;
+        let value: Value = serde_json::from_slice(&bytes)
             .map_err(|e| DasError::Transport(format!("{status}: {e}")))?;
         if let Some(err) = value.get("error").filter(|e| !e.is_null()) {
             return Err(DasError::Rpc(err.to_string()));
         }
         Ok(value.get("result").cloned().unwrap_or(Value::Null))
     }
+}
+
+/// Buffer a response body, refusing anything past `max`. The `Content-Length`
+/// check rejects an oversized declared body before it is streamed; the running
+/// accumulation check is the real guard, since the header is optional and
+/// provider-controlled. Returns the error detail; the caller prefixes the HTTP
+/// status.
+async fn read_body_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>, String> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(format!(
+                "response body of {len} bytes exceeds the {max}-byte cap"
+            ));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        if buf.len() + chunk.len() > max {
+            return Err(format!("response body exceeds the {max}-byte cap"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 #[async_trait]
@@ -182,6 +220,21 @@ mod tests {
             .get_asset("asset-1")
             .await
             .expect_err("must time out");
+        assert!(matches!(err, DasError::Transport(_)));
+    }
+
+    #[tokio::test]
+    async fn oversized_body_is_rejected_instead_of_buffered() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let client = HttpDasClient::with_limits(server.uri(), REQUEST_TIMEOUT, 64);
+        let err = client
+            .get_asset("asset-1")
+            .await
+            .expect_err("must reject an oversized body");
         assert!(matches!(err, DasError::Transport(_)));
     }
 

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T15:42:20.680Z",
+  "updatedAt": "2026-06-12T16:02:24.614Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8654,
-    "tasks": 1028,
-    "integrated": 1029
+    "events": 8663,
+    "tasks": 1029,
+    "integrated": 1030
   },
   "throughput": {
-    "last24h": 70,
+    "last24h": 71,
     "last7d": 191,
     "velocity": 27.3
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 52
+      "count": 53
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1029
+      "total": 1030
     }
   ],
   "states": {
-    "integrated": 1023,
+    "integrated": 1024,
     "proposed": 1,
     "blocked": 3,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "bound-covenant-cli-x402-signer-subprocess-output",
+    "task": "a2a-validate-inbound-task-intent-text-non-empty",
     "state": "in_progress",
-    "since": "2026-06-12T15:19:54.549Z"
+    "since": "2026-06-12T16:02:21.630Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T15:43:30.543Z",
+      "task": "bound-covenant-cli-x402-signer-subprocess-output",
+      "note": "Pushed a5ddd11e to origin/loop/main-track (51acac7a..a5ddd11e). CLI x402 signer subprocess output now bounded (16MiB/stream, 120s/phase, SIG"
+    },
     {
       "at": "2026-06-12T15:17:33.330Z",
       "task": "bound-covenantd-signer-dispatch-subprocess-output",
@@ -315,11 +320,6 @@
       "at": "2026-06-12T08:06:45.294Z",
       "task": "harden-hyre-catalog-manifest-response-size",
       "note": "Committed. catalog.rs read_capped over the manifest read; README 2705; scripts gate green; review SHIP."
-    },
-    {
-      "at": "2026-06-12T07:54:52.087Z",
-      "task": "harden-zauth-directory-response-size",
-      "note": "Committed. directory.rs read_capped over the listing read; README 2704; scripts gate green; independent review SHIP."
     }
   ]
 }

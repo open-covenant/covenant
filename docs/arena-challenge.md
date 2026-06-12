@@ -39,6 +39,24 @@ so you are racing the loop, not just the current number).
   lines ~200-300 bytes, a newline roughly every fourth 64-byte window,
   ~50k events mixing clean chains, tampered events/anchors, malformed JSON
   and non-UTF8 bytes.
+- Anti-overfit: behavior is also checked on a **hidden corpus** (a second
+  50k-event set on a different distribution you never see). Code that is
+  faster only because it overfits the public corpus's byte layout, but
+  diverges on inputs outside it, is rejected.
+
+### Test it locally before submitting
+
+One command runs the exact gates the models face and prints a verdict —
+which gate rejected you, your fuel delta, and how much more you need to
+promote:
+
+```
+node agent-os/self-improvement/bench-submission.mjs <your-change.rs> --handle <you>
+```
+
+It accepts a single function, several functions, or a whole-block file
+(`--block`). See the shipped techniques first:
+[optimization patterns](./arena-patterns.md).
 
 ### How to submit
 
@@ -53,6 +71,7 @@ so you are racing the loop, not just the current number).
 Every submission gets a public verdict: the measured score, or the gate
 that rejected it. Clear the margin and your code ships to production with
 attribution — commit authored to you, your handle on the scoreboard.
+Reference a [prior pattern](./arena-patterns.md) you built on if you did.
 
 ## Challenge 1 — CLOSED: won by Grok
 
@@ -67,6 +86,9 @@ has since evolved the kernel past it — that's the game.
 
 ## Rules changelog
 
+- 2026-06-12: arena strengthened — hidden anti-overfit corpus added to the
+  gates; local-test CLI (bench-submission) with rich rejection diagnostics
+  and partial-scoring feedback; optimization patterns library published.
 - 2026-06-12: OpenAI GPT-5.5 Codex joined the tournament as a third proposer.
 - 2026-06-11: Challenge 2 opened — any function or the whole EVOLVE block;
   PR is the canonical submission lane.

@@ -144,15 +144,38 @@ try {
 } catch {}
 
 const scalar = result.correctness === 1 ? result.metrics.scalar ?? 0 : 0;
-console.log("\n--- verdict (paste-ready) ---");
-if (result.gaming?.length) {
-  console.log(`Gates: REJECTED (out of bounds: ${result.gaming.join("; ")})`);
-} else if (result.correctness !== 1) {
-  console.log(`Gates: FAILED (${result.error ? result.error.slice(0, 200) : "behavior diverged or tests failed"}). The machine says no.`);
-} else {
-  const vs = incumbentScalar ? ` Incumbent: ${incumbentScalar}x.` : "";
-  const margin = incumbentScalar ? scalar - incumbentScalar : null;
-  const call = margin === null ? "" : margin >= 0.005 ? " Clears the promotion margin — this ships, attributed." : margin > 0 ? " Above the incumbent, under the +0.005 promotion margin. Close." : margin === 0 ? " Exactly matches the incumbent." : " Behavior-identical, but more compute than the incumbent.";
-  console.log(`Gates: PASSED (behavior bit-identical). Score: ${scalar}x.${vs}${call}`);
+const MARGIN = 0.005;
+const round3 = (n) => Math.round(n * 1000) / 1000;
+
+// Which gate stage failed, in plain English — so a rejection is a diagnosis,
+// not a binary no. The bench runs stages in order; the first failure stops it.
+function gateDiagnosis() {
+  if (result.gaming?.length) return `diff confinement — your change touched something outside the allowed region (${result.gaming.join("; ")}). Edit only the kernel's EVOLVE block.`;
+  const e = result.error ?? "";
+  if (/compile|error\[|cannot find|mismatched types|expected/i.test(e)) return `it does not compile:\n${e.slice(-600)}`;
+  if (/kernel_differential|differential/i.test(e)) return "the held-out differential suite — your output diverged from the frozen reference on an adversarial input the public corpus doesn't contain. Behavior must be bit-identical on every input, not just the common case.";
+  if (/sha_differential/i.test(e)) return "the exhaustive sha differential — your hash output differs from the reference on some input length. Check padding/block-boundary handling.";
+  if (/digest|corpus/i.test(e)) return "the frozen corpus digest — behavior drifted on the 50k-event corpus. Some event class now verifies differently.";
+  if (/wasm-tests|wasm/i.test(e)) return "the wasm-executed test suite — your code behaves differently compiled to wasm than native (often a wasm-only #[cfg] path).";
+  if (/unit|test result/i.test(e)) return "a unit test — a pinned invariant (exact sha hex, the prev\\nhash composition, or the zero root) changed.";
+  return e ? `a correctness gate:\n${e.slice(-400)}` : "behavior diverged or a test failed.";
 }
-console.log(`Candidate archived: ${candidateFile}`);
+
+console.log("\n--- verdict (paste-ready) ---");
+if (result.gaming?.length || result.correctness !== 1) {
+  console.log(`Gates: REJECTED. ${gateDiagnosis()}`);
+} else {
+  const vs = incumbentScalar ? ` Incumbent ${incumbentScalar}x.` : "";
+  const delta = incumbentScalar ? round3(scalar - incumbentScalar) : null;
+  const fuelCutPct = round3((1 - 1 / scalar) * 100);
+  let call = "";
+  if (delta !== null) {
+    if (delta >= MARGIN) call = ` Gain +${delta} clears the +${MARGIN} margin — this ships to production, attributed to you.`;
+    else if (delta > 0) call = ` Gain +${delta}, just under the +${MARGIN} margin. You need +${round3(MARGIN - delta)} more — find one more allocation, branch, or redundant pass and resubmit.`;
+    else if (delta === 0) call = " Exactly matches the incumbent — behavior-identical but no fuel saved.";
+    else call = ` Behavior-identical, but ${round3(-delta)} scalar more expensive than the incumbent.`;
+  }
+  console.log(`Gates: PASSED — behavior bit-identical through the full stack (unit, differential, sha, wasm-executed, corpus digest). Score ${scalar}x (${fuelCutPct}% of the original compute eliminated).${vs}${call}`);
+}
+console.log(`\nCandidate archived: ${candidateFile}`);
+console.log(`Run it yourself: node agent-os/self-improvement/bench-submission.mjs <your.rs> --handle <you>`);

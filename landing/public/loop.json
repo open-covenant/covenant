@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T07:40:46.612Z",
+  "updatedAt": "2026-06-12T08:00:50.360Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8466,
-    "tasks": 1007,
-    "integrated": 1007
+    "events": 8488,
+    "tasks": 1009,
+    "integrated": 1010
   },
   "throughput": {
-    "last24h": 48,
-    "last7d": 180,
-    "velocity": 25.7
+    "last24h": 51,
+    "last7d": 183,
+    "velocity": 26.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 30
+      "count": 33
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1007
+      "total": 1010
     }
   ],
   "states": {
-    "integrated": 1002,
+    "integrated": 1005,
     "proposed": 1,
-    "blocked": 3,
-    "self_review": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,23 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "harden-hyre-paid-http-response-size",
-    "state": "self_review",
-    "since": "2026-06-12T07:38:55.971Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T07:54:52.087Z",
+      "task": "harden-zauth-directory-response-size",
+      "note": "Committed. directory.rs read_capped over the listing read; README 2704; scripts gate green; independent review SHIP."
+    },
+    {
+      "at": "2026-06-12T07:49:13.336Z",
+      "task": "harden-x402-client-challenge-response-size",
+      "note": "Committed. client.rs read_capped over the 402 challenge; README 2703; scripts gate green; independent review SHIP."
+    },
+    {
+      "at": "2026-06-12T07:43:16.126Z",
+      "task": "harden-hyre-paid-http-response-size",
+      "note": "Committed e22cf407. x402.rs read_capped over all 4 paid-loop reads; README 2702; scripts gate green; independent review SHIP."
+    },
     {
       "at": "2026-06-12T07:34:15.977Z",
       "task": "harden-metaplex-das-http-response-size",
@@ -305,21 +315,6 @@
       "at": "2026-06-12T03:54:31.737Z",
       "task": "hyre-facilitator-from-x402-wire-contract-coverage",
       "note": "Pushed 0a313a41 to origin/loop/main-track. Pins from_x402 wire-contract fields; README 2675."
-    },
-    {
-      "at": "2026-06-12T03:50:51.146Z",
-      "task": "sap-bridge-config-cluster-enabled-rpc-layering-coverage",
-      "note": "Pushed 8ba67d20 to origin/loop/main-track. One test pins enabled+rpc_url cluster-beats-global layering in from_env; README 2674."
-    },
-    {
-      "at": "2026-06-12T03:45:37.878Z",
-      "task": "hyre-x402-select-scheme-and-amount-rejection-coverage",
-      "note": "Pushed 81b31358 to origin/loop/main-track. One test pins x402::select fails closed on non-exact scheme and unparseable amount; README metric"
-    },
-    {
-      "at": "2026-06-12T03:28:58.423Z",
-      "task": "sap-bridge-manifest-diff-metadata-field-coverage",
-      "note": "Pushed 46f0cbcb to origin/loop/main-track. Two tests pin per-field metadata drift in identity.rs; README metrics current at 2672."
     }
   ]
 }

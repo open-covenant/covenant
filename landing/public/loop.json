@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T00:39:31.217Z",
+  "updatedAt": "2026-06-12T00:59:34.855Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8231,
-    "tasks": 981,
-    "integrated": 981
+    "events": 8245,
+    "tasks": 982,
+    "integrated": 983
   },
   "throughput": {
-    "last24h": 22,
-    "last7d": 174,
-    "velocity": 24.9
+    "last24h": 24,
+    "last7d": 173,
+    "velocity": 24.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 4
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 981
+      "total": 983
     }
   ],
   "states": {
-    "integrated": 976,
+    "integrated": 978,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -196,7 +195,7 @@
     },
     {
       "name": "covenant",
-      "count": 95
+      "count": 96
     },
     {
       "name": "audit",
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "covenantd-metaplex-from-config-and-action-label-coverage",
-    "state": "in_progress",
-    "since": "2026-06-12T00:37:58.266Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T00:48:53.568Z",
+      "task": "covenant-hyre-catalog-summary-fallback-coverage",
+      "note": "committed to loop/main-track: test(covenant-hyre) to_x402_catalog summary/description fallback; README 2655->2656"
+    },
+    {
+      "at": "2026-06-12T00:40:01.322Z",
+      "task": "covenantd-metaplex-from-config-and-action-label-coverage",
+      "note": "committed to loop/main-track: test(covenantd-metaplex) from_config unset-omission + action_label slugs; README 2653->2655"
+    },
     {
       "at": "2026-06-12T00:34:39.557Z",
       "task": "covenantd-http-sap-stats-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-11T22:11:45.217Z",
       "task": "metaplex-config-from-env-and-truthy-coverage",
       "note": "Committed 618e8ab3 and pushed 523f7b4d..618e8ab3 to origin/loop/main-track. test(metaplex): MetaplexConfig::from_env + truthy() coverage. Al"
-    },
-    {
-      "at": "2026-06-11T21:50:51.746Z",
-      "task": "zauth-challenge-select-payment-gating-coverage",
-      "note": "Committed e2a91cad, pushed to origin/loop/main-track. 3 select()/to_payment_requirements tests; independently security-reviewed (APPROVE)."
-    },
-    {
-      "at": "2026-06-11T21:46:03.141Z",
-      "task": "metaplex-signer-build-request-coverage",
-      "note": "Committed 9873b9a4, pushed to origin/loop/main-track. 7 build() tests; independently security-reviewed (APPROVE)."
     }
   ]
 }

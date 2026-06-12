@@ -412,4 +412,90 @@ mod tests {
             "a manifest that filters down to nothing must be rejected as no-priced-endpoints",
         );
     }
+
+    #[test]
+    fn parse_params_drops_non_path_query_and_malformed_entries() {
+        // The tool layer models only path and query arguments. A header or
+        // cookie param (e.g. an auth header) must never reach a generated
+        // tool's schema, and a param object missing `name` or `in` must be
+        // skipped — one malformed operation shouldn't abort the parse and
+        // erase every tool Hyre publishes.
+        let raw = serde_json::json!([
+            { "name": "mint", "in": "path", "required": true, "description": "Token mint" },
+            { "name": "X-Trace", "in": "header", "required": true },
+            { "name": "session", "in": "cookie" },
+            { "in": "query", "description": "no name" },
+            { "name": "noLocation", "description": "no in" },
+        ]);
+        let params = parse_params(Some(&raw));
+        assert_eq!(params.len(), 1, "only the path param survives the filter");
+        assert_eq!(params[0].name, "mint");
+        assert_eq!(params[0].location, ParamIn::Path);
+    }
+
+    #[test]
+    fn parse_params_defaults_required_false_and_empty_description() {
+        // `required` and `description` are optional in the manifest; a param
+        // that omits them must distill to an optional arg with no help text,
+        // not panic or inherit a stale value.
+        let raw = serde_json::json!([{ "name": "curve_key", "in": "query" }]);
+        let params = parse_params(Some(&raw));
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].location, ParamIn::Query);
+        assert!(!params[0].required);
+        assert_eq!(params[0].description, "");
+    }
+
+    #[test]
+    fn parse_body_without_json_schema_is_empty() {
+        // A body advertised only as multipart/form-data carries no schema we
+        // model, so it must distill to zero body fields rather than a tool
+        // argument the agent can't satisfy.
+        let raw = serde_json::json!({
+            "required": true,
+            "content": { "multipart/form-data": { "schema": { "type": "object" } } }
+        });
+        assert!(parse_body(Some(&raw)).is_empty());
+        assert!(parse_body(None).is_empty());
+    }
+
+    #[test]
+    fn parse_body_without_properties_is_empty() {
+        let raw = serde_json::json!({
+            "content": { "application/json": { "schema": { "type": "object" } } }
+        });
+        assert!(
+            parse_body(Some(&raw)).is_empty(),
+            "a schema with no properties object yields no body fields"
+        );
+    }
+
+    #[test]
+    fn parse_body_absent_required_array_marks_all_optional() {
+        // With no `required` array every body field must default to optional;
+        // marking them required would make the generated tool reject calls
+        // Hyre itself accepts. A field without a description gets an empty one.
+        let raw = serde_json::json!({
+            "content": { "application/json": { "schema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "NL question" },
+                    "limit": { "type": "integer" }
+                }
+            }}}
+        });
+        let body = parse_body(Some(&raw));
+        assert_eq!(body.len(), 2);
+        assert!(
+            body.iter().all(|f| !f.required),
+            "no required array -> every field optional"
+        );
+        let query = body.iter().find(|f| f.name == "query").unwrap();
+        assert_eq!(query.description, "NL question");
+        let limit = body.iter().find(|f| f.name == "limit").unwrap();
+        assert_eq!(
+            limit.description, "",
+            "a field without a description gets an empty one"
+        );
+    }
 }

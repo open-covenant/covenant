@@ -112,7 +112,10 @@ pub fn select<'a>(
             && network_matches(&a.network, network)
             && a.atomic_amount()
                 .and_then(|s| s.parse::<u128>().ok())
-                .is_some_and(|n| n <= per_call_cap)
+                // A present "0" is a zero price, not a free call: a 402 that
+                // advertises a settleable resource never charges nothing, and
+                // to_requirements would otherwise sign that zero-price option.
+                .is_some_and(|n| n > 0 && n <= per_call_cap)
     })
 }
 
@@ -395,6 +398,27 @@ mod tests {
         assert!(
             select(std::slice::from_ref(&bad_amount), NETWORK, ASSET, 10_000).is_none(),
             "an unparseable amount must be filtered out before it can reach to_requirements",
+        );
+    }
+
+    #[test]
+    fn select_rejects_zero_amount_option() {
+        // select() is the price guard: it already drops missing, unparseable,
+        // and over-cap amounts. A present "0" was the remaining hole — it parses
+        // and is trivially <= any cap, so without the positive lower bound it
+        // reaches to_requirements and gets signed as a zero-price authorization,
+        // the same "signed for a zero price" outcome the missing-amount guard
+        // exists to prevent.
+        let mut zero = parse_challenge(LIVE_DEFI_TVL_402).expect("parse")[0].clone();
+        assert!(
+            select(std::slice::from_ref(&zero), NETWORK, ASSET, 10_000).is_some(),
+            "the pinned live option must select before its amount is zeroed",
+        );
+        zero.amount = Some("0".into());
+        zero.max_amount_required = None;
+        assert!(
+            select(std::slice::from_ref(&zero), NETWORK, ASSET, 10_000).is_none(),
+            "a zero-amount option must be filtered out before it can reach to_requirements",
         );
     }
 

@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-12T08:20:54.053Z",
+  "updatedAt": "2026-06-12T08:40:57.739Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8506,
-    "tasks": 1011,
+    "events": 8511,
+    "tasks": 1012,
     "integrated": 1012
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1007,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "self_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "bound-covenantd-x402-paid-response-body",
+    "state": "self_review",
+    "since": "2026-06-12T08:36:06.908Z"
+  },
   "recent": [
     {
       "at": "2026-06-12T08:13:53.707Z",

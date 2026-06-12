@@ -212,7 +212,8 @@ fn parse_body(raw: Option<&Value>) -> Vec<BodyField> {
 /// USDC. Parses the decimal directly to avoid float rounding on prices
 /// that must settle exactly on-chain. A zero price is rejected: a paid
 /// endpoint priced at `"0"` is malformed (a genuinely free endpoint
-/// omits `x-payment-info` and is skipped by [`parse`]).
+/// omits `x-payment-info` and is skipped by [`parse`]). A price large
+/// enough to overflow `u128` when scaled is rejected too, not panicked.
 fn usd_to_micro(usd: &str) -> Result<u128> {
     let (whole, frac) = usd.split_once('.').unwrap_or((usd, ""));
     let whole: u128 = whole
@@ -236,7 +237,14 @@ fn usd_to_micro(usd: &str) -> Result<u128> {
             .parse()
             .map_err(|_| HyreError::Manifest(format!("price fraction: {usd:?}")))?
     };
-    let micro = whole * 10u128.pow(USDC_DECIMALS) + frac;
+    // The integer part is parsed straight from the untrusted manifest with no
+    // upper bound, so scaling it can overflow u128. Reject that rather than
+    // panic (overflow-checks is on for release too) the way the parser already
+    // rejects every other malformed price.
+    let micro = whole
+        .checked_mul(10u128.pow(USDC_DECIMALS))
+        .and_then(|scaled| scaled.checked_add(frac))
+        .ok_or_else(|| HyreError::Manifest(format!("price overflows u128: {usd:?}")))?;
     if micro == 0 {
         // An explicit "0" is a malformed paid endpoint: it would register a
         // zero-credit tool and settle a zero-credit debit/receipt the audit
@@ -321,6 +329,34 @@ mod tests {
         assert!(
             matches!(parse(&json), Err(HyreError::Manifest(m)) if m.contains("zero")),
             "a zero-priced paid endpoint must be rejected",
+        );
+    }
+
+    #[test]
+    fn usd_to_micro_rejects_overflowing_price() {
+        // The integer part is an unbounded u128 parsed from an untrusted
+        // manifest. u128::MAX parses cleanly but overflows when scaled to
+        // atomic USDC; with overflow-checks on (release included) the bare
+        // multiply would panic the refresh rather than convert, so it must
+        // reject like every other malformed price.
+        let huge = u128::MAX.to_string();
+        assert!(
+            matches!(usd_to_micro(&huge), Err(HyreError::Manifest(m)) if m.contains("overflow")),
+            "a price that overflows u128 when scaled must be rejected",
+        );
+    }
+
+    #[test]
+    fn parse_rejects_overflowing_priced_endpoint() {
+        // A remote provider can advertise any integer price string; one large
+        // enough to overflow the atomic-USDC scaling must fail the refresh
+        // closed rather than panic the parser mid-manifest.
+        let json = doc(serde_json::json!({
+            "/trenches/new-tokens": { "get": priced_op(&u128::MAX.to_string()) },
+        }));
+        assert!(
+            matches!(parse(&json), Err(HyreError::Manifest(m)) if m.contains("overflow")),
+            "an overflowing paid endpoint price must be rejected",
         );
     }
 

@@ -327,4 +327,34 @@ mod tests {
             "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
         );
     }
+
+    #[test]
+    fn from_x402_pins_the_payai_wire_contract_fields() {
+        // The four constants from_x402 supplies — and the network/resource/
+        // description it forwards — are the shape PayAI validates before it will
+        // verify or settle. None are asserted by the translate test above, so a
+        // refactor that drifted any of them would break live settlement silently.
+        let src = covenant_x402::PaymentRequirements {
+            network: "solana".into(),
+            asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".into(),
+            amount: "80000".into(),
+            amount_usdc: 0.08,
+            pay_to: "7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC".into(),
+            scheme: "exact".into(),
+            extra: None,
+        };
+        let req = FacilitatorRequirements::from_x402(
+            &src,
+            "https://mpp.hyreagent.fun/defi/tvl",
+            "TVL snapshot",
+            "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4",
+        );
+        assert_eq!(req.scheme, "exact", "PayAI settles only the exact scheme");
+        assert_eq!(req.mime_type, "application/json");
+        assert_eq!(req.output_schema, serde_json::json!({}));
+        assert_eq!(req.max_timeout_seconds, 30);
+        assert_eq!(req.network, "solana", "rail is forwarded from the source");
+        assert_eq!(req.resource, "https://mpp.hyreagent.fun/defi/tvl");
+        assert_eq!(req.description, "TVL snapshot");
+    }
 }

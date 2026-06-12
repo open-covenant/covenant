@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T10:01:12.690Z",
+  "updatedAt": "2026-06-12T10:21:16.292Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8551,
-    "tasks": 1016,
-    "integrated": 1017
+    "events": 8560,
+    "tasks": 1017,
+    "integrated": 1018
   },
   "throughput": {
-    "last24h": 58,
-    "last7d": 190,
-    "velocity": 27.1
+    "last24h": 59,
+    "last7d": 191,
+    "velocity": 27.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 40
+      "count": 41
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1017
+      "total": 1018
     }
   ],
   "states": {
-    "integrated": 1012,
+    "integrated": 1013,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T10:14:50.677Z",
+      "task": "harden-zauth-reposcan-response-size",
+      "note": "Integrated as 543400cf, pushed to origin/loop/main-track (cd7ac5b1..543400cf). Changed: covenant-zauth/src/http.rs (new shared read_capped 1"
+    },
     {
       "at": "2026-06-12T09:53:54.542Z",
       "task": "bound-jupiter-swap-client-response-bodies",
@@ -310,11 +315,6 @@
       "at": "2026-06-12T05:19:41.014Z",
       "task": "harden-hyre-manifest-saturate-credits-cast",
       "note": "Integrated as 49bf9dfd, pushed to origin/loop/main-track. credits() saturates instead of truncating; closes the silent under-charge both pri"
-    },
-    {
-      "at": "2026-06-12T05:14:21.562Z",
-      "task": "harden-hyre-config-checked-resale-markup",
-      "note": "Integrated as b96c0641, pushed to origin/loop/main-track (30e8cf80..b96c0641). marked_up now returns Option and publishable drops overflowin"
     }
   ]
 }

@@ -85,6 +85,41 @@ pub enum ProviderError {
     /// plans / compaction summaries entirely.
     #[error("provider response truncated at max_tokens={max_tokens} ({partial_len} chars partial)", partial_len = partial.len())]
     Truncated { max_tokens: u32, partial: String },
+    #[error("response body exceeds the {limit}-byte cap")]
+    ResponseTooLarge { limit: usize },
+}
+
+/// Maximum provider response body the client will buffer into memory. The
+/// endpoints are operator-configured model gateways reached with the operator's
+/// api_key (and base_url, for the OpenAI-compatible and Ollama paths); a
+/// compromised or malicious endpoint must not be able to exhaust a daemon
+/// worker's memory with an unbounded body. 16 MiB sits far above any real
+/// completion or embedding yet stops a runaway stream — the memory-axis sibling
+/// of each provider's request timeout.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Buffer a response body, refusing anything past `max`. The `Content-Length`
+/// check rejects an oversized declared body before it is streamed; the running
+/// accumulation check is the real guard, since the header is optional and
+/// provider-controlled. A mid-stream transport fault surfaces as
+/// [`ProviderError::Http`]; an over-cap body as [`ProviderError::ResponseTooLarge`].
+async fn read_body_capped(
+    mut resp: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>, ProviderError> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(ProviderError::ResponseTooLarge { limit: max });
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if buf.len() + chunk.len() > max {
+            return Err(ProviderError::ResponseTooLarge { limit: max });
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 #[async_trait]
@@ -126,10 +161,19 @@ pub struct OllamaProvider {
     pub endpoint: String,
     pub model: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl OllamaProvider {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::with_limits(endpoint, model, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        endpoint: impl Into<String>,
+        model: impl Into<String>,
+        max_bytes: usize,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -138,6 +182,7 @@ impl OllamaProvider {
             endpoint: endpoint.into(),
             model: model.into(),
             client,
+            max_bytes,
         }
     }
 
@@ -179,13 +224,17 @@ impl Provider for OllamaProvider {
         let resp = self.client.post(&url).json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: OllamaChatResponse = resp.json().await?;
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: OllamaChatResponse = serde_json::from_slice(&bytes)?;
         if parsed.message.content.is_empty() {
             return Err(ProviderError::Empty);
         }
@@ -199,7 +248,9 @@ pub struct AnthropicProvider {
     pub api_key: String,
     pub model: String,
     pub max_tokens: u32,
+    endpoint: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 /// Default token ceiling for an Anthropic response. 4096 is the practical
@@ -208,8 +259,19 @@ pub struct AnthropicProvider {
 /// error to the caller.
 pub const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4096;
 
+const ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
+
 impl AnthropicProvider {
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::with_limits(api_key, model, ANTHROPIC_ENDPOINT, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        endpoint: impl Into<String>,
+        max_bytes: usize,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             .build()
@@ -218,7 +280,9 @@ impl AnthropicProvider {
             api_key: api_key.into(),
             model: model.into(),
             max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+            endpoint: endpoint.into(),
             client,
+            max_bytes,
         }
     }
 
@@ -341,7 +405,7 @@ impl Provider for AnthropicProvider {
         };
         let resp = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(&self.endpoint)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&body)
@@ -349,13 +413,17 @@ impl Provider for AnthropicProvider {
             .await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: AnthropicResponse = resp.json().await?;
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: AnthropicResponse = serde_json::from_slice(&bytes)?;
         process_anthropic_response(parsed, self.max_tokens)
     }
 }
@@ -367,6 +435,7 @@ pub struct OpenAiProvider {
     pub base_url: String,
     pub model: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl OpenAiProvider {
@@ -374,6 +443,15 @@ impl OpenAiProvider {
         api_key: impl Into<String>,
         base_url: impl Into<String>,
         model: impl Into<String>,
+    ) -> Self {
+        Self::with_limits(api_key, base_url, model, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        max_bytes: usize,
     ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
@@ -384,6 +462,7 @@ impl OpenAiProvider {
             base_url: base_url.into(),
             model: model.into(),
             client,
+            max_bytes,
         }
     }
 
@@ -444,13 +523,17 @@ impl Provider for OpenAiProvider {
             .await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: OpenAiResponse = resp.json().await?;
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: OpenAiResponse = serde_json::from_slice(&bytes)?;
         let text = parsed
             .choices
             .into_iter()
@@ -597,10 +680,19 @@ pub struct OllamaEmbedder {
     pub endpoint: String,
     pub model: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl OllamaEmbedder {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::with_limits(endpoint, model, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        endpoint: impl Into<String>,
+        model: impl Into<String>,
+        max_bytes: usize,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -609,6 +701,7 @@ impl OllamaEmbedder {
             endpoint: endpoint.into(),
             model: model.into(),
             client,
+            max_bytes,
         }
     }
 
@@ -643,13 +736,17 @@ impl Embedder for OllamaEmbedder {
         let resp = self.client.post(&url).json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: OllamaEmbedResponse = resp.json().await?;
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: OllamaEmbedResponse = serde_json::from_slice(&bytes)?;
         if parsed.embedding.is_empty() {
             return Err(ProviderError::Empty);
         }
@@ -861,10 +958,12 @@ mod tests {
 
     #[test]
     fn provider_error_display_messages_pin_three_string_variant_format_strings() {
-        // ProviderError has seven variants. Five wrap external errors
-        // via #[from]; the three string-literal variants (Empty, Status,
-        // MissingKey) emit operator-facing format strings that no
-        // existing test inspects. anthropic_without_key_returns_missing_key
+        // ProviderError has nine variants. Four wrap external errors
+        // via #[from] (Http, Serde, Io, Toml); the three string-literal
+        // variants (Empty, Status, MissingKey) emit operator-facing format
+        // strings that no existing test inspects (Truncated and
+        // ResponseTooLarge carry their own dynamic messages).
+        // anthropic_without_key_returns_missing_key
         // and openai_without_key_returns_missing_key assert
         // MissingKey via `matches!` which ignores the Display rendering;
         // Empty and Status have no test at all. A thiserror format-
@@ -2235,6 +2334,138 @@ model = "nomic-embed-text"
         assert!(
             matches!(err, ProviderError::Empty),
             "non-text-only response must be Empty, not Truncated: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ollama_provider_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // The four HTTP-backed providers buffer the whole response into
+        // memory. Each per-request timeout bounds the time axis;
+        // read_body_capped bounds the memory axis so a compromised or buggy
+        // endpoint cannot OOM the daemon worker with a multi-GB body. A
+        // small valid body is served to every POST: a generous cap reads
+        // and parses it, a tiny cap rejects it. with_limits points the
+        // provider at the wiremock server.
+        //
+        // wiremock always sets Content-Length, so the over-cap assertion
+        // exercises the early-reject branch; the running chunk-accumulation
+        // guard (the real defense against an omitted/understated header) is
+        // inspection-verified, mirroring the das.rs precedent.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"message":{"content":"hello world"}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let text = OllamaProvider::with_limits(server.uri(), "m", 16 * 1024)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect("an under-cap Ollama body must read back through read_body_capped");
+        assert_eq!(text, "hello world");
+
+        let err = OllamaProvider::with_limits(server.uri(), "m", 8)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect_err("an over-cap Ollama body must be rejected, not buffered");
+        assert!(
+            matches!(err, ProviderError::ResponseTooLarge { limit: 8 }),
+            "Ollama over-cap read must surface ProviderError::ResponseTooLarge {{ limit: 8 }} so a \
+             malicious endpoint cannot OOM the daemon worker; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_provider_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"content":[{"type":"text","text":"hello world"}],"stop_reason":"end_turn"}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let text = AnthropicProvider::with_limits("k", "m", server.uri(), 16 * 1024)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect("an under-cap Anthropic body must read back through read_body_capped");
+        assert_eq!(text, "hello world");
+
+        let err = AnthropicProvider::with_limits("k", "m", server.uri(), 8)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect_err("an over-cap Anthropic body must be rejected, not buffered");
+        assert!(
+            matches!(err, ProviderError::ResponseTooLarge { limit: 8 }),
+            "Anthropic over-cap read must surface ProviderError::ResponseTooLarge {{ limit: 8 }} so a \
+             compromised or proxied endpoint cannot OOM the daemon worker; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_provider_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"choices":[{"message":{"content":"hello world"}}]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let text = OpenAiProvider::with_limits("k", server.uri(), "m", 16 * 1024)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect("an under-cap OpenAI body must read back through read_body_capped");
+        assert_eq!(text, "hello world");
+
+        let err = OpenAiProvider::with_limits("k", server.uri(), "m", 8)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect_err("an over-cap OpenAI body must be rejected, not buffered");
+        assert!(
+            matches!(err, ProviderError::ResponseTooLarge { limit: 8 }),
+            "OpenAI over-cap read must surface ProviderError::ResponseTooLarge {{ limit: 8 }} so a \
+             compromised or operator-configured base_url endpoint cannot OOM the daemon worker; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn ollama_embedder_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"embedding":[0.5,0.5]}"#))
+            .mount(&server)
+            .await;
+
+        let v = OllamaEmbedder::with_limits(server.uri(), "m", 16 * 1024)
+            .embed("hi")
+            .await
+            .expect("an under-cap Ollama embedding body must read back through read_body_capped");
+        assert_eq!(v, vec![0.5_f32, 0.5]);
+
+        let err = OllamaEmbedder::with_limits(server.uri(), "m", 8)
+            .embed("hi")
+            .await
+            .expect_err("an over-cap Ollama embedding body must be rejected, not buffered");
+        assert!(
+            matches!(err, ProviderError::ResponseTooLarge { limit: 8 }),
+            "Ollama embedder over-cap read must surface ProviderError::ResponseTooLarge {{ limit: 8 }} \
+             so a malicious endpoint cannot OOM the daemon worker; got {err:?}",
         );
     }
 }

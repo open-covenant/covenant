@@ -17,9 +17,12 @@
 //! `agent.`).
 //!
 //! [`Manifest::parse`] and [`Manifest::from_path`] return [`ManifestError`],
-//! which separates [`ManifestError::Parse`], [`ManifestError::Io`], and
-//! [`ManifestError::Validation`] so callers can distinguish TOML parse
-//! failures from filesystem errors and semantic rejections.
+//! which separates [`ManifestError::Parse`], [`ManifestError::Io`],
+//! [`ManifestError::TooLarge`], and [`ManifestError::Validation`] so callers
+//! can distinguish TOML parse failures from filesystem errors, oversized
+//! manifests, and semantic rejections. [`Manifest::from_path`] bounds the read
+//! at [`MAX_MANIFEST_BYTES`] so a hostile or corrupt package cannot OOM the
+//! daemon when it scans the agents directory.
 
 #![deny(unsafe_code)]
 
@@ -203,14 +206,47 @@ pub enum HermesApprovalPolicy {
 /// Reserved capability namespaces (spec §5).
 pub const RESERVED_NAMESPACES: &[&str] = &["intent.", "memory.", "identity.", "tool.", "agent."];
 
+/// Maximum size of an `agent.toml` read by [`Manifest::from_path`]. Manifests
+/// are small TOML configs; bounding the read keeps a hostile or corrupt agent
+/// package from OOM-ing the daemon when `covenant-router` scans the agents
+/// directory. This is the load-time counterpart to the cap on agent subprocess
+/// output in `covenant-runtime`.
+pub const MAX_MANIFEST_BYTES: u64 = 1 << 20;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     #[error("toml parse: {0}")]
     Parse(#[from] toml::de::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("manifest exceeds the maximum size of {0} bytes")]
+    TooLarge(u64),
     #[error("validation: {0}")]
     Validation(String),
+}
+
+/// Read a file into a `String`, rejecting anything larger than `max` bytes.
+///
+/// The metadata length is an early reject for the common regular-file case;
+/// the `take(max + 1)` backstop bounds the actual read so a file that lies
+/// about its size, grows during the read, or is a stream-like special file
+/// still cannot allocate past the cap. Non-UTF-8 content routes to
+/// [`ManifestError::Io`] with [`std::io::ErrorKind::InvalidData`], matching the
+/// behaviour of the `read_to_string` this replaced.
+fn read_capped(p: &Path, max: u64) -> Result<String, ManifestError> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(p)?;
+    if file.metadata().map(|m| m.len() > max).unwrap_or(false) {
+        return Err(ManifestError::TooLarge(max));
+    }
+    let mut buf = Vec::new();
+    file.take(max + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > max {
+        return Err(ManifestError::TooLarge(max));
+    }
+    String::from_utf8(buf)
+        .map_err(|e| ManifestError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
 }
 
 impl Manifest {
@@ -221,7 +257,7 @@ impl Manifest {
     }
 
     pub fn from_path(p: &Path) -> Result<Self, ManifestError> {
-        let s = std::fs::read_to_string(p)?;
+        let s = read_capped(p, MAX_MANIFEST_BYTES)?;
         Self::parse(&s)
     }
 
@@ -1722,6 +1758,52 @@ cpu_ms_per_task = 1000
              triage keeps disk faults distinct from syntax and validation faults; \
              asserting only is_err() would let a read-error-misrouting refactor pass \
              (disk-fault-misroute regression class): {err:?}"
+        );
+    }
+
+    #[test]
+    fn from_path_rejects_oversized_manifest_before_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        // One byte over the cap. The bytes are valid UTF-8 but never a valid
+        // manifest; the read must reject on size before the parser ever runs,
+        // so the daemon cannot be OOM-ed by a hostile or corrupt package whose
+        // agent.toml is arbitrarily large.
+        std::fs::write(&path, vec![b'#'; (MAX_MANIFEST_BYTES + 1) as usize]).unwrap();
+        let err = Manifest::from_path(&path).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::TooLarge(MAX_MANIFEST_BYTES)),
+            "an agent.toml larger than MAX_MANIFEST_BYTES must surface \
+             ManifestError::TooLarge carrying the cap, not Parse/Io/Validation; a \
+             regression to an unbounded read_to_string would slurp the whole file \
+             and OOM the daemon (untrusted-agent DoS regression class): {err:?}"
+        );
+    }
+
+    #[test]
+    fn from_path_reads_manifest_just_under_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        // A valid manifest padded with a comment to sit just under the cap
+        // proves the bound does not reject legitimate packages and that the
+        // capped read returns the full contents to the parser.
+        let pad = MAX_MANIFEST_BYTES as usize - FULL.len() - 16;
+        let body = format!("{FULL}\n#{}", "x".repeat(pad));
+        assert!((body.len() as u64) < MAX_MANIFEST_BYTES);
+        std::fs::write(&path, &body).unwrap();
+        let m = Manifest::from_path(&path).unwrap();
+        assert_eq!(m.agent.id, "research");
+    }
+
+    #[test]
+    fn manifest_error_too_large_display_message_names_the_byte_limit() {
+        let err = ManifestError::TooLarge(MAX_MANIFEST_BYTES);
+        assert_eq!(
+            format!("{err}"),
+            format!("manifest exceeds the maximum size of {MAX_MANIFEST_BYTES} bytes"),
+            "ManifestError::TooLarge Display drifted (dropped limit, reworded prefix, \
+             or prefix-convergence with another variant); operators triaging a \
+             rejected oversized package rely on this message"
         );
     }
 

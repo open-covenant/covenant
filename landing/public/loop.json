@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T07:00:39.224Z",
+  "updatedAt": "2026-06-12T07:20:42.817Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8438,
-    "tasks": 1004,
-    "integrated": 1004
+    "events": 8452,
+    "tasks": 1005,
+    "integrated": 1006
   },
   "throughput": {
-    "last24h": 45,
-    "last7d": 177,
-    "velocity": 25.3
+    "last24h": 47,
+    "last7d": 179,
+    "velocity": 25.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 27
+      "count": 29
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1004
+      "total": 1006
     }
   ],
   "states": {
-    "integrated": 999,
+    "integrated": 1001,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "harden-x402-paid-client-http-timeout",
-    "state": "in_progress",
-    "since": "2026-06-12T07:00:38.800Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T07:17:18.402Z",
+      "task": "harden-zauth-directory-http-read-timeout",
+      "note": "Committed c2b1cdf8, pushed origin/loop/main-track. zauth directory CLI read now bounded at 20s; test pins it. README 2699->2700."
+    },
+    {
+      "at": "2026-06-12T07:06:37.190Z",
+      "task": "harden-x402-paid-client-http-timeout",
+      "note": "Committed 0b7f27e9, pushed origin/loop/main-track. Daemon x402 pay path now bounded at 120s via covenant_x402::http_client(); test pins it. "
+    },
     {
       "at": "2026-06-12T06:58:38.236Z",
       "task": "harden-hyre-paid-execution-http-timeout",
@@ -310,16 +315,6 @@
       "at": "2026-06-12T03:25:23.280Z",
       "task": "stake-keeper-jupiter-quote-amount-parse-coverage",
       "note": "Pushed 34c775ea to origin/loop/main-track. Two tests pin jupiter.rs amount parse failures; README metrics current at 2670."
-    },
-    {
-      "at": "2026-06-12T03:16:22.443Z",
-      "task": "hyre-tool-arg-coercion-coverage",
-      "note": "Pushed 6cd32b1e to origin/loop/main-track. Two tests pin arg_str coercion in tools.rs; README metrics current at 2668."
-    },
-    {
-      "at": "2026-06-12T03:13:49.826Z",
-      "task": "hyre-manifest-param-body-filter-coverage",
-      "note": "Pushed 8647de85 to origin/loop/main-track. Five tests pin manifest.rs param/body filtering robustness; README metrics current at 2666."
     }
   ]
 }

@@ -423,39 +423,83 @@ impl HermesRunner {
                     }
                 };
                 buffer.extend_from_slice(&bytes);
-                while let Some(idx) = find_boundary(&buffer) {
-                    let frame = buffer[..idx].to_vec();
-                    // Drop the boundary itself (`\n\n` or `\r\n\r\n`).
-                    let advance = if buffer[idx..].starts_with(b"\r\n\r\n") {
-                        idx + 4
-                    } else {
-                        idx + 2
-                    };
-                    buffer.drain(..advance);
-                    if let Some(trace) = parse_sse_frame(&frame) {
-                        // Stream the trace to the daemon live (best-effort) so
-                        // the audit step-trail fills in as the run works.
-                        if let Some(tx) = &event_tx {
-                            let _ = tx.send(crate::StreamedTrace {
-                                intent_id,
-                                issuer: issuer.clone(),
-                                trace: trace.clone(),
-                            });
-                        }
-                        match sink.lock() {
-                            Ok(mut v) => v.push(trace),
-                            Err(poisoned) => {
-                                // Already poisoned — push anyway. The
-                                // main thread will surface the lock
-                                // state via its own match arm above.
-                                poisoned.into_inner().push(trace);
-                            }
+                let traces = match drain_sse_frames(&mut buffer, MAX_SSE_BUFFER_BYTES) {
+                    Ok(traces) => traces,
+                    Err(pending) => {
+                        // The gateway streamed past the per-frame ceiling with
+                        // no boundary; `buffer` would grow without bound.
+                        // Abandon the best-effort trace stream — the poll loop
+                        // still delivers the run's final outcome — rather than
+                        // let a hostile or buggy gateway OOM the worker.
+                        warn!(
+                            %run_id,
+                            pending,
+                            cap = MAX_SSE_BUFFER_BYTES,
+                            "hermes event stream frame exceeds cap; aborting stream"
+                        );
+                        return;
+                    }
+                };
+                for trace in traces {
+                    // Stream the trace to the daemon live (best-effort) so
+                    // the audit step-trail fills in as the run works.
+                    if let Some(tx) = &event_tx {
+                        let _ = tx.send(crate::StreamedTrace {
+                            intent_id,
+                            issuer: issuer.clone(),
+                            trace: trace.clone(),
+                        });
+                    }
+                    match sink.lock() {
+                        Ok(mut v) => v.push(trace),
+                        Err(poisoned) => {
+                            // Already poisoned — push anyway. The
+                            // main thread will surface the lock
+                            // state via its own match arm above.
+                            poisoned.into_inner().push(trace);
                         }
                     }
                 }
             }
         })
     }
+}
+
+/// Maximum un-delimited SSE bytes the event-stream reader will buffer before
+/// treating the stream as hostile. The Hermes gateway is remote and only
+/// operator-configured, so the live trace stream earns the same memory-axis
+/// ceiling as every [`read_capped`] gateway read: a gateway that never emits a
+/// frame boundary — or one absurdly large frame — must not grow the
+/// accumulation buffer without bound and OOM the worker. The cap is applied to
+/// the remainder after complete frames are drained, so a steady stream of small
+/// frames holds at most one in-progress frame regardless of run length.
+const MAX_SSE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
+
+/// Drain every complete SSE frame from `buffer`, returning the parsed traces in
+/// arrival order. Each complete frame is removed (its trailing boundary
+/// included), so `buffer` is left holding only the trailing partial frame.
+/// Returns `Err(buffer.len())` when that un-delimited remainder still exceeds
+/// `max` — a gateway streaming without a frame boundary, which would otherwise
+/// grow `buffer` without bound.
+fn drain_sse_frames(buffer: &mut Vec<u8>, max: usize) -> Result<Vec<RuntimeTrace>, usize> {
+    let mut traces = Vec::new();
+    while let Some(idx) = find_boundary(buffer) {
+        let frame = buffer[..idx].to_vec();
+        // Drop the boundary itself (`\n\n` or `\r\n\r\n`).
+        let advance = if buffer[idx..].starts_with(b"\r\n\r\n") {
+            idx + 4
+        } else {
+            idx + 2
+        };
+        buffer.drain(..advance);
+        if let Some(trace) = parse_sse_frame(&frame) {
+            traces.push(trace);
+        }
+    }
+    if buffer.len() > max {
+        return Err(buffer.len());
+    }
+    Ok(traces)
 }
 
 fn find_boundary(buf: &[u8]) -> Option<usize> {
@@ -1056,6 +1100,79 @@ mod tests {
              here and operators running through non-CRLF proxies still \
              see frame boundaries",
         );
+    }
+
+    #[test]
+    fn drain_sse_frames_drains_complete_frames_in_order_and_empties_buffer() {
+        let f1 = "data: {\"event\":\"tool.started\",\"run_id\":\"r1\",\"tool\":\"terminal\",\"preview\":\"ls\"}";
+        let f2 = "data: {\"event\":\"tool.started\",\"run_id\":\"r2\",\"tool\":\"http\",\"preview\":\"GET\"}";
+        let mut buffer = format!("{f1}\n\n{f2}\n\n").into_bytes();
+        let traces = drain_sse_frames(&mut buffer, MAX_SSE_BUFFER_BYTES)
+            .expect("two complete frames under the cap must drain");
+        let ids: Vec<&str> = traces
+            .iter()
+            .map(|t| match t {
+                RuntimeTrace::HermesToolInvoked { run_id, .. } => run_id.as_str(),
+                other => panic!("expected HermesToolInvoked, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["r1", "r2"], "frames must surface in arrival order");
+        assert!(
+            buffer.is_empty(),
+            "every complete frame plus its boundary must be drained",
+        );
+    }
+
+    #[test]
+    fn drain_sse_frames_retains_partial_frame_under_cap() {
+        // A frame split across chunks arrives without its terminating
+        // boundary first. drain_sse_frames must return no traces and leave the
+        // partial bytes in `buffer` so the next chunk completes the frame —
+        // not drop them and not trip the cap.
+        let partial = b"data: {\"event\":\"tool.started\",\"run_id\":\"r1\"".to_vec();
+        let mut buffer = partial.clone();
+        let traces = drain_sse_frames(&mut buffer, MAX_SSE_BUFFER_BYTES)
+            .expect("a partial frame under the cap is not an error");
+        assert!(
+            traces.is_empty(),
+            "an unterminated frame yields no trace yet"
+        );
+        assert_eq!(buffer, partial, "the partial frame must be retained intact");
+    }
+
+    #[test]
+    fn drain_sse_frames_rejects_undelimited_buffer_past_cap() {
+        // The OOM guard: a gateway streaming bytes that never form a frame
+        // boundary makes find_boundary return None forever, so the inner drain
+        // never runs and the buffer would grow without bound. Once the
+        // un-delimited remainder passes the cap, drain_sse_frames returns
+        // Err(len) so the reader can abandon the stream instead of OOMing.
+        // Uses a tiny cap (mirroring the read_capped(big, 64) seam) so the
+        // guard is exercised without a 16 MiB fixture.
+        let mut buffer = vec![b'x'; 65];
+        let err = drain_sse_frames(&mut buffer, 64)
+            .expect_err("an un-delimited buffer past the cap must be rejected");
+        assert_eq!(err, 65, "the rejection reports the offending buffer length");
+    }
+
+    #[test]
+    fn drain_sse_frames_drains_many_small_frames_exceeding_cap() {
+        // The cap is on the un-delimited remainder AFTER draining, not on the
+        // cumulative bytes seen. A long healthy run streams many small frames
+        // whose total dwarfs the cap; each is drained as its boundary arrives,
+        // so the remainder stays tiny and the run is never killed. A cap on
+        // cumulative bytes would wrongly abort here.
+        let frame =
+            "data: {\"event\":\"tool.started\",\"run_id\":\"r\",\"tool\":\"t\",\"preview\":\"p\"}";
+        let mut buffer = format!("{frame}\n\n").repeat(50).into_bytes();
+        assert!(
+            buffer.len() > 64,
+            "fixture-sanity: total bytes exceed the cap"
+        );
+        let traces = drain_sse_frames(&mut buffer, 64)
+            .expect("complete frames drain regardless of cumulative size");
+        assert_eq!(traces.len(), 50, "every complete frame must be parsed");
+        assert!(buffer.is_empty(), "no remainder is left after draining");
     }
 
     #[test]

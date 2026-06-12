@@ -636,7 +636,14 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        // `read_capped` feeds this from `String::from_utf8_lossy`, so `s` is
+        // valid UTF-8 but byte `max` can land inside a multi-byte char. Slicing
+        // there would panic, so back up to the largest boundary at or below it.
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
     }
 }
 
@@ -1362,6 +1369,33 @@ mod tests {
              test could conceivably accept it under a future trait \
              swap",
         );
+    }
+
+    #[test]
+    fn truncate_backs_up_to_a_char_boundary_on_multibyte_overflow() {
+        // read_capped feeds truncate() a String::from_utf8_lossy of the raw
+        // gateway body: valid UTF-8, but the byte at `max` can fall inside a
+        // multi-byte char. A hostile or MITM'd gateway can return a >max-byte
+        // error body with a char straddling byte `max`; the old `&s[..max]`
+        // slice panicked the runner task there. truncate must back up to the
+        // largest char boundary at or below `max` instead.
+
+        // '€' (U+20AC) is three bytes; four of them put boundaries at 0,3,6,9,12.
+        // max=5 lands inside the second '€', so the slice backs up to byte 3.
+        assert_eq!(truncate("€€€€", 5), "€…");
+
+        // '💥' (U+1F4A5) is four bytes; "ab💥cd" has boundaries at 0,1,2,6,7,8.
+        // max=4 lands inside '💥', so the slice backs up to byte 2.
+        assert_eq!(truncate("ab💥cd", 4), "ab…");
+
+        // The output stays within the byte cap (kept prefix plus the ellipsis
+        // marker), which is the bound the truncation exists to enforce against
+        // an adversarial body.
+        assert!(truncate("€€€€", 5).len() <= 5 + "…".len());
+
+        // ASCII overflow is unchanged: every byte is a boundary, so the walk is
+        // a no-op and the slice lands exactly at max (matches the legacy path).
+        assert_eq!(truncate("abcdef", 5), "abcde…");
     }
 
     #[test]

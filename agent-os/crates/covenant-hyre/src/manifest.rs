@@ -210,7 +210,9 @@ fn parse_body(raw: Option<&Value>) -> Vec<BodyField> {
 
 /// Convert a fixed USD decimal string (e.g. `"0.080000"`) to atomic
 /// USDC. Parses the decimal directly to avoid float rounding on prices
-/// that must settle exactly on-chain.
+/// that must settle exactly on-chain. A zero price is rejected: a paid
+/// endpoint priced at `"0"` is malformed (a genuinely free endpoint
+/// omits `x-payment-info` and is skipped by [`parse`]).
 fn usd_to_micro(usd: &str) -> Result<u128> {
     let (whole, frac) = usd.split_once('.').unwrap_or((usd, ""));
     let whole: u128 = whole
@@ -234,7 +236,15 @@ fn usd_to_micro(usd: &str) -> Result<u128> {
             .parse()
             .map_err(|_| HyreError::Manifest(format!("price fraction: {usd:?}")))?
     };
-    Ok(whole * 10u128.pow(USDC_DECIMALS) + frac)
+    let micro = whole * 10u128.pow(USDC_DECIMALS) + frac;
+    if micro == 0 {
+        // An explicit "0" is a malformed paid endpoint: it would register a
+        // zero-credit tool and settle a zero-credit debit/receipt the audit
+        // verifier treats as drift. Free endpoints omit x-payment-info and
+        // never reach here.
+        return Err(HyreError::Manifest(format!("price is zero: {usd:?}")));
+    }
+    Ok(micro)
 }
 
 #[cfg(test)]
@@ -284,6 +294,33 @@ mod tests {
         assert!(
             matches!(&err, HyreError::Manifest(m) if m.contains("price fraction")),
             "a non-numeric fraction must be rejected with the fraction guard: {err:?}"
+        );
+    }
+
+    #[test]
+    fn usd_to_micro_rejects_zero_price() {
+        // A genuinely free endpoint omits x-payment-info (parse() skips it), so
+        // every spelling of an explicit zero price is a malformed paid endpoint
+        // and must be rejected, not converted to a zero-credit tool.
+        for z in ["0", "0.0", "0.000000"] {
+            assert!(
+                matches!(usd_to_micro(z), Err(HyreError::Manifest(m)) if m.contains("zero")),
+                "zero price {z:?} must be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_zero_priced_endpoint() {
+        // The manifest is fetched from an untrusted provider URL; a paid
+        // endpoint advertised at "0" must fail the whole refresh closed rather
+        // than register a zero-credit paid tool the daemon would settle for free.
+        let json = doc(serde_json::json!({
+            "/trenches/new-tokens": { "get": priced_op("0") },
+        }));
+        assert!(
+            matches!(parse(&json), Err(HyreError::Manifest(m)) if m.contains("zero")),
+            "a zero-priced paid endpoint must be rejected",
         );
     }
 

@@ -464,16 +464,22 @@ export default async function ArenaPage() {
                 </div>
 
                 <div className="mt-6 border border-neutral-800/80 px-5 py-4">
-                  <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">In flight</div>
-                  <div className="mt-2 truncate font-light text-emerald-300" title={loop.inFlight?.task ?? "idle"}>
-                    {loop.inFlight ? loop.inFlight.task : "idle"}
+                  <div className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">
+                    {loop.inFlight ? "In flight" : "Last shipped"}
                   </div>
-                  {loop.inFlight && (
-                    <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
-                      {loop.inFlight.state.replace("_", " ")} · since{" "}
-                      {new Date(loop.inFlight.since).toUTCString().slice(5, 22)}
-                    </div>
-                  )}
+                  <div
+                    className="mt-2 truncate font-light text-emerald-300"
+                    title={loop.inFlight?.task ?? loop.recent[0]?.task ?? "idle"}
+                  >
+                    {loop.inFlight ? loop.inFlight.task : loop.recent[0]?.task ?? "idle"}
+                  </div>
+                  <div className="mt-1 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                    {loop.inFlight
+                      ? `${loop.inFlight.state.replace("_", " ")} · since ${new Date(loop.inFlight.since).toUTCString().slice(5, 22)}`
+                      : loop.recent[0]
+                        ? `integrated · ${new Date(loop.recent[0].at).toUTCString().slice(5, 22)}`
+                        : ""}
+                  </div>
                 </div>
 
                 <p className="mt-8 text-[11px] uppercase tracking-[0.25em] text-neutral-500">

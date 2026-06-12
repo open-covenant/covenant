@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T12:01:35.084Z",
+  "updatedAt": "2026-06-12T12:03:46.192Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8609,
+    "events": 8614,
     "tasks": 1023,
-    "integrated": 1023
+    "integrated": 1024
   },
   "throughput": {
-    "last24h": 64,
-    "last7d": 192,
-    "velocity": 27.4
+    "last24h": 65,
+    "last7d": 193,
+    "velocity": 27.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 46
+      "count": 47
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1023
+      "total": 1024
     }
   ],
   "states": {
-    "integrated": 1018,
+    "integrated": 1019,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "bound-mcp-stdio-transport-line-reads",
-    "state": "in_progress",
-    "since": "2026-06-12T11:57:57.618Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T12:01:52.288Z",
+      "task": "bound-mcp-stdio-transport-line-reads",
+      "note": "Committed e94b68ab. MCP stdio reads bounded via read_capped_line (16 MiB/line); reader + stderr logger rewired; test read_capped_line_bounds"
+    },
     {
       "at": "2026-06-12T11:50:59.060Z",
       "task": "bound-orbit-registry-response-body",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T07:06:37.190Z",
       "task": "harden-x402-paid-client-http-timeout",
       "note": "Committed 0b7f27e9, pushed origin/loop/main-track. Daemon x402 pay path now bounded at 120s via covenant_x402::http_client(); test pins it. "
-    },
-    {
-      "at": "2026-06-12T06:58:38.236Z",
-      "task": "harden-hyre-paid-execution-http-timeout",
-      "note": "Committed 877cc852, pushed origin/loop/main-track. Daemon Hyre paid loop now bounded at 120s via covenant_hyre::http_client(); test pins it."
     }
   ]
 }

@@ -2621,7 +2621,7 @@ async fn run_zauth_list(args: &[String]) -> Result<()> {
         }
     }
 
-    let client = covenant_zauth::DirectoryClient::new(reqwest::Client::new());
+    let client = covenant_zauth::DirectoryClient::new(covenant_zauth::directory::http_client());
     let page = client
         .list(covenant_zauth::ListQuery {
             verified,
@@ -2689,7 +2689,7 @@ async fn run_zauth_search(args: &[String]) -> Result<()> {
     }
     let query = query.ok_or_else(|| anyhow::anyhow!("covenant zauth search: missing <query>"))?;
 
-    let client = covenant_zauth::DirectoryClient::new(reqwest::Client::new());
+    let client = covenant_zauth::DirectoryClient::new(covenant_zauth::directory::http_client());
     let page = client
         .list(covenant_zauth::ListQuery {
             verified: Some(true),

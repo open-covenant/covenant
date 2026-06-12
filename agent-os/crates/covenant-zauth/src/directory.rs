@@ -1,10 +1,31 @@
 //! Read-only client for `https://api.zauth.inc/api/directory`.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, ZauthError};
 
 const DEFAULT_BASE_URL: &str = "https://api.zauth.inc";
+
+/// Per-request timeout for the directory read. `api.zauth.inc` is an
+/// external service; a hung or slow-drip response must not make a CLI
+/// invocation hang forever. The listing is a stateless read with no
+/// payment settlement, so a short read timeout is sufficient.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The reqwest client the CLI should drive [`DirectoryClient`] with —
+/// bounded so an unresponsive registry cannot hang the command.
+pub fn http_client() -> reqwest::Client {
+    http_client_with_timeout(REQUEST_TIMEOUT)
+}
+
+fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 #[derive(Debug, Clone)]
 pub struct DirectoryClient {
@@ -274,6 +295,25 @@ mod tests {
             .await
             .expect("list");
         assert_eq!(page.endpoints.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn slow_directory_times_out_instead_of_hanging() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/directory"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let client = DirectoryClient::with_base_url(
+            http_client_with_timeout(Duration::from_millis(50)),
+            server.uri(),
+        );
+        let err = client
+            .list(ListQuery::default())
+            .await
+            .expect_err("must time out");
+        assert!(matches!(err, ZauthError::Http(_)), "got {err:?}");
     }
 
     #[tokio::test]

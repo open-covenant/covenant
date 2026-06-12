@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T08:00:50.360Z",
+  "updatedAt": "2026-06-12T08:20:54.053Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8488,
-    "tasks": 1009,
-    "integrated": 1010
+    "events": 8506,
+    "tasks": 1011,
+    "integrated": 1012
   },
   "throughput": {
-    "last24h": 51,
-    "last7d": 183,
-    "velocity": 26.1
+    "last24h": 53,
+    "last7d": 185,
+    "velocity": 26.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 33
+      "count": 35
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1010
+      "total": 1012
     }
   ],
   "states": {
-    "integrated": 1005,
+    "integrated": 1007,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T08:13:53.707Z",
+      "task": "consolidate-hyre-bounded-read-helper",
+      "note": "Committed. Shared crate::http::read_capped; both local copies removed; 70 tests; scripts gate green; review SHIP."
+    },
+    {
+      "at": "2026-06-12T08:06:45.294Z",
+      "task": "harden-hyre-catalog-manifest-response-size",
+      "note": "Committed. catalog.rs read_capped over the manifest read; README 2705; scripts gate green; review SHIP."
+    },
     {
       "at": "2026-06-12T07:54:52.087Z",
       "task": "harden-zauth-directory-response-size",
@@ -305,16 +315,6 @@
       "at": "2026-06-12T04:03:19.460Z",
       "task": "hyre-x402-truncate-error-body-bound-coverage",
       "note": "Pushed 1a3413de to origin/loop/main-track. Pins x402 truncate cap/boundary/ellipsis; README 2677."
-    },
-    {
-      "at": "2026-06-12T03:59:25.239Z",
-      "task": "zauth-reposcan-signer-failure-fail-closed-coverage",
-      "note": "Pushed 3e9aaa16 to origin/loop/main-track. Pins fail-closed signer-failure arm in reposcan scan; README 2676."
-    },
-    {
-      "at": "2026-06-12T03:54:31.737Z",
-      "task": "hyre-facilitator-from-x402-wire-contract-coverage",
-      "note": "Pushed 0a313a41 to origin/loop/main-track. Pins from_x402 wire-contract fields; README 2675."
     }
   ]
 }

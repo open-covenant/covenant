@@ -2830,7 +2830,7 @@ async fn run_zauth_scan(args: &[String]) -> Result<()> {
         per_call_cap,
     };
 
-    let client = covenant_zauth::RepoScanClient::new(reqwest::Client::new());
+    let client = covenant_zauth::RepoScanClient::new(covenant_zauth::reposcan::http_client());
     let result = client
         .scan(&req, &signer)
         .await

@@ -9,6 +9,8 @@
 //! result without a payment challenge. The caller pays only when the
 //! first hit is a 402.
 
+use std::time::Duration;
+
 use covenant_x402::Signer;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,6 +20,46 @@ use crate::challenge;
 use crate::{Result, ZauthError};
 
 const DEFAULT_BASE_URL: &str = "https://api.zauth.inc";
+
+/// Per-request timeout for the unpaid first POST. It only fetches the 402
+/// challenge (or a cached gratis result) and never settles, so a hung or
+/// slow-drip `api.zauth.inc` must fail fast rather than wedge the CLI — the
+/// time-axis sibling of the body-size cap on the same client.
+const FIRST_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Floor and ceiling for the paid retry's timeout. The challenge advertises
+/// `maxTimeoutSeconds` as the settlement window the server commits to, so the
+/// paid request must be willing to wait that long — a short fixed ceiling
+/// would abort a legitimate settlement after funds have already committed.
+/// The advertised value is untrusted: a hostile 402 could push it to 0
+/// (instant abort) or to `u32::MAX` (~forever), so the derived timeout is
+/// clamped to a sane band.
+const PAID_TIMEOUT_MIN_SECS: u64 = 30;
+const PAID_TIMEOUT_MAX_SECS: u64 = 600;
+
+/// The reqwest client the CLI should drive [`RepoScanClient`] with — the
+/// unpaid first request is bounded so an unresponsive registry cannot hang
+/// the command. The paid retry overrides this per-request with a
+/// settlement-aware timeout (see [`paid_timeout`]).
+pub fn http_client() -> reqwest::Client {
+    http_client_with_timeout(FIRST_REQUEST_TIMEOUT)
+}
+
+fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Derive the paid retry's timeout from the challenge's advertised
+/// `maxTimeoutSeconds`, clamped so an untrusted value cannot abort a real
+/// settlement instantly or hang the CLI indefinitely.
+fn paid_timeout(max_timeout_seconds: u32) -> Duration {
+    Duration::from_secs(
+        (max_timeout_seconds as u64).clamp(PAID_TIMEOUT_MIN_SECS, PAID_TIMEOUT_MAX_SECS),
+    )
+}
 
 #[derive(Debug, Clone)]
 pub struct RepoScanClient {
@@ -98,6 +140,7 @@ impl RepoScanClient {
             .http
             .post(&url)
             .header("x-payment", header_value)
+            .timeout(paid_timeout(accept.max_timeout_seconds))
             .json(&body)
             .send()
             .await?;
@@ -352,6 +395,39 @@ mod tests {
         assert!(
             matches!(err, ZauthError::ResponseTooLarge(_)),
             "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_reposcan_request_times_out_instead_of_hanging() {
+        // A hung api.zauth.inc on the unpaid first POST must fail fast with a
+        // typed error rather than wedge the CLI forever.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/x402/reposcan"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let client = RepoScanClient::with_base_url(
+            http_client_with_timeout(Duration::from_millis(50)),
+            server.uri(),
+        );
+        let err = client
+            .scan(&req(), &MockSigner)
+            .await
+            .expect_err("must time out");
+        assert!(matches!(err, ZauthError::Http(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn paid_timeout_clamps_untrusted_max_timeout_seconds() {
+        // The advertised window is honored within the band; a hostile 0 cannot
+        // instant-abort a settlement and a hostile u32::MAX cannot hang forever.
+        assert_eq!(paid_timeout(300), Duration::from_secs(300));
+        assert_eq!(paid_timeout(0), Duration::from_secs(PAID_TIMEOUT_MIN_SECS));
+        assert_eq!(
+            paid_timeout(u32::MAX),
+            Duration::from_secs(PAID_TIMEOUT_MAX_SECS)
         );
     }
 }

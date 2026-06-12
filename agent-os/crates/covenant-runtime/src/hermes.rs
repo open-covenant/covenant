@@ -129,7 +129,7 @@ impl HermesRunner {
             .await
             .map_err(remote_err)?;
         let status = resp.status();
-        let text = resp.text().await.map_err(remote_err)?;
+        let text = read_capped(resp, MAX_RESPONSE_BYTES).await?;
         if !status.is_success() {
             return Err(RunnerError::Remote {
                 status: status.as_u16(),
@@ -152,7 +152,7 @@ impl HermesRunner {
             .await
             .map_err(remote_err)?;
         let status = resp.status();
-        let text = resp.text().await.map_err(remote_err)?;
+        let text = read_capped(resp, MAX_RESPONSE_BYTES).await?;
         if !status.is_success() {
             return Err(RunnerError::Remote {
                 status: status.as_u16(),
@@ -177,7 +177,8 @@ impl HermesRunner {
         if !resp.status().is_success() {
             return None;
         }
-        let value: Value = resp.json().await.ok()?;
+        let text = read_capped(resp, MAX_RESPONSE_BYTES).await.ok()?;
+        let value: Value = serde_json::from_str(&text).ok()?;
         let features = value.get("features")?.as_object()?;
         Some(HermesCapabilities {
             run_submission: feature_flag(features, "run_submission"),
@@ -588,6 +589,40 @@ fn remote_err(e: reqwest::Error) -> RunnerError {
         status: e.status().map(|s| s.as_u16()).unwrap_or(0),
         message: e.to_string(),
     }
+}
+
+/// Maximum gateway response body the runner will buffer into memory. The
+/// Hermes gateway is remote and operator-configured, so a compromised, buggy,
+/// or MITM'd one must not be able to exhaust a daemon worker with an unbounded
+/// body — the memory-axis ceiling mirroring [`REQUEST_TIMEOUT`] on the time
+/// axis.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read a gateway response body into a string, refusing anything past `max`.
+/// The `Content-Length` check rejects an oversized declared body before it is
+/// streamed; the running accumulation check is the real guard, since the
+/// header is optional and gateway-controlled. Bodies are JSON, so the bounded
+/// bytes are decoded lossily. An over-cap body is a gateway fault, surfaced as
+/// the same [`RunnerError::Remote`] shape [`remote_err`] uses for transport
+/// faults rather than a new variant.
+async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<String, RunnerError> {
+    let too_large = |bytes: u64| RunnerError::Remote {
+        status: 0,
+        message: format!("gateway response body of {bytes} bytes exceeds the {max}-byte cap"),
+    };
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(too_large(len));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(remote_err)? {
+        if buf.len() + chunk.len() > max {
+            return Err(too_large((buf.len() + chunk.len()) as u64));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -1910,6 +1945,45 @@ network = "off"
         assert!(
             result.files.is_empty(),
             "files fetch failure must not fail the run"
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_response_body_read_is_bounded() {
+        // The Hermes gateway is remote and untrusted: a normal body reads back
+        // whole, but a response past the cap is refused, not buffered into the
+        // daemon's memory. wiremock always emits Content-Length, so this trips
+        // the early declared-length reject; the running accumulation guard for
+        // an absent or understated header is inspection-verified.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let ok = http
+            .get(format!("{}/ok", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(read_capped(ok, 64).await.expect("under cap"), "hello");
+
+        let big = http
+            .get(format!("{}/big", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        let err = read_capped(big, 64).await.expect_err("over cap");
+        assert!(
+            matches!(err, RunnerError::Remote { status: 0, .. }),
+            "got {err:?}"
         );
     }
 }

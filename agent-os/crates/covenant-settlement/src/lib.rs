@@ -41,6 +41,24 @@ pub trait Settlement: Send + Sync {
         receipt_ids: &[uuid::Uuid],
         confirmation: ChainConfirmation,
     ) -> Result<u64, SettlementError>;
+
+    /// Apply the legacy-receipt correlation backfill to this store's durable
+    /// receipts. The file-backed store overrides this to hold its write lock
+    /// across the read-modify-write so a receipt recorded concurrently is not
+    /// lost to the atomic rewrite. The default is a no-op for backends without
+    /// a durable file (in-memory and disabled stores).
+    async fn backfill(
+        &self,
+        dry_run: bool,
+        correlations: &[ReceiptBackfillCorrelation],
+    ) -> Result<BackfillOutcome, SettlementError> {
+        let _ = correlations;
+        Ok(BackfillOutcome {
+            row_count: 0,
+            rollback_path: None,
+            dry_run,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,14 +200,10 @@ pub fn receipt_migration_plan_json(receipts: &[SettlementReceipt]) -> serde_json
     })
 }
 
-pub async fn backfill_receipts(
-    store_path: impl AsRef<Path>,
-    dry_run: bool,
-) -> Result<BackfillOutcome, SettlementError> {
-    backfill_receipts_with_correlations(store_path, dry_run, &[]).await
-}
-
-pub async fn backfill_receipts_with_correlations(
+// Lock-free file backfill logic. Reachable only through `JsonlReceiptStore::backfill`,
+// which holds the store write lock; callers must not invoke it directly on a path a
+// live store also writes, or a concurrent record() can be lost to the rewrite.
+pub(crate) async fn backfill_receipts_with_correlations(
     store_path: impl AsRef<Path>,
     dry_run: bool,
     correlations: &[ReceiptBackfillCorrelation],
@@ -493,6 +507,19 @@ impl Settlement for JsonlReceiptStore {
         drop(out);
         fs::rename(&tmp, &self.path).await?;
         Ok(updated)
+    }
+
+    async fn backfill(
+        &self,
+        dry_run: bool,
+        correlations: &[ReceiptBackfillCorrelation],
+    ) -> Result<BackfillOutcome, SettlementError> {
+        // Hold the same lock as record()/recent()/mark_batch_confirmed():
+        // the backfill reads the store, then atomically renames a rewritten
+        // copy over it. Without this guard a receipt appended between the
+        // read and the rename is silently clobbered (a lost settlement row).
+        let _guard = self.lock.lock().await;
+        backfill_receipts_with_correlations(&self.path, dry_run, correlations).await
     }
 }
 
@@ -842,6 +869,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_backfill_trait_method_applies_correlations_through_the_store() {
+        // The trait method delegates to the same file logic under the store
+        // lock; it must produce the identical outcome to the free function so
+        // the lock wrapper provably does not alter the rewrite.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        let legacy_id = Uuid::from_u128(0x10);
+        let mut legacy = receipt(10);
+        legacy.id = legacy_id;
+        std::fs::write(
+            &path,
+            format!("{}\n", legacy_receipt_wire_without_defaults(&legacy)),
+        )
+        .unwrap();
+
+        let store = JsonlReceiptStore::open(path.clone()).await.unwrap();
+        let memory_record_id = Uuid::from_u128(0x100);
+        let outcome = store
+            .backfill(
+                false,
+                &[ReceiptBackfillCorrelation {
+                    receipt_id: legacy_id,
+                    memory_record_id,
+                }],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.row_count, 1);
+        assert!(outcome.rollback_path.is_some());
+        let rows = read_receipt_file(&path);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].memory_record_id, Some(memory_record_id));
+    }
+
+    #[tokio::test]
+    async fn jsonl_backfill_does_not_drop_a_concurrently_recorded_receipt() {
+        // Regression: backfill must hold the store write lock across its
+        // read-modify-rename. The daemon records settlement receipts during
+        // intent dispatch while a backfill request runs; without the lock a
+        // receipt appended between the backfill's read and its atomic rename is
+        // silently clobbered. With the lock either interleaving is safe.
+        for i in 0..12u128 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("receipts.jsonl");
+            let legacy_id = Uuid::from_u128(0x10);
+            let mut legacy = receipt(10);
+            legacy.id = legacy_id;
+            std::fs::write(
+                &path,
+                format!("{}\n", legacy_receipt_wire_without_defaults(&legacy)),
+            )
+            .unwrap();
+            let store = JsonlReceiptStore::open(path.clone()).await.unwrap();
+
+            let fresh_id = Uuid::from_u128(0x900 + i);
+            let mut fresh = receipt(99);
+            fresh.id = fresh_id;
+            let correlations = [ReceiptBackfillCorrelation {
+                receipt_id: legacy_id,
+                memory_record_id: Uuid::from_u128(0x100),
+            }];
+
+            let (backfill_res, record_res) =
+                tokio::join!(store.backfill(false, &correlations), store.record(fresh));
+            backfill_res.unwrap();
+            record_res.unwrap();
+
+            let ids: Vec<Uuid> = read_receipt_file(&path).into_iter().map(|r| r.id).collect();
+            assert!(
+                ids.contains(&fresh_id),
+                "iteration {i}: a receipt recorded concurrently with backfill was lost: {ids:?}",
+            );
+            assert!(
+                ids.contains(&legacy_id),
+                "iteration {i}: the backfilled legacy receipt is missing: {ids:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn backfill_receipts_dry_run_reports_without_writes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("receipts.jsonl");
@@ -946,7 +1054,9 @@ mod tests {
         let original = legacy_receipt_wire_without_defaults(&legacy);
         std::fs::write(&path, format!("{original}\n")).unwrap();
 
-        let outcome = backfill_receipts(&path, false).await.unwrap();
+        let outcome = backfill_receipts_with_correlations(&path, false, &[])
+            .await
+            .unwrap();
 
         assert_eq!(outcome.row_count, 1);
         assert!(outcome.rollback_path.is_some());
@@ -966,7 +1076,9 @@ mod tests {
         let original = format!("{}\n", serde_json::to_string(&row).unwrap());
         std::fs::write(&path, &original).unwrap();
 
-        let outcome = backfill_receipts(&path, false).await.unwrap();
+        let outcome = backfill_receipts_with_correlations(&path, false, &[])
+            .await
+            .unwrap();
 
         assert_eq!(outcome.row_count, 0);
         assert_eq!(outcome.rollback_path, None);

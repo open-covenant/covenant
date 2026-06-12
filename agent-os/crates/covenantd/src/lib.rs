@@ -14177,15 +14177,15 @@ impl Server {
             }
         }
 
-        let Some(home) = self.home.clone() else {
+        if self.home.is_none() {
             return Response::Error {
                 message: "settlement backfill unavailable: server has no home directory configured"
                     .into(),
             };
-        };
-        let receipts_path = home.join("receipts").join("working.jsonl");
-
-        match covenant_settlement::backfill_receipts(&receipts_path, dry_run).await {
+        }
+        // Route the backfill through the live settlement store so its rewrite
+        // holds the same lock as concurrent record()/mark_batch_confirmed().
+        match self.settlement.backfill(dry_run, &[]).await {
             Ok(outcome) => {
                 let rollback_path = outcome.rollback_path.map(|path| path.display().to_string());
                 // Emitted only here, after backfill_receipts returned Ok —
@@ -14864,7 +14864,7 @@ mod tests {
     use covenant_memory::{InMemoryStore, MEMORY_BACKFILL_SAVEPOINT_NAME};
     use covenant_router::AgentCard;
     use covenant_runtime::MockRunner;
-    use covenant_settlement::InMemorySettlement;
+    use covenant_settlement::{InMemorySettlement, JsonlReceiptStore, Settlement};
 
     fn stub_card(id: &str, capabilities: Vec<&str>) -> AgentCard {
         let toml = format!(
@@ -16094,6 +16094,16 @@ required = {caps:?}
         }
     }
 
+    impl Server {
+        /// Test-only: replace the settlement backend so backfill tests drive
+        /// the file-backed `JsonlReceiptStore` (and its write lock) rather than
+        /// the in-memory default `server_with` installs.
+        fn with_settlement(mut self, settlement: Arc<dyn Settlement>) -> Self {
+            self.settlement = settlement;
+            self
+        }
+    }
+
     /// Seed `<home>/receipts/working.jsonl` with a single legacy-wire
     /// receipt row that omits the default-bearing chain fields. A backfill
     /// re-serializes those fields back as `null`, so the row counts as one
@@ -16154,9 +16164,12 @@ required = {caps:?}
     #[tokio::test]
     async fn settlement_backfill_apply_repairs_rows_with_capability() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
         let original = seed_legacy_receipt_row(dir.path());
         let store_path = dir.path().join("receipts").join("working.jsonl");
+        let store = Arc::new(JsonlReceiptStore::open(store_path.clone()).await.unwrap());
+        let s = server_with(vec![], "")
+            .with_home(dir.path().to_path_buf())
+            .with_settlement(store);
         s.op_respond(Request::GrantCapability {
             action: "settlement.backfill.apply".into(),
             scope: None,
@@ -16197,9 +16210,12 @@ required = {caps:?}
     #[tokio::test]
     async fn settlement_backfill_dry_run_reports_without_writes() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
         let original = seed_legacy_receipt_row(dir.path());
         let store_path = dir.path().join("receipts").join("working.jsonl");
+        let store = Arc::new(JsonlReceiptStore::open(store_path.clone()).await.unwrap());
+        let s = server_with(vec![], "")
+            .with_home(dir.path().to_path_buf())
+            .with_settlement(store);
         s.op_respond(Request::GrantCapability {
             action: "settlement.backfill.dry_run".into(),
             scope: None,
@@ -16237,8 +16253,15 @@ required = {caps:?}
     #[tokio::test]
     async fn settlement_backfill_apply_emits_audit_row_on_operator_feed() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
         seed_legacy_receipt_row(dir.path());
+        let store = Arc::new(
+            JsonlReceiptStore::open(dir.path().join("receipts").join("working.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let s = server_with(vec![], "")
+            .with_home(dir.path().to_path_buf())
+            .with_settlement(store);
         s.op_respond(Request::GrantCapability {
             action: "settlement.backfill.apply".into(),
             scope: None,
@@ -16298,8 +16321,15 @@ required = {caps:?}
     #[tokio::test]
     async fn settlement_backfill_dry_run_emits_audit_row_without_rollback_path() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
         seed_legacy_receipt_row(dir.path());
+        let store = Arc::new(
+            JsonlReceiptStore::open(dir.path().join("receipts").join("working.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let s = server_with(vec![], "")
+            .with_home(dir.path().to_path_buf())
+            .with_settlement(store);
         s.op_respond(Request::GrantCapability {
             action: "settlement.backfill.dry_run".into(),
             scope: None,

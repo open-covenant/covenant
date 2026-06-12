@@ -1330,41 +1330,183 @@ mod imp {
             lanes_hex(&state)
         }
 
-        /// Digest every line, four at a time, bucketed by padded block count;
-        /// leftovers take the single-lane path.
-        #[target_feature(enable = "simd128")]
-        pub(super) fn digest_all(lines: &[&[u8]]) -> Vec<[u8; 64]> {
-            let mut out = vec![[0u8; 64]; lines.len()];
-            let mut buckets: Vec<Vec<u32>> = Vec::new();
-            for (i, line) in lines.iter().enumerate() {
-                let blocks = (line.len() + 72) >> 6;
-                if buckets.len() <= blocks {
-                    buckets.resize_with(blocks + 1, Vec::new);
+    /// Digest every line, four at a time, bucketed by padded block count;
+            /// leftovers take the single-lane path.
+            #[target_feature(enable = "simd128")]
+            pub(super) fn digest_all(lines: &[&[u8]]) -> Vec<[u8; 64]> {
+                let mut out = vec![[0u8; 64]; lines.len()];
+
+                macro_rules! run_quad {
+                    ($q:expr, $blocks:expr) => {{
+                        let qv: [u32; 4] = $q;
+                        let i0 = qv[0] as usize;
+                        let i1 = qv[1] as usize;
+                        let i2 = qv[2] as usize;
+                        let i3 = qv[3] as usize;
+                        let l0 = lines[i0];
+                        let l1 = lines[i1];
+                        let l2 = lines[i2];
+                        let l3 = lines[i3];
+                        let full: usize = $blocks - 1;
+
+                        let hexes = if (l0.len() >> 6) == full
+                            && (l1.len() >> 6) == full
+                            && (l2.len() >> 6) == full
+                            && (l3.len() >> 6) == full
+                        {
+                            let off = full << 6;
+                            let mut tails = [[0u8; 64]; 4];
+
+                            let r0 = l0.len() - off;
+                            tails[0][..r0].copy_from_slice(&l0[off..off + r0]);
+                            tails[0][r0] = 0x80;
+                            tails[0][56..64]
+                                .copy_from_slice(&((l0.len() as u64).wrapping_mul(8)).to_be_bytes());
+
+                            let r1 = l1.len() - off;
+                            tails[1][..r1].copy_from_slice(&l1[off..off + r1]);
+                            tails[1][r1] = 0x80;
+                            tails[1][56..64]
+                                .copy_from_slice(&((l1.len() as u64).wrapping_mul(8)).to_be_bytes());
+
+                            let r2 = l2.len() - off;
+                            tails[2][..r2].copy_from_slice(&l2[off..off + r2]);
+                            tails[2][r2] = 0x80;
+                            tails[2][56..64]
+                                .copy_from_slice(&((l2.len() as u64).wrapping_mul(8)).to_be_bytes());
+
+                            let r3 = l3.len() - off;
+                            tails[3][..r3].copy_from_slice(&l3[off..off + r3]);
+                            tails[3][r3] = 0x80;
+                            tails[3][56..64]
+                                .copy_from_slice(&((l3.len() as u64).wrapping_mul(8)).to_be_bytes());
+
+                            let mut state = splat_h0();
+                            let mut k = 0;
+                            while k < full {
+                                let p = k << 6;
+                                let b0: &[u8; 64] =
+                                    l0[p..p + 64].try_into().expect("64-byte block");
+                                let b1: &[u8; 64] =
+                                    l1[p..p + 64].try_into().expect("64-byte block");
+                                let b2: &[u8; 64] =
+                                    l2[p..p + 64].try_into().expect("64-byte block");
+                                let b3: &[u8; 64] =
+                                    l3[p..p + 64].try_into().expect("64-byte block");
+                                let q0 = quad::<0>(b0, b1, b2, b3);
+                                let q1 = quad::<16>(b0, b1, b2, b3);
+                                let q2 = quad::<32>(b0, b1, b2, b3);
+                                let q3 = quad::<48>(b0, b1, b2, b3);
+                                compressm_at!(
+                                    &mut state,
+                                    [
+                                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3],
+                                        q2[0], q2[1], q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
+                                    ],
+                                );
+                                k += 1;
+                            }
+
+                            let b0: &[u8; 64] = &tails[0];
+                            let b1: &[u8; 64] = &tails[1];
+                            let b2: &[u8; 64] = &tails[2];
+                            let b3: &[u8; 64] = &tails[3];
+                            let q0 = quad::<0>(b0, b1, b2, b3);
+                            let q1 = quad::<16>(b0, b1, b2, b3);
+                            let q2 = quad::<32>(b0, b1, b2, b3);
+                            let q3 = quad::<48>(b0, b1, b2, b3);
+                            compressm_at!(
+                                &mut state,
+                                [
+                                    q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3],
+                                    q2[0], q2[1], q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
+                                ],
+                            );
+                            lanes_hex(&state)
+                        } else {
+                            digest4([l0, l1, l2, l3], $blocks)
+                        };
+
+                        out[i0] = hexes[0];
+                        out[i1] = hexes[1];
+                        out[i2] = hexes[2];
+                        out[i3] = hexes[3];
+                    }};
                 }
-                buckets[blocks].push(i as u32);
-            }
-            for (blocks, bucket) in buckets.iter().enumerate() {
-                let mut quads = bucket.chunks_exact(4);
-                for q in &mut quads {
-                    let hexes = digest4(
-                        [
-                            lines[q[0] as usize],
-                            lines[q[1] as usize],
-                            lines[q[2] as usize],
-                            lines[q[3] as usize],
-                        ],
-                        blocks,
-                    );
-                    for (j, hex) in hexes.iter().enumerate() {
-                        out[q[j] as usize] = *hex;
+
+                let mut p5 = [0u32; 4];
+                let mut p6 = [0u32; 4];
+                let mut c5 = 0usize;
+                let mut c6 = 0usize;
+                let mut pending: Vec<([u32; 4], usize)> = Vec::new();
+
+                let mut i = 0usize;
+                while i < lines.len() {
+                    let blocks = (lines[i].len() + 72) >> 6;
+                    if blocks == 6 {
+                        p6[c6] = i as u32;
+                        c6 += 1;
+                        if c6 == 4 {
+                            run_quad!(p6, 6usize);
+                            c6 = 0;
+                        }
+                    } else if blocks == 5 {
+                        p5[c5] = i as u32;
+                        c5 += 1;
+                        if c5 == 4 {
+                            run_quad!(p5, 5usize);
+                            c5 = 0;
+                        }
+                    } else {
+                        if pending.len() <= blocks {
+                            pending.resize(blocks + 1, ([0u32; 4], 0usize));
+                        }
+                        let c;
+                        {
+                            let slot = &mut pending[blocks];
+                            c = slot.1;
+                            slot.0[c] = i as u32;
+                            if c == 3 {
+                                slot.1 = 0;
+                            } else {
+                                slot.1 = c + 1;
+                            }
+                        }
+                        if c == 3 {
+                            let q = pending[blocks].0;
+                            run_quad!(q, blocks);
+                        }
                     }
+                    i += 1;
                 }
-                for &i in quads.remainder() {
-                    out[i as usize] = digest_hex(lines[i as usize]);
+
+                let mut r = 0usize;
+                while r < c5 {
+                    let j = p5[r] as usize;
+                    out[j] = digest_hex(lines[j]);
+                    r += 1;
                 }
+                r = 0;
+                while r < c6 {
+                    let j = p6[r] as usize;
+                    out[j] = digest_hex(lines[j]);
+                    r += 1;
+                }
+
+                let mut b = 0usize;
+                while b < pending.len() {
+                    let (q, c) = pending[b];
+                    let mut k = 0usize;
+                    while k < c {
+                        let j = q[k] as usize;
+                        out[j] = digest_hex(lines[j]);
+                        k += 1;
+                    }
+                    b += 1;
+                }
+
+                out
             }
-            out
-        }
 
         #[target_feature(enable = "simd128")]
         pub(super) fn digest_hex(bytes: &[u8]) -> [u8; 64] {

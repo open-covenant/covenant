@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T19:23:01.117Z",
+  "updatedAt": "2026-06-12T19:43:04.609Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8691,
+    "events": 8695,
     "tasks": 1032,
-    "integrated": 1033
+    "integrated": 1034
   },
   "throughput": {
-    "last24h": 74,
-    "last7d": 189,
-    "velocity": 27
+    "last24h": 75,
+    "last7d": 188,
+    "velocity": 26.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 56
+      "count": 57
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1033
+      "total": 1034
     }
   ],
   "states": {
-    "integrated": 1027,
+    "integrated": 1028,
     "proposed": 1,
-    "blocked": 3,
-    "self_review": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "bound-metaplex-signer-rpc-response-body",
-    "state": "self_review",
-    "since": "2026-06-12T19:14:53.334Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T19:24:32.629Z",
+      "task": "bound-metaplex-signer-rpc-response-body",
+      "note": "Committed ccb52cc5, pushed origin/loop/main-track (dce8e60b..ccb52cc5). README metrics + signer cap in one commit; autonomy records gitignor"
+    },
     {
       "at": "2026-06-12T17:17:01.755Z",
       "task": "bound-hermes-sse-event-stream-buffer",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T09:20:15.585Z",
       "task": "bound-web-search-tool-response-bodies",
       "note": "Integrated as 36042af7, pushed to origin/loop/main-track (6a485544..36042af7). Changed: covenant-tools/src/lib.rs (read_body_capped 16 MiB c"
-    },
-    {
-      "at": "2026-06-12T08:57:32.692Z",
-      "task": "bound-hermes-gateway-response-body",
-      "note": "Integrated as 6a485544 on loop/main-track (pushed e3e02157..6a485544). Bounds the 3 Hermes gateway response reads (submit/poll/probe) — the "
     }
   ]
 }

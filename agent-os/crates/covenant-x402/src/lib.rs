@@ -32,7 +32,7 @@ pub mod types;
 #[cfg(feature = "solana")]
 pub mod solana;
 
-pub use client::Client;
+pub use client::{http_client, Client};
 pub use flow::PaidRequest;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
 pub use signer::{MockSigner, Signer};

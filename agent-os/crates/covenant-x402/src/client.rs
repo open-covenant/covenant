@@ -2,6 +2,7 @@
 
 use reqwest::{Method, Response, StatusCode};
 use serde_json::Value;
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::{
@@ -9,6 +10,27 @@ use crate::{
     types::{Capability, PaymentRequirements},
     Result, X402Error,
 };
+
+/// Total per-request ceiling for the paid loop. The endpoint and its
+/// facilitator are untrusted, so a hung or never-completing response must
+/// not wedge the daemon worker forever. It is a safety ceiling, not an
+/// enforcement of a per-challenge window: the paid retry settles
+/// synchronously, so the ceiling sits well above a typical settlement to
+/// avoid aborting a legitimate payment after funds may be committed.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The reqwest client the daemon should drive [`Client::request_paid`]
+/// with — bounded so an unresponsive endpoint cannot block a worker.
+pub fn http_client() -> reqwest::Client {
+    http_client_with_timeout(REQUEST_TIMEOUT)
+}
+
+fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// Outbound x402 client.
 ///
@@ -178,6 +200,28 @@ mod tests {
         let reqs = vec![req("base:8453", "usdc-base", "80000")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         assert!(pick_requirement(&reqs, &c).is_none());
+    }
+
+    #[tokio::test]
+    async fn slow_endpoint_times_out_instead_of_hanging() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/image/creative-director"))
+            .respond_with(ResponseTemplate::new(402).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let client = Client::new(http_client_with_timeout(Duration::from_millis(50)));
+        let err = client
+            .request_paid(
+                Method::POST,
+                &format!("{}/image/creative-director", server.uri()),
+                None,
+                &cap("solana:mainnet", "usdc-sol", 100_000),
+                &MockSigner,
+            )
+            .await
+            .expect_err("must time out");
+        assert!(matches!(err, X402Error::Http(_)), "got {err:?}");
     }
 
     #[tokio::test]

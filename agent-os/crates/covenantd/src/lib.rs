@@ -5820,7 +5820,7 @@ impl Server {
             issuer: &issuer,
         };
 
-        let client = covenant_x402::Client::new(reqwest::Client::new());
+        let client = covenant_x402::Client::new(covenant_x402::http_client());
         let outcome =
             match x402::pay_and_record(&context, &config, &client, &signer, peer, &call).await {
                 Ok(outcome) => outcome,

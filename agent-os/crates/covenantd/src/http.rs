@@ -1668,4 +1668,99 @@ mod tests {
         assert_eq!(v.len(), 1, "the invalid entry is dropped");
         assert_eq!(v[0].to_str().unwrap(), "http://localhost:3000");
     }
+
+    static SAP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn sap_stats_path_pins_explicit_precedence_trim_and_blank_fallthrough() {
+        let _guard = SAP_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var("COVENANT_SAP_STATS_PATH").ok();
+
+        // An explicit override wins outright and is trimmed: the SAP worker
+        // and the /sap/stats handler must resolve the identical counter file
+        // or the endpoint reports a phantom zero against a live counter.
+        std::env::set_var(
+            "COVENANT_SAP_STATS_PATH",
+            "  /var/lib/covenant/explicit-stats.json  ",
+        );
+        assert_eq!(
+            sap_stats_path(),
+            std::path::PathBuf::from("/var/lib/covenant/explicit-stats.json"),
+        );
+
+        // A blank override is treated as unset, never as the literal path,
+        // and the fixed counter filename is always appended. Asserting the
+        // filename rather than the home-derived prefix keeps this test
+        // independent of concurrent COVENANT_HOME mutation in sibling tests.
+        std::env::set_var("COVENANT_SAP_STATS_PATH", "   ");
+        let resolved = sap_stats_path();
+        assert_ne!(resolved, std::path::PathBuf::from("   "));
+        assert_eq!(
+            resolved.file_name().and_then(|s| s.to_str()),
+            Some("sap-rpc-stats.json"),
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("COVENANT_SAP_STATS_PATH", v),
+            None => std::env::remove_var("COVENANT_SAP_STATS_PATH"),
+        }
+    }
+
+    #[test]
+    fn read_sap_stats_defaults_on_missing_and_malformed_else_parses_camelcase() {
+        use std::io::Write;
+
+        let _guard = SAP_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var("COVENANT_SAP_STATS_PATH").ok();
+
+        // Missing file is the normal pre-first-call state: zeros, not an error.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("COVENANT_SAP_STATS_PATH", dir.path().join("absent.json"));
+        let absent = read_sap_stats();
+        assert_eq!(
+            (
+                absent.calls,
+                absent.successes,
+                absent.failures,
+                absent.first_seen_unix,
+                absent.last_call_unix,
+            ),
+            (0, 0, 0, 0, 0),
+        );
+
+        // Valid camelCase JSON parses field-for-field.
+        let mut good = tempfile::NamedTempFile::new().expect("tempfile");
+        good.write_all(
+            br#"{"calls":7,"successes":5,"failures":2,"firstSeenUnix":11,"lastCallUnix":13}"#,
+        )
+        .expect("write good stats");
+        std::env::set_var("COVENANT_SAP_STATS_PATH", good.path());
+        let parsed = read_sap_stats();
+        assert_eq!(
+            (
+                parsed.calls,
+                parsed.successes,
+                parsed.failures,
+                parsed.first_seen_unix,
+                parsed.last_call_unix,
+            ),
+            (7, 5, 2, 11, 13),
+        );
+
+        // A corrupt body must fall back to defaults via unwrap_or_default(),
+        // never panic the /sap/stats handler with a mid-write counter file.
+        let mut bad = tempfile::NamedTempFile::new().expect("tempfile");
+        bad.write_all(b"this is not json").expect("write bad stats");
+        std::env::set_var("COVENANT_SAP_STATS_PATH", bad.path());
+        let corrupt = read_sap_stats();
+        assert_eq!(
+            (corrupt.calls, corrupt.successes, corrupt.failures),
+            (0, 0, 0)
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("COVENANT_SAP_STATS_PATH", v),
+            None => std::env::remove_var("COVENANT_SAP_STATS_PATH"),
+        }
+    }
 }

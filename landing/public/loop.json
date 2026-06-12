@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T03:19:59.579Z",
+  "updatedAt": "2026-06-12T03:40:03.421Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8276,
-    "tasks": 986,
-    "integrated": 986
+    "events": 8290,
+    "tasks": 987,
+    "integrated": 988
   },
   "throughput": {
-    "last24h": 27,
-    "last7d": 171,
-    "velocity": 24.4
+    "last24h": 29,
+    "last7d": 170,
+    "velocity": 24.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 9
+      "count": 11
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 986
+      "total": 988
     }
   ],
   "states": {
-    "integrated": 981,
+    "integrated": 983,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "stake-keeper-jupiter-quote-amount-parse-coverage",
-    "state": "in_progress",
-    "since": "2026-06-12T03:17:07.169Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T03:28:58.423Z",
+      "task": "sap-bridge-manifest-diff-metadata-field-coverage",
+      "note": "Pushed 46f0cbcb to origin/loop/main-track. Two tests pin per-field metadata drift in identity.rs; README metrics current at 2672."
+    },
+    {
+      "at": "2026-06-12T03:25:23.280Z",
+      "task": "stake-keeper-jupiter-quote-amount-parse-coverage",
+      "note": "Pushed 34c775ea to origin/loop/main-track. Two tests pin jupiter.rs amount parse failures; README metrics current at 2670."
+    },
     {
       "at": "2026-06-12T03:16:22.443Z",
       "task": "hyre-tool-arg-coercion-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-11T22:45:16.794Z",
       "task": "metaplex-das-http-rpc-envelope-coverage",
       "note": "Committed + pushed to origin/loop/main-track (das.rs + wiremock dev-dep + Cargo.lock edge + README)."
-    },
-    {
-      "at": "2026-06-11T22:38:12.823Z",
-      "task": "metaplex-request-uri-control-char-and-length-boundary-covera",
-      "note": "Security review performed in-role (test-only, no production change): both arms non-vacuous (control-char test fails if the is_control half i"
-    },
-    {
-      "at": "2026-06-11T22:33:27.362Z",
-      "task": "metaplex-signer-collection-from-env-coverage",
-      "note": "Committed + pushed to origin/loop/main-track."
     }
   ]
 }

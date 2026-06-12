@@ -19,6 +19,13 @@ use crate::{
 /// avoid aborting a legitimate payment after funds may be committed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Maximum 402-challenge body the client will buffer into memory. Any
+/// endpoint that answers `402` controls that body, so a malicious one must
+/// not be able to exhaust a daemon worker's memory with an unbounded
+/// challenge. 16 MiB sits far above any real requirements array yet stops a
+/// runaway stream — the memory-axis sibling of [`REQUEST_TIMEOUT`].
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 /// The reqwest client the daemon should drive [`Client::request_paid`]
 /// with — bounded so an unresponsive endpoint cannot block a worker.
 pub fn http_client() -> reqwest::Client {
@@ -38,11 +45,16 @@ fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
 /// instance across many capability-scoped calls.
 pub struct Client {
     http: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl Client {
     pub fn new(http: reqwest::Client) -> Self {
-        Self { http }
+        Self::with_limits(http, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(http: reqwest::Client, max_bytes: usize) -> Self {
+        Self { http, max_bytes }
     }
 
     /// Issue a paid request.
@@ -77,7 +89,7 @@ impl Client {
             return Err(X402Error::UnexpectedStatus(status.as_u16()));
         }
 
-        let challenge_text = initial.text().await?;
+        let challenge_text = read_capped(initial, self.max_bytes).await?;
         let requirements: Vec<PaymentRequirements> = serde_json::from_str(&challenge_text)
             .map_err(|e| X402Error::DecodeChallenge(e.to_string()))?;
 
@@ -110,6 +122,31 @@ impl Client {
         }
         Ok(req.send().await?)
     }
+}
+
+/// Read the challenge body into a string, refusing anything past `max`. The
+/// `Content-Length` check rejects an oversized declared body before it is
+/// streamed; the running accumulation check is the real guard, since the
+/// header is optional and provider-controlled. The challenge is JSON, so the
+/// bounded bytes are decoded lossily rather than via charset-aware `.text()`.
+async fn read_capped(mut resp: Response, max: usize) -> Result<String> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(X402Error::DecodeChallenge(format!(
+                "challenge body of {len} bytes exceeds the {max}-byte cap"
+            )));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if buf.len() + chunk.len() > max {
+            return Err(X402Error::DecodeChallenge(format!(
+                "challenge body exceeds the {max}-byte cap"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// Picks the first requirement that matches the capability.
@@ -222,6 +259,28 @@ mod tests {
             .await
             .expect_err("must time out");
         assert!(matches!(err, X402Error::Http(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_challenge_body_is_rejected_instead_of_buffered() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/image/creative-director"))
+            .respond_with(ResponseTemplate::new(402).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let client = Client::with_limits(reqwest::Client::new(), 64);
+        let err = client
+            .request_paid(
+                Method::POST,
+                &format!("{}/image/creative-director", server.uri()),
+                None,
+                &cap("solana:mainnet", "usdc-sol", 100_000),
+                &MockSigner,
+            )
+            .await
+            .expect_err("must reject an oversized challenge");
+        assert!(matches!(err, X402Error::DecodeChallenge(_)), "got {err:?}");
     }
 
     #[tokio::test]

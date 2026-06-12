@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T00:19:27.565Z",
+  "updatedAt": "2026-06-12T00:39:31.217Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8214,
-    "tasks": 979,
-    "integrated": 979
+    "events": 8231,
+    "tasks": 981,
+    "integrated": 981
   },
   "throughput": {
-    "last24h": 20,
-    "last7d": 175,
-    "velocity": 25
+    "last24h": 22,
+    "last7d": 174,
+    "velocity": 24.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 2
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-12",
-      "total": 979
+      "total": 981
     }
   ],
   "states": {
-    "integrated": 974,
+    "integrated": 976,
     "proposed": 1,
     "blocked": 3,
-    "self_review": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "covenantd-hyre-executor-budget-would-exceed-refusal",
-    "state": "self_review",
-    "since": "2026-06-12T00:18:36.473Z"
+    "task": "covenantd-metaplex-from-config-and-action-label-coverage",
+    "state": "in_progress",
+    "since": "2026-06-12T00:37:58.266Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T00:34:39.557Z",
+      "task": "covenantd-http-sap-stats-coverage",
+      "note": "committed to loop/main-track: test(covenantd-http) pin sap-stats path resolution and read fallback; README 2651->2653"
+    },
+    {
+      "at": "2026-06-12T00:19:51.012Z",
+      "task": "covenantd-hyre-executor-budget-would-exceed-refusal",
+      "note": "Committed aea560ab + pushed to origin/loop/main-track. Test-only: 1 test pins covenantd hyre DaemonHyreExecutor over-budget would_exceed ref"
+    },
     {
       "at": "2026-06-12T00:16:07.210Z",
       "task": "covenantd-x402-pay-and-record-budget-precheck-refusals",
@@ -310,16 +320,6 @@
       "at": "2026-06-11T21:46:03.141Z",
       "task": "metaplex-signer-build-request-coverage",
       "note": "Committed 9873b9a4, pushed to origin/loop/main-track. 7 build() tests; independently security-reviewed (APPROVE)."
-    },
-    {
-      "at": "2026-06-11T21:39:44.228Z",
-      "task": "metaplex-signer-guard-and-io-coverage",
-      "note": "Committed d40de71a, pushed 53e93ce8..d40de71a to origin/loop/main-track. 10 pure-logic tests for the metaplex-signer guards/IO; security-rev"
-    },
-    {
-      "at": "2026-06-11T21:04:51.421Z",
-      "task": "metaplex-tool-gating-and-request-build-coverage",
-      "note": "Pushed in 53e93ce8 to origin/loop/main-track. Bundled with the branch --scripts gate repair (line-ref realignment + 2 validator anchor syncs"
     }
   ]
 }

@@ -97,9 +97,13 @@ impl HyreConfig {
         }
     }
 
-    /// Apply the resale markup to an atomic-USDC price.
-    pub fn marked_up(&self, price_micro_usdc: u128) -> u128 {
-        price_micro_usdc + price_micro_usdc * self.markup_bps as u128 / 10_000
+    /// Apply the resale markup to an atomic-USDC price. Returns `None`
+    /// when the markup overflows `u128`: the price is manifest-derived
+    /// and unbounded, so an absurd price must drop out of the resale set
+    /// rather than panic the derivation (overflow-checks is on in release).
+    pub fn marked_up(&self, price_micro_usdc: u128) -> Option<u128> {
+        let markup = price_micro_usdc.checked_mul(self.markup_bps as u128)? / 10_000;
+        price_micro_usdc.checked_add(markup)
     }
 }
 
@@ -130,9 +134,22 @@ mod tests {
     #[test]
     fn markup_applies_basis_points() {
         let mut c = HyreConfig::default();
-        assert_eq!(c.marked_up(80_000), 80_000);
+        assert_eq!(c.marked_up(80_000), Some(80_000));
         c.markup_bps = 2_000; // +20%
-        assert_eq!(c.marked_up(80_000), 96_000);
+        assert_eq!(c.marked_up(80_000), Some(96_000));
+    }
+
+    #[test]
+    fn marked_up_rejects_overflowing_markup() {
+        // The price is manifest-derived and only bounded to <= u128::MAX by
+        // usd_to_micro, so a large-but-valid price times a nonzero markup
+        // overflows. It must return None — dropping the tool from the resale
+        // set — rather than panic the derivation under overflow-checks.
+        let c = HyreConfig {
+            markup_bps: 5_000, // +50%
+            ..HyreConfig::default()
+        };
+        assert_eq!(c.marked_up(u128::MAX), None);
     }
 
     #[test]

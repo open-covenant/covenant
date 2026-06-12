@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T03:40:03.421Z",
+  "updatedAt": "2026-06-12T04:00:07.057Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8290,
-    "tasks": 987,
-    "integrated": 988
+    "events": 8326,
+    "tasks": 991,
+    "integrated": 992
   },
   "throughput": {
-    "last24h": 29,
-    "last7d": 170,
-    "velocity": 24.3
+    "last24h": 33,
+    "last7d": 172,
+    "velocity": 24.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 11
+      "count": 15
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 988
+      "total": 992
     }
   ],
   "states": {
-    "integrated": 983,
+    "integrated": 987,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,26 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T03:59:25.239Z",
+      "task": "zauth-reposcan-signer-failure-fail-closed-coverage",
+      "note": "Pushed 3e9aaa16 to origin/loop/main-track. Pins fail-closed signer-failure arm in reposcan scan; README 2676."
+    },
+    {
+      "at": "2026-06-12T03:54:31.737Z",
+      "task": "hyre-facilitator-from-x402-wire-contract-coverage",
+      "note": "Pushed 0a313a41 to origin/loop/main-track. Pins from_x402 wire-contract fields; README 2675."
+    },
+    {
+      "at": "2026-06-12T03:50:51.146Z",
+      "task": "sap-bridge-config-cluster-enabled-rpc-layering-coverage",
+      "note": "Pushed 8ba67d20 to origin/loop/main-track. One test pins enabled+rpc_url cluster-beats-global layering in from_env; README 2674."
+    },
+    {
+      "at": "2026-06-12T03:45:37.878Z",
+      "task": "hyre-x402-select-scheme-and-amount-rejection-coverage",
+      "note": "Pushed 81b31358 to origin/loop/main-track. One test pins x402::select fails closed on non-exact scheme and unparseable amount; README metric"
+    },
     {
       "at": "2026-06-12T03:28:58.423Z",
       "task": "sap-bridge-manifest-diff-metadata-field-coverage",
@@ -295,26 +315,6 @@
       "at": "2026-06-11T23:07:06.216Z",
       "task": "metaplex-attestation-payload-wire-contract-coverage",
       "note": "Committed 3a4144be + pushed to origin/loop/main-track. Test-only AppData camelCase + AttestAuditRoot serde-default coverage; README metrics "
-    },
-    {
-      "at": "2026-06-11T23:03:24.102Z",
-      "task": "zauth-challenge-select-scheme-asset-filter-coverage",
-      "note": "Committed 067aef36 + pushed to origin/loop/main-track. Test-only x402 scheme/asset filter coverage in covenant-zauth challenge::select; READ"
-    },
-    {
-      "at": "2026-06-11T22:51:56.954Z",
-      "task": "metaplex-das-outbound-envelope-coverage",
-      "note": "Committed + pushed to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-11T22:48:46.339Z",
-      "task": "zauth-directory-list-query-param-completeness-coverage",
-      "note": "Committed 9956a66b, pushed to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-11T22:45:16.794Z",
-      "task": "metaplex-das-http-rpc-envelope-coverage",
-      "note": "Committed + pushed to origin/loop/main-track (das.rs + wiremock dev-dep + Cargo.lock edge + README)."
     }
   ]
 }

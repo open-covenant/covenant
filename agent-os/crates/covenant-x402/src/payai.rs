@@ -45,6 +45,7 @@ use solana_sdk::{
 use spl_associated_token_account::get_associated_token_address;
 use tracing::debug;
 
+use crate::http::{read_capped, MAX_RESPONSE_BYTES};
 use crate::solana::decimals_for_mint;
 use crate::{PaymentRequirements, Result, Signer, X402Error};
 
@@ -59,6 +60,7 @@ pub struct PayaiSolanaSigner {
     keypair: Keypair,
     rpc_url: String,
     http: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl PayaiSolanaSigner {
@@ -67,10 +69,20 @@ impl PayaiSolanaSigner {
     }
 
     pub fn with(keypair: Keypair, rpc_url: impl Into<String>, http: reqwest::Client) -> Self {
+        Self::with_limits(keypair, rpc_url, http, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        keypair: Keypair,
+        rpc_url: impl Into<String>,
+        http: reqwest::Client,
+        max_bytes: usize,
+    ) -> Self {
         Self {
             keypair,
             rpc_url: rpc_url.into(),
             http,
+            max_bytes,
         }
     }
 
@@ -98,12 +110,14 @@ impl PayaiSolanaSigner {
         let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(X402Error::Sign(format!(
-                "rpc status {status}: {}",
-                resp.text().await.unwrap_or_default()
-            )));
+            let body = read_capped(resp, self.max_bytes, X402Error::Sign)
+                .await
+                .unwrap_or_default();
+            return Err(X402Error::Sign(format!("rpc status {status}: {body}")));
         }
-        let parsed: serde_json::Value = resp.json().await?;
+        let text = read_capped(resp, self.max_bytes, X402Error::Sign).await?;
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| X402Error::Sign(format!("decode rpc response: {e}")))?;
         let blockhash_str = parsed
             .pointer("/result/value/blockhash")
             .and_then(|v| v.as_str())
@@ -127,12 +141,16 @@ impl PayaiSolanaSigner {
         let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
+            let body = read_capped(resp, self.max_bytes, X402Error::Sign)
+                .await
+                .unwrap_or_default();
             return Err(X402Error::Sign(format!(
-                "rpc getAccountInfo status {status}: {}",
-                resp.text().await.unwrap_or_default()
+                "rpc getAccountInfo status {status}: {body}"
             )));
         }
-        let parsed: serde_json::Value = resp.json().await?;
+        let text = read_capped(resp, self.max_bytes, X402Error::Sign).await?;
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| X402Error::Sign(format!("decode rpc response: {e}")))?;
         Ok(parsed
             .pointer("/result/value")
             .map(|v| !v.is_null())
@@ -549,5 +567,31 @@ mod tests {
             .await
             .expect_err("rpc error status");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("getAccountInfo status")));
+    }
+
+    #[tokio::test]
+    async fn latest_blockhash_rejects_oversized_rpc_body() {
+        // The Solana RPC is untrusted: a compromised or malicious node returning
+        // a body past the cap must fail closed as a Sign error rather than buffer
+        // the whole response into the keypair-custody signer and OOM it.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let signer = PayaiSolanaSigner::with_limits(
+            Keypair::new(),
+            server.uri(),
+            reqwest::Client::new(),
+            64,
+        );
+        let err = signer
+            .latest_blockhash()
+            .await
+            .expect_err("oversized rpc body");
+        assert!(
+            matches!(err, X402Error::Sign(ref msg) if msg.contains("cap")),
+            "got: {err:?}"
+        );
     }
 }

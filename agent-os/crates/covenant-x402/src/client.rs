@@ -6,6 +6,7 @@ use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::{
+    http::{read_capped, MAX_RESPONSE_BYTES},
     signer::Signer,
     types::{Capability, PaymentRequirements},
     Result, X402Error,
@@ -18,13 +19,6 @@ use crate::{
 /// synchronously, so the ceiling sits well above a typical settlement to
 /// avoid aborting a legitimate payment after funds may be committed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// Maximum 402-challenge body the client will buffer into memory. Any
-/// endpoint that answers `402` controls that body, so a malicious one must
-/// not be able to exhaust a daemon worker's memory with an unbounded
-/// challenge. 16 MiB sits far above any real requirements array yet stops a
-/// runaway stream — the memory-axis sibling of [`REQUEST_TIMEOUT`].
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// The reqwest client the daemon should drive [`Client::request_paid`]
 /// with — bounded so an unresponsive endpoint cannot block a worker.
@@ -89,7 +83,8 @@ impl Client {
             return Err(X402Error::UnexpectedStatus(status.as_u16()));
         }
 
-        let challenge_text = read_capped(initial, self.max_bytes).await?;
+        let challenge_text =
+            read_capped(initial, self.max_bytes, X402Error::DecodeChallenge).await?;
         let requirements: Vec<PaymentRequirements> = serde_json::from_str(&challenge_text)
             .map_err(|e| X402Error::DecodeChallenge(e.to_string()))?;
 
@@ -122,31 +117,6 @@ impl Client {
         }
         Ok(req.send().await?)
     }
-}
-
-/// Read the challenge body into a string, refusing anything past `max`. The
-/// `Content-Length` check rejects an oversized declared body before it is
-/// streamed; the running accumulation check is the real guard, since the
-/// header is optional and provider-controlled. The challenge is JSON, so the
-/// bounded bytes are decoded lossily rather than via charset-aware `.text()`.
-async fn read_capped(mut resp: Response, max: usize) -> Result<String> {
-    if let Some(len) = resp.content_length() {
-        if len > max as u64 {
-            return Err(X402Error::DecodeChallenge(format!(
-                "challenge body of {len} bytes exceeds the {max}-byte cap"
-            )));
-        }
-    }
-    let mut buf = Vec::new();
-    while let Some(chunk) = resp.chunk().await? {
-        if buf.len() + chunk.len() > max {
-            return Err(X402Error::DecodeChallenge(format!(
-                "challenge body exceeds the {max}-byte cap"
-            )));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// Picks the first requirement that matches the capability.

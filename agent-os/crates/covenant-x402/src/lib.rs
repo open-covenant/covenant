@@ -25,6 +25,7 @@
 
 pub mod client;
 pub mod flow;
+mod http;
 pub mod orbit;
 pub mod signer;
 pub mod types;

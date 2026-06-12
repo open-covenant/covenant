@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T09:01:01.556Z",
+  "updatedAt": "2026-06-12T09:21:05.346Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8524,
-    "tasks": 1013,
-    "integrated": 1014
+    "events": 8533,
+    "tasks": 1014,
+    "integrated": 1015
   },
   "throughput": {
-    "last24h": 55,
-    "last7d": 187,
-    "velocity": 26.7
+    "last24h": 56,
+    "last7d": 188,
+    "velocity": 26.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 37
+      "count": 38
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1014
+      "total": 1015
     }
   ],
   "states": {
-    "integrated": 1009,
+    "integrated": 1010,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T09:20:15.585Z",
+      "task": "bound-web-search-tool-response-bodies",
+      "note": "Integrated as 36042af7, pushed to origin/loop/main-track (6a485544..36042af7). Changed: covenant-tools/src/lib.rs (read_body_capped 16 MiB c"
+    },
     {
       "at": "2026-06-12T08:57:32.692Z",
       "task": "bound-hermes-gateway-response-body",
@@ -310,11 +315,6 @@
       "at": "2026-06-12T04:46:06.190Z",
       "task": "harden-hyre-manifest-reject-zero-price",
       "note": "Shipped as 68d5baf0, pushed to origin/loop/main-track. usd_to_micro now rejects zero-price paid endpoints; tests usd_to_micro_rejects_zero_p"
-    },
-    {
-      "at": "2026-06-12T04:33:13.130Z",
-      "task": "harden-x402-pick-requirement-reject-zero-amount",
-      "note": "Shipped as ac6c84e9, pushed to origin/loop/main-track. pick_requirement now rejects zero-amount requirements; test pick_rejects_zero_amount "
     }
   ]
 }

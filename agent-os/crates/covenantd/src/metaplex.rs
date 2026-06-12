@@ -92,11 +92,13 @@ impl SubprocessMetaplexSigner {
             env,
         }
     }
-}
 
-#[async_trait::async_trait]
-impl MetaplexSigner for SubprocessMetaplexSigner {
-    async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
+    async fn sign_with_limits(
+        &self,
+        request: SignerRequest,
+        max_output_bytes: usize,
+        deadline: std::time::Duration,
+    ) -> Result<SignerResponse, String> {
         let payload = serde_json::to_vec(&request).map_err(|e| format!("encode request: {e}"))?;
 
         let mut child = Command::new(&self.program)
@@ -105,6 +107,10 @@ impl MetaplexSigner for SubprocessMetaplexSigner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // An over-cap flood or an elapsed deadline returns early, dropping
+            // the Child; kill_on_drop reaps the sidecar instead of leaving it
+            // running detached.
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| format!("spawn signer {:?}: {e}", self.program))?;
 
@@ -120,22 +126,23 @@ impl MetaplexSigner for SubprocessMetaplexSigner {
             // Drop closes stdin so the one-shot sidecar sees EOF.
         }
 
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|e| format!("await signer: {e}"))?;
+        // wait_with_output() buffered stdout and stderr unbounded with no
+        // deadline; the metaplex signer talks to Solana RPC and DAS, so a
+        // runaway, buggy, or hostile-RPC-fed sidecar could OOM the daemon or
+        // hang here. Shared with the x402 signer dispatch so the cap and the
+        // deadline never diverge.
+        let (stdout_bytes, stderr_bytes, status) =
+            crate::x402::read_signer_output(&mut child, max_output_bytes, deadline)
+                .await
+                .map_err(|e| e.message())?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!(
-                "signer exited {}: {}",
-                output.status,
-                stderr.trim()
-            ));
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_bytes);
+            return Err(format!("signer exited {}: {}", status, stderr.trim()));
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .map_err(|e| format!("signer stdout not utf-8: {e}"))?;
+        let stdout =
+            String::from_utf8(stdout_bytes).map_err(|e| format!("signer stdout not utf-8: {e}"))?;
         let response = serde_json::from_str::<SignerResponse>(stdout.trim())
             .map_err(|e| format!("decode signer response: {e}"))?;
 
@@ -151,6 +158,18 @@ impl MetaplexSigner for SubprocessMetaplexSigner {
             "metaplex on-chain write confirmed"
         );
         Ok(response)
+    }
+}
+
+#[async_trait::async_trait]
+impl MetaplexSigner for SubprocessMetaplexSigner {
+    async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
+        self.sign_with_limits(
+            request,
+            crate::x402::MAX_SIGNER_OUTPUT_BYTES,
+            crate::x402::SIGNER_OUTPUT_DEADLINE,
+        )
+        .await
     }
 }
 
@@ -326,5 +345,65 @@ mod tests {
         };
         assert_eq!(action_label(&attest), "attest.audit_root");
         assert_eq!(action_label(&register), "identity.register");
+    }
+
+    fn sample_request() -> SignerRequest {
+        SignerRequest::RegisterIdentity {
+            agent_label: "operator".into(),
+            agent_pubkey: "Agent1111111111111111111111111111111111111".into(),
+            asset: None,
+            registration_uri: None,
+        }
+    }
+
+    fn fake_signer(body: &str) -> (tempfile::TempDir, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = dir.path().join("fake-signer.sh");
+        // `cat >/dev/null` drains the request on stdin first so the daemon's
+        // write does not race a broken pipe before the body runs.
+        std::fs::write(&script, format!("#!/bin/sh\ncat >/dev/null\n{body}\n"))
+            .expect("write script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        (dir, script)
+    }
+
+    #[tokio::test]
+    async fn sign_with_limits_rejects_oversized_signer_stdout() {
+        // The metaplex signer talks to Solana RPC and DAS, so its stdout is
+        // untrusted; a flood past the cap must surface a cap-breach error
+        // instead of buffering the whole stream and OOMing the daemon. A
+        // 64-byte cap against 200 bytes of output forces the overflow branch.
+        let (_dir, script) = fake_signer("head -c 200 /dev/zero");
+        let signer = SubprocessMetaplexSigner {
+            program: script,
+            env: vec![],
+        };
+        let err = signer
+            .sign_with_limits(sample_request(), 64, std::time::Duration::from_secs(30))
+            .await
+            .expect_err("over cap");
+        assert!(
+            err.contains("exceeded") && err.contains("cap"),
+            "an over-cap signer stdout must surface as a cap-breach error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_with_limits_decodes_under_cap_response() {
+        // A normal single-line SignerResponse under the cap must still decode,
+        // proving the bounded read did not regress the happy path.
+        let (_dir, script) =
+            fake_signer("printf '{\"signature\":\"s\",\"asset\":\"a\",\"cluster\":\"devnet\"}'");
+        let signer = SubprocessMetaplexSigner {
+            program: script,
+            env: vec![],
+        };
+        let resp = signer
+            .sign_with_limits(sample_request(), 4096, std::time::Duration::from_secs(30))
+            .await
+            .expect("under-cap response decodes");
+        assert_eq!(resp.cluster, "devnet");
+        assert_eq!(resp.signature, "s");
     }
 }

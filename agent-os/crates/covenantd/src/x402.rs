@@ -27,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use reqwest::{Method, Response};
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -87,11 +87,13 @@ impl SubprocessSigner {
         self.env.push((key.into(), value.into()));
         self
     }
-}
 
-#[async_trait::async_trait]
-impl Signer for SubprocessSigner {
-    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String, X402Error> {
+    async fn build_payment_with_limits(
+        &self,
+        requirements: &PaymentRequirements,
+        max_output_bytes: usize,
+        deadline: std::time::Duration,
+    ) -> Result<String, X402Error> {
         let payload = serde_json::to_vec(requirements)
             .map_err(|e| X402Error::Sign(format!("encode requirement: {e}")))?;
 
@@ -102,6 +104,10 @@ impl Signer for SubprocessSigner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // An over-cap flood or an elapsed deadline returns early, dropping
+            // the Child; kill_on_drop reaps the sidecar instead of leaving it
+            // running detached.
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| X402Error::Sign(format!("spawn signer {:?}: {e}", self.program)))?;
 
@@ -117,21 +123,21 @@ impl Signer for SubprocessSigner {
             // Drop closes stdin so the one-shot sidecar sees EOF.
         }
 
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|e| X402Error::Sign(format!("await signer: {e}")))?;
+        let (stdout_bytes, stderr_bytes, status) =
+            read_signer_output(&mut child, max_output_bytes, deadline)
+                .await
+                .map_err(|e| X402Error::Sign(e.message()))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_bytes);
             return Err(X402Error::Sign(format!(
                 "signer exited {}: {}",
-                output.status,
+                status,
                 stderr.trim()
             )));
         }
 
-        let header = String::from_utf8(output.stdout)
+        let header = String::from_utf8(stdout_bytes)
             .map_err(|e| X402Error::Sign(format!("signer stdout not utf-8: {e}")))?;
         let header = header.trim().to_string();
         if header.is_empty() {
@@ -139,6 +145,132 @@ impl Signer for SubprocessSigner {
         }
         Ok(header)
     }
+}
+
+#[async_trait::async_trait]
+impl Signer for SubprocessSigner {
+    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String, X402Error> {
+        self.build_payment_with_limits(
+            requirements,
+            MAX_SIGNER_OUTPUT_BYTES,
+            SIGNER_OUTPUT_DEADLINE,
+        )
+        .await
+    }
+}
+
+/// Maximum bytes the daemon buffers from one signer sidecar stream. The x402
+/// and metaplex signer sidecars talk to Solana RPC and DAS, so their stdout and
+/// stderr reflect external responses; an unbounded read lets a runaway, buggy,
+/// or hostile-RPC-fed sidecar exhaust the daemon's memory. The result is a
+/// single line, so 16 MiB sits far above any legitimate payload while still
+/// capping a flood — the memory-axis sibling of the bounded paid-call response
+/// read below and of the runner's `read_agent_output_capped`.
+pub(crate) const MAX_SIGNER_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Wall-clock budget for one signer dispatch, applied independently to the read
+/// phase and to the post-kill reap (the stdin write is not counted), so a
+/// wedged sidecar costs at most ~2× this before it is killed and reaped — the
+/// same two-stage bound the SAP bridge worker uses. `wait_with_output()` had no
+/// deadline at all, letting a sidecar that stalls with a pipe held open hang the
+/// dispatch forever; this also lets the concurrent capped read make progress
+/// when one stream stalls after the other has already returned.
+pub(crate) const SIGNER_OUTPUT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Why a signer sidecar's bounded output could not be read. Callers map each
+/// arm onto their own signer error type (the metaplex signer's `String`, the
+/// x402 signer's [`X402Error::Sign`]) via [`SignerOutputError::message`], so the
+/// wording stays identical across both dispatches.
+#[derive(Debug)]
+pub(crate) enum SignerOutputError {
+    /// stdout exceeded the byte cap; the sidecar was killed before any
+    /// truncated envelope could be parsed.
+    StdoutTooLarge(usize),
+    /// The read-and-reap deadline (seconds) elapsed; the sidecar was killed.
+    Timeout(u64),
+    /// An I/O error reading a stream or reaping the sidecar.
+    Io(std::io::Error),
+}
+
+impl SignerOutputError {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            SignerOutputError::StdoutTooLarge(cap) => {
+                format!("signer stdout exceeded the {cap}-byte cap")
+            }
+            SignerOutputError::Timeout(secs) => format!("signer did not finish within {secs}s"),
+            SignerOutputError::Io(e) => format!("read signer output: {e}"),
+        }
+    }
+}
+
+/// Reads up to `max` bytes from a signer subprocess stream, reporting whether
+/// the stream had more to give. `take` stops the read at the cap instead of
+/// buffering an unbounded body; reading one extra byte lets the caller tell an
+/// exact-fit payload from a truncated flood. The returned buffer is clamped to
+/// `max`.
+async fn read_stream_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut buf = Vec::new();
+    reader.take(max as u64 + 1).read_to_end(&mut buf).await?;
+    let overflowed = buf.len() > max;
+    buf.truncate(max);
+    Ok((buf, overflowed))
+}
+
+/// Reads a one-shot signer sidecar's stdout and stderr — each bounded to `max`
+/// bytes — then reaps it, all within `deadline`. This replaces
+/// `child.wait_with_output()`, which buffered both streams to EOF with no size
+/// cap and no deadline, letting a runaway, buggy, or hostile-RPC-fed sidecar
+/// OOM the daemon or hang the dispatch. The streams are read concurrently (not
+/// stdout-then-stderr) so a sidecar that fills its stderr pipe before closing
+/// stdout cannot starve the stdout read. On overflow or timeout the child is
+/// SIGKILL-reaped before the bounded wait so a sidecar blocked on a full pipe
+/// cannot stall the reap. A stderr-only flood is truncated and tolerated — the
+/// valid stdout envelope still decodes — but stdout overflow fails closed so no
+/// caller parses a truncated envelope.
+pub(crate) async fn read_signer_output(
+    child: &mut tokio::process::Child,
+    max: usize,
+    deadline: std::time::Duration,
+) -> Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus), SignerOutputError> {
+    let mut stdout = child.stdout.take().expect("signer stdout piped");
+    let mut stderr = child.stderr.take().expect("signer stderr piped");
+
+    let read_both = async {
+        tokio::join!(
+            read_stream_capped(&mut stdout, max),
+            read_stream_capped(&mut stderr, max),
+        )
+    };
+    let (out, err) = match tokio::time::timeout(deadline, read_both).await {
+        Ok(pair) => pair,
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(SignerOutputError::Timeout(deadline.as_secs()));
+        }
+    };
+    let (stdout_bytes, stdout_overflowed) = out.map_err(SignerOutputError::Io)?;
+    let (stderr_bytes, _stderr_overflowed) = err.map_err(SignerOutputError::Io)?;
+
+    if stdout_overflowed {
+        let _ = child.start_kill();
+    }
+    let status = match tokio::time::timeout(deadline, child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => return Err(SignerOutputError::Io(e)),
+        Err(_) => {
+            let _ = child.start_kill();
+            return Err(SignerOutputError::Timeout(deadline.as_secs()));
+        }
+    };
+    if stdout_overflowed {
+        return Err(SignerOutputError::StdoutTooLarge(max));
+    }
+    Ok((stdout_bytes, stderr_bytes, status))
 }
 
 /// Subsystem handles the accounting needs, borrowed for the duration
@@ -543,6 +675,41 @@ mod tests {
             .await
             .expect_err("empty");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("empty header")));
+    }
+
+    #[tokio::test]
+    async fn build_payment_with_limits_rejects_oversized_signer_stdout() {
+        // The signer sidecar is external (it talks to Solana RPC); a stdout
+        // flood past the cap must surface a Sign error naming the cap instead
+        // of buffering the whole stream and OOMing the daemon. The fake signer
+        // drains stdin first so the payload write does not race a broken pipe,
+        // then writes 200 bytes; a 64-byte cap forces the overflow branch.
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; head -c 200 /dev/zero");
+        let err = signer
+            .build_payment_with_limits(&requirement(), 64, SIGNER_OUTPUT_DEADLINE)
+            .await
+            .expect_err("over cap");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("exceeded") && m.contains("cap")),
+            "an over-cap signer stdout must surface as a cap-breach Sign error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_payment_tolerates_a_bounded_stderr_flood() {
+        // A stderr-only flood is truncated and tolerated: the valid stdout
+        // header still returns. This proves stderr overflow stays bounded
+        // without failing a dispatch whose result is well-formed.
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; head -c 200 /dev/zero >&2; printf 'mock-x-payment-header'");
+        let header = signer
+            .build_payment_with_limits(&requirement(), 64, SIGNER_OUTPUT_DEADLINE)
+            .await
+            .expect("a bounded stderr flood is non-fatal");
+        assert_eq!(header, "mock-x-payment-header");
     }
 
     #[tokio::test]

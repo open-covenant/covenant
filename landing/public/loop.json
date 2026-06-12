@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T20:43:15.157Z",
+  "updatedAt": "2026-06-12T21:03:18.917Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8701,
+    "events": 8703,
     "tasks": 1033,
-    "integrated": 1034
+    "integrated": 1035
   },
   "throughput": {
-    "last24h": 75,
-    "last7d": 188,
-    "velocity": 26.9
+    "last24h": 76,
+    "last7d": 189,
+    "velocity": 27
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 57
+      "count": 58
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1034
+      "total": 1035
     }
   ],
   "states": {
-    "integrated": 1028,
+    "integrated": 1029,
     "proposed": 1,
-    "blocked": 3,
-    "validation": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "serialize-settlement-backfill-with-store-lock",
-    "state": "validation",
-    "since": "2026-06-12T20:42:06.130Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T20:43:19.296Z",
+      "task": "serialize-settlement-backfill-with-store-lock",
+      "note": "Integrating to loop/main-track: settlement backfill now routes through JsonlReceiptStore::backfill holding the store write lock, closing the"
+    },
     {
       "at": "2026-06-12T19:24:32.629Z",
       "task": "bound-metaplex-signer-rpc-response-body",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T09:34:58.966Z",
       "task": "bound-llm-provider-response-bodies",
       "note": "Integrated as 3f800010, pushed to origin/loop/main-track (36042af7..3f800010). Changed: covenant-llm/src/lib.rs (read_body_capped 16 MiB cap"
-    },
-    {
-      "at": "2026-06-12T09:20:15.585Z",
-      "task": "bound-web-search-tool-response-bodies",
-      "note": "Integrated as 36042af7, pushed to origin/loop/main-track (6a485544..36042af7). Changed: covenant-tools/src/lib.rs (read_body_capped 16 MiB c"
     }
   ]
 }

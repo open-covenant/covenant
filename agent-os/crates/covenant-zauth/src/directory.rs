@@ -14,14 +14,6 @@ const DEFAULT_BASE_URL: &str = "https://api.zauth.inc";
 /// payment settlement, so a short read timeout is sufficient.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Maximum directory body the client will buffer into memory. `api.zauth.inc`
-/// is an external service; a compromised or malicious one must not be able to
-/// exhaust daemon/CLI memory with an unbounded body (the decode-error path
-/// also embeds the body in its message). 16 MiB sits far above the full 2,672
-/// entry listing yet stops a runaway stream — the memory-axis sibling of
-/// [`REQUEST_TIMEOUT`].
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-
 /// The reqwest client the CLI should drive [`DirectoryClient`] with —
 /// bounded so an unresponsive registry cannot hang the command.
 pub fn http_client() -> reqwest::Client {
@@ -44,11 +36,11 @@ pub struct DirectoryClient {
 
 impl DirectoryClient {
     pub fn new(http: reqwest::Client) -> Self {
-        Self::with_limits(http, DEFAULT_BASE_URL, MAX_RESPONSE_BYTES)
+        Self::with_limits(http, DEFAULT_BASE_URL, crate::http::MAX_RESPONSE_BYTES)
     }
 
     pub fn with_base_url(http: reqwest::Client, base_url: impl Into<String>) -> Self {
-        Self::with_limits(http, base_url, MAX_RESPONSE_BYTES)
+        Self::with_limits(http, base_url, crate::http::MAX_RESPONSE_BYTES)
     }
 
     fn with_limits(http: reqwest::Client, base_url: impl Into<String>, max_bytes: usize) -> Self {
@@ -80,35 +72,11 @@ impl DirectoryClient {
         if !status.is_success() {
             return Err(ZauthError::UnexpectedStatus(status.as_u16()));
         }
-        let text = read_capped(resp, self.max_bytes).await?;
+        let text =
+            crate::http::read_capped(resp, self.max_bytes, ZauthError::DecodeDirectory).await?;
         serde_json::from_str(&text)
             .map_err(|e| ZauthError::DecodeDirectory(format!("{e}: body={text}")))
     }
-}
-
-/// Read the directory body into a string, refusing anything past `max`. The
-/// `Content-Length` check rejects an oversized declared body before it is
-/// streamed; the running accumulation check is the real guard, since the
-/// header is optional and provider-controlled. The directory is JSON, so the
-/// bounded bytes are decoded lossily rather than via charset-aware `.text()`.
-async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<String> {
-    if let Some(len) = resp.content_length() {
-        if len > max as u64 {
-            return Err(ZauthError::DecodeDirectory(format!(
-                "directory body of {len} bytes exceeds the {max}-byte cap"
-            )));
-        }
-    }
-    let mut buf = Vec::new();
-    while let Some(chunk) = resp.chunk().await? {
-        if buf.len() + chunk.len() > max {
-            return Err(ZauthError::DecodeDirectory(format!(
-                "directory body exceeds the {max}-byte cap"
-            )));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[derive(Debug, Clone, Default)]

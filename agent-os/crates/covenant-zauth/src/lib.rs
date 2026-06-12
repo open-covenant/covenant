@@ -29,6 +29,7 @@
 
 pub mod challenge;
 pub mod directory;
+mod http;
 pub mod reposcan;
 
 pub use directory::{
@@ -45,6 +46,8 @@ pub enum ZauthError {
     UnexpectedStatus(u16),
     #[error("decode directory: {0}")]
     DecodeDirectory(String),
+    #[error("response too large: {0}")]
+    ResponseTooLarge(String),
     #[error("decode challenge: {0}")]
     DecodeChallenge(String),
     #[error("402 response missing payment-required header")]

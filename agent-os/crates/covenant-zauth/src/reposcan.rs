@@ -23,20 +23,23 @@ const DEFAULT_BASE_URL: &str = "https://api.zauth.inc";
 pub struct RepoScanClient {
     http: reqwest::Client,
     base_url: String,
+    max_bytes: usize,
 }
 
 impl RepoScanClient {
     pub fn new(http: reqwest::Client) -> Self {
-        Self {
-            http,
-            base_url: DEFAULT_BASE_URL.into(),
-        }
+        Self::with_limits(http, DEFAULT_BASE_URL, crate::http::MAX_RESPONSE_BYTES)
     }
 
     pub fn with_base_url(http: reqwest::Client, base_url: impl Into<String>) -> Self {
+        Self::with_limits(http, base_url, crate::http::MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(http: reqwest::Client, base_url: impl Into<String>, max_bytes: usize) -> Self {
         Self {
             http,
             base_url: base_url.into(),
+            max_bytes,
         }
     }
 
@@ -52,7 +55,9 @@ impl RepoScanClient {
         let status = first.status();
 
         if status.is_success() {
-            let body_text = first.text().await?;
+            let body_text =
+                crate::http::read_capped(first, self.max_bytes, ZauthError::ResponseTooLarge)
+                    .await?;
             return Ok(RepoScanResult {
                 status: status.as_u16(),
                 body: body_text,
@@ -64,7 +69,8 @@ impl RepoScanClient {
         }
 
         let headers = first.headers().clone();
-        let _drained = first.text().await?;
+        let _drained =
+            crate::http::read_capped(first, self.max_bytes, ZauthError::ResponseTooLarge).await?;
         let parsed = challenge::decode_from_headers(&headers)?;
 
         let accept = challenge::select(
@@ -96,7 +102,10 @@ impl RepoScanClient {
             .send()
             .await?;
         let paid_status = paid.status();
-        let paid_body = paid.text().await.unwrap_or_default();
+        let paid_body =
+            crate::http::read_capped(paid, self.max_bytes, ZauthError::ResponseTooLarge)
+                .await
+                .unwrap_or_default();
         let paid_amount = paid_status
             .is_success()
             .then(|| requirements.amount.clone());
@@ -321,6 +330,28 @@ mod tests {
         assert!(
             matches!(err, ZauthError::Sign(ref m) if m.contains("funding key unavailable")),
             "got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_reposcan_body_is_rejected_instead_of_buffered() {
+        // A gratis 2xx whose body dwarfs the cap must be refused rather than
+        // buffered whole into memory — the same OOM guard the directory read
+        // already carries, applied to the RepoScan body.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/x402/reposcan"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let client = RepoScanClient::with_limits(reqwest::Client::new(), server.uri(), 64);
+        let err = client
+            .scan(&req(), &MockSigner)
+            .await
+            .expect_err("must reject an oversized reposcan body");
+        assert!(
+            matches!(err, ZauthError::ResponseTooLarge(_)),
+            "got {err:?}"
         );
     }
 }

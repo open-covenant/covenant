@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-12T20:23:11.703Z",
+  "updatedAt": "2026-06-12T20:43:15.157Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8699,
+    "events": 8701,
     "tasks": 1033,
     "integrated": 1034
   },
@@ -187,7 +187,7 @@
     "integrated": 1028,
     "proposed": 1,
     "blocked": 3,
-    "in_progress": 1
+    "validation": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "serialize-settlement-backfill-with-store-lock",
-    "state": "in_progress",
-    "since": "2026-06-12T20:20:22.986Z"
+    "state": "validation",
+    "since": "2026-06-12T20:42:06.130Z"
   },
   "recent": [
     {

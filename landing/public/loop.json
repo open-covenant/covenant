@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T08:40:57.739Z",
+  "updatedAt": "2026-06-12T09:01:01.556Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8511,
-    "tasks": 1012,
-    "integrated": 1012
+    "events": 8524,
+    "tasks": 1013,
+    "integrated": 1014
   },
   "throughput": {
-    "last24h": 53,
-    "last7d": 185,
-    "velocity": 26.4
+    "last24h": 55,
+    "last7d": 187,
+    "velocity": 26.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 35
+      "count": 37
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-12",
-      "total": 1012
+      "total": 1014
     }
   ],
   "states": {
-    "integrated": 1007,
+    "integrated": 1009,
     "proposed": 1,
-    "blocked": 3,
-    "self_review": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "bound-covenantd-x402-paid-response-body",
-    "state": "self_review",
-    "since": "2026-06-12T08:36:06.908Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-12T08:57:32.692Z",
+      "task": "bound-hermes-gateway-response-body",
+      "note": "Integrated as 6a485544 on loop/main-track (pushed e3e02157..6a485544). Bounds the 3 Hermes gateway response reads (submit/poll/probe) — the "
+    },
+    {
+      "at": "2026-06-12T08:44:02.586Z",
+      "task": "bound-covenantd-x402-paid-response-body",
+      "note": "Integrated as e3e02157 on loop/main-track (pushed 516ae861..e3e02157). Bounds the last unbounded untrusted reqwest body read in the http-res"
+    },
     {
       "at": "2026-06-12T08:13:53.707Z",
       "task": "consolidate-hyre-bounded-read-helper",
@@ -310,16 +315,6 @@
       "at": "2026-06-12T04:33:13.130Z",
       "task": "harden-x402-pick-requirement-reject-zero-amount",
       "note": "Shipped as ac6c84e9, pushed to origin/loop/main-track. pick_requirement now rejects zero-amount requirements; test pick_rejects_zero_amount "
-    },
-    {
-      "at": "2026-06-12T04:27:53.716Z",
-      "task": "harden-hyre-x402-select-reject-zero-amount",
-      "note": "Shipped as 1949b79e, pushed to origin/loop/main-track. select() now rejects zero-amount x402 options; test select_rejects_zero_amount_option"
-    },
-    {
-      "at": "2026-06-12T04:03:19.460Z",
-      "task": "hyre-x402-truncate-error-body-bound-coverage",
-      "note": "Pushed 1a3413de to origin/loop/main-track. Pins x402 truncate cap/boundary/ellipsis; README 2677."
     }
   ]
 }

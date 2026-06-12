@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-12T11:41:31.198Z",
+  "updatedAt": "2026-06-12T12:01:35.084Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8591,
-    "tasks": 1021,
-    "integrated": 1021
+    "events": 8609,
+    "tasks": 1023,
+    "integrated": 1023
   },
   "throughput": {
-    "last24h": 62,
+    "last24h": 64,
     "last7d": 192,
     "velocity": 27.4
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 44
+      "count": 46
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-12",
-      "total": 1021
+      "total": 1023
     }
   ],
   "states": {
-    "integrated": 1016,
+    "integrated": 1018,
     "proposed": 1,
     "blocked": 3,
     "in_progress": 1
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "bound-hermes-files-snapshot-response-body",
+    "task": "bound-mcp-stdio-transport-line-reads",
     "state": "in_progress",
-    "since": "2026-06-12T11:38:52.860Z"
+    "since": "2026-06-12T11:57:57.618Z"
   },
   "recent": [
+    {
+      "at": "2026-06-12T11:50:59.060Z",
+      "task": "bound-orbit-registry-response-body",
+      "note": "Committed 8d401505. fetch_page bounded via read_capped + X402Error::Registry; with_limits seam; test fetch_page_response_body_is_bounded. Pu"
+    },
+    {
+      "at": "2026-06-12T11:44:51.893Z",
+      "task": "bound-hermes-files-snapshot-response-body",
+      "note": "Committed 7270bf00. fetch_files routed through read_capped + serde_json::from_str with best-effort empty-list fallback; test fetch_files_is_"
+    },
     {
       "at": "2026-06-12T11:23:56.960Z",
       "task": "bound-runtime-subprocess-agent-output",
@@ -310,16 +320,6 @@
       "at": "2026-06-12T06:58:38.236Z",
       "task": "harden-hyre-paid-execution-http-timeout",
       "note": "Committed 877cc852, pushed origin/loop/main-track. Daemon Hyre paid loop now bounded at 120s via covenant_hyre::http_client(); test pins it."
-    },
-    {
-      "at": "2026-06-12T06:47:02.546Z",
-      "task": "harden-metaplex-das-http-request-timeout",
-      "note": "Committed bdc1c579, pushed to origin/loop/main-track. DAS client now bounded at 20s; failure-mode test pins it. README metrics 2696->2697."
-    },
-    {
-      "at": "2026-06-12T06:06:39.787Z",
-      "task": "harden-metaplex-onchain-string-bidi-zerowidth-rejection",
-      "note": "Committed 1b601da6 on loop/main-track: shared is_unsafe_onchain_char rejects bidi-override + zero-width + LS/PS chars in validate_registrati"
     }
   ]
 }

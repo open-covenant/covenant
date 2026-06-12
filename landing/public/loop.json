@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-12T09:21:05.346Z",
+  "updatedAt": "2026-06-12T09:41:08.923Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8533,
-    "tasks": 1014,
-    "integrated": 1015
+    "events": 8546,
+    "tasks": 1016,
+    "integrated": 1016
   },
   "throughput": {
-    "last24h": 56,
-    "last7d": 188,
-    "velocity": 26.9
+    "last24h": 57,
+    "last7d": 189,
+    "velocity": 27
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-12",
-      "count": 38
+      "count": 39
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-12",
-      "total": 1015
+      "total": 1016
     }
   ],
   "states": {
-    "integrated": 1010,
+    "integrated": 1011,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "bound-jupiter-swap-client-response-bodies",
+    "state": "in_progress",
+    "since": "2026-06-12T09:38:50.393Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-12T09:34:58.966Z",
+      "task": "bound-llm-provider-response-bodies",
+      "note": "Integrated as 3f800010, pushed to origin/loop/main-track (36042af7..3f800010). Changed: covenant-llm/src/lib.rs (read_body_capped 16 MiB cap"
+    },
     {
       "at": "2026-06-12T09:20:15.585Z",
       "task": "bound-web-search-tool-response-bodies",
@@ -310,11 +320,6 @@
       "at": "2026-06-12T05:03:04.716Z",
       "task": "harden-hyre-manifest-checked-price-arithmetic",
       "note": "Integrated as 30e8cf80, pushed to origin/loop/main-track (68d5baf0..30e8cf80). usd_to_micro now rejects overflowing untrusted prices via che"
-    },
-    {
-      "at": "2026-06-12T04:46:06.190Z",
-      "task": "harden-hyre-manifest-reject-zero-price",
-      "note": "Shipped as 68d5baf0, pushed to origin/loop/main-track. usd_to_micro now rejects zero-price paid endpoints; tests usd_to_micro_rejects_zero_p"
     }
   ]
 }

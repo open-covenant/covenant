@@ -205,8 +205,8 @@ impl ReadTool {
             }
             "das.assets_by_owner" => {
                 let owner = str_arg(&args, "owner")?;
-                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100) as u32;
-                let page = args.get("page").and_then(Value::as_u64).unwrap_or(1) as u32;
+                let limit = bounded_u32_arg(&args, "limit", 100, 1, 1000)?;
+                let page = bounded_u32_arg(&args, "page", 1, 1, u32::MAX)?;
                 self.das
                     .get_assets_by_owner(owner, limit, page)
                     .await
@@ -338,6 +338,37 @@ fn opt_str_arg(args: &Value, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// Read an optional bounded integer argument, enforcing the tool schema's
+/// declared range instead of silently truncating it. Absent or null falls
+/// back to `default`; a present value that is not a non-negative integer or
+/// lies outside `min..=max` is rejected. The schema is published for clients
+/// but never enforced by the MCP layer, and the previous `as u32` cast
+/// truncated anything above `u32::MAX`, so a caller could page the DAS
+/// provider with a value the schema forbids (e.g. a limit of 0 from a
+/// truncated `2^32`, or 5000 over the advertised maximum).
+fn bounded_u32_arg(
+    args: &Value,
+    key: &str,
+    default: u32,
+    min: u32,
+    max: u32,
+) -> Result<u32, ToolError> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| {
+                ToolError::InvalidArguments(format!("{key} must be a non-negative integer"))
+            })?;
+            u32::try_from(n)
+                .ok()
+                .filter(|n| (min..=max).contains(n))
+                .ok_or_else(|| {
+                    ToolError::InvalidArguments(format!("{key} must be between {min} and {max}"))
+                })
+        }
+    }
 }
 
 fn das_err(e: crate::das::DasError) -> ToolError {
@@ -688,6 +719,103 @@ mod tests {
             res.content,
             vec![Content::json(
                 json!({ "owner": "wallet", "limit": 5, "page": 3 })
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn assets_by_owner_rejects_out_of_range_limit() {
+        let cfg = enabled_reads();
+        let tool = metaplex_tool(
+            &cfg,
+            "metaplex.das.assets_by_owner",
+            Arc::new(EchoDas),
+            None,
+        )
+        .unwrap();
+        // Above the schema's published maximum of 1000.
+        let err = tool
+            .call(json!({ "owner": "wallet", "limit": 1001 }))
+            .await
+            .expect_err("a limit over the schema maximum must be rejected");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("limit")));
+        // Below the schema minimum of 1.
+        let err = tool
+            .call(json!({ "owner": "wallet", "limit": 0 }))
+            .await
+            .expect_err("a zero limit must be rejected");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("limit")));
+        // Above u32::MAX: the old `as u32` cast truncated this to 0 silently.
+        let err = tool
+            .call(json!({ "owner": "wallet", "limit": (u32::MAX as u64) + 1 }))
+            .await
+            .expect_err("a limit above u32::MAX must be rejected, not truncated");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("limit")));
+        // A present but non-integer limit is rejected rather than silently
+        // falling back to the default the way the old `unwrap_or(100)` did.
+        let err = tool
+            .call(json!({ "owner": "wallet", "limit": "lots" }))
+            .await
+            .expect_err("a non-integer limit must be rejected");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("limit")));
+    }
+
+    #[tokio::test]
+    async fn assets_by_owner_rejects_out_of_range_page() {
+        let cfg = enabled_reads();
+        let tool = metaplex_tool(
+            &cfg,
+            "metaplex.das.assets_by_owner",
+            Arc::new(EchoDas),
+            None,
+        )
+        .unwrap();
+        // Below the schema minimum of 1.
+        let err = tool
+            .call(json!({ "owner": "wallet", "page": 0 }))
+            .await
+            .expect_err("a zero page must be rejected");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("page")));
+        // Above u32::MAX: the old cast truncated this silently.
+        let err = tool
+            .call(json!({ "owner": "wallet", "page": (u32::MAX as u64) + 1 }))
+            .await
+            .expect_err("a page above u32::MAX must be rejected, not truncated");
+        assert!(matches!(err, ToolError::InvalidArguments(m) if m.contains("page")));
+    }
+
+    #[tokio::test]
+    async fn assets_by_owner_accepts_schema_boundary_values() {
+        let cfg = enabled_reads();
+        let tool = metaplex_tool(
+            &cfg,
+            "metaplex.das.assets_by_owner",
+            Arc::new(EchoDas),
+            None,
+        )
+        .unwrap();
+        // The inclusive schema maximum (1000) and a valid page pass through
+        // unchanged — the bound rejects only what the schema forbids.
+        let res = tool
+            .call(json!({ "owner": "wallet", "limit": 1000, "page": 7 }))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.content,
+            vec![Content::json(
+                json!({ "owner": "wallet", "limit": 1000, "page": 7 })
+            )]
+        );
+        // The inclusive minimum (1) flows through as an explicit present value,
+        // pinning the lower bound so a `<` vs `<=` slip can't silently reject it.
+        let res = tool
+            .call(json!({ "owner": "wallet", "limit": 1, "page": 1 }))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.content,
+            vec![Content::json(
+                json!({ "owner": "wallet", "limit": 1, "page": 1 })
             )]
         );
     }

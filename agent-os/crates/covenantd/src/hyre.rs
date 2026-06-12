@@ -247,4 +247,31 @@ mod tests {
         let err = exec.execute(bad).await.expect_err("bad method");
         assert!(err.contains("invalid HTTP method"), "got: {err}");
     }
+
+    /// An over-budget payer is refused by the read-only pre-check before
+    /// any signer or network activity, and no accounting is written.
+    #[tokio::test]
+    async fn executor_refuses_when_budget_would_exceed() {
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(InMemoryAuditLog::new());
+        let budget = Arc::new(InMemoryLedger::new());
+        let payer = agent(1);
+        budget.set_capacity(&payer, 5).await.unwrap(); // 5 < 8 credits
+
+        let exec = DaemonHyreExecutor::new(
+            settlement.clone(),
+            audit.clone(),
+            budget,
+            Arc::new(enabled_x402()),
+            agent(9),
+            payer,
+        );
+        let mut over = req();
+        over.credits = 8; // exceeds the 5-credit bucket
+
+        let err = exec.execute(over).await.expect_err("over budget");
+        assert!(err.contains("exceeded"), "got: {err}");
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
+    }
 }

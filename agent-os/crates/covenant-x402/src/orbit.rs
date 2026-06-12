@@ -22,6 +22,7 @@
 use serde::Deserialize;
 use tracing::{debug, warn};
 
+use crate::http::{read_capped, MAX_RESPONSE_BYTES};
 use crate::{PaymentRequirements, Result, X402Error};
 
 /// Default base URL for the public registry.
@@ -81,6 +82,7 @@ pub struct OrbitClient {
     http: reqwest::Client,
     base_url: String,
     page_size: usize,
+    max_bytes: usize,
 }
 
 impl OrbitClient {
@@ -96,10 +98,20 @@ impl OrbitClient {
     /// Custom configuration — used by tests and self-hosted
     /// registries. `page_size` is clamped to at least 1.
     pub fn with(http: reqwest::Client, base_url: String, page_size: usize) -> Self {
+        Self::with_limits(http, base_url, page_size, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        http: reqwest::Client,
+        base_url: String,
+        page_size: usize,
+        max_bytes: usize,
+    ) -> Self {
         Self {
             http,
             base_url,
             page_size: page_size.max(1),
+            max_bytes,
         }
     }
 
@@ -118,7 +130,8 @@ impl OrbitClient {
         if !status.is_success() {
             return Err(X402Error::UnexpectedStatus(status.as_u16()));
         }
-        Ok(resp.json::<RegistryResponse>().await?)
+        let body = read_capped(resp, self.max_bytes, X402Error::Registry).await?;
+        serde_json::from_str(&body).map_err(|e| X402Error::Registry(e.to_string()))
     }
 
     /// Iterates pages until every entry is loaded. Stops when the
@@ -318,6 +331,28 @@ mod tests {
             matches!(err, X402Error::UnexpectedStatus(503)),
             "got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn fetch_page_response_body_is_bounded() {
+        // The registry is third-party and untrusted: a page past the cap is
+        // refused as a Registry decode failure rather than buffered into the
+        // worker's memory. The under-cap parse path stays covered by
+        // fetch_page_hits_expected_url, which runs against the default cap.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/services-list"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(page(
+                vec![xona_entry_json("a", "100")],
+                0,
+                1,
+            )))
+            .mount(&server)
+            .await;
+        // A cap below the page body trips the bounded read before it parses.
+        let client = OrbitClient::with_limits(reqwest::Client::new(), server.uri(), 100, 64);
+        let err = client.fetch_page(100, 0).await.expect_err("over cap");
+        assert!(matches!(err, X402Error::Registry(_)), "got {err:?}");
     }
 
     #[tokio::test]

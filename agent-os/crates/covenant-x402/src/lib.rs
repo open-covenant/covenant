@@ -70,6 +70,10 @@ pub enum X402Error {
     /// The signer failed to construct a payment payload.
     #[error("sign: {0}")]
     Sign(String),
+    /// The orbit-x402 registry response did not decode as a services
+    /// list, or exceeded the response-size cap.
+    #[error("registry: {0}")]
+    Registry(String),
     /// Underlying HTTP transport failure.
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),

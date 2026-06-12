@@ -9,6 +9,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DasError {
@@ -48,11 +49,25 @@ pub struct HttpDasClient {
     http: reqwest::Client,
 }
 
+/// Total per-request timeout for DAS calls. The endpoint is an
+/// operator-configured third-party RPC; a hung or slow-drip provider must
+/// not be able to block a daemon worker forever. Matches the provider-RPC
+/// precedent of the stake-keeper Jupiter client.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
 impl HttpDasClient {
     pub fn new(endpoint: impl Into<String>) -> Self {
+        Self::with_timeout(endpoint, REQUEST_TIMEOUT)
+    }
+
+    fn with_timeout(endpoint: impl Into<String>, timeout: Duration) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             endpoint: endpoint.into(),
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
@@ -153,6 +168,21 @@ mod tests {
             .await;
         let client = HttpDasClient::new(server.uri());
         (server, client)
+    }
+
+    #[tokio::test]
+    async fn slow_provider_times_out_instead_of_hanging() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let client = HttpDasClient::with_timeout(server.uri(), Duration::from_millis(50));
+        let err = client
+            .get_asset("asset-1")
+            .await
+            .expect_err("must time out");
+        assert!(matches!(err, DasError::Transport(_)));
     }
 
     #[tokio::test]

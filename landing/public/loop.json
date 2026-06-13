@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T06:44:59.975Z",
+  "updatedAt": "2026-06-13T07:05:03.493Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8910,
-    "tasks": 1056,
-    "integrated": 1058
+    "events": 8937,
+    "tasks": 1059,
+    "integrated": 1061
   },
   "throughput": {
-    "last24h": 56,
-    "last7d": 202,
-    "velocity": 28.9
+    "last24h": 57,
+    "last7d": 205,
+    "velocity": 29.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 22
+      "count": 25
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1058
+      "total": 1061
     }
   ],
   "states": {
-    "integrated": 1052,
+    "integrated": 1055,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T07:04:06.904Z",
+      "task": "peer-auth-purge-revoked-cutoff-equality-boundary-coverage",
+      "note": "committed 1624bfe4 on loop/main-track, pushed eba5d099..1624bfe4; peer-auth purge_revoked_older_than cutoff-equality keep arm pinned on both"
+    },
+    {
+      "at": "2026-06-13T06:57:24.904Z",
+      "task": "permissions-purge-revoked-cutoff-equality-boundary-coverage",
+      "note": "committed eba5d099 on loop/main-track, pushed 2b735b85..eba5d099; capability purge_revoked_older_than cutoff-equality keep arm pinned on bot"
+    },
+    {
+      "at": "2026-06-13T06:50:12.194Z",
+      "task": "memory-purge-older-than-cutoff-equality-boundary-coverage",
+      "note": "committed 2b735b85 on loop/main-track, pushed d98ccbda..2b735b85; memory purge_older_than cutoff-equality keep arm pinned on both backends, "
+    },
     {
       "at": "2026-06-13T06:30:00.833Z",
       "task": "a2a-queue-deadline-within-filter-binding-limit-coverage",
@@ -300,21 +315,6 @@
       "at": "2026-06-13T02:40:35.811Z",
       "task": "mcp-remote-tool-transport-fault-coverage",
       "note": "Integrating into loop/main-track: covenant-mcp RemoteTool::call transport-fault coverage (Timeout/ServerCrashed) + README test count, single"
-    },
-    {
-      "at": "2026-06-13T02:00:28.154Z",
-      "task": "router-load-agents-unreadable-dir-io-error-coverage",
-      "note": "Integrating into loop/main-track: covenant-router read_dir-failure fail-closed coverage + README test count, single conventional commit."
-    },
-    {
-      "at": "2026-06-13T01:51:06.106Z",
-      "task": "hyre-paid-signer-failure-typed-sign-error",
-      "note": "Integrating into loop/main-track: HyreError::Sign typed variant for paid-path signer failures + fail-closed coverage. Single conventional co"
-    },
-    {
-      "at": "2026-06-13T01:02:55.793Z",
-      "task": "hyre-paid-path-oversized-response-coverage",
-      "note": "Committed df1d655e and pushed to origin/loop/main-track (a39dd0bf..df1d655e). Two wiremock regression tests cover the oversized 402-challeng"
     }
   ]
 }

@@ -2094,6 +2094,14 @@ mod tests {
         s.put(record(Uuid::new_v4(), MemoryTier::Working, "newer", 500))
             .await
             .unwrap();
+        // A same-age record in another tier proves the delete is tier-scoped,
+        // not just age-scoped. purge_older_than is destructive, so a dropped
+        // `tier = ?1` clause is cross-tier data loss, not a read leak: this
+        // Episodic row is older than the cutoff and must survive a
+        // Working-scoped purge.
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "old-ep", 100))
+            .await
+            .unwrap();
         let n = s
             .purge_older_than(Some(MemoryTier::Working), 200)
             .await
@@ -2102,6 +2110,13 @@ mod tests {
         let recent = s.recent(Some(MemoryTier::Working), 10).await.unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].text, "newer");
+        let episodic = s.recent(Some(MemoryTier::Episodic), 10).await.unwrap();
+        assert_eq!(
+            episodic.len(),
+            1,
+            "a Working-scoped purge must spare the older Episodic record"
+        );
+        assert_eq!(episodic[0].text, "old-ep");
     }
 
     #[tokio::test]

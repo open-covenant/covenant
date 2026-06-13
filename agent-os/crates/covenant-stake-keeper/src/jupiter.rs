@@ -427,4 +427,56 @@ mod tests {
             "over-cap swap read must surface the byte-cap error so a malicious endpoint cannot OOM the keeper; got {err:#}",
         );
     }
+
+    #[tokio::test]
+    async fn quote_surfaces_upstream_http_error() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A non-2xx Jupiter response must surface as an error naming the HTTP
+        // status and echoing the upstream body, never get fed into quote
+        // decoding. The keeper swaps real funds against these responses, so an
+        // operator has to tell a 503 outage from a 400 bad-mint at a glance.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("upstream unavailable"))
+            .mount(&server)
+            .await;
+
+        let input = Pubkey::new_unique();
+        let output = Pubkey::new_unique();
+        let err = JupiterClient::with_limits(server.uri(), server.uri(), 16 * 1024)
+            .quote(&input, &output, 1_000_000_000, 200)
+            .await
+            .expect_err("a non-2xx quote response must error, not parse as a quote");
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("jupiter quote http 503") && err.contains("upstream unavailable"),
+            "quote error must name the status and echo the upstream body; got {err}",
+        );
+    }
+
+    #[tokio::test]
+    async fn swap_surfaces_upstream_http_error() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("upstream unavailable"))
+            .mount(&server)
+            .await;
+
+        let user = Pubkey::new_unique();
+        let quote_raw = serde_json::json!({ "outAmount": "1" });
+        let err = JupiterClient::with_limits(server.uri(), server.uri(), 16 * 1024)
+            .swap(&quote_raw, &user)
+            .await
+            .expect_err("a non-2xx swap response must error, not parse as a transaction");
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("jupiter swap http 503") && err.contains("upstream unavailable"),
+            "swap error must name the status and echo the upstream body; got {err}",
+        );
+    }
 }

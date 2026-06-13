@@ -1351,6 +1351,71 @@ mod tests {
     }
 
     #[test]
+    fn build_receipt_batch_pins_four_leaf_two_level_root_across_pair_order() {
+        // build_receipt_batch reduces leaves level by level (while
+        // level.len() > 1, lib.rs:111-121): each level pairs adjacent hashes
+        // left-to-right and pushes sha256(left || right) into the next level IN
+        // ORDER. build_receipt_batch_pins_two_leaf_merkle_root_concatenates_-
+        // left_then_right pins WITHIN-pair order (a before b) and
+        // build_receipt_batch_pins_odd_leaf_count_duplicates_last_leaf_-
+        // convention pins the duplicate-last rule, but both run a single
+        // non-trivial pair per level, so ACROSS-pair order -- which parent lands
+        // first in the next level -- is unpinned. A 4-leaf batch is the smallest
+        // balanced two-level tree that exercises it:
+        //
+        //   root = sha256( sha256(h_a || h_b) || sha256(h_c || h_d) )
+        //
+        // A refactor that built a level in reverse (next.reverse(), or walking
+        // chunks back-to-front) leaves the two-leaf root unchanged (one pair =>
+        // one parent, reversal is a no-op) and leaves the odd-leaf RELATIONAL
+        // equality intact (the 3-leaf and 4-leaf-dup roots reverse identically),
+        // so it passes every existing batch test while diverging from the
+        // on-chain anchor for any batch with two or more pairs. Pin the exact
+        // two-level root, recomputed from receipt_hash via fresh hashers.
+        let mut a = receipt(1);
+        a.id = Uuid::from_u128(0xa);
+        let mut b = receipt(2);
+        b.id = Uuid::from_u128(0xb);
+        let mut c = receipt(3);
+        c.id = Uuid::from_u128(0xc);
+        let mut d = receipt(4);
+        d.id = Uuid::from_u128(0xd);
+
+        let batch = build_receipt_batch(&[a.clone(), b.clone(), c.clone(), d.clone()])
+            .expect("four-leaf batch must build");
+
+        let pair = |left: [u8; 32], right: [u8; 32]| -> [u8; 32] {
+            let mut hasher = Sha256::new();
+            hasher.update(left);
+            hasher.update(right);
+            hasher.finalize().into()
+        };
+        let l_ab = pair(receipt_hash(&a), receipt_hash(&b));
+        let l_cd = pair(receipt_hash(&c), receipt_hash(&d));
+        let expected_root = hex32(pair(l_ab, l_cd));
+        assert_eq!(
+            batch.merkle_root, expected_root,
+            "four-leaf merkle_root must equal sha256(sha256(h_a||h_b) || \
+             sha256(h_c||h_d)) with the first pair's parent hashed before the \
+             second's; a level built in reverse keeps the two-leaf and odd-leaf \
+             tests green but diverges from the on-chain anchor for any tree with \
+             two or more pairs",
+        );
+
+        // Across-pair order is load-bearing: swapping the two pairs ([c,d,a,b])
+        // must change the root, or a pair-sort / order-normalization refactor
+        // would collapse distinct batch orderings onto one anchor.
+        let swapped =
+            build_receipt_batch(&[c, d, a, b]).expect("reordered four-leaf batch must build");
+        assert_ne!(
+            batch.merkle_root, swapped.merkle_root,
+            "merkle_root([a,b,c,d]) must not equal merkle_root([c,d,a,b]); an \
+             across-pair sort or order-normalization would collapse distinct \
+             batch orderings onto one settlement anchor",
+        );
+    }
+
+    #[test]
     fn receipt_migration_plan_splits_legacy_and_correlated_memory_receipts() {
         let mut legacy = receipt(1);
         legacy.id = Uuid::from_u128(1);

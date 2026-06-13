@@ -3481,6 +3481,79 @@ mod tests {
     }
 
     #[test]
+    fn plan_compaction_detach_stale_parents_flag_gates_detachment() {
+        // plan_compaction detaches a record from a stale parent (one absent
+        // from the retained set) only when policy.detach_stale_parents is set
+        // (lib.rs:330). Every compaction test that exercises detachment sets
+        // the flag TRUE (compaction_dry_run_plans_without_mutating,
+        // compaction_apply_deletes_short_horizon_marks_longterm_and_detaches_parents);
+        // the two tests that set it false (sqlite_compact_apply_rolls_back...,
+        // sqlite_compact_apply_persists_full_plan...) seed no parented
+        // records, so the OFF arm — a record whose parent is dangling stays
+        // attached when the operator did not opt in — is pinned by no test.
+        // Dropping the `if detach_stale_parents` guard would always rewrite
+        // parents, silently severing lineage the operator never asked to
+        // touch. Pin both arms over the SAME dangling-parent input so the
+        // flag is proven to be the sole discriminator.
+        let child = Uuid::new_v4();
+        let missing_parent = Uuid::new_v4();
+        let mut child_record = record(child, MemoryTier::Episodic, "child", 10);
+        child_record.parent = Some(missing_parent);
+        let records = vec![child_record];
+
+        let off = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                detach_stale_parents: false,
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "detach gate off".into(),
+        };
+        let (outcome_off, updates_off) = plan_compaction(&records, &off);
+        assert!(
+            outcome_off.parents_detached.is_empty(),
+            "with detach_stale_parents=false a dangling parent must NOT be detached; \
+             a dropped or inverted gate would sever it",
+        );
+        assert!(
+            !outcome_off.would_change,
+            "the off arm performs no work over this input, so would_change must be false",
+        );
+        assert!(
+            updates_off.is_empty(),
+            "no record may be rewritten when the detach flag is off and no other policy fires",
+        );
+
+        // Control: same record, flag ON. The parent IS dangling (absent from
+        // the retained set), so detachment proceeds — proving the parent was
+        // detachable all along and only the flag held it back.
+        let on = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                detach_stale_parents: true,
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "detach gate on".into(),
+        };
+        let (outcome_on, updates_on) = plan_compaction(&records, &on);
+        assert_eq!(
+            outcome_on.parents_detached,
+            vec![child],
+            "with detach_stale_parents=true the dangling parent is detached; flipping the \
+             !retained.contains(parent) detection would leave this orphan attached",
+        );
+        assert_eq!(
+            updates_on.len(),
+            1,
+            "the single detached record is emitted as exactly one update",
+        );
+        assert_eq!(
+            updates_on[0].parent, None,
+            "detachment sets the record's parent to None",
+        );
+    }
+
+    #[test]
     fn memory_error_display_messages_pin_five_string_variant_format_strings() {
         let worker = format!("{}", MemoryError::Worker("channel closed".into()));
         assert_eq!(

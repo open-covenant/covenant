@@ -1296,6 +1296,61 @@ mod tests {
     }
 
     #[test]
+    fn build_receipt_batch_pins_two_leaf_merkle_root_concatenates_left_then_right() {
+        // build_receipt_batch reduces a level of leaf hashes pairwise as
+        //
+        //   hasher.update(pair[0]); hasher.update(right);   (lib.rs:116-117)
+        //
+        // i.e. sha256(left || right) with the left leaf hashed first.
+        // That root is the settlement anchor the on-chain Solana program
+        // recomputes to verify a batch. The other batch tests pin only
+        // RELATIONAL properties of merkle_root: length 64, inequality
+        // across distinct inputs, and merkle_root([a,b,c]) ==
+        // merkle_root([a,b,c,c]) for the odd-leaf convention. Every one of
+        // those is invariant under a left/right transposition of the
+        // concatenation — under sha256(right || left) the lengths, the
+        // cross-input inequalities, and the odd-leaf equality all still
+        // hold — so the exact byte order of the Merkle combination is
+        // unpinned. A transposed off-chain root stays a valid 64-char hex
+        // string and passes the whole suite while diverging from every
+        // independent verifier that recomputes the anchor. Pin the
+        // two-leaf root to the exact left-then-right combination, recomputed
+        // from the same receipt_hash primitive, and pin that leaf order is
+        // load-bearing.
+        let mut a = receipt(1);
+        a.id = Uuid::from_u128(0xa);
+        let mut b = receipt(2);
+        b.id = Uuid::from_u128(0xb);
+
+        let batch =
+            build_receipt_batch(&[a.clone(), b.clone()]).expect("two-leaf batch must build");
+
+        let mut hasher = Sha256::new();
+        hasher.update(receipt_hash(&a));
+        hasher.update(receipt_hash(&b));
+        let expected_root = hex32(hasher.finalize().into());
+        assert_eq!(
+            batch.merkle_root, expected_root,
+            "two-leaf merkle_root must equal hex32(sha256(receipt_hash(a) || receipt_hash(b))) \
+             with a hashed before b; a transposed sha256(receipt_hash(b) || receipt_hash(a)) \
+             still yields a valid 64-char hex root and passes every relational batch test but \
+             diverges from the on-chain anchor recomputation",
+        );
+
+        // Leaf order is load-bearing: sha256 is not concatenation-commutative,
+        // so [a,b] and [b,a] must not collide unless a refactor sorted or
+        // otherwise order-normalized the pair before hashing — which would
+        // let two batches settling the same receipt set in different leaf
+        // positions share one anchor.
+        let swapped = build_receipt_batch(&[b, a]).expect("swapped two-leaf batch must build");
+        assert_ne!(
+            batch.merkle_root, swapped.merkle_root,
+            "merkle_root([a,b]) must not equal merkle_root([b,a]); an order-normalizing \
+             refactor would collapse distinct leaf orderings onto one settlement anchor",
+        );
+    }
+
+    #[test]
     fn receipt_migration_plan_splits_legacy_and_correlated_memory_receipts() {
         let mut legacy = receipt(1);
         legacy.id = Uuid::from_u128(1);

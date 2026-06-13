@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T00:23:54.340Z",
+  "updatedAt": "2026-06-13T00:43:57.829Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8725,
+    "events": 8730,
     "tasks": 1036,
-    "integrated": 1037
+    "integrated": 1038
   },
   "throughput": {
-    "last24h": 57,
-    "last7d": 185,
-    "velocity": 26.4
+    "last24h": 56,
+    "last7d": 186,
+    "velocity": 26.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-13",
-      "total": 1037
+      "total": 1038
     }
   ],
   "states": {
-    "integrated": 1031,
+    "integrated": 1032,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "cli-bootstrap-bound-agent-manifest-read",
-    "state": "in_progress",
-    "since": "2026-06-13T00:20:35.365Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T00:36:08.197Z",
+      "task": "cli-bootstrap-bound-agent-manifest-read",
+      "note": "Pushed a39dd0bf to origin/loop/main-track. covenant bootstrap agents-dir scan now reads each agent.toml through Manifest::from_path (1 MiB c"
+    },
     {
       "at": "2026-06-13T00:05:27.583Z",
       "task": "payai-build-payment-missing-funder-ata-fail-closed-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T10:38:59.357Z",
       "task": "harden-zauth-reposcan-request-timeout",
       "note": "Integrated as 3a26fad6, pushed to origin/loop/main-track (543400cf..3a26fad6). Changed: reposcan.rs (FIRST_REQUEST_TIMEOUT=20s client via ht"
-    },
-    {
-      "at": "2026-06-12T10:14:50.677Z",
-      "task": "harden-zauth-reposcan-response-size",
-      "note": "Integrated as 543400cf, pushed to origin/loop/main-track (cd7ac5b1..543400cf). Changed: covenant-zauth/src/http.rs (new shared read_capped 1"
     }
   ]
 }

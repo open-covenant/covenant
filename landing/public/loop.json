@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T08:25:17.638Z",
+  "updatedAt": "2026-06-13T08:45:21.076Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9013,
-    "tasks": 1068,
-    "integrated": 1069
+    "events": 9019,
+    "tasks": 1069,
+    "integrated": 1070
   },
   "throughput": {
     "last24h": 57,
-    "last7d": 213,
-    "velocity": 30.4
+    "last7d": 212,
+    "velocity": 30.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 33
+      "count": 34
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-13",
-      "total": 1069
+      "total": 1070
     }
   ],
   "states": {
-    "integrated": 1063,
+    "integrated": 1064,
     "proposed": 1,
     "blocked": 3,
-    "validation": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -196,7 +196,7 @@
     },
     {
       "name": "covenant",
-      "count": 98
+      "count": 99
     },
     {
       "name": "audit",
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "covenant-runtime-hermes-read-capped-exact-boundary-coverage",
-    "state": "validation",
-    "since": "2026-06-13T08:24:42.730Z"
+    "task": "a2a-task-queue-leased-ordering-tie-break-coverage",
+    "state": "in_progress",
+    "since": "2026-06-13T08:41:22.172Z"
   },
   "recent": [
+    {
+      "at": "2026-06-13T08:25:21.538Z",
+      "task": "covenant-runtime-hermes-read-capped-exact-boundary-coverage",
+      "note": "Committed on loop/main-track. Scope: hermes.rs +49-line boundary test, README 2799->2800."
+    },
     {
       "at": "2026-06-13T08:20:38.028Z",
       "task": "covenant-runtime-truncate-stderr-cap-boundary-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-13T04:59:53.055Z",
       "task": "budget-project-overshoot-threshold-boundary-coverage",
       "note": "Landing on loop/main-track: one pinning unit test in covenant-budget plus the regenerated README count."
-    },
-    {
-      "at": "2026-06-13T04:48:44.461Z",
-      "task": "permissions-trust-root-signature-check-coverage",
-      "note": "Landing as a single commit on loop/main-track: one pinning unit test in covenant-permissions plus the regenerated README count."
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T04:24:35.811Z",
+  "updatedAt": "2026-06-13T04:44:39.313Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8819,
-    "tasks": 1046,
-    "integrated": 1047
+    "events": 8833,
+    "tasks": 1048,
+    "integrated": 1049
   },
   "throughput": {
     "last24h": 54,
-    "last7d": 193,
-    "velocity": 27.6
+    "last7d": 195,
+    "velocity": 27.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 11
+      "count": 13
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-13",
-      "total": 1047
+      "total": 1049
     }
   ],
   "states": {
-    "integrated": 1041,
+    "integrated": 1043,
     "proposed": 1,
     "blocked": 3,
-    "ready": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "stake-keeper-jupiter-non-2xx-error-path-coverage",
-    "state": "ready",
-    "since": "2026-06-13T04:24:27.341Z"
+    "task": "permissions-trust-root-signature-check-coverage",
+    "state": "in_progress",
+    "since": "2026-06-13T04:43:19.336Z"
   },
   "recent": [
+    {
+      "at": "2026-06-13T04:30:17.349Z",
+      "task": "memory-sqlite-purge-tier-isolation-coverage",
+      "note": "Committed 149f839e on loop/main-track. 1 file changed (covenant-memory lib.rs, +15). All declared verification passed."
+    },
+    {
+      "at": "2026-06-13T04:24:52.463Z",
+      "task": "stake-keeper-jupiter-non-2xx-error-path-coverage",
+      "note": "Committed 05e26691 on loop/main-track. 2 files changed (jupiter.rs +2 tests, README metric). All declared verification passed except the pre"
+    },
     {
       "at": "2026-06-13T04:17:04.263Z",
       "task": "memory-sqlite-recent-tier-filter-coverage",
@@ -310,16 +320,6 @@
       "at": "2026-06-12T15:43:30.543Z",
       "task": "bound-covenant-cli-x402-signer-subprocess-output",
       "note": "Pushed a5ddd11e to origin/loop/main-track (51acac7a..a5ddd11e). CLI x402 signer subprocess output now bounded (16MiB/stream, 120s/phase, SIG"
-    },
-    {
-      "at": "2026-06-12T15:17:33.330Z",
-      "task": "bound-covenantd-signer-dispatch-subprocess-output",
-      "note": "Pushed 51acac7a to origin/loop/main-track (84d085b1..51acac7a). Bounds both covenantd signer subprocess dispatches (metaplex.rs sign, x402.r"
-    },
-    {
-      "at": "2026-06-12T14:48:02.258Z",
-      "task": "bound-sap-bridge-worker-subprocess-output",
-      "note": "noop check"
     }
   ]
 }

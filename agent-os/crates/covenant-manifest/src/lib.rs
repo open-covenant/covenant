@@ -1796,6 +1796,32 @@ cpu_ms_per_task = 1000
     }
 
     #[test]
+    fn from_path_reads_manifest_exactly_at_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        // Both read_capped guards use strict `>` (lib.rs:240 metadata, :245
+        // post-read), so a file of exactly MAX_MANIFEST_BYTES is the largest
+        // legitimate manifest and must parse. The just-under and the MAX+1
+        // tests bracket the cap but skip this equality boundary; a `>` -> `>=`
+        // flip on either guard would reject the maximum-size package while
+        // passing both bracketing tests.
+        let pad = MAX_MANIFEST_BYTES as usize - FULL.len() - 2;
+        let body = format!("{FULL}\n#{}", "x".repeat(pad));
+        assert_eq!(
+            body.len() as u64,
+            MAX_MANIFEST_BYTES,
+            "fixture must sit exactly on the cap to pin the equality boundary"
+        );
+        std::fs::write(&path, &body).unwrap();
+        let m = Manifest::from_path(&path).expect(
+            "an agent.toml of exactly MAX_MANIFEST_BYTES must be accepted; a `>` -> `>=` \
+             regression on either size guard would reject the maximum-size package \
+             (legitimate-max-manifest rejection regression class)",
+        );
+        assert_eq!(m.agent.id, "research");
+    }
+
+    #[test]
     fn manifest_error_too_large_display_message_names_the_byte_limit() {
         let err = ManifestError::TooLarge(MAX_MANIFEST_BYTES);
         assert_eq!(

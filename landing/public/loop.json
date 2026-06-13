@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T00:03:50.906Z",
+  "updatedAt": "2026-06-13T00:23:54.340Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8716,
-    "tasks": 1035,
-    "integrated": 1036
+    "events": 8725,
+    "tasks": 1036,
+    "integrated": 1037
   },
   "throughput": {
-    "last24h": 59,
-    "last7d": 184,
-    "velocity": 26.3
+    "last24h": 57,
+    "last7d": 185,
+    "velocity": 26.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1036
+      "total": 1037
     }
   ],
   "states": {
-    "integrated": 1030,
+    "integrated": 1031,
     "proposed": 1,
     "blocked": 3,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "payai-build-payment-missing-funder-ata-fail-closed-coverage",
+    "task": "cli-bootstrap-bound-agent-manifest-read",
     "state": "in_progress",
-    "since": "2026-06-13T00:02:19.011Z"
+    "since": "2026-06-13T00:20:35.365Z"
   },
   "recent": [
+    {
+      "at": "2026-06-13T00:05:27.583Z",
+      "task": "payai-build-payment-missing-funder-ata-fail-closed-coverage",
+      "note": "Committed 99fd93ab and pushed to origin/loop/main-track. Adds build_payment_rejects_when_funder_ata_missing_on_chain covering the Ok(false) "
+    },
     {
       "at": "2026-06-12T23:55:14.620Z",
       "task": "manifest-from-path-read-size-bound",
@@ -315,11 +320,6 @@
       "at": "2026-06-12T10:14:50.677Z",
       "task": "harden-zauth-reposcan-response-size",
       "note": "Integrated as 543400cf, pushed to origin/loop/main-track (cd7ac5b1..543400cf). Changed: covenant-zauth/src/http.rs (new shared read_capped 1"
-    },
-    {
-      "at": "2026-06-12T09:53:54.542Z",
-      "task": "bound-jupiter-swap-client-response-bodies",
-      "note": "Integrated as cd7ac5b1, pushed to origin/loop/main-track (3f800010..cd7ac5b1). Changed: jupiter.rs (read_body_capped 16 MiB cap, anyhow flav"
     }
   ]
 }

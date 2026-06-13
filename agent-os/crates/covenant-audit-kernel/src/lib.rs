@@ -1432,60 +1432,94 @@ mod imp {
     #[target_feature(enable = "simd128")]
     fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
         use std::arch::wasm32::*;
+
         let n = bytes.len();
         let mut lines = Vec::with_capacity(n / 192 + 4);
         let nl = u8x16_splat(b'\n');
-        let mut start = 0;
-        let mut i = 0;
-        while i + 64 <= n {
-            let b: &[u8; 64] = bytes[i..i + 64].try_into().expect("64-byte chunk");
-            let w = |lo: &[u8], hi: &[u8]| {
+        let mut start = 0usize;
+        let mut i = 0usize;
+
+        macro_rules! load16 {
+            ($buf:ident, $o:literal) => {{
                 u64x2(
-                    u64::from_le_bytes(lo.try_into().expect("8-byte chunk")),
-                    u64::from_le_bytes(hi.try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes($buf[$o..$o + 8].try_into().expect("8-byte chunk")),
+                    u64::from_le_bytes($buf[$o + 8..$o + 16].try_into().expect("8-byte chunk")),
                 )
-            };
-            let m0 = u64::from(i8x16_bitmask(u8x16_eq(w(&b[0..8], &b[8..16]), nl)) as u16);
-            let m1 = u64::from(i8x16_bitmask(u8x16_eq(w(&b[16..24], &b[24..32]), nl)) as u16);
-            let m2 = u64::from(i8x16_bitmask(u8x16_eq(w(&b[32..40], &b[40..48]), nl)) as u16);
-            let m3 = u64::from(i8x16_bitmask(u8x16_eq(w(&b[48..56], &b[56..64]), nl)) as u16);
-            let mut mask = m0 | (m1 << 16) | (m2 << 32) | (m3 << 48);
-            while mask != 0 {
-                let end = i + mask.trailing_zeros() as usize;
-                mask &= mask - 1;
-                let mut line = &bytes[start..end];
-                if let [head @ .., b'\r'] = line {
-                    line = head;
+            }};
+        }
+
+        macro_rules! mask64 {
+            ($buf:ident, $a:literal, $b:literal, $c:literal, $d:literal) => {{
+                let m0 = u64::from(i8x16_bitmask(u8x16_eq(load16!($buf, $a), nl)) as u16);
+                let m1 = u64::from(i8x16_bitmask(u8x16_eq(load16!($buf, $b), nl)) as u16);
+                let m2 = u64::from(i8x16_bitmask(u8x16_eq(load16!($buf, $c), nl)) as u16);
+                let m3 = u64::from(i8x16_bitmask(u8x16_eq(load16!($buf, $d), nl)) as u16);
+                m0 | (m1 << 16) | (m2 << 32) | (m3 << 48)
+            }};
+        }
+
+        macro_rules! push_line {
+            ($end:expr) => {{
+                let end = $end;
+                let mut trimmed = end;
+                if trimmed > start && bytes[trimmed - 1] == b'\r' {
+                    trimmed -= 1;
                 }
-                if !line.is_empty() {
-                    lines.push(line);
+                if trimmed > start {
+                    lines.push(&bytes[start..trimmed]);
                 }
                 start = end + 1;
-            }
+            }};
+        }
+
+        macro_rules! handle_mask {
+            ($mask:expr, $base:expr) => {{
+                let base: usize = $base;
+                let mut mask: u64 = $mask;
+                while mask != 0 {
+                    let end = base + mask.trailing_zeros() as usize;
+                    mask &= mask - 1;
+                    push_line!(end);
+                }
+            }};
+        }
+
+        while i + 512 <= n {
+            let b: &[u8; 512] = bytes[i..i + 512].try_into().expect("512-byte chunk");
+            handle_mask!(mask64!(b, 0, 16, 32, 48), i);
+            handle_mask!(mask64!(b, 64, 80, 96, 112), i + 64);
+            handle_mask!(mask64!(b, 128, 144, 160, 176), i + 128);
+            handle_mask!(mask64!(b, 192, 208, 224, 240), i + 192);
+            handle_mask!(mask64!(b, 256, 272, 288, 304), i + 256);
+            handle_mask!(mask64!(b, 320, 336, 352, 368), i + 320);
+            handle_mask!(mask64!(b, 384, 400, 416, 432), i + 384);
+            handle_mask!(mask64!(b, 448, 464, 480, 496), i + 448);
+            i += 512;
+        }
+
+        while i + 64 <= n {
+            let b: &[u8; 64] = bytes[i..i + 64].try_into().expect("64-byte chunk");
+            handle_mask!(mask64!(b, 0, 16, 32, 48), i);
             i += 64;
         }
+
         while i < n {
             if bytes[i] == b'\n' {
-                let mut line = &bytes[start..i];
-                if let [head @ .., b'\r'] = line {
-                    line = head;
-                }
-                if !line.is_empty() {
-                    lines.push(line);
-                }
-                start = i + 1;
+                push_line!(i);
             }
             i += 1;
         }
+
         if start < n {
-            let mut line = &bytes[start..n];
-            if let [head @ .., b'\r'] = line {
-                line = head;
+            let mut end = n;
+            if end > start && bytes[end - 1] == b'\r' {
+                end -= 1;
             }
-            if !line.is_empty() {
-                lines.push(line);
+            if end > start {
+                lines.push(&bytes[start..end]);
             }
         }
+
         lines
     }
 

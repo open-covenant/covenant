@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T05:04:42.744Z",
+  "updatedAt": "2026-06-13T05:24:46.241Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8847,
-    "tasks": 1049,
-    "integrated": 1051
+    "events": 8865,
+    "tasks": 1051,
+    "integrated": 1053
   },
   "throughput": {
     "last24h": 54,
-    "last7d": 197,
-    "velocity": 28.1
+    "last7d": 199,
+    "velocity": 28.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 15
+      "count": 17
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1051
+      "total": 1053
     }
   ],
   "states": {
-    "integrated": 1045,
+    "integrated": 1047,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T05:23:19.885Z",
+      "task": "manifest-read-capped-size-cap-equality-boundary-coverage",
+      "note": "Landing on loop/main-track: one pinning unit test in covenant-manifest plus the regenerated README count."
+    },
+    {
+      "at": "2026-06-13T05:15:05.653Z",
+      "task": "peer-auth-list-summaries-prefix-limit-truncation-coverage",
+      "note": "Landing on loop/main-track: two pinning unit tests in covenant-peer-auth (InMemory + Jsonl) plus the regenerated README count and the seeded"
+    },
     {
       "at": "2026-06-13T04:59:53.055Z",
       "task": "budget-project-overshoot-threshold-boundary-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-12T19:24:32.629Z",
       "task": "bound-metaplex-signer-rpc-response-body",
       "note": "Committed ccb52cc5, pushed origin/loop/main-track (dce8e60b..ccb52cc5). README metrics + signer cap in one commit; autonomy records gitignor"
-    },
-    {
-      "at": "2026-06-12T17:17:01.755Z",
-      "task": "bound-hermes-sse-event-stream-buffer",
-      "note": "Committed dce8e60b and pushed to origin/loop/main-track (c03eaa02..dce8e60b). Bounded the Hermes SSE event-stream buffer: extracted drain_ss"
-    },
-    {
-      "at": "2026-06-12T16:46:23.667Z",
-      "task": "bound-peer-auth-pagination-limit-take-overflow",
-      "note": "Committed c03eaa02 and pushed to origin/loop/main-track (8108b6c4..c03eaa02). Made the peer-auth pagination peek increment saturating at all"
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T05:51:05.564Z",
+  "updatedAt": "2026-06-13T06:04:52.956Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8883,
-    "tasks": 1053,
-    "integrated": 1055
+    "events": 8892,
+    "tasks": 1054,
+    "integrated": 1056
   },
   "throughput": {
     "last24h": 55,
-    "last7d": 200,
-    "velocity": 28.6
+    "last7d": 201,
+    "velocity": 28.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 19
+      "count": 20
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1055
+      "total": 1056
     }
   ],
   "states": {
-    "integrated": 1049,
+    "integrated": 1050,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T06:01:21.362Z",
+      "task": "a2a-task-queue-binding-limit-queued-leased-ordering-coverage",
+      "note": "Pushed 1775096a to origin/loop/main-track. Both mailbox backends pinned for queued-before-leased ordering under a binding limit; independent"
+    },
     {
       "at": "2026-06-13T05:43:55.517Z",
       "task": "memory-search-tier-filter-binding-limit-cross-product-covera",
@@ -310,11 +315,6 @@
       "at": "2026-06-13T00:05:27.583Z",
       "task": "payai-build-payment-missing-funder-ata-fail-closed-coverage",
       "note": "Committed 99fd93ab and pushed to origin/loop/main-track. Adds build_payment_rejects_when_funder_ata_missing_on_chain covering the Ok(false) "
-    },
-    {
-      "at": "2026-06-12T23:55:14.620Z",
-      "task": "manifest-from-path-read-size-bound",
-      "note": "Committed 79561e74 and pushed to origin/loop/main-track. Bounds Manifest::from_path at MAX_MANIFEST_BYTES with typed TooLarge; 3 new tests; "
     }
   ]
 }

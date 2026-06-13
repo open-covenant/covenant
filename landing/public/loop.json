@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T04:04:32.317Z",
+  "updatedAt": "2026-06-13T04:24:35.811Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8802,
-    "tasks": 1044,
-    "integrated": 1046
+    "events": 8819,
+    "tasks": 1046,
+    "integrated": 1047
   },
   "throughput": {
-    "last24h": 53,
-    "last7d": 192,
-    "velocity": 27.4
+    "last24h": 54,
+    "last7d": 193,
+    "velocity": 27.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 10
+      "count": 11
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-13",
-      "total": 1046
+      "total": 1047
     }
   ],
   "states": {
-    "integrated": 1040,
+    "integrated": 1041,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "ready": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "stake-keeper-jupiter-non-2xx-error-path-coverage",
+    "state": "ready",
+    "since": "2026-06-13T04:24:27.341Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-13T04:17:04.263Z",
+      "task": "memory-sqlite-recent-tier-filter-coverage",
+      "note": "Committed f730cbcf on loop/main-track: test(covenant-memory): cover SqliteStore tier-filtered recent. 2 files changed (covenant-memory lib.r"
+    },
     {
       "at": "2026-06-13T04:04:28.293Z",
       "task": "memory-in-memory-search-tier-filter-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-12T14:48:02.258Z",
       "task": "bound-sap-bridge-worker-subprocess-output",
       "note": "noop check"
-    },
-    {
-      "at": "2026-06-12T14:43:26.655Z",
-      "task": "bound-sap-bridge-worker-subprocess-output",
-      "note": "Committed 84d085b1 and pushed to origin/loop/main-track. Bounds SAP worker subprocess stdout/stderr via capped concurrent read (16 MiB), clo"
     }
   ]
 }

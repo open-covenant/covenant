@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T09:25:28.051Z",
+  "updatedAt": "2026-06-13T09:45:31.482Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9042,
-    "tasks": 1071,
-    "integrated": 1073
+    "events": 9050,
+    "tasks": 1072,
+    "integrated": 1074
   },
   "throughput": {
     "last24h": 58,
-    "last7d": 215,
-    "velocity": 30.7
+    "last7d": 216,
+    "velocity": 30.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 37
+      "count": 38
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1073
+      "total": 1074
     }
   ],
   "states": {
-    "integrated": 1067,
+    "integrated": 1068,
     "proposed": 1,
     "blocked": 3
   },
@@ -199,7 +199,7 @@
     },
     {
       "name": "audit",
-      "count": 90
+      "count": 91
     },
     {
       "name": "live",
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T09:44:01.042Z",
+      "task": "audit-integrity-report-root-hash-chain-fold-coverage",
+      "note": "Committed 70d84e7f on loop/main-track (README + covenant-audit/src/lib.rs). Pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-13T09:23:45.916Z",
       "task": "settlement-merkle-two-leaf-root-concatenation-order-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-13T05:43:55.517Z",
       "task": "memory-search-tier-filter-binding-limit-cross-product-covera",
       "note": "Landing on loop/main-track: two pinning unit tests in covenant-memory (in-memory + sqlite search_similar tier+limit cross-product) plus the "
-    },
-    {
-      "at": "2026-06-13T05:37:33.672Z",
-      "task": "memory-recent-tier-filter-binding-limit-cross-product-covera",
-      "note": "Landing on loop/main-track: two pinning unit tests in covenant-memory (in-memory + sqlite recent tier+limit cross-product) plus the regenera"
     }
   ]
 }

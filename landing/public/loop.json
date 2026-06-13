@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T02:44:18.583Z",
+  "updatedAt": "2026-06-13T03:04:21.951Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8766,
-    "tasks": 1040,
-    "integrated": 1042
+    "events": 8788,
+    "tasks": 1043,
+    "integrated": 1044
   },
   "throughput": {
-    "last24h": 59,
-    "last7d": 190,
-    "velocity": 27.1
+    "last24h": 61,
+    "last7d": 191,
+    "velocity": 27.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 6
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-13",
-      "total": 1042
+      "total": 1044
     }
   ],
   "states": {
-    "integrated": 1036,
+    "integrated": 1038,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,22 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "sap-bridge-worker-error-routing-upstream-vs-rpc-coverage",
+    "state": "in_progress",
+    "since": "2026-06-13T03:04:01.707Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-13T02:53:46.760Z",
+      "task": "llm-ollama-provider-surface-truncated-done-reason-length",
+      "note": "Integrating into loop/main-track: covenant-llm Ollama length-truncation guard + helper + tests + README count, single conventional commit."
+    },
+    {
+      "at": "2026-06-13T02:49:38.448Z",
+      "task": "llm-openai-provider-surface-truncated-finish-reason-length",
+      "note": "Integrating into loop/main-track: covenant-llm OpenAI-compatible length-truncation guard + helper + tests + README count, single conventiona"
+    },
     {
       "at": "2026-06-13T02:40:35.811Z",
       "task": "mcp-remote-tool-transport-fault-coverage",
@@ -305,16 +320,6 @@
       "at": "2026-06-12T12:58:23.143Z",
       "task": "harden-hermes-gateway-error-truncate-char-boundary",
       "note": "Integrating to loop/main-track: truncate() now walks to the largest UTF-8 char boundary at or below max before slicing, closing the panic ax"
-    },
-    {
-      "at": "2026-06-12T12:01:52.288Z",
-      "task": "bound-mcp-stdio-transport-line-reads",
-      "note": "Committed e94b68ab. MCP stdio reads bounded via read_capped_line (16 MiB/line); reader + stderr logger rewired; test read_capped_line_bounds"
-    },
-    {
-      "at": "2026-06-12T11:50:59.060Z",
-      "task": "bound-orbit-registry-response-body",
-      "note": "Committed 8d401505. fetch_page bounded via read_capped + X402Error::Registry; with_limits seam; test fetch_page_response_body_is_bounded. Pu"
     }
   ]
 }

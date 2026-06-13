@@ -278,4 +278,69 @@ mod tests {
             .expect("under-cap envelope decodes through the bounded read");
         assert_eq!(value, 42);
     }
+
+    #[tokio::test]
+    async fn invoke_with_limits_routes_a_named_upstream_error_to_upstream() {
+        // An ok:false envelope carrying a meaningful upstream error name must
+        // surface as BridgeError::Upstream with the name preserved verbatim, not
+        // flattened into a string. BridgeError documents this as load-bearing:
+        // reconciliation loops branch on the failure class (a TransactionFailed /
+        // blockheight-exceeded send failure, BridgeSignerRequiredError) instead of
+        // substring-matching a message. The whole ok:false routing is otherwise
+        // uncovered -- the existing tests are ok:true happy decode, pre-spawn
+        // validation, and the stdout cap -- so a refactor that collapsed the
+        // match env.name arm into the Rpc fold would erase the branchable name
+        // with no failing test. The fake worker drains stdin first (so the
+        // payload write does not race a broken pipe), then prints the envelope.
+        let mut config = Config::disabled(Cluster::Devnet);
+        config.worker_command = vec![
+            "sh".into(),
+            "-c".into(),
+            "cat >/dev/null; printf '{\"ok\":false,\"name\":\"TransactionFailed\",\"error\":\"blockhash expired\"}'".into(),
+        ];
+        let err = invoke_with_limits::<serde_json::Value, serde_json::Value>(
+            &config,
+            "send",
+            &serde_json::json!({}),
+            4096,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, BridgeError::Upstream { name, message }
+                if name == "TransactionFailed" && message == "blockhash expired"),
+            "a named upstream failure must surface as Upstream with its name intact: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_with_limits_folds_a_nameless_failure_to_rpc() {
+        // A failure name that carries no signal -- absent, empty, or JS's default
+        // "Error" -- must collapse to BridgeError::Rpc, never a useless
+        // Upstream { name: "" | "Error" } that a reconciliation loop would mistake
+        // for a branchable failure class. All three no-signal shapes share one
+        // message, so the only variable under test is the name guard
+        // (!name.is_empty() && name != "Error"); loosening it would surface here.
+        let nameless = [
+            "cat >/dev/null; printf '{\"ok\":false,\"error\":\"node unreachable\"}'",
+            "cat >/dev/null; printf '{\"ok\":false,\"name\":\"\",\"error\":\"node unreachable\"}'",
+            "cat >/dev/null; printf '{\"ok\":false,\"name\":\"Error\",\"error\":\"node unreachable\"}'",
+        ];
+        for worker in nameless {
+            let mut config = Config::disabled(Cluster::Devnet);
+            config.worker_command = vec!["sh".into(), "-c".into(), worker.into()];
+            let err = invoke_with_limits::<serde_json::Value, serde_json::Value>(
+                &config,
+                "send",
+                &serde_json::json!({}),
+                4096,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(&err, BridgeError::Rpc(m) if m == "node unreachable"),
+                "a no-signal name must fold to Rpc, got {err:?} for worker `{worker}`"
+            );
+        }
+    }
 }

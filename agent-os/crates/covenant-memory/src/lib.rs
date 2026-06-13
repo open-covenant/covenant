@@ -1419,6 +1419,28 @@ mod tests {
         assert_eq!(recent[1].text, "c");
     }
 
+    #[tokio::test]
+    async fn sqlite_recent_filters_by_tier() {
+        // SqliteStore is the production backend, and recent()'s `WHERE tier = ?1`
+        // arm is what enforces memory.read.<tier> isolation there. The sibling
+        // sqlite_recent_orders_by_created_at_desc seeds Working-only rows, so
+        // dropping that clause would still pass it; mixed tiers make the filter
+        // load-bearing — recent(Some(Episodic)) must surface only the Episodic row.
+        let s = SqliteStore::open_in_memory().unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w", 1))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e", 2))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::LongTerm, "l", 3))
+            .await
+            .unwrap();
+        let only_episodic = s.recent(Some(MemoryTier::Episodic), 10).await.unwrap();
+        assert_eq!(only_episodic.len(), 1);
+        assert_eq!(only_episodic[0].text, "e");
+    }
+
     #[test]
     fn parse_tier_pins_canonical_tier_mapping_and_silent_catch_all_to_long_term() {
         // SqliteStore::parse_tier is the reverse of SqliteStore::tier_str

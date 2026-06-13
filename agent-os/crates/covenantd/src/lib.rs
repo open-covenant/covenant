@@ -47787,6 +47787,104 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_auto_retry_scheduler_scan_audit_buckets_skips_by_reason() {
+        // record_a2a_auto_retry_scheduler_scan folds each report.skipped
+        // entry into the audit row's skipped_by_reason map via
+        // *entry(reason.as_str()).or_insert(0) += 1 (lib.rs:2224-2228).
+        // a2a_auto_retry_scheduler_once_reuses_gate_and_audits_summary only
+        // asserts skipped_by_reason.is_empty() for an all-requeued scan, so
+        // the fold never runs with a real skip. Two Unsafe leases produce
+        // two UnsafeDuplicateSafety skips in one scan, pinning both the
+        // bucket key (reason.as_str) and the count (the increment): a
+        // dropped fold blanks the map and a set-to-1 mutation reports 1.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone());
+        let mut first = loopback_a2a_task_for(&s);
+        first.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Unsafe,
+            "unsafe-a",
+        ));
+        let mut second = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            ..first.clone()
+        };
+        second.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Unsafe,
+            "unsafe-b",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", first.recipient.display)).await;
+        grant_action(&s, "a2a.repair.requeue").await;
+        s.op_respond(Request::SendA2ATask {
+            task: first.clone(),
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask {
+            task: second.clone(),
+        })
+        .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let report = match s
+            .run_a2a_auto_retry_scheduler_once(covenant_a2a::A2AAutoRetryPolicy {
+                enabled: true,
+                min_lease_age_ms: 0,
+                max_attempts: 3,
+                max_requeues: 10,
+                scan_limit: 10,
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => report,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert_eq!(report.considered, 2);
+        assert!(
+            report.requeued.is_empty(),
+            "both Unsafe leases are skipped, not requeued",
+        );
+        assert_eq!(report.skipped.len(), 2);
+
+        let scan = audit
+            .recent(20)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|event| matches!(event.kind, AuditKind::A2AAutoRetrySchedulerScan { .. }))
+            .expect("scheduler scan audit row");
+        match &scan.kind {
+            AuditKind::A2AAutoRetrySchedulerScan {
+                considered,
+                requeued,
+                skipped,
+                skipped_by_reason,
+                error,
+                ..
+            } => {
+                assert_eq!(*considered, 2);
+                assert_eq!(*requeued, 0);
+                assert_eq!(*skipped, 2, "both Unsafe leases land in the skipped count");
+                assert_eq!(
+                    skipped_by_reason.get("unsafe_duplicate_safety").copied(),
+                    Some(2),
+                    "the two same-reason skips aggregate into one bucket with \
+                     count 2 — a dropped fold blanks the map and a set-to-1 \
+                     mutation reports 1",
+                );
+                assert_eq!(
+                    skipped_by_reason.len(),
+                    1,
+                    "only the unsafe_duplicate_safety key is present — no \
+                     phantom buckets from a miskeyed fold",
+                );
+                assert_eq!(error, &None);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_auto_retry_scheduler_once_audits_missing_capability_error() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let s = server_with_audit(audit.clone());

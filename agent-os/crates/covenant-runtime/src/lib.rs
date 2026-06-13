@@ -3566,4 +3566,33 @@ cpu_ms_per_task = 5000
             truncated.len()
         );
     }
+
+    #[test]
+    fn truncate_stderr_keeps_a_buffer_sized_exactly_at_the_cap() {
+        // truncate_stderr_for_diagnostics returns a buffer untouched when its
+        // length is <= MAX_LEN (lib.rs:286): equality is the keep-arm, so a
+        // stderr sized exactly at the cap comes back verbatim with no
+        // `...(truncated)` marker, and only MAX_LEN+1 is clipped. The sibling
+        // test brackets this far from the boundary — a 13-byte buffer kept, an
+        // 8011-byte buffer tailed — so a `<=` -> `<` flip, which would clip a
+        // buffer sized exactly at the cap (prepend the marker, drop a byte),
+        // passes every assertion there. Pin both arms: exactly MAX_LEN is
+        // returned verbatim, MAX_LEN+1 is clipped.
+        const MAX_LEN: usize = 4096;
+
+        let exact = "a".repeat(MAX_LEN);
+        assert_eq!(
+            truncate_stderr_for_diagnostics(exact.clone()),
+            exact,
+            "a stderr buffer sized exactly at MAX_LEN must be returned verbatim — equality is the \
+             keep-arm; a <= -> < flip would clip it and prepend the truncated marker",
+        );
+
+        let over = "a".repeat(MAX_LEN + 1);
+        let truncated = truncate_stderr_for_diagnostics(over);
+        assert!(
+            truncated.starts_with("...(truncated)"),
+            "one byte over the cap must be clipped and marked, bracketing the keep-arm: {truncated}",
+        );
+    }
 }

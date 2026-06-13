@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T09:45:31.482Z",
+  "updatedAt": "2026-06-13T10:05:35.003Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9050,
-    "tasks": 1072,
-    "integrated": 1074
+    "events": 9066,
+    "tasks": 1074,
+    "integrated": 1076
   },
   "throughput": {
-    "last24h": 58,
-    "last7d": 216,
-    "velocity": 30.9
+    "last24h": 59,
+    "last7d": 218,
+    "velocity": 31.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 38
+      "count": 40
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1074
+      "total": 1076
     }
   ],
   "states": {
-    "integrated": 1068,
+    "integrated": 1070,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T10:03:04.539Z",
+      "task": "settlement-merkle-four-leaf-two-level-across-pair-order-cove",
+      "note": "Committed a7352a7b on loop/main-track. Pushing."
+    },
+    {
+      "at": "2026-06-13T09:54:16.097Z",
+      "task": "settlement-receipt-hash-canonical-json-field-order-coverage",
+      "note": "Committed 8d4ca277 on loop/main-track. Pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-13T09:44:01.042Z",
       "task": "audit-integrity-report-root-hash-chain-fold-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-13T06:11:06.788Z",
       "task": "budget-recent-debits-agent-filter-binding-limit-cross-produc",
       "note": "Pushed c25611e4 to origin/loop/main-track. Both budget backends pinned for agent-filter-before-binding-limit; independently reviewed SOUND; "
-    },
-    {
-      "at": "2026-06-13T06:01:21.362Z",
-      "task": "a2a-task-queue-binding-limit-queued-leased-ordering-coverage",
-      "note": "Pushed 1775096a to origin/loop/main-track. Both mailbox backends pinned for queued-before-leased ordering under a binding limit; independent"
-    },
-    {
-      "at": "2026-06-13T05:43:55.517Z",
-      "task": "memory-search-tier-filter-binding-limit-cross-product-covera",
-      "note": "Landing on loop/main-track: two pinning unit tests in covenant-memory (in-memory + sqlite search_similar tier+limit cross-product) plus the "
     }
   ]
 }

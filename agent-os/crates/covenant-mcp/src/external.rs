@@ -909,6 +909,78 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn remote_tool_transport_faults_surface_as_transport_prefixed_failed_distinct_from_rpc() {
+        // RemoteTool::call routes McpClientError::Rpc to a "rpc {code}: {message}"
+        // message and folds every transport fault -- Io, Serde, Closed, Timeout,
+        // ServerCrashed -- into "transport: {e}". remote_tool_propagates_rpc_errors
+        // pins only the Rpc arm; the catch-all has no coverage. The transport layer
+        // keeps Timeout and ServerCrashed as distinct, retry-policy-bearing variants
+        // (transport.rs pins their Display and the crash-vs-closed routing so an
+        // operator can decide reconnect-vs-abandon). Pin that those diagnostics
+        // survive the collapse into the opaque ToolError::Failed AND stay
+        // prefix-distinct from a server-side rpc rejection: an operator triaging a
+        // failed tool call must tell "the server ran my tool and rejected it" (fix
+        // the request) apart from "the call never completed" (restart or wait on a
+        // slow/crashed server). A simplify pass that merged the two match arms, or
+        // dropped the {e} interpolation for a static string, would converge the
+        // prefixes or discard the retry signal and surface here.
+
+        // Timeout: the transport's "timeout after {dur}" diagnostic must reach the
+        // tool-call error surface so the operator sees the call never completed.
+        let client: Arc<dyn McpClient> = Arc::new(MockMcpClient::new(|method, _| match method {
+            "initialize" | "tools/list" => happy_handler(method, &Value::Null),
+            "tools/call" => Err(McpClientError::Timeout(std::time::Duration::from_secs(5))),
+            _ => unreachable!(),
+        }));
+        let tools = bootstrap_remote_tools(client).await.unwrap();
+        let err = tools[0].call(Value::Null).await.unwrap_err();
+        match err {
+            ToolError::Failed(msg) => {
+                assert!(
+                    msg.starts_with("transport: ") && !msg.starts_with("rpc "),
+                    "a transport timeout must surface under the 'transport: ' prefix, \
+                     distinct from the 'rpc ' prefix RemoteTool::call gives a server-side \
+                     rejection; a refactor that merged the two arms would converge them: {msg}"
+                );
+                assert!(
+                    msg.contains("timeout after"),
+                    "the McpClientError::Timeout Display detail must survive the collapse \
+                     into ToolError::Failed so the operator can tell a slow/unresponsive \
+                     server from any other transport fault; a static 'transport error' \
+                     string would drop this retry signal: {msg}"
+                );
+            }
+            other => panic!("expected ToolError::Failed for a transport timeout, got: {other:?}"),
+        }
+
+        // ServerCrashed: the crash diagnostic must likewise reach the surface so the
+        // operator restarts the server rather than retrying a doomed request.
+        let client: Arc<dyn McpClient> = Arc::new(MockMcpClient::new(|method, _| match method {
+            "initialize" | "tools/list" => happy_handler(method, &Value::Null),
+            "tools/call" => Err(McpClientError::ServerCrashed),
+            _ => unreachable!(),
+        }));
+        let tools = bootstrap_remote_tools(client).await.unwrap();
+        let err = tools[0].call(Value::Null).await.unwrap_err();
+        match err {
+            ToolError::Failed(msg) => {
+                assert!(
+                    msg.starts_with("transport: ") && !msg.starts_with("rpc "),
+                    "a server crash must surface under the 'transport: ' prefix, not the \
+                     'rpc ' prefix of a server-side tool rejection: {msg}"
+                );
+                assert!(
+                    msg.contains("server crashed"),
+                    "the McpClientError::ServerCrashed diagnostic must survive into \
+                     ToolError::Failed so the operator restarts the server instead of \
+                     retrying a doomed request: {msg}"
+                );
+            }
+            other => panic!("expected ToolError::Failed for a server crash, got: {other:?}"),
+        }
+    }
+
     #[test]
     fn bootstrap_error_display_messages_pin_two_string_variant_format_strings() {
         let bad_list = format!("{}", BootstrapError::BadList("missing field tools".into()));

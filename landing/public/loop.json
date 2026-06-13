@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T07:25:07.017Z",
+  "updatedAt": "2026-06-13T07:45:10.552Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8950,
-    "tasks": 1061,
-    "integrated": 1062
+    "events": 8970,
+    "tasks": 1063,
+    "integrated": 1065
   },
   "throughput": {
-    "last24h": 56,
-    "last7d": 206,
-    "velocity": 29.4
+    "last24h": 57,
+    "last7d": 209,
+    "velocity": 29.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 26
+      "count": 29
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-13",
-      "total": 1062
+      "total": 1065
     }
   ],
   "states": {
-    "integrated": 1056,
+    "integrated": 1059,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,23 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "memory-compaction-cutoff-equality-keep-arm-boundary-coverage",
-    "state": "in_progress",
-    "since": "2026-06-13T07:21:59.664Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T07:43:41.528Z",
+      "task": "budget-compact-cutoff-equality-keep-arm-boundary-coverage",
+      "note": "pushed 31620b81; README 2793->2795; all three compact keep-arm sites mutation-verified"
+    },
+    {
+      "at": "2026-06-13T07:35:02.209Z",
+      "task": "budget-exact-remaining-balance-spend-boundary-coverage",
+      "note": "pushed 602e149f to origin/loop/main-track; README 2791->2793; both budget backends' spend boundary mutation-verified"
+    },
+    {
+      "at": "2026-06-13T07:27:44.093Z",
+      "task": "memory-compaction-cutoff-equality-keep-arm-boundary-coverage",
+      "note": "pushed de493b90 to origin/loop/main-track; README 2790->2791; covenant-memory lib tests green; both delete and stale-mark cutoff boundary si"
+    },
     {
       "at": "2026-06-13T07:11:53.218Z",
       "task": "covenantd-a2a-min-lease-age-inclusive-threshold-boundary-cov",
@@ -305,21 +315,6 @@
       "at": "2026-06-13T04:04:28.293Z",
       "task": "memory-in-memory-search-tier-filter-coverage",
       "note": "Committed af495add on loop/main-track: test(covenant-memory) cover InMemoryStore tier-filtered search. +1 test (README 2766). Pushing to ori"
-    },
-    {
-      "at": "2026-06-13T03:09:18.957Z",
-      "task": "sap-bridge-worker-error-routing-upstream-vs-rpc-coverage",
-      "note": "Integrating into loop/main-track: covenant-sap-bridge worker ok:false error-routing coverage (Upstream name vs Rpc fold) + README test count"
-    },
-    {
-      "at": "2026-06-13T02:53:46.760Z",
-      "task": "llm-ollama-provider-surface-truncated-done-reason-length",
-      "note": "Integrating into loop/main-track: covenant-llm Ollama length-truncation guard + helper + tests + README count, single conventional commit."
-    },
-    {
-      "at": "2026-06-13T02:49:38.448Z",
-      "task": "llm-openai-provider-surface-truncated-finish-reason-length",
-      "note": "Integrating into loop/main-track: covenant-llm OpenAI-compatible length-truncation guard + helper + tests + README count, single conventiona"
     }
   ]
 }

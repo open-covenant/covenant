@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T03:44:28.857Z",
+  "updatedAt": "2026-06-13T04:04:32.317Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8793,
-    "tasks": 1043,
-    "integrated": 1045
+    "events": 8802,
+    "tasks": 1044,
+    "integrated": 1046
   },
   "throughput": {
-    "last24h": 57,
-    "last7d": 191,
-    "velocity": 27.3
+    "last24h": 53,
+    "last7d": 192,
+    "velocity": 27.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 9
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1045
+      "total": 1046
     }
   ],
   "states": {
-    "integrated": 1039,
+    "integrated": 1040,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T04:04:28.293Z",
+      "task": "memory-in-memory-search-tier-filter-coverage",
+      "note": "Committed af495add on loop/main-track: test(covenant-memory) cover InMemoryStore tier-filtered search. +1 test (README 2766). Pushing to ori"
+    },
     {
       "at": "2026-06-13T03:09:18.957Z",
       "task": "sap-bridge-worker-error-routing-upstream-vs-rpc-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-12T14:43:26.655Z",
       "task": "bound-sap-bridge-worker-subprocess-output",
       "note": "Committed 84d085b1 and pushed to origin/loop/main-track. Bounds SAP worker subprocess stdout/stderr via capped concurrent read (16 MiB), clo"
-    },
-    {
-      "at": "2026-06-12T13:45:47.683Z",
-      "task": "bound-hyre-facilitator-response-body",
-      "note": "committed d0f9bd16 on loop/main-track; last un-capped untrusted reqwest read in the workspace now bounded — covenant-hyre http.rs every-body"
     }
   ]
 }

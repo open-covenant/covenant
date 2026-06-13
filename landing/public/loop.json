@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T08:45:21.076Z",
+  "updatedAt": "2026-06-13T09:05:24.588Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9019,
-    "tasks": 1069,
-    "integrated": 1070
+    "events": 9033,
+    "tasks": 1070,
+    "integrated": 1072
   },
   "throughput": {
-    "last24h": 57,
-    "last7d": 212,
-    "velocity": 30.3
+    "last24h": 58,
+    "last7d": 214,
+    "velocity": 30.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 34
+      "count": 36
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-13",
-      "total": 1070
+      "total": 1072
     }
   ],
   "states": {
-    "integrated": 1064,
+    "integrated": 1066,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "a2a-task-queue-leased-ordering-tie-break-coverage",
-    "state": "in_progress",
-    "since": "2026-06-13T08:41:22.172Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T09:00:45.811Z",
+      "task": "covenantd-recent-debits-truncate-after-merge-coverage",
+      "note": "Committed on loop/main-track. Scope: covenantd/src/lib.rs +47 (recent_debits_truncates_to_limit_after_cross_agent_merge), README 2802->2803."
+    },
+    {
+      "at": "2026-06-13T08:46:59.273Z",
+      "task": "a2a-task-queue-leased-ordering-tie-break-coverage",
+      "note": "Committed 8987101e on loop/main-track. Scope: covenant-a2a/src/lib.rs +111 (in_memory_/jsonl_task_queue_orders_leased_entries_by_lease_age_t"
+    },
     {
       "at": "2026-06-13T08:25:21.538Z",
       "task": "covenant-runtime-hermes-read-capped-exact-boundary-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-13T05:23:19.885Z",
       "task": "manifest-read-capped-size-cap-equality-boundary-coverage",
       "note": "Landing on loop/main-track: one pinning unit test in covenant-manifest plus the regenerated README count."
-    },
-    {
-      "at": "2026-06-13T05:15:05.653Z",
-      "task": "peer-auth-list-summaries-prefix-limit-truncation-coverage",
-      "note": "Landing on loop/main-track: two pinning unit tests in covenant-peer-auth (InMemory + Jsonl) plus the regenerated README count and the seeded"
-    },
-    {
-      "at": "2026-06-13T04:59:53.055Z",
-      "task": "budget-project-overshoot-threshold-boundary-coverage",
-      "note": "Landing on loop/main-track: one pinning unit test in covenant-budget plus the regenerated README count."
     }
   ]
 }

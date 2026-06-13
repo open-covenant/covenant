@@ -1640,6 +1640,80 @@ mod tests {
     }
 
     #[test]
+    fn receipt_hash_pins_canonical_json_field_order_and_value_encoding() {
+        // receipt_hash (lib.rs:358) is sha256(serde_json::to_vec(payload)) over
+        // a serde_json::json! object. With serde_json's default Map backing (no
+        // preserve_order feature anywhere in the workspace) keys serialize in
+        // BTreeMap ALPHABETICAL order, and the conditional memory_record_id is
+        // sorted into that order rather than appended. This hash is the Merkle
+        // leaf the on-chain Solana program recomputes, so the exact bytes --
+        // field set, field ORDER, and per-field value encoding (id as a
+        // hyphenated UUID string, payer as Bitcoin-base58, resource as the
+        // lowercase ResourceKind rename) -- are a cross-system contract.
+        //
+        // receipt_hash_pins_conditional_memory_record_id_and_per_field_-
+        // determinism pins determinism, the 32-byte width, and per-field
+        // inequality, but every one of those survives a field-ORDER flip: if any
+        // workspace dependency enabled serde_json/preserve_order the payload
+        // would silently switch to insertion order, changing every leaf hash and
+        // breaking on-chain verification while determinism and all inequalities
+        // still hold. Pin the exact canonical bytes by recomputing the hash from
+        // a hand-spelled alphabetical-order literal. payer is bs58 of the
+        // all-zero key (32 '1's, pinned by covenant-types
+        // pubkey_base58_pins_bitcoin_alphabet_leading_zero_ones_and_distinctness);
+        // credits_consumed (7) and settled_at (42) differ so the two numeric
+        // keys are distinguishable by value.
+        let mut r = receipt(7);
+        r.id = Uuid::from_u128(0xabc);
+        r.settled_at = 42;
+
+        let canonical = concat!(
+            "{",
+            "\"credits_consumed\":7,",
+            "\"id\":\"00000000-0000-0000-0000-000000000abc\",",
+            "\"payer\":\"11111111111111111111111111111111\",",
+            "\"resource\":\"memory\",",
+            "\"settled_at\":42",
+            "}"
+        );
+        let expected: [u8; 32] = Sha256::digest(canonical.as_bytes()).into();
+        assert_eq!(
+            receipt_hash(&r),
+            expected,
+            "receipt_hash must equal sha256 of the exact alphabetical-order JSON \
+             payload; a serde_json preserve_order flip (insertion order), a \
+             value-encoding change (base58 -> hex or checked payer, a non-rename \
+             resource, a non-hyphenated id), or a field add/drop would diverge \
+             here while determinism and per-field inequality still hold",
+        );
+
+        // The conditional memory_record_id sorts into alphabetical position
+        // (after id, before payer) -- it is NOT appended last. A refactor that
+        // appended it, or an insertion-order regression, moves the field and
+        // changes the leaf hash for every correlated receipt.
+        let mut with_mem = r.clone();
+        with_mem.memory_record_id = Some(Uuid::from_u128(0xdef));
+        let canonical_mem = concat!(
+            "{",
+            "\"credits_consumed\":7,",
+            "\"id\":\"00000000-0000-0000-0000-000000000abc\",",
+            "\"memory_record_id\":\"00000000-0000-0000-0000-000000000def\",",
+            "\"payer\":\"11111111111111111111111111111111\",",
+            "\"resource\":\"memory\",",
+            "\"settled_at\":42",
+            "}"
+        );
+        let expected_mem: [u8; 32] = Sha256::digest(canonical_mem.as_bytes()).into();
+        assert_eq!(
+            receipt_hash(&with_mem),
+            expected_mem,
+            "with memory_record_id = Some, the field must serialize in \
+             alphabetical position between id and payer; appending it last or an \
+             insertion-order regression would change the Merkle leaf",
+        );
+    }
+
+    #[test]
     fn receipt_migration_plan_does_not_export_display_identity() {
         let mut legacy = receipt(1);
         legacy.payer = AgentId::new("private-display@local", [1u8; 32]);

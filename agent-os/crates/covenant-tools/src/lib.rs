@@ -1393,6 +1393,54 @@ api_key = "BSA-test"
     }
 
     #[tokio::test]
+    async fn brave_search_reads_a_body_sized_exactly_at_the_cap() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // read_body_capped keeps a body whose size is exactly the cap: both
+        // the Content-Length early reject (`if len > max`, lib.rs:65) and the
+        // running accumulation guard (`if buf.len() + chunk.len() > max`,
+        // lib.rs:71) use `>`, not `>=`, so a body of max bytes is allowed and
+        // only max+1 is rejected. The sibling cap tests bracket that boundary
+        // from far away — an 8-byte cap rejects the ~80-byte body, a 16 KiB
+        // cap accepts it — so a `>` -> `>=` flip on either guard, which would
+        // reject a body sized exactly at the cap, passes both. Serve a body of
+        // known length N: cap=N must read back the hit (re-pinning both
+        // keep-arms on the boundary) and cap=N-1 must be rejected. A `>=` flip
+        // on line 65 or line 71 turns the cap=N read into ResponseTooLarge.
+        let body =
+            r#"{"web":{"results":[{"title":"t","url":"https://example.com","description":"d"}]}}"#;
+        let exact = body.len();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let at_cap = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, exact)
+            .search("q", 5)
+            .await
+            .expect("a body sized exactly at the cap must read back through read_body_capped");
+        assert_eq!(at_cap.len(), 1);
+        assert_eq!(
+            at_cap[0].url, "https://example.com",
+            "the at-cap read must still deserialize the Brave response body verbatim",
+        );
+
+        let err = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, exact - 1)
+            .search("q", 5)
+            .await
+            .expect_err("a body one byte over the cap must be rejected, not buffered");
+        assert!(
+            matches!(err, SearchError::ResponseTooLarge { limit } if limit == exact - 1),
+            "one byte over the cap must surface SearchError::ResponseTooLarge {{ limit: {} }} so a \
+             malicious provider cannot OOM the daemon worker; got {err:?}",
+            exact - 1,
+        );
+    }
+
+    #[tokio::test]
     async fn serpapi_search_caps_oversized_body_and_reads_a_small_body() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};

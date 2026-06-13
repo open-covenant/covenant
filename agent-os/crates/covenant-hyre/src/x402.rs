@@ -196,7 +196,10 @@ fn to_requirements(accept: &Accept, caip2_network: &str) -> Result<PaymentRequir
 /// by `signer` and the request is retried once with the `x-payment`
 /// header. Selection failures surface as [`HyreError::NotAllowed`] —
 /// the call is rejected before the signer runs, so no payment leaves
-/// the host for an out-of-policy option.
+/// the host for an out-of-policy option. A signer that cannot build the
+/// payment header surfaces as [`HyreError::Sign`], keeping a
+/// signing/custody failure distinct from a network or decode fault, and
+/// aborts the loop before the paid retry.
 pub async fn execute_paid(
     http: &reqwest::Client,
     signer: &dyn Signer,
@@ -253,7 +256,7 @@ async fn execute_paid_with_limits(
     let header = signer
         .build_payment(&requirements)
         .await
-        .map_err(|e| HyreError::Execute(e.to_string()))?;
+        .map_err(|e| HyreError::Sign(e.to_string()))?;
 
     let paid = send(http, &method, &plan.url, plan.body.as_ref(), Some(&header)).await?;
     let status = paid.status();
@@ -754,6 +757,53 @@ mod tests {
         assert!(
             out.paid_amount.is_none(),
             "a rejected payment must not record a settled amount"
+        );
+    }
+
+    #[tokio::test]
+    async fn paid_signer_failure_surfaces_as_typed_sign_error() {
+        // The loop selects a policy-compliant option, normalises it, then asks
+        // the signer to build the x-payment header. A signer that cannot build
+        // the payment (funding key unavailable, bad blockhash, insufficient
+        // funds at sign time) must abort the call as a typed HyreError::Sign
+        // carrying the signer's message — never panic, and never fall through to
+        // the paid POST. Sign keeps a signing/custody failure distinct from the
+        // generic Execute used for HTTP, method, and body-decode faults. The 402
+        // mock expects exactly one request — the unpaid challenge fetch — so if
+        // the loop ever signed and issued the paid retry, the expectation would
+        // fail on server drop. A Sign result therefore proves the loop stopped
+        // at the signer before any payment left the host.
+        struct FailingSigner;
+        #[async_trait::async_trait]
+        impl Signer for FailingSigner {
+            async fn build_payment(
+                &self,
+                _requirements: &PaymentRequirements,
+            ) -> covenant_x402::Result<String> {
+                Err(covenant_x402::X402Error::Sign(
+                    "funding key unavailable".into(),
+                ))
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_body_string(LIVE_DEFI_TVL_402))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let err = execute_paid(
+            &reqwest::Client::new(),
+            &FailingSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+        )
+        .await
+        .expect_err("a signer failure must abort the paid loop");
+        assert!(
+            matches!(err, HyreError::Sign(ref m) if m.contains("funding key unavailable")),
+            "got {err:?}",
         );
     }
 }

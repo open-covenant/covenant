@@ -61,6 +61,8 @@ pub enum HyreError {
     NotAllowed(String),
     #[error("paid call: {0}")]
     Execute(String),
+    #[error("signer: {0}")]
+    Sign(String),
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),
 }

@@ -555,6 +555,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oversized_challenge_body_is_rejected_before_parsing() {
+        // A 402 whose challenge body exceeds the cap must fail closed at the
+        // read boundary, before parse_challenge buffers an unbounded body.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let err = execute_paid_with_limits(
+            &reqwest::Client::new(),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+            64,
+        )
+        .await
+        .expect_err("must reject an oversized challenge body");
+        assert!(matches!(err, HyreError::Execute(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_paid_retry_body_is_rejected_after_payment() {
+        // The challenge parses, the loop signs and sends payment, then the
+        // paid retry floods the response. The cap must fail closed rather than
+        // buffer an unbounded body on a path where funds were already committed.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_body_string(LIVE_DEFI_TVL_402))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .and(header_exists("x-payment"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(8192)))
+            .mount(&server)
+            .await;
+        let err = execute_paid_with_limits(
+            &reqwest::Client::new(),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+            4096,
+        )
+        .await
+        .expect_err("must reject an oversized paid-retry body");
+        assert!(matches!(err, HyreError::Execute(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
     async fn full_loop_pays_live_shape_and_returns_data() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))

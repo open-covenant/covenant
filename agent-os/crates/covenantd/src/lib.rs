@@ -47470,6 +47470,143 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_auto_retry_scan_caps_requeues_at_max_requeues_with_limit_reached() {
+        // The scan loop bounds how many leases one pass requeues: after
+        // evaluate_auto_retry returns Requeue, retry_a2a_stale gates on
+        // `report.requeued.len() >= policy.max_requeues` (lib.rs:3036)
+        // and on the cap pushes a LimitReached skip with
+        // lease_age_ms = Some(..) and continues without requeueing.
+        // Every other functional scan test runs max_requeues high or
+        // with a single eligible task, so this cap branch never fires;
+        // LimitReached otherwise appears only in the audit verify-drift
+        // detector. Two eligible idempotent leases with max_requeues=1
+        // is the minimal config that exercises the cap: the first lease
+        // is requeued, the second is capped. Dropping the guard or
+        // flipping `>=` to `>` requeues both and the LimitReached
+        // assertions below bite.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let mut task_a = loopback_a2a_task_for(&s);
+        task_a.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "cap-task-a",
+        ));
+        let mut task_b = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            ..task_a.clone()
+        };
+        task_b.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "cap-task-b",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", task_a.recipient.display)).await;
+        grant_action(&s, "a2a.repair.requeue").await;
+        s.op_respond(Request::SendA2ATask {
+            task: task_a.clone(),
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask {
+            task: task_b.clone(),
+        })
+        .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let report = match s
+            .op_respond(Request::RetryA2AStale {
+                policy: covenant_a2a::A2AAutoRetryPolicy {
+                    enabled: true,
+                    min_lease_age_ms: 0,
+                    max_attempts: 3,
+                    max_requeues: 1,
+                    scan_limit: 10,
+                },
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => report,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        assert_eq!(report.considered, 2, "both leased tasks are scanned");
+        assert_eq!(
+            report.requeued.len(),
+            1,
+            "max_requeues=1 caps the pass at one requeue; a missing cap \
+             would requeue both eligible leases",
+        );
+        assert_eq!(
+            report.skipped.len(),
+            1,
+            "the second eligible lease must be skipped, not requeued",
+        );
+        assert_eq!(
+            report.skipped[0].reason,
+            covenant_a2a::A2AAutoRetrySkipReason::LimitReached,
+            "the over-cap lease is skipped for LimitReached, not an \
+             eligibility reason — evaluate_auto_retry already returned \
+             Requeue for it before the cap rejected it",
+        );
+        assert!(
+            report.skipped[0].lease_age_ms.is_some(),
+            "LimitReached fires inside the Requeue branch after lease-age \
+             computation, so the skip carries Some(lease_age) for audit \
+             attribution — None would mean the cap moved above the \
+             eligibility ladder",
+        );
+
+        let requeued_id = report.requeued[0].task_id;
+        let capped_id = report.skipped[0].task_id;
+        assert_ne!(
+            requeued_id, capped_id,
+            "the requeued and capped leases must be distinct tasks",
+        );
+        let mut got = [requeued_id, capped_id];
+        got.sort();
+        let mut want = [task_a.id, task_b.id];
+        want.sort();
+        assert_eq!(
+            got, want,
+            "the requeued and capped task ids must be exactly the two \
+             sent leases",
+        );
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                let requeued_entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == requeued_id)
+                    .expect("requeued task entry");
+                assert_eq!(
+                    requeued_entry.state,
+                    covenant_a2a::A2ATaskQueueState::Queued,
+                    "the requeued lease returns to Queued",
+                );
+                let capped_entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == capped_id)
+                    .expect("capped task entry");
+                assert_eq!(
+                    capped_entry.state,
+                    covenant_a2a::A2ATaskQueueState::InFlight,
+                    "the LimitReached lease is untouched and stays \
+                     InFlight — the cap prevented the requeue, it did \
+                     not partially apply it",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_auto_retry_scheduler_once_reuses_gate_and_audits_summary() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let s = server_with_audit(audit.clone());

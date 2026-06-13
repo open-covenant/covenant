@@ -3427,6 +3427,61 @@ mod tests {
     }
 
     #[test]
+    fn project_overshoot_linear_extrapolation_pins_threshold_equality_boundary_proceeds() {
+        // The short-circuit gate (lib.rs:150-153) is a strict less-than on
+        // BOTH legs:
+        //
+        //     if observation_window_ms < min_observation_window_ms
+        //         || observed_debit_samples < min_debit_samples
+        //     { return false; }
+        //
+        // so a debit observed at EXACTLY the minimum window or sample count
+        // must fall through to the projection, not short-circuit.
+        // project_overshoot_linear_extrapolation_short_circuits_below_observation_thresholds
+        // probes strictly-below (window=100, samples=1) and every
+        // proceed-path test uses strictly-above (window=1000, samples=5);
+        // none sits at the exact boundary. A refactor that flipped either
+        // leg to `<=` (a natural "include the minimum" off-by-one) would
+        // short-circuit at the precise instant enough evidence has just
+        // accumulated — the hard-preempt projection would silently never
+        // fire at window == min or samples == min — and every existing test
+        // would still pass (100 <= 500 still short-circuits; 1000 <= 500
+        // still proceeds).
+        let policy = BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 500,
+            min_debit_samples: 3,
+        };
+
+        // Window leg at the exact minimum, samples comfortably above:
+        // isolates the observation-window boundary. projected = 60 + 60 =
+        // 120 > 100, so the gate MUST fall through to a `true` flag; a `<=`
+        // on the window leg short-circuits this to `false`.
+        assert!(
+            project_overshoot(60, 500, 5, 100, policy),
+            "observation_window_ms == min must proceed past the gate (strict \
+             <), not short-circuit; a <= on the window leg would silently \
+             stop the projection from firing at the exact minimum window"
+        );
+
+        // Samples leg at the exact minimum, window comfortably above:
+        // isolates the debit-sample boundary.
+        assert!(
+            project_overshoot(60, 1000, 3, 100, policy),
+            "observed_debit_samples == min must proceed past the gate (strict \
+             <), not short-circuit; a <= on the samples leg would silently \
+             stop the projection from firing at the exact minimum sample count"
+        );
+
+        // Both legs at the exact minimum simultaneously — the dual boundary
+        // the existing strictly-above / strictly-below cases never touch.
+        assert!(
+            project_overshoot(60, 500, 3, 100, policy),
+            "window == min AND samples == min must proceed past the gate; a \
+             <= on either leg short-circuits this to false"
+        );
+    }
+
+    #[test]
     fn project_overshoot_linear_extrapolation_flags_when_observed_already_exceeds_remaining() {
         // The conservative model: if current_debit already exceeds
         // remaining, no extrapolation needed — the overshoot is

@@ -1,10 +1,10 @@
 {
-  "updatedAt": "2026-06-13T10:05:35.003Z",
+  "updatedAt": "2026-06-13T10:25:38.447Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9066,
-    "tasks": 1074,
-    "integrated": 1076
+    "events": 9078,
+    "tasks": 1076,
+    "integrated": 1077
   },
   "throughput": {
     "last24h": 59,
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 40
+      "count": 41
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-13",
-      "total": 1076
+      "total": 1077
     }
   ],
   "states": {
-    "integrated": 1070,
+    "integrated": 1071,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "memory-receipt-backfill-anti-double-bind-pin",
+    "state": "in_progress",
+    "since": "2026-06-13T10:25:21.006Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-13T10:21:39.757Z",
+      "task": "memory-compaction-idempotent-stale-mark-skip-pin",
+      "note": "Pushed 2eff2ae1 to origin/loop/main-track. Pins plan_compaction idempotent-skip else arm (lib.rs:356) — bite-verified: test fails when guard"
+    },
     {
       "at": "2026-06-13T10:03:04.539Z",
       "task": "settlement-merkle-four-leaf-two-level-across-pair-order-cove",
@@ -310,11 +320,6 @@
       "at": "2026-06-13T06:30:00.833Z",
       "task": "a2a-queue-deadline-within-filter-binding-limit-coverage",
       "note": "committed d98ccbda on loop/main-track; covenantd a2a_queue deadline_within_ms filter-before-limit pinned, mutation-proven"
-    },
-    {
-      "at": "2026-06-13T06:11:06.788Z",
-      "task": "budget-recent-debits-agent-filter-binding-limit-cross-produc",
-      "note": "Pushed c25611e4 to origin/loop/main-track. Both budget backends pinned for agent-filter-before-binding-limit; independently reviewed SOUND; "
     }
   ]
 }

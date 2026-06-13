@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T06:24:56.492Z",
+  "updatedAt": "2026-06-13T06:44:59.975Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8902,
+    "events": 8910,
     "tasks": 1056,
-    "integrated": 1057
+    "integrated": 1058
   },
   "throughput": {
-    "last24h": 55,
-    "last7d": 201,
-    "velocity": 28.7
+    "last24h": 56,
+    "last7d": 202,
+    "velocity": 28.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 21
+      "count": 22
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-13",
-      "total": 1057
+      "total": 1058
     }
   ],
   "states": {
-    "integrated": 1051,
-    "proposed": 2,
+    "integrated": 1052,
+    "proposed": 1,
     "blocked": 3
   },
   "areas": [
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T06:30:00.833Z",
+      "task": "a2a-queue-deadline-within-filter-binding-limit-coverage",
+      "note": "committed d98ccbda on loop/main-track; covenantd a2a_queue deadline_within_ms filter-before-limit pinned, mutation-proven"
+    },
     {
       "at": "2026-06-13T06:11:06.788Z",
       "task": "budget-recent-debits-agent-filter-binding-limit-cross-produc",
@@ -310,11 +315,6 @@
       "at": "2026-06-13T01:02:55.793Z",
       "task": "hyre-paid-path-oversized-response-coverage",
       "note": "Committed df1d655e and pushed to origin/loop/main-track (a39dd0bf..df1d655e). Two wiremock regression tests cover the oversized 402-challeng"
-    },
-    {
-      "at": "2026-06-13T00:36:08.197Z",
-      "task": "cli-bootstrap-bound-agent-manifest-read",
-      "note": "Pushed a39dd0bf to origin/loop/main-track. covenant bootstrap agents-dir scan now reads each agent.toml through Manifest::from_path (1 MiB c"
     }
   ]
 }

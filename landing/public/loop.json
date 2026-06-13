@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T07:05:03.493Z",
+  "updatedAt": "2026-06-13T07:25:07.017Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8937,
-    "tasks": 1059,
-    "integrated": 1061
+    "events": 8950,
+    "tasks": 1061,
+    "integrated": 1062
   },
   "throughput": {
-    "last24h": 57,
-    "last7d": 205,
-    "velocity": 29.3
+    "last24h": 56,
+    "last7d": 206,
+    "velocity": 29.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 25
+      "count": 26
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-13",
-      "total": 1061
+      "total": 1062
     }
   ],
   "states": {
-    "integrated": 1055,
+    "integrated": 1056,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "memory-compaction-cutoff-equality-keep-arm-boundary-coverage",
+    "state": "in_progress",
+    "since": "2026-06-13T07:21:59.664Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-13T07:11:53.218Z",
+      "task": "covenantd-a2a-min-lease-age-inclusive-threshold-boundary-cov",
+      "note": "committed 4728362b on loop/main-track, pushed 1624bfe4..4728362b; covenantd a2a_entry_matches_min_lease_age inclusive >= threshold-equality "
+    },
     {
       "at": "2026-06-13T07:04:06.904Z",
       "task": "peer-auth-purge-revoked-cutoff-equality-boundary-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-13T02:49:38.448Z",
       "task": "llm-openai-provider-surface-truncated-finish-reason-length",
       "note": "Integrating into loop/main-track: covenant-llm OpenAI-compatible length-truncation guard + helper + tests + README count, single conventiona"
-    },
-    {
-      "at": "2026-06-13T02:40:35.811Z",
-      "task": "mcp-remote-tool-transport-fault-coverage",
-      "note": "Integrating into loop/main-track: covenant-mcp RemoteTool::call transport-fault coverage (Timeout/ServerCrashed) + README test count, single"
     }
   ]
 }

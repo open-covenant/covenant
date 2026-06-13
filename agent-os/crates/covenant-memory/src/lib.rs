@@ -2274,6 +2274,141 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_purge_older_than_keeps_record_stamped_exactly_at_cutoff() {
+        // InMemoryStore::purge_older_than retains a record unless it is
+        // STRICTLY older than the cutoff: `!(r.created_at < before_ms && ..)`.
+        // The trait contract (the `purge_older_than` doc) says "strictly older
+        // than before_ms", so a record stamped EXACTLY at before_ms survives.
+        // in_memory_purge_older_than_drops_old_records stamps 100/500 with
+        // cutoff 200, so no record ever lands on the cutoff and the equality
+        // arm is exercised by zero tests. A `<` -> `<=` flip (a "purge older OR
+        // EQUAL TO before_ms" misreading) would silently purge every record
+        // stamped on the cutoff tick — an operator running a TTL purge with a
+        // cutoff aligned to a record timestamp loses that record every cycle,
+        // and the strict-less-than test still passes. Pin both the equality
+        // keep arm and the strict-less-than drop arm so a coordinated swap
+        // cannot land silently.
+        let s = InMemoryStore::new();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "below", 100))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "boundary", 200))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "above", 300))
+            .await
+            .unwrap();
+
+        // cutoff=200 lands the boundary on the middle record: 100 is strictly
+        // less (purged), 200 sits on the cutoff (kept), 300 is greater (kept).
+        let purged = s
+            .purge_older_than(Some(MemoryTier::Working), 200)
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must purge only the 100-stamped record; the \
+             200-stamped record sits on the cutoff and `<` keeps it. A flip \
+             to `<=` would purge both and return 2, silently losing every \
+             cutoff-equal record. got: {purged}",
+        );
+        let mut stamps: Vec<u64> = s
+            .recent(Some(MemoryTier::Working), 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.created_at)
+            .collect();
+        stamps.sort();
+        assert_eq!(
+            stamps,
+            vec![200, 300],
+            "survivors must be the cutoff-equal record (200) and the \
+             strictly-greater one (300); purging cutoff-equal records would \
+             leave [300] and inverting the predicate would leave [100]",
+        );
+
+        // Re-purge with the boundary moved to 300 so the equality arm is
+        // pinned on a second cutoff value, not a phase-1 coincidence.
+        let purged = s
+            .purge_older_than(Some(MemoryTier::Working), 300)
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge at cutoff=300 drops the now-strictly-less 200 while \
+             keeping the cutoff-equal 300; pins the equality arm is invariant \
+             to the cutoff value. got: {purged}",
+        );
+        let remaining = s.recent(Some(MemoryTier::Working), 10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].created_at, 300,
+            "the lone survivor must be the cutoff-equal 300-stamped record",
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_purge_older_than_keeps_record_stamped_exactly_at_cutoff() {
+        // SqliteStore::purge_older_than deletes via the same strict cutoff as
+        // the in-memory backend: `DELETE FROM memories WHERE .. created_at < ?2`,
+        // so a row stamped EXACTLY at before_ms survives. sqlite_purge_older_
+        // than_clears_only_matching_rows stamps 100/500 with cutoff 200 and
+        // pins tier scoping, never the cutoff-equality arm. A `<` -> `<=` flip
+        // in the SQL predicate would DELETE the boundary row on every purge and
+        // diverge from the in-memory backend and the trait contract. Mirror the
+        // in-memory equality pin so the two backends stay aligned.
+        let s = SqliteStore::open_in_memory().unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "below", 100))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "boundary", 200))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "above", 300))
+            .await
+            .unwrap();
+
+        let purged = s
+            .purge_older_than(Some(MemoryTier::Working), 200)
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must delete only the 100-stamped row; the 200-stamped \
+             row sits on the cutoff and `created_at < ?2` keeps it. A flip to \
+             `<=` would delete both and return 2. got: {purged}",
+        );
+        let mut stamps: Vec<u64> = s
+            .recent(Some(MemoryTier::Working), 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.created_at)
+            .collect();
+        stamps.sort();
+        assert_eq!(
+            stamps,
+            vec![200, 300],
+            "survivors must be the cutoff-equal row (200) and the \
+             strictly-greater one (300)",
+        );
+
+        let purged = s
+            .purge_older_than(Some(MemoryTier::Working), 300)
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge at cutoff=300 drops the now-strictly-less 200 while \
+             keeping the cutoff-equal 300. got: {purged}",
+        );
+        let remaining = s.recent(Some(MemoryTier::Working), 10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].created_at, 300);
+    }
+
+    #[tokio::test]
     async fn sqlite_persistence_across_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("memory.db");

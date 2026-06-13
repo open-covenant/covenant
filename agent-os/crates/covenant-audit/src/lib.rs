@@ -1129,6 +1129,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_integrity_report_detects_dangling_chain_anchor() {
+        // verify_integrity flags a hash-chain sidecar that outruns the
+        // event log: `if anchors.len() > event_lines.len()` (lib.rs:827)
+        // reports the surplus as "<n> dangling chain anchor(s)" — the
+        // specific diagnostic for an event log that lost trailing lines
+        // (truncated or rolled back) while the append-only chain sidecar
+        // kept its anchors. The earlier `!=` parity check (lib.rs:785)
+        // also marks any count mismatch invalid, so line 827 is the
+        // dangling-count diagnostic on top of that verdict, not the sole
+        // gate. Every other integrity test runs equal event/anchor counts
+        // or mutates an event line in place; none drives anchors.len() >
+        // event_lines.len(), so the line-827 arm is exercised by no test
+        // (grep "dangling" matches only the format string). A `>` -> `>=`
+        // flip is the severe regression: it pushes a "0 dangling chain
+        // anchor(s)" failure on every healthy equal-count log (valid ->
+        // false for untampered chains) — unique to line 827, since the
+        // line-785 `!=` is correctly silent at equal counts. Inverting or
+        // dropping line 827 loses the dangling diagnostic (line 785 still
+        // flags invalidity, with a less specific message). Pin both arms:
+        // the equal-count log stays valid and the surplus surfaces the
+        // dangling diagnostic.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        log.record(dummy(intent_kind("error"))).await.unwrap();
+
+        // Equal counts are healthy — re-pins the `>` keep-arm: a `>=` flip
+        // would surface a "0 dangling" failure here.
+        let healthy = log.verify_integrity().await.unwrap();
+        assert!(
+            healthy.valid,
+            "an event log fully backed by anchors (equal counts) must verify: {healthy:?}",
+        );
+
+        // Truncate the event log to its first line, leaving two chain
+        // anchors over one event — the sidecar now outruns the events.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let first_line = raw.lines().next().unwrap();
+        std::fs::write(&path, format!("{first_line}\n")).unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(
+            !report.valid,
+            "a chain anchor with no backing event must mark the report invalid: {report:?}",
+        );
+        assert_eq!(report.events, 1, "the truncated event log holds one event");
+        assert_eq!(
+            report.anchors, 2,
+            "the chain sidecar still holds two anchors"
+        );
+        assert!(
+            report.failures.iter().any(|f| f.contains("dangling")),
+            "the surplus anchor must surface as a dangling-anchor failure: {report:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn jsonl_integrity_report_detects_tampered_event_line() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");

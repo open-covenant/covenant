@@ -52434,6 +52434,51 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_entry_matches_min_lease_age_pins_inclusive_threshold_equality() {
+        // a2a_entry_matches_min_lease_age keeps an in-flight entry when its
+        // lease age is AT LEAST min_lease_age_ms:
+        //   now_ms.saturating_sub(leased_at) >= min_lease_age_ms
+        // The `>=` is inclusive, so a lease aged EXACTLY min_lease_age_ms ago is
+        // old enough to reclaim and must match. a2a_entry_matches_min_lease_age_
+        // pins_filter_matrix probes age 100 vs min 50 (strictly above) and age
+        // 100 vs min 500 (strictly below) but never age == min, so a `>=` -> `>`
+        // flip would silently drop a lease sitting exactly on the threshold from
+        // the operator's `--min-lease-age-ms` stale-lease reclaim view, delaying
+        // repair by one tick, with the matrix test still green.
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: AgentId::new("sender@local", [1u8; 32]),
+            recipient: AgentId::new("recipient@local", [2u8; 32]),
+            intent_text: "anything".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let in_flight = covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::InFlight,
+            task,
+            lease_id: Some(Uuid::new_v4()),
+            leased_to: Some(AgentId::new("leasee@local", [3u8; 32])),
+            leased_at_ms: Some(100),
+            attempt: 1,
+        };
+        // Lease age = 200 - 100 = 100, exactly equal to min_lease_age_ms: the
+        // inclusive arm must keep it.
+        assert!(
+            a2a_entry_matches_min_lease_age(&in_flight, Some(100), 200),
+            "a lease aged exactly min_lease_age_ms must match — `>=` includes \
+             the threshold; a `>` flip would drop it and delay reclaim a tick",
+        );
+        // One ms older threshold than the lease age brackets the boundary from
+        // below so the equality case above is the decisive line.
+        assert!(
+            !a2a_entry_matches_min_lease_age(&in_flight, Some(101), 200),
+            "lease age 100 is strictly younger than min 101 and must not match",
+        );
+    }
+
+    #[test]
     fn a2a_entry_visible_to_peer_pins_each_visibility_path() {
         let sender = AgentId::new("sender@local", [1u8; 32]);
         let recipient = AgentId::new("recipient@local", [2u8; 32]);

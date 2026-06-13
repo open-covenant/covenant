@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T08:05:14.032Z",
+  "updatedAt": "2026-06-13T08:25:17.638Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8979,
-    "tasks": 1064,
-    "integrated": 1066
+    "events": 9013,
+    "tasks": 1068,
+    "integrated": 1069
   },
   "throughput": {
-    "last24h": 56,
-    "last7d": 210,
-    "velocity": 30
+    "last24h": 57,
+    "last7d": 213,
+    "velocity": 30.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 30
+      "count": 33
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-13",
-      "total": 1066
+      "total": 1069
     }
   ],
   "states": {
-    "integrated": 1060,
+    "integrated": 1063,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "validation": 1
   },
   "areas": [
     {
@@ -195,7 +196,7 @@
     },
     {
       "name": "covenant",
-      "count": 96
+      "count": 98
     },
     {
       "name": "audit",
@@ -214,8 +215,27 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "covenant-runtime-hermes-read-capped-exact-boundary-coverage",
+    "state": "validation",
+    "since": "2026-06-13T08:24:42.730Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-13T08:20:38.028Z",
+      "task": "covenant-runtime-truncate-stderr-cap-boundary-coverage",
+      "note": "Committed on loop/main-track. Scope: lib.rs +29-line boundary test, README 2798->2799."
+    },
+    {
+      "at": "2026-06-13T08:16:12.038Z",
+      "task": "covenant-tools-read-body-capped-exact-boundary-coverage",
+      "note": "Committed on loop/main-track. test(covenant-tools): pin read_body_capped accepts a body sized exactly at the cap. Scope: lib.rs +48-line bou"
+    },
+    {
+      "at": "2026-06-13T08:11:08.085Z",
+      "task": "hermes-poll-loop-max-consecutive-failures-boundary-coverage",
+      "note": "Committed 52b9a97f on loop/main-track. test(covenant-runtime): pin hermes poll tolerates the max consecutive-failure streak. Scope: hermes.r"
+    },
     {
       "at": "2026-06-13T07:55:41.628Z",
       "task": "audit-integrity-dangling-chain-anchor-detection-coverage",
@@ -300,21 +320,6 @@
       "at": "2026-06-13T04:48:44.461Z",
       "task": "permissions-trust-root-signature-check-coverage",
       "note": "Landing as a single commit on loop/main-track: one pinning unit test in covenant-permissions plus the regenerated README count."
-    },
-    {
-      "at": "2026-06-13T04:30:17.349Z",
-      "task": "memory-sqlite-purge-tier-isolation-coverage",
-      "note": "Committed 149f839e on loop/main-track. 1 file changed (covenant-memory lib.rs, +15). All declared verification passed."
-    },
-    {
-      "at": "2026-06-13T04:24:52.463Z",
-      "task": "stake-keeper-jupiter-non-2xx-error-path-coverage",
-      "note": "Committed 05e26691 on loop/main-track. 2 files changed (jupiter.rs +2 tests, README metric). All declared verification passed except the pre"
-    },
-    {
-      "at": "2026-06-13T04:17:04.263Z",
-      "task": "memory-sqlite-recent-tier-filter-coverage",
-      "note": "Committed f730cbcf on loop/main-track: test(covenant-memory): cover SqliteStore tier-filtered recent. 2 files changed (covenant-memory lib.r"
     }
   ]
 }

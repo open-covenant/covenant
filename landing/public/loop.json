@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T11:25:48.964Z",
+  "updatedAt": "2026-06-13T11:45:52.395Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9123,
-    "tasks": 1081,
-    "integrated": 1083
+    "events": 9141,
+    "tasks": 1083,
+    "integrated": 1085
   },
   "throughput": {
-    "last24h": 62,
-    "last7d": 223,
-    "velocity": 31.9
+    "last24h": 63,
+    "last7d": 224,
+    "velocity": 32
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 47
+      "count": 49
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1083
+      "total": 1085
     }
   ],
   "states": {
-    "integrated": 1077,
+    "integrated": 1079,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T11:43:26.302Z",
+      "task": "a2a-auto-retry-scheduler-scan-audit-skipped-by-reason-bucket",
+      "note": "Committed ef4ca020 on loop/main-track. Pushing to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-13T11:34:00.536Z",
+      "task": "a2a-auto-retry-scan-capability-scope-mismatch-skip-pin",
+      "note": "Committed 212924a3 on loop/main-track. test(covenantd) scan scope-mismatch skip pin + README metrics 2815. Pushing to origin/loop/main-track"
+    },
     {
       "at": "2026-06-13T11:12:56.759Z",
       "task": "a2a-auto-retry-scan-max-requeues-cap-limit-reached-pin",
@@ -305,16 +315,6 @@
       "at": "2026-06-13T07:55:41.628Z",
       "task": "audit-integrity-dangling-chain-anchor-detection-coverage",
       "note": "pushed 549fdff6; README 2795->2796; security cross-review APPROVE; both arms of line-827 dangling guard mutation-verified"
-    },
-    {
-      "at": "2026-06-13T07:43:41.528Z",
-      "task": "budget-compact-cutoff-equality-keep-arm-boundary-coverage",
-      "note": "pushed 31620b81; README 2793->2795; all three compact keep-arm sites mutation-verified"
-    },
-    {
-      "at": "2026-06-13T07:35:02.209Z",
-      "task": "budget-exact-remaining-balance-spend-boundary-coverage",
-      "note": "pushed 602e149f to origin/loop/main-track; README 2791->2793; both budget backends' spend boundary mutation-verified"
     }
   ]
 }

@@ -3951,6 +3951,108 @@ mod tests {
     }
 
     #[test]
+    fn memory_receipt_backfill_plan_json_binds_two_same_payer_receipts_to_distinct_records() {
+        // match_legacy_receipts_to_memory_records makes the greedy
+        // assignment injective within a run: each receipt binds to the
+        // first eligible record in slice order, which is then inserted
+        // into used_memory so a later same-payer receipt skips it
+        //
+        //   let candidate = memories.iter().find(|memory| {
+        //       memory.owner.pubkey == receipt.payer.pubkey
+        //           && !correlated.contains(&memory.id)
+        //           && !used_memory.contains(&memory.id)   // <- the guard
+        //   });
+        //   if let Some(memory) = candidate { used_memory.insert(memory.id); ... }
+        //
+        // The pairs_legacy_receipts_by_owner test uses one receipt + one
+        // record and never reaches a second same-payer receipt, so the
+        // used_memory guard is unexercised. Drop it and both receipts'
+        // .find() would resolve to the same first record — double-binding
+        // two payments onto one memory_record_id and stranding the second
+        // record as unmatched. (This is the within-run guard; the cross-run
+        // `correlated` set is covered separately.)
+        let owner = AgentId::new("owner@local", [4u8; 32]);
+        let mk_memory = |n: u128| MemoryRecord {
+            id: uuid::Uuid::from_u128(n),
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "legacy memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let mk_receipt = |n: u128| SettlementReceipt {
+            id: uuid::Uuid::from_u128(n),
+            payer: owner.clone(),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 3,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        // Input order fixes the deterministic outcome: the first receipt
+        // takes the first record; the second receipt skips it (now used)
+        // and takes the second.
+        let value = memory_receipt_backfill_plan_json(
+            100,
+            &[mk_memory(10), mk_memory(11)],
+            &[mk_receipt(20), mk_receipt(21)],
+        );
+
+        let records = value["records"]
+            .as_array()
+            .expect("records must be an array");
+        assert_eq!(
+            records.len(),
+            2,
+            "both same-payer receipts must match — each to its own record",
+        );
+        assert_eq!(
+            records[0]["receipt_id"],
+            uuid::Uuid::from_u128(20).to_string()
+        );
+        assert_eq!(
+            records[0]["memory_record_id"],
+            uuid::Uuid::from_u128(10).to_string(),
+            "first receipt (slice order) binds the first eligible record",
+        );
+        assert_eq!(
+            records[1]["receipt_id"],
+            uuid::Uuid::from_u128(21).to_string()
+        );
+        assert_eq!(
+            records[1]["memory_record_id"],
+            uuid::Uuid::from_u128(11).to_string(),
+            "second receipt skips the used first record and binds the second",
+        );
+        assert_ne!(
+            records[0]["memory_record_id"], records[1]["memory_record_id"],
+            "the two receipts must bind to DISTINCT memory records — pins the \
+             used_memory anti-double-bind guard; dropping it binds both to \
+             the first record",
+        );
+        assert_eq!(
+            value["unmatched_legacy_receipts"].as_array().map(Vec::len),
+            Some(0),
+            "neither receipt may be left unmatched when two eligible records exist",
+        );
+        assert_eq!(
+            value["unmatched_memory_records"].as_array().map(Vec::len),
+            Some(0),
+            "no record may be stranded — a double-bind would leave the second here",
+        );
+    }
+
+    #[test]
     fn memory_receipt_backfill_plan_json_lists_unmatched_rows() {
         let memory_owner = AgentId::new("memory@local", [5u8; 32]);
         let payer = AgentId::new("payer@local", [6u8; 32]);

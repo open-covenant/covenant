@@ -2281,6 +2281,154 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_peer_registry_purge_keeps_revocation_stamped_exactly_at_cutoff() {
+        // InMemoryPeerRegistry::purge_revoked_older_than drops a revocation
+        // tombstone (and its peer entry in lockstep) only when its timestamp is
+        // STRICTLY less than the cutoff: `filter(|(_, ts)| **ts < before_ms)`.
+        // The trait contract says "Drop revocation tombstones with revoked_at <
+        // before_ms", so a revocation stamped EXACTLY at before_ms survives.
+        // The existing purge tests stamp revoked_at=50 with cutoff 100, so no
+        // revocation lands on the cutoff and the equality keep arm is untested.
+        // resolve() returns None for both a kept tombstone and a purged one, so
+        // the survivor proof is a drain-count sequence over moving cutoffs: a
+        // `<` -> `<=` flip makes the first purge drop two, and a `<` -> `>`
+        // inversion makes the second purge drop zero.
+        let r = InMemoryPeerRegistry::new();
+        let (live_token, live_entry) = entry("live@local");
+        let (below_token, below_entry) = entry("below@local");
+        let (boundary_token, boundary_entry) = entry("boundary@local");
+        let (above_token, above_entry) = entry("above@local");
+        r.register(live_entry.clone()).await.unwrap();
+        r.register(below_entry).await.unwrap();
+        r.register(boundary_entry).await.unwrap();
+        r.register(above_entry).await.unwrap();
+        assert!(r.revoke(&below_token).await.unwrap());
+        assert!(r.revoke(&boundary_token).await.unwrap());
+        assert!(r.revoke(&above_token).await.unwrap());
+
+        // Deterministic timestamps bracketing the cutoff.
+        {
+            let mut g = r.revoked.lock().await;
+            g.insert(*below_token.as_bytes(), 100);
+            g.insert(*boundary_token.as_bytes(), 200);
+            g.insert(*above_token.as_bytes(), 300);
+        }
+
+        assert_eq!(
+            r.purge_revoked_older_than(200).await.unwrap(),
+            1,
+            "cutoff=200 must purge only the strictly-older below(100); the \
+             boundary(200) revocation sits on the cutoff and `<` keeps it. A \
+             flip to `<=` would purge both and return 2.",
+        );
+        assert_eq!(
+            r.purge_revoked_older_than(300).await.unwrap(),
+            1,
+            "cutoff=300 drops the now-strictly-older boundary(200) while \
+             keeping the cutoff-equal above(300); a `>` inversion would have \
+             nothing strictly greater than 300 and return 0 here.",
+        );
+        assert_eq!(
+            r.purge_revoked_older_than(1000).await.unwrap(),
+            1,
+            "a cutoff above every stamp drains the last survivor above(300); \
+             confirms exactly the two cutoff-equal revocations survived their \
+             own phase rather than leaking out a phase early.",
+        );
+
+        // Every purge is scoped to revocations: the never-revoked live entry
+        // is untouched and is the lone remaining entry.
+        assert_eq!(
+            r.resolve(&live_token).await.unwrap(),
+            Some(live_entry.agent_id),
+        );
+        let recent = r.recent(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].token, live_token);
+    }
+
+    #[tokio::test]
+    async fn jsonl_peer_registry_purge_keeps_revocation_stamped_exactly_at_cutoff() {
+        // JsonlPeerRegistry::purge_revoked_older_than uses the same strict
+        // cutoff as the in-memory backend: it drops PeerEvent::Revoked whose
+        // revoked_at is strictly less than before_ms, so a revocation stamped
+        // EXACTLY at before_ms survives the rewrite. The existing jsonl purge
+        // test stamps revoked_at=50 with cutoff 100 and never lands a
+        // revocation on the cutoff. Mirror the in-memory drain-count proof.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+
+        let (live_token, live_entry) = entry("live@local");
+        let (below_token, below_entry) = entry("below@local");
+        let (boundary_token, boundary_entry) = entry("boundary@local");
+        let (above_token, above_entry) = entry("above@local");
+        r.register(live_entry.clone()).await.unwrap();
+        r.register(below_entry).await.unwrap();
+        r.register(boundary_entry).await.unwrap();
+        r.register(above_entry).await.unwrap();
+        assert!(r.revoke(&below_token).await.unwrap());
+        assert!(r.revoke(&boundary_token).await.unwrap());
+        assert!(r.revoke(&above_token).await.unwrap());
+
+        // Rewrite each on-disk revocation with a deterministic timestamp
+        // bracketing the cutoff (the in-process revoke just stamped now).
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut out: Vec<String> = Vec::new();
+        for line in raw.lines() {
+            if line.contains("\"revoked\"") {
+                if let PeerEvent::Revoked { token, .. } = serde_json::from_str(line).unwrap() {
+                    let revoked_at = if token == below_token {
+                        100
+                    } else if token == boundary_token {
+                        200
+                    } else {
+                        300
+                    };
+                    out.push(
+                        serde_json::to_string(&PeerEvent::Revoked { token, revoked_at }).unwrap(),
+                    );
+                    continue;
+                }
+            }
+            out.push(line.to_string());
+        }
+        std::fs::write(&path, out.join("\n") + "\n").unwrap();
+
+        // Reopen so in-memory state matches the rewritten file, then drain.
+        let r2 = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        assert_eq!(
+            r2.purge_revoked_older_than(200).await.unwrap(),
+            1,
+            "cutoff=200 must purge only the strictly-older below(100); the \
+             boundary(200) revocation sits on the cutoff and `<` keeps it. A \
+             flip to `<=` would rewrite both out and return 2.",
+        );
+        assert_eq!(
+            r2.purge_revoked_older_than(300).await.unwrap(),
+            1,
+            "cutoff=300 drops the now-strictly-older boundary(200) while \
+             keeping the cutoff-equal above(300); a `>` inversion would return \
+             0 here.",
+        );
+        assert_eq!(
+            r2.purge_revoked_older_than(1000).await.unwrap(),
+            1,
+            "a cutoff above every stamp drains the last survivor above(300).",
+        );
+
+        // Reopen once more — only the never-revoked live entry survived.
+        let r3 = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        assert_eq!(
+            r3.resolve(&live_token).await.unwrap(),
+            Some(live_entry.agent_id),
+        );
+        let recent = r3.recent(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].token, live_token);
+    }
+
+    #[tokio::test]
     async fn jsonl_purge_revoked_propagates_non_notfound_io_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("registry.jsonl");

@@ -47607,6 +47607,118 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_auto_retry_scan_skips_scope_mismatched_lease_as_capability_scope_mismatch() {
+        // The scan applies two capability gates. The pre-flight at
+        // retry_a2a_stale (lib.rs:2991) is action-only — check_capabilities
+        // filters on capability.action and ignores scope — so any
+        // a2a.repair.requeue grant clears it. After evaluate_auto_retry
+        // returns Requeue and the max_requeues cap clears, the loop runs a
+        // per-task a2a_scope_check (lib.rs:3061) that threads
+        // task_id/lease_id/peer/duplicate_risk through a2a_scope_allows; on
+        // Ok(allowed: false) it pushes a CapabilityScopeMismatch skip with
+        // lease_age_ms = Some(..) and continues without requeueing
+        // (lib.rs:3066-3074). Every other functional scan test grants an
+        // unscoped a2a.repair.requeue (empty scope = allow-all), so this
+        // per-task scope-deny arm never fires. Granting the action scoped to
+        // a foreign task_id passes the pre-flight but denies the per-task
+        // check: dropping the scope check, or treating allowed:false as
+        // eligible, requeues the lease and the assertions below bite.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let mut task = loopback_a2a_task_for(&s);
+        task.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "scope-mismatch-task",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", task.recipient.display)).await;
+        // a2a.repair.requeue bound to the all-zeros task_id, which a
+        // Uuid::new_v4() task id can never equal — the action-only
+        // pre-flight still passes, but the per-task scope check denies it.
+        grant_scoped_action(
+            &s,
+            "a2a.repair.requeue",
+            serde_json::json!({
+                "version": 1,
+                "task_id": "00000000-0000-0000-0000-000000000000"
+            }),
+        )
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let report = match s
+            .op_respond(Request::RetryA2AStale {
+                policy: covenant_a2a::A2AAutoRetryPolicy {
+                    enabled: true,
+                    min_lease_age_ms: 0,
+                    max_attempts: 3,
+                    max_requeues: 10,
+                    scan_limit: 10,
+                },
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => report,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        assert_eq!(report.considered, 1, "the leased task is scanned");
+        assert!(
+            report.requeued.is_empty(),
+            "the scope-mismatched lease must not be requeued — the per-task \
+             scope check denied it after evaluate_auto_retry returned Requeue",
+        );
+        assert_eq!(
+            report.skipped.len(),
+            1,
+            "the one considered task is skipped, not requeued",
+        );
+        assert_eq!(
+            report.skipped[0].task_id, task.id,
+            "the skip names the sent task",
+        );
+        assert_eq!(
+            report.skipped[0].reason,
+            covenant_a2a::A2AAutoRetrySkipReason::CapabilityScopeMismatch,
+            "the lease is eligible per evaluate_auto_retry but the daemon \
+             per-task scope check rejects the scope-bound grant, so the skip \
+             reason is CapabilityScopeMismatch — not an eligibility reason",
+        );
+        assert!(
+            report.skipped[0].lease_age_ms.is_some(),
+            "CapabilityScopeMismatch fires inside the Requeue branch after \
+             lease-age computation, so the skip carries Some(lease_age) — \
+             None would mean the scope check moved above the eligibility ladder",
+        );
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                let entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == task.id)
+                    .expect("scanned task entry");
+                assert_eq!(
+                    entry.state,
+                    covenant_a2a::A2ATaskQueueState::InFlight,
+                    "the scope-denied lease is untouched and stays InFlight — \
+                     the scope check prevented the requeue, it did not \
+                     partially apply it",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_auto_retry_scheduler_once_reuses_gate_and_audits_summary() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let s = server_with_audit(audit.clone());

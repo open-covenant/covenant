@@ -484,16 +484,52 @@ struct OpenAiRequest<'a> {
 #[derive(Deserialize)]
 struct OpenAiResponse {
     choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
 }
 
 #[derive(Deserialize)]
 struct OpenAiChoice {
     message: OpenAiMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct OpenAiMessage {
     content: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAiUsage {
+    #[serde(default)]
+    completion_tokens: u32,
+}
+
+/// Post-process a parsed OpenAI-compatible response: surface a [`ProviderError::Truncated`]
+/// when the first choice's `finish_reason` is `"length"`, otherwise return the
+/// first choice's text. Extracted from `complete` so the truncation contract is
+/// unit-testable without a live HTTP path, mirroring [`process_anthropic_response`].
+/// OpenAI does not echo the request ceiling, so the reported `max_tokens` is
+/// `usage.completion_tokens` — the token count at which the model hit its output
+/// limit (0 if the endpoint omits `usage`). The `partial` text is always carried
+/// so a truncated plan / compaction summary stays inspectable instead of being
+/// returned as if it were complete.
+fn process_openai_response(response: OpenAiResponse) -> Result<String, ProviderError> {
+    let completion_tokens = response.usage.map(|u| u.completion_tokens).unwrap_or(0);
+    let choice = response.choices.into_iter().next();
+    let truncated = choice.as_ref().and_then(|c| c.finish_reason.as_deref()) == Some("length");
+    let text = choice.map(|c| c.message.content).unwrap_or_default();
+    if truncated {
+        return Err(ProviderError::Truncated {
+            max_tokens: completion_tokens,
+            partial: text,
+        });
+    }
+    if text.is_empty() {
+        return Err(ProviderError::Empty);
+    }
+    Ok(text)
 }
 
 #[async_trait]
@@ -534,16 +570,7 @@ impl Provider for OpenAiProvider {
         }
         let bytes = read_body_capped(resp, self.max_bytes).await?;
         let parsed: OpenAiResponse = serde_json::from_slice(&bytes)?;
-        let text = parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .unwrap_or_default();
-        if text.is_empty() {
-            return Err(ProviderError::Empty);
-        }
-        Ok(text)
+        process_openai_response(parsed)
     }
 }
 
@@ -2335,6 +2362,85 @@ model = "nomic-embed-text"
             matches!(err, ProviderError::Empty),
             "non-text-only response must be Empty, not Truncated: {err:?}"
         );
+    }
+
+    #[test]
+    fn openai_provider_surfaces_truncated_when_finish_reason_is_length() {
+        // OpenAI / DeepSeek / OpenAI-compatible endpoints set
+        // finish_reason="length" when the completion was cut at the output
+        // ceiling. The prior parser ignored finish_reason and returned the
+        // partial content via Ok, so a long plan / compaction summary
+        // silently lost its tail — the same silent-truncation failure mode
+        // hardened on the Anthropic path. The Truncated error gives callers a
+        // signal to raise the cap and retry, and carries the completion_tokens
+        // at which the ceiling was hit (OpenAI does not echo the request
+        // limit) plus the partial text that arrived.
+        let raw = r#"{
+            "choices": [
+                {"message": {"content": "step 1: outline the fix\nstep 2: "}, "finish_reason": "length"}
+            ],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4096, "total_tokens": 4108}
+        }"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let err = process_openai_response(response).expect_err("length finish_reason must error");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(
+                    max_tokens, 4096,
+                    "Truncated.max_tokens must carry usage.completion_tokens — the token \
+                     count at which the OpenAI-compatible model hit its output ceiling",
+                );
+                assert_eq!(
+                    partial, "step 1: outline the fix\nstep 2: ",
+                    "Truncated.partial must carry the content that arrived before the cut \
+                     so the operator can inspect it and retry with a higher cap; dropping \
+                     it would re-introduce the silent data-loss failure mode for the \
+                     plan / compaction-summary workloads",
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn openai_normal_finish_reason_returns_text_and_missing_usage_defaults_to_zero() {
+        // A normal stop must NOT trip the truncation guard — the content is
+        // returned verbatim. A second response with finish_reason="length" but
+        // no usage object pins that the completion_tokens fallback is 0 and the
+        // partial is still surfaced, so an OpenAI-compatible endpoint that omits
+        // usage cannot turn a truncation into a swallowed Ok.
+        let raw = r#"{
+            "choices": [{"message": {"content": "the whole answer"}, "finish_reason": "stop"}]
+        }"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let text = process_openai_response(response).expect("a normal stop must return Ok(text)");
+        assert_eq!(text, "the whole answer");
+
+        let raw = r#"{
+            "choices": [{"message": {"content": "cut off here"}, "finish_reason": "length"}]
+        }"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let err =
+            process_openai_response(response).expect_err("length must error even without usage");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(
+                    max_tokens, 0,
+                    "missing usage must default completion_tokens to 0"
+                );
+                assert_eq!(
+                    partial, "cut off here",
+                    "the partial must survive a missing usage object"
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
     }
 
     #[tokio::test]

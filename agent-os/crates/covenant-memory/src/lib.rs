@@ -3383,6 +3383,104 @@ mod tests {
     }
 
     #[test]
+    fn plan_compaction_pins_tier_matched_delete_cutoffs_under_differing_horizons() {
+        // plan_compaction deletes a Working record only on
+        // delete_working_before_ms (lib.rs:293-300) and an Episodic record
+        // only on delete_episodic_before_ms (lib.rs:301-308); LongTerm has no
+        // delete arm. The two cutoffs are independent and tier-matched, but
+        // every other compaction test sets them EQUAL (apply: both 20;
+        // plan_compaction_pins_inclusive_keep_arm_at_each_cutoff_boundary:
+        // both 100) or sets only the working cutoff with a too-new episodic
+        // record (compaction_dry_run_plans_without_mutating: episodic@30 vs
+        // cutoff 20). Under equal cutoffs a swap of which field each arm
+        // reads — or an arm widened to also match the other tier on the wider
+        // horizon — leaves `deleted` unchanged and survives. Pin the binding
+        // with DIFFERENT horizons (working=100, episodic=200) and records in
+        // the gap between them: a Working record at 150 is above its own
+        // cutoff and must be KEPT (a swap reading episodic's 200 would delete
+        // it); an Episodic record at 150 is below its own cutoff and must be
+        // DELETED (a swap reading working's 100 would keep it). An old
+        // LongTerm record stays immune.
+        const WORKING_CUTOFF: u64 = 100;
+        const EPISODIC_CUTOFF: u64 = 200;
+        let working_old = Uuid::new_v4();
+        let working_between = Uuid::new_v4();
+        let episodic_between = Uuid::new_v4();
+        let episodic_above = Uuid::new_v4();
+        let longterm_old = Uuid::new_v4();
+
+        let records = vec![
+            record(working_old, MemoryTier::Working, "working old", 50),
+            record(
+                working_between,
+                MemoryTier::Working,
+                "working between cutoffs",
+                150,
+            ),
+            record(
+                episodic_between,
+                MemoryTier::Episodic,
+                "episodic between cutoffs",
+                150,
+            ),
+            record(
+                episodic_above,
+                MemoryTier::Episodic,
+                "episodic above its cutoff",
+                250,
+            ),
+            record(longterm_old, MemoryTier::LongTerm, "durable fact", 50),
+        ];
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(WORKING_CUTOFF),
+                delete_episodic_before_ms: Some(EPISODIC_CUTOFF),
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "tier-matched cutoff pin".into(),
+        };
+
+        let (outcome, _updates) = plan_compaction(&records, &request);
+
+        // The Working record at 150 is ABOVE its own 100 cutoff: it must be
+        // kept. A swap that read the wider episodic 200 cutoff would delete it.
+        assert!(
+            !outcome.deleted.contains(&working_between),
+            "a Working record above delete_working_before_ms (150 vs 100) must be kept; \
+             deleting it means the Working arm read the wider episodic cutoff (200)",
+        );
+        // The Episodic record at 150 is BELOW its own 200 cutoff: it must be
+        // deleted. A swap that read the narrower working 100 cutoff would keep it.
+        assert!(
+            outcome.deleted.contains(&episodic_between),
+            "an Episodic record below delete_episodic_before_ms (150 vs 200) must be deleted; \
+             keeping it means the Episodic arm read the narrower working cutoff (100)",
+        );
+        // The Episodic record at 250 is above its own 200 cutoff: a regression
+        // that dropped the episodic cutoff and deleted the whole tier is caught here.
+        assert!(
+            !outcome.deleted.contains(&episodic_above),
+            "an Episodic record above delete_episodic_before_ms (250 vs 200) must be kept",
+        );
+        // LongTerm has no delete arm regardless of age.
+        assert!(
+            !outcome.deleted.contains(&longterm_old),
+            "a LongTerm record is never deleted by age — only stale-marked",
+        );
+
+        let mut expected = vec![working_old, episodic_between];
+        expected.sort();
+        assert_eq!(
+            outcome.deleted, expected,
+            "deleted must be exactly the tier-matched set: working_old (50<100) and \
+             episodic_between (150<200); working_between (150) and episodic_above (250) sit \
+             above their own cutoffs and longterm_old is immune, so an arm swap, a cross-tier \
+             widening, or any LongTerm delete path all change this set",
+        );
+    }
+
+    #[test]
     fn memory_error_display_messages_pin_five_string_variant_format_strings() {
         let worker = format!("{}", MemoryError::Worker("channel closed".into()));
         assert_eq!(

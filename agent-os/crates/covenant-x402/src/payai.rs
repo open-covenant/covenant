@@ -570,6 +570,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_payment_rejects_when_funder_ata_missing_on_chain() {
+        // The funder's source ATA does not exist on chain: getAccountInfo
+        // returns 200 with result.value=null, so account_exists resolves to
+        // Ok(false). build_payment must fail closed as a Sign error before
+        // building or signing a transfer PayAI could never settle, rather than
+        // treat a missing ATA as spendable. Distinct from
+        // account_exists_rejects_rpc_error_status, which covers the RPC-fault
+        // (Err) propagation, not this Ok(false) guard branch — and from the
+        // other build_payment tests, which all fail before any RPC.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"context": {"slot": 1}, "value": null}
+            })))
+            .mount(&server)
+            .await;
+        let req = PaymentRequirements {
+            network: "solana".into(),
+            asset: USDC_MAINNET.into(),
+            amount: "1".into(),
+            amount_usdc: 0.000001,
+            pay_to: RECIPIENT.into(),
+            scheme: "exact".into(),
+            extra: Some(PaymentExtra {
+                fee_payer: Some(PAYAI_FEE_PAYER.into()),
+            }),
+        };
+        // account_exists is the first RPC; its Ok(false) returns before
+        // latest_blockhash is reached, so a single getAccountInfo mock suffices.
+        let err = PayaiSolanaSigner::new(Keypair::new(), server.uri())
+            .build_payment(&req)
+            .await
+            .expect_err("missing funder ATA");
+        assert!(
+            matches!(&err, X402Error::Sign(msg) if msg.contains("does not exist on chain")),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn latest_blockhash_rejects_oversized_rpc_body() {
         // The Solana RPC is untrusted: a compromised or malicious node returning
         // a body past the cap must fail closed as a Sign error rather than buffer

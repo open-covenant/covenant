@@ -6173,6 +6173,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_task_queue_orders_leased_entries_by_lease_age_then_task_id() {
+        // task_queue sorts leased entries by (leased_at_ms asc, task.id asc)
+        // at lib.rs:775. in_flight is a HashMap, so its .values() order is
+        // process-random; the task.id tie-break is the only thing that makes
+        // a queue listing reproducible when several leases share a
+        // millisecond. The binding-limit test pins only the queued head and
+        // the leased count, so a b.cmp(a) flip on either key, or an
+        // Ordering::Equal tie-break, survives it. The public lease path
+        // stamps leased_at_ms from the wall clock and cannot force an
+        // equal-ms tie, so insert the leases directly to build the three-way
+        // tie the tie-break exists to resolve.
+        let m = InMemoryMailbox::new();
+        let tasks: Vec<A2ATask> = (0..5).map(|_| dummy_task()).collect();
+        let leases = [
+            (0usize, 2_000u64),
+            (1, 2_000),
+            (2, 2_000),
+            (3, 1_000),
+            (4, 3_000),
+        ];
+        {
+            let mut in_flight = m.in_flight.lock();
+            for &(i, leased_at_ms) in &leases {
+                let task = &tasks[i];
+                in_flight.insert(
+                    task.id,
+                    TaskLease {
+                        lease_id: Uuid::new_v4(),
+                        task: task.clone(),
+                        leased_to: task.recipient.clone(),
+                        leased_at_ms,
+                        attempt: 1,
+                    },
+                );
+            }
+        }
+
+        let mut tied = vec![tasks[0].id, tasks[1].id, tasks[2].id];
+        tied.sort();
+        let expected = vec![tasks[3].id, tied[0], tied[1], tied[2], tasks[4].id];
+
+        let queue = m.task_queue(10).await.unwrap();
+        assert_eq!(
+            queue.iter().map(|e| e.task.id).collect::<Vec<_>>(),
+            expected,
+            "leased entries must sort by lease age then task id: the 1_000ms \
+             lease first, the three 2_000ms leases in ascending id order (the \
+             HashMap-order tie-break at lib.rs:778), then the 3_000ms lease",
+        );
+        assert!(
+            queue.iter().all(|e| e.state == A2ATaskQueueState::InFlight),
+            "every task is leased, so no queued head can mask the leased ordering",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_task_queue_orders_leased_entries_by_lease_age_then_task_id() {
+        // Parity with the in-memory backend: JsonlMailbox::task_queue
+        // (lib.rs:1318) delegates to MailboxState::task_queue (lib.rs:1054),
+        // whose own copy of the leased comparator lives at lib.rs:1073. Seed
+        // the event log with TaskLeased rows carrying a controlled
+        // leased_at_ms so replay rebuilds the same three-way tie, then open
+        // and read the queue back through the real deserialize + replay path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let tasks: Vec<A2ATask> = (0..5).map(|_| dummy_task()).collect();
+
+        let mut log = String::new();
+        for task in &tasks {
+            log.push_str(
+                &serde_json::to_string(&MailboxEvent::TaskSent { task: task.clone() }).unwrap(),
+            );
+            log.push('\n');
+        }
+        let leases = [
+            (0usize, 2_000u64),
+            (1, 2_000),
+            (2, 2_000),
+            (3, 1_000),
+            (4, 3_000),
+        ];
+        for &(i, leased_at_ms) in &leases {
+            let task = &tasks[i];
+            let event = MailboxEvent::TaskLeased {
+                task_id: task.id,
+                lease_id: Uuid::new_v4(),
+                leased_to: task.recipient.clone(),
+                leased_at_ms,
+                attempt: 1,
+            };
+            log.push_str(&serde_json::to_string(&event).unwrap());
+            log.push('\n');
+        }
+        tokio::fs::write(&path, log).await.unwrap();
+
+        let m = JsonlMailbox::open(path).await.unwrap();
+
+        let mut tied = vec![tasks[0].id, tasks[1].id, tasks[2].id];
+        tied.sort();
+        let expected = vec![tasks[3].id, tied[0], tied[1], tied[2], tasks[4].id];
+
+        let queue = m.task_queue(10).await.unwrap();
+        assert_eq!(
+            queue.iter().map(|e| e.task.id).collect::<Vec<_>>(),
+            expected,
+            "JsonlMailbox must order leased entries by lease age then task id \
+             after replay, matching the in-memory backend (lib.rs:1073)",
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_repair_rejects_lease_mismatch() {
         let m = InMemoryMailbox::new();
         let task = dummy_task();

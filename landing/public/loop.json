@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T11:45:52.395Z",
+  "updatedAt": "2026-06-13T12:05:55.798Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9141,
-    "tasks": 1083,
-    "integrated": 1085
+    "events": 9150,
+    "tasks": 1084,
+    "integrated": 1086
   },
   "throughput": {
-    "last24h": 63,
-    "last7d": 224,
-    "velocity": 32
+    "last24h": 62,
+    "last7d": 223,
+    "velocity": 31.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 49
+      "count": 50
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1085
+      "total": 1086
     }
   ],
   "states": {
-    "integrated": 1079,
+    "integrated": 1080,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T11:50:56.506Z",
+      "task": "manifest-from-path-non-utf8-routes-to-io-invaliddata-kind-pi",
+      "note": "Committed 56829666 on loop/main-track. Pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-13T11:43:26.302Z",
       "task": "a2a-auto-retry-scheduler-scan-audit-skipped-by-reason-bucket",
@@ -310,11 +315,6 @@
       "at": "2026-06-13T08:11:08.085Z",
       "task": "hermes-poll-loop-max-consecutive-failures-boundary-coverage",
       "note": "Committed 52b9a97f on loop/main-track. test(covenant-runtime): pin hermes poll tolerates the max consecutive-failure streak. Scope: hermes.r"
-    },
-    {
-      "at": "2026-06-13T07:55:41.628Z",
-      "task": "audit-integrity-dangling-chain-anchor-detection-coverage",
-      "note": "pushed 549fdff6; README 2795->2796; security cross-review APPROVE; both arms of line-827 dangling guard mutation-verified"
     }
   ]
 }

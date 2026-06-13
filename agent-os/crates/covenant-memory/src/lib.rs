@@ -2003,6 +2003,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_search_respects_tier_filter() {
+        // InMemoryStore is the default backend when persistence is off, so
+        // its inline `tier.is_none_or(|t| r.tier == t)` predicate is what
+        // enforces memory.read.<tier> isolation in that configuration. Two
+        // equal-similarity records in different tiers pin it: a search scoped
+        // to Episodic must drop the higher-scoring-eligible Working record.
+        let s = InMemoryStore::new();
+        let mut w = record(Uuid::new_v4(), MemoryTier::Working, "w-alpha", 1);
+        w.embedding = vec![1.0, 0.0, 0.0];
+        let mut e = record(Uuid::new_v4(), MemoryTier::Episodic, "e-alpha", 2);
+        e.embedding = vec![1.0, 0.0, 0.0];
+        s.put(w).await.unwrap();
+        s.put(e).await.unwrap();
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], Some(MemoryTier::Episodic), 5, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "e-alpha");
+    }
+
+    #[tokio::test]
     async fn sqlite_search_respects_tier_filter() {
         let s = SqliteStore::open_in_memory().unwrap();
         let mut w = record(Uuid::new_v4(), MemoryTier::Working, "w-alpha", 1);

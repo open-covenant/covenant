@@ -2791,6 +2791,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_recent_debits_filters_by_agent_before_binding_limit() {
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        let b = agent("b@local");
+        l.set_capacity(&a, 100).await.unwrap();
+        l.set_capacity(&b, 100).await.unwrap();
+        let r1 = Uuid::new_v4();
+        let r3 = Uuid::new_v4();
+        let r4 = Uuid::new_v4();
+        // Interleave b's debit between a's matches so a take-before-filter
+        // reorder would spend the cap on the wrong agent.
+        l.try_debit(&a, 1, r1).await.unwrap();
+        l.try_debit(&b, 2, Uuid::new_v4()).await.unwrap();
+        l.try_debit(&a, 3, r3).await.unwrap();
+        l.try_debit(&a, 4, r4).await.unwrap();
+
+        // Three debits match agent a; a binding limit of 2 must keep the
+        // first two MATCHING debits (filter then take), not the first two
+        // rows overall. A take-then-filter reorder takes [a, b] and keeps a
+        // single a debit.
+        let a_debits = l.recent_debits(&a, 2).await.unwrap();
+        assert_eq!(
+            a_debits
+                .iter()
+                .map(|d| d.paired_receipt)
+                .collect::<Vec<_>>(),
+            vec![r1, r3],
+            "binding limit must cap the agent-filtered debits, not the unfiltered row stream"
+        );
+        assert!(a_debits.iter().all(|d| d.agent.pubkey == a.pubkey));
+    }
+
+    #[tokio::test]
+    async fn jsonl_recent_debits_filters_by_agent_before_binding_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget").join("ledger.jsonl");
+        let l = JsonlLedger::open(path).await.unwrap();
+        let a = agent("a@local");
+        let b = agent("b@local");
+        l.set_capacity(&a, 100).await.unwrap();
+        l.set_capacity(&b, 100).await.unwrap();
+        let r1 = Uuid::new_v4();
+        let r3 = Uuid::new_v4();
+        let r4 = Uuid::new_v4();
+        l.try_debit(&a, 1, r1).await.unwrap();
+        l.try_debit(&b, 2, Uuid::new_v4()).await.unwrap();
+        l.try_debit(&a, 3, r3).await.unwrap();
+        l.try_debit(&a, 4, r4).await.unwrap();
+
+        let a_debits = l.recent_debits(&a, 2).await.unwrap();
+        assert_eq!(
+            a_debits
+                .iter()
+                .map(|d| d.paired_receipt)
+                .collect::<Vec<_>>(),
+            vec![r1, r3],
+            "binding limit must cap the agent-filtered debits, not the unfiltered row stream"
+        );
+        assert!(a_debits.iter().all(|d| d.agent.pubkey == a.pubkey));
+    }
+
+    #[tokio::test]
     async fn in_memory_recent_debits_all_spans_agents_and_windows_to_tail() {
         let l = InMemoryLedger::new();
         let a = agent("a@local");

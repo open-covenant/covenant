@@ -6086,6 +6086,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_task_queue_binding_limit_keeps_queued_before_leased() {
+        let m = InMemoryMailbox::new();
+        let tasks: Vec<A2ATask> = (0..4).map(|_| dummy_task()).collect();
+        for task in &tasks {
+            m.send_task(task.clone()).await.unwrap();
+        }
+        // Lease the first two in FIFO order, leaving tasks[2] and tasks[3]
+        // queued and tasks[0], tasks[1] in flight.
+        let recipient = tasks[0].recipient.clone();
+        for _ in 0..2 {
+            m.try_recv_task_for(&recipient).await.unwrap().unwrap();
+        }
+
+        // A limit equal to the queued count must keep exactly the queued
+        // head, in order, and drop every leased entry: queued sorts ahead
+        // of leased, then truncate caps the tail. A leased-before-queued
+        // reorder would surface the in-flight ids here; truncating before
+        // the extend would overrun the cap.
+        let bound = m.task_queue(2).await.unwrap();
+        assert_eq!(
+            bound.iter().map(|e| e.task.id).collect::<Vec<_>>(),
+            vec![tasks[2].id, tasks[3].id],
+            "binding limit must keep the queued head in order, not the leased entries",
+        );
+        assert!(
+            bound.iter().all(|e| e.state == A2ATaskQueueState::Queued),
+            "limit == queued count must drop every leased entry",
+        );
+
+        // A slack limit proves the leased entries exist past the cap, so
+        // the binding case dropped them by truncation, not by absence.
+        let full = m.task_queue(10).await.unwrap();
+        assert_eq!(
+            full.len(),
+            4,
+            "slack limit must surface all queued + leased entries"
+        );
+        assert_eq!(
+            full.iter()
+                .filter(|e| e.state == A2ATaskQueueState::InFlight)
+                .count(),
+            2,
+            "the two leased tasks must be present past the binding cap",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_task_queue_binding_limit_keeps_queued_before_leased() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let m = JsonlMailbox::open(path).await.unwrap();
+        let tasks: Vec<A2ATask> = (0..4).map(|_| dummy_task()).collect();
+        for task in &tasks {
+            m.send_task(task.clone()).await.unwrap();
+        }
+        let recipient = tasks[0].recipient.clone();
+        for _ in 0..2 {
+            m.try_recv_task_for(&recipient).await.unwrap().unwrap();
+        }
+
+        let bound = m.task_queue(2).await.unwrap();
+        assert_eq!(
+            bound.iter().map(|e| e.task.id).collect::<Vec<_>>(),
+            vec![tasks[2].id, tasks[3].id],
+            "binding limit must keep the queued head in order, not the leased entries",
+        );
+        assert!(
+            bound.iter().all(|e| e.state == A2ATaskQueueState::Queued),
+            "limit == queued count must drop every leased entry",
+        );
+
+        let full = m.task_queue(10).await.unwrap();
+        assert_eq!(
+            full.len(),
+            4,
+            "slack limit must surface all queued + leased entries"
+        );
+        assert_eq!(
+            full.iter()
+                .filter(|e| e.state == A2ATaskQueueState::InFlight)
+                .count(),
+            2,
+            "the two leased tasks must be present past the binding cap",
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_repair_rejects_lease_mismatch() {
         let m = InMemoryMailbox::new();
         let task = dummy_task();

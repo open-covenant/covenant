@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T02:24:15.086Z",
+  "updatedAt": "2026-06-13T02:44:18.583Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8757,
-    "tasks": 1039,
-    "integrated": 1041
+    "events": 8766,
+    "tasks": 1040,
+    "integrated": 1042
   },
   "throughput": {
-    "last24h": 58,
-    "last7d": 189,
-    "velocity": 27
+    "last24h": 59,
+    "last7d": 190,
+    "velocity": 27.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1041
+      "total": 1042
     }
   ],
   "states": {
-    "integrated": 1035,
+    "integrated": 1036,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T02:40:35.811Z",
+      "task": "mcp-remote-tool-transport-fault-coverage",
+      "note": "Integrating into loop/main-track: covenant-mcp RemoteTool::call transport-fault coverage (Timeout/ServerCrashed) + README test count, single"
+    },
     {
       "at": "2026-06-13T02:00:28.154Z",
       "task": "router-load-agents-unreadable-dir-io-error-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-12T11:50:59.060Z",
       "task": "bound-orbit-registry-response-body",
       "note": "Committed 8d401505. fetch_page bounded via read_capped + X402Error::Registry; with_limits seam; test fetch_page_response_body_is_bounded. Pu"
-    },
-    {
-      "at": "2026-06-12T11:44:51.893Z",
-      "task": "bound-hermes-files-snapshot-response-body",
-      "note": "Committed 7270bf00. fetch_files routed through read_capped + serde_json::from_str with best-effort empty-list fallback; test fetch_files_is_"
     }
   ]
 }

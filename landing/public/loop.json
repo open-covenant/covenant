@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T11:05:45.533Z",
+  "updatedAt": "2026-06-13T11:25:48.964Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9118,
+    "events": 9123,
     "tasks": 1081,
-    "integrated": 1082
+    "integrated": 1083
   },
   "throughput": {
-    "last24h": 63,
-    "last7d": 222,
-    "velocity": 31.7
+    "last24h": 62,
+    "last7d": 223,
+    "velocity": 31.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 46
+      "count": 47
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-13",
-      "total": 1082
+      "total": 1083
     }
   ],
   "states": {
-    "integrated": 1076,
+    "integrated": 1077,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "a2a-auto-retry-scan-max-requeues-cap-limit-reached-pin",
-    "state": "in_progress",
-    "since": "2026-06-13T11:04:58.871Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T11:12:56.759Z",
+      "task": "a2a-auto-retry-scan-max-requeues-cap-limit-reached-pin",
+      "note": "Committed 1b2ec9b1 on loop/main-track. test(covenantd) cap pin + README metrics 2814. Pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-13T10:56:26.789Z",
       "task": "memory-compaction-detach-only-stale-not-live-parent-pin",
@@ -315,11 +315,6 @@
       "at": "2026-06-13T07:35:02.209Z",
       "task": "budget-exact-remaining-balance-spend-boundary-coverage",
       "note": "pushed 602e149f to origin/loop/main-track; README 2791->2793; both budget backends' spend boundary mutation-verified"
-    },
-    {
-      "at": "2026-06-13T07:27:44.093Z",
-      "task": "memory-compaction-cutoff-equality-keep-arm-boundary-coverage",
-      "note": "pushed de493b90 to origin/loop/main-track; README 2790->2791; covenant-memory lib tests green; both delete and stale-mark cutoff boundary si"
     }
   ]
 }

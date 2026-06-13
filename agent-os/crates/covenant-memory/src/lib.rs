@@ -3606,6 +3606,77 @@ mod tests {
     }
 
     #[test]
+    fn plan_compaction_detaches_only_stale_parent_not_retained() {
+        // With detach_stale_parents on, plan_compaction detaches a parent only
+        // when it is absent from the retained set — `if let Some(parent) =
+        // after.parent { if !retained.contains(&parent)` (lib.rs:331-332).
+        // Every detach test uses a parent that is NOT retained (missing, or a
+        // deleted old_working), so the detection predicate is unpinned: no
+        // test has a child whose parent SURVIVES the compaction and asserts it
+        // stays attached. Run both shapes in ONE flag-on plan with no delete
+        // cutoffs (so every input record is retained): a child whose parent is
+        // a surviving record must keep it; a child whose parent is a dangling
+        // id must lose it. An unconditional detach, or an inverted membership
+        // test, flips which child is detached.
+        let alive_parent = Uuid::new_v4();
+        let child_alive = Uuid::new_v4();
+        let child_dangling = Uuid::new_v4();
+        let dangling_parent = Uuid::new_v4();
+
+        let mut child_alive_record = record(child_alive, MemoryTier::Episodic, "kept lineage", 50);
+        child_alive_record.parent = Some(alive_parent);
+        let mut child_dangling_record = record(child_dangling, MemoryTier::Episodic, "orphan", 50);
+        child_dangling_record.parent = Some(dangling_parent);
+        let records = vec![
+            record(alive_parent, MemoryTier::LongTerm, "surviving parent", 100),
+            child_alive_record,
+            child_dangling_record,
+        ];
+
+        // detach on, NO delete cutoffs => nothing is deleted, so alive_parent
+        // is in the retained set and child_alive's edge is live.
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                detach_stale_parents: true,
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "stale-only detach pin".into(),
+        };
+
+        let (outcome, updates) = plan_compaction(&records, &request);
+
+        assert!(
+            outcome.deleted.is_empty(),
+            "no delete cutoff is set, so every record is retained",
+        );
+        assert_eq!(
+            outcome.parents_detached,
+            vec![child_dangling],
+            "only the child whose parent is absent from the retained set may be detached; \
+             an unconditional detach would also list child_alive and an inverted \
+             retained.contains would list child_alive INSTEAD of child_dangling",
+        );
+        assert!(
+            !outcome.parents_detached.contains(&child_alive),
+            "a child whose parent survives the compaction keeps its parent edge",
+        );
+        assert_eq!(
+            updates.len(),
+            1,
+            "exactly one record changed: the orphan whose dangling parent was detached",
+        );
+        assert_eq!(
+            updates[0].id, child_dangling,
+            "the detached record is the orphan"
+        );
+        assert_eq!(
+            updates[0].parent, None,
+            "detachment clears the parent to None"
+        );
+    }
+
+    #[test]
     fn memory_error_display_messages_pin_five_string_variant_format_strings() {
         let worker = format!("{}", MemoryError::Worker("channel closed".into()));
         assert_eq!(

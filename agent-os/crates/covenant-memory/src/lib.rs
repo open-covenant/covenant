@@ -1441,6 +1441,88 @@ mod tests {
         assert_eq!(only_episodic[0].text, "e");
     }
 
+    /// `recent` must apply the `memory.read.<tier>` filter *before* the limit:
+    /// the returned page is the newest `limit` rows among the tier-matching
+    /// rows, not the tier-matching subset of the newest `limit` rows.
+    /// `in_memory_recent_filters_by_tier` keeps `limit` slack (10) so truncate
+    /// is a no-op, and `sqlite_recent_orders_by_created_at_desc` binds the
+    /// limit but seeds one tier, so neither pins the ordering. Here three
+    /// Episodic rows sit behind two newer Working rows under a cap of two:
+    /// filter-then-truncate returns the two newest Episodic rows; a
+    /// `sort -> truncate -> filter` reorder takes the newer Working rows first
+    /// and filters them away, collapsing to an empty page on the live
+    /// `memory recent --tier Episodic --limit 2` path.
+    #[tokio::test]
+    async fn in_memory_recent_tier_filter_with_binding_limit_keeps_matching_rows_beyond_cap() {
+        let s = InMemoryStore::new();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e1", 1))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e2", 2))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e3", 3))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w4", 4))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w5", 5))
+            .await
+            .unwrap();
+
+        let page = s.recent(Some(MemoryTier::Episodic), 2).await.unwrap();
+        assert_eq!(page.len(), 2, "limit binds among the Episodic rows");
+        assert!(
+            page.iter().all(|r| r.tier == MemoryTier::Episodic),
+            "newer Working rows must not displace tier-matching rows"
+        );
+        let texts: Vec<&str> = page.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["e3", "e2"],
+            "newest two Episodic rows, newest first; a third (e1) exists beyond the cap"
+        );
+    }
+
+    /// SQLite mirror: the production backend pages the tier+limit interaction
+    /// through `WHERE tier = ?1 ORDER BY created_at DESC LIMIT ?2`, so the
+    /// filter binds before the limit in SQL. Pin it so moving the tier
+    /// predicate to a post-`LIMIT` Rust take regresses identically to the
+    /// in-memory reorder.
+    #[tokio::test]
+    async fn sqlite_recent_tier_filter_with_binding_limit_keeps_matching_rows_beyond_cap() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e1", 1))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e2", 2))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e3", 3))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w4", 4))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w5", 5))
+            .await
+            .unwrap();
+
+        let page = s.recent(Some(MemoryTier::Episodic), 2).await.unwrap();
+        assert_eq!(page.len(), 2, "limit binds among the Episodic rows");
+        assert!(
+            page.iter().all(|r| r.tier == MemoryTier::Episodic),
+            "newer Working rows must not displace tier-matching rows"
+        );
+        let texts: Vec<&str> = page.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["e3", "e2"],
+            "newest two Episodic rows, newest first; a third (e1) exists beyond the cap"
+        );
+    }
+
     #[test]
     fn parse_tier_pins_canonical_tier_mapping_and_silent_catch_all_to_long_term() {
         // SqliteStore::parse_tier is the reverse of SqliteStore::tier_str

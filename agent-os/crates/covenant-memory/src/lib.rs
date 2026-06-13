@@ -2885,6 +2885,81 @@ mod tests {
     }
 
     #[test]
+    fn plan_compaction_skips_remarking_longterm_record_that_already_carries_matching_stale_context()
+    {
+        // plan_compaction stale-marks a LongTerm record by inserting a
+        // stale_context object, but only when the record does not already
+        // hold that exact value:
+        //
+        //   if metadata.get("stale_context") != Some(&stale_context) {
+        //       metadata.insert("stale_context", stale_context);
+        //       ... stale_marked.push(after.id); changed = true;
+        //   } else {
+        //       after.metadata = Value::Object(metadata);  // untouched
+        //   }
+        //
+        // The else arm is the compaction idempotency guarantee documented
+        // on compact() ("already present ... keeps repeated invocations
+        // idempotent"): a second run over an already-marked corpus is a
+        // no-op. Every other compaction test seeds records WITHOUT a
+        // pre-existing stale_context, so they only exercise the insert
+        // arm. Without this test a refactor that dropped the inequality
+        // guard and always inserted + pushed would re-mark unchanged
+        // records on every run — flipping would_change/changed to true on
+        // a genuine no-op, re-emitting the row in `updates` (rewriting it
+        // and recording a mutation each cycle at the store layer), and
+        // poisoning stale_marked as a what-changed-this-run signal.
+        let policy = MemoryCompactionPolicy {
+            mark_longterm_stale_before_ms: Some(100),
+            marked_at_ms: Some(150),
+            ..MemoryCompactionPolicy::default()
+        };
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy,
+            reason: "idempotent re-run".into(),
+        };
+
+        // created_at (10) < cutoff (100), so the record still qualifies
+        // for stale marking — the skip must come from the value guard, not
+        // from the record falling outside the staleness window. The seeded
+        // stale_context is byte-identical to what this request would write:
+        // marked_at_ms = policy.marked_at_ms (150), reason = request.reason.
+        let id = Uuid::new_v4();
+        let mut already_marked = record(id, MemoryTier::LongTerm, "durable", 10);
+        already_marked.metadata = serde_json::json!({
+            "stale_context": { "marked_at_ms": 150, "reason": "idempotent re-run" },
+        });
+
+        let (outcome, updates) = plan_compaction(&[already_marked], &request);
+
+        assert!(
+            outcome.stale_marked.is_empty(),
+            "a LongTerm record already carrying the exact stale_context \
+             must not be re-listed in stale_marked — pins the inequality \
+             guard's else arm; a refactor that always re-marked would \
+             surface here with stale_marked = [{id}]",
+        );
+        assert!(
+            !outcome.would_change,
+            "re-running compaction over an already-marked corpus must be a \
+             no-op: would_change stays false when nothing is deleted, \
+             detached, or freshly marked",
+        );
+        assert!(
+            !outcome.changed,
+            "changed must stay false on an idempotent re-run even in Apply \
+             mode — changed is gated on would_change",
+        );
+        assert!(
+            updates.is_empty(),
+            "no updated record may be emitted for an unchanged stale \
+             record — a spurious update would rewrite the row and record a \
+             mutation on every compaction cycle",
+        );
+    }
+
+    #[test]
     fn plan_repair_detach_parent_pins_parent_mismatch_arms_and_field_composition() {
         // covenant_memory::plan_repair, DetachParent arm, guards on
         //

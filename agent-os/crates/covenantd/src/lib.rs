@@ -46881,6 +46881,60 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_queue_deadline_within_filters_before_binding_limit() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", peer.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        // The two undated tasks fail the deadline filter; the third,
+        // queued last, carries a long-past deadline that lands inside
+        // any window. Queued order is insertion order, so the only
+        // match sits at index 2 — behind a binding limit of 2. A
+        // take-before-filter reorder fetches the two undated rows and
+        // returns nothing.
+        s.op_respond(Request::SendA2ATask {
+            task: loopback_a2a_task_for(&s),
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask {
+            task: loopback_a2a_task_for(&s),
+        })
+        .await;
+        let near = covenant_a2a::A2ATask {
+            deadline_ms: Some(1),
+            ..loopback_a2a_task_for(&s)
+        };
+        s.op_respond(Request::SendA2ATask { task: near.clone() })
+            .await;
+
+        let queue = s
+            .op_respond(Request::A2AQueue {
+                limit: 2,
+                min_lease_age_ms: None,
+                deadline_within_ms: Some(0),
+                state_filter: None,
+            })
+            .await;
+        match queue {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(
+                    tasks.len(),
+                    1,
+                    "deadline_within_ms must bind before --limit so two undated tasks cannot push the only in-window task out of the result window",
+                );
+                assert_eq!(tasks[0].task.id, near.id);
+                assert_eq!(tasks[0].task.deadline_ms, Some(1));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_queue_scrubs_unrelated_in_flight_tasks() {
         let s = server_with(vec![], "");
         let alien_sender = AgentId::new("alice@local", [9u8; 32]);

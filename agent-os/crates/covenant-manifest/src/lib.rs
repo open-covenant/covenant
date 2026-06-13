@@ -1762,6 +1762,36 @@ cpu_ms_per_task = 1000
     }
 
     #[test]
+    fn from_path_non_utf8_routes_to_io_invalid_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.toml");
+        // 0xFF is never a valid UTF-8 byte, and the payload sits well under
+        // the size cap. read_capped reads it, String::from_utf8 fails, and
+        // the failure must route to ManifestError::Io carrying
+        // ErrorKind::InvalidData (lib.rs:248-249) — the documented contract
+        // that keeps a corrupt-bytes manifest distinct from a disk fault
+        // (NotFound / permission) and from a parse or validation fault
+        // during agent-package load triage. Downgrading the kind to Other,
+        // or rerouting to Parse/Validation, would collapse that distinction.
+        std::fs::write(&path, b"\xff\xfe\xff").unwrap();
+        match Manifest::from_path(&path).unwrap_err() {
+            ManifestError::Io(io) => assert_eq!(
+                io.kind(),
+                std::io::ErrorKind::InvalidData,
+                "a non-UTF-8 agent.toml must surface ManifestError::Io with \
+                 ErrorKind::InvalidData so corrupt-bytes faults stay distinct \
+                 from disk faults; downgrading the kind to Other collapses the \
+                 corruption signal into a generic IO error",
+            ),
+            other => panic!(
+                "non-UTF-8 manifest must route to ManifestError::Io(InvalidData), \
+                 not {other:?} — a Parse/Validation/TooLarge route would \
+                 misclassify byte corruption as a content or size fault"
+            ),
+        }
+    }
+
+    #[test]
     fn from_path_rejects_oversized_manifest_before_parse() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent.toml");

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T05:24:46.241Z",
+  "updatedAt": "2026-06-13T05:44:49.605Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8865,
-    "tasks": 1051,
-    "integrated": 1053
+    "events": 8883,
+    "tasks": 1053,
+    "integrated": 1055
   },
   "throughput": {
-    "last24h": 54,
-    "last7d": 199,
-    "velocity": 28.4
+    "last24h": 55,
+    "last7d": 201,
+    "velocity": 28.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 17
+      "count": 19
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1053
+      "total": 1055
     }
   ],
   "states": {
-    "integrated": 1047,
+    "integrated": 1049,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T05:43:55.517Z",
+      "task": "memory-search-tier-filter-binding-limit-cross-product-covera",
+      "note": "Landing on loop/main-track: two pinning unit tests in covenant-memory (in-memory + sqlite search_similar tier+limit cross-product) plus the "
+    },
+    {
+      "at": "2026-06-13T05:37:33.672Z",
+      "task": "memory-recent-tier-filter-binding-limit-cross-product-covera",
+      "note": "Landing on loop/main-track: two pinning unit tests in covenant-memory (in-memory + sqlite recent tier+limit cross-product) plus the regenera"
+    },
     {
       "at": "2026-06-13T05:23:19.885Z",
       "task": "manifest-read-capped-size-cap-equality-boundary-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-12T23:55:14.620Z",
       "task": "manifest-from-path-read-size-bound",
       "note": "Committed 79561e74 and pushed to origin/loop/main-track. Bounds Manifest::from_path at MAX_MANIFEST_BYTES with typed TooLarge; 3 new tests; "
-    },
-    {
-      "at": "2026-06-12T20:43:19.296Z",
-      "task": "serialize-settlement-backfill-with-store-lock",
-      "note": "Integrating to loop/main-track: settlement backfill now routes through JsonlReceiptStore::backfill holding the store write lock, closing the"
-    },
-    {
-      "at": "2026-06-12T19:24:32.629Z",
-      "task": "bound-metaplex-signer-rpc-response-body",
-      "note": "Committed ccb52cc5, pushed origin/loop/main-track (dce8e60b..ccb52cc5). README metrics + signer cap in one commit; autonomy records gitignor"
     }
   ]
 }

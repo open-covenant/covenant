@@ -2773,6 +2773,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_try_debit_and_would_exceed_allow_spending_exactly_the_remaining_balance() {
+        // Both spend gates use a STRICT `tokens_remaining < credits`
+        // comparison: try_debit (lib.rs:403) returns Exhausted only when
+        // the balance is strictly short, and would_exceed (:427) reports
+        // `tokens_remaining < credits`. The `<` is exclusive, so credits
+        // EXACTLY equal to the remaining balance is allowed — an agent may
+        // spend down to exactly zero in one debit, and would_exceed
+        // reports false at that point. Every other test probes strictly
+        // below (debit 3 of 10, would_exceed 5 of 10 → allowed) or
+        // strictly above (debit 6 of 5, would_exceed 11 of 10 → rejected);
+        // the credits == tokens_remaining equality is pinned by no test. A
+        // `<` -> `<=` flip would reject a full-balance spend as Exhausted
+        // and make would_exceed claim it would exceed, silently breaking
+        // the budget hard guarantee with the suite still green. Pin the
+        // equality keep-arm on both gates and bracket from above.
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        l.set_capacity(&a, 10).await.unwrap();
+
+        assert!(
+            !l.would_exceed(&a, 10).await.unwrap(),
+            "spending exactly the remaining balance (10 of 10) must not exceed — \
+             tokens_remaining < credits is strict; a `<` -> `<=` flip breaks this",
+        );
+        assert!(
+            l.would_exceed(&a, 11).await.unwrap(),
+            "spending one more than the balance (11 of 10) must exceed — \
+             brackets the boundary from above",
+        );
+
+        // Reject side first so it cannot consume before the accept side.
+        match l.try_debit(&a, 11, Uuid::new_v4()).await.unwrap_err() {
+            BudgetError::Exhausted {
+                tokens_remaining, ..
+            } => assert_eq!(
+                tokens_remaining, 10,
+                "a rejected over-spend must not consume"
+            ),
+            other => panic!("expected Exhausted for 11 of 10, got {other:?}"),
+        }
+
+        l.try_debit(&a, 10, Uuid::new_v4()).await.expect(
+            "debiting exactly the remaining balance (10 of 10) must succeed — \
+             a `<` -> `<=` flip would reject it as Exhausted",
+        );
+        assert_eq!(
+            l.tokens_remaining(&a).await.unwrap(),
+            0,
+            "a full-balance debit must drain the bucket to exactly zero",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_try_debit_and_would_exceed_allow_spending_exactly_the_remaining_balance() {
+        // JsonlLedger mirrors the in-memory spend gates with the same
+        // strict `tokens_remaining < credits` comparison: try_debit
+        // (lib.rs:866) and would_exceed (:905). Pin the same exact-balance
+        // equality keep-arm on the persistent backend so a `<` -> `<=`
+        // flip that slipped past the in-memory pin is still caught here.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget").join("ledger.jsonl");
+        let l = JsonlLedger::open(path).await.unwrap();
+        let a = agent("a@local");
+        l.set_capacity(&a, 10).await.unwrap();
+
+        assert!(
+            !l.would_exceed(&a, 10).await.unwrap(),
+            "spending exactly the remaining balance must not exceed on the persistent ledger",
+        );
+        assert!(
+            l.would_exceed(&a, 11).await.unwrap(),
+            "spending one more than the balance must exceed — brackets the boundary from above",
+        );
+
+        match l.try_debit(&a, 11, Uuid::new_v4()).await.unwrap_err() {
+            BudgetError::Exhausted {
+                tokens_remaining, ..
+            } => assert_eq!(
+                tokens_remaining, 10,
+                "a rejected over-spend must not consume"
+            ),
+            other => panic!("expected Exhausted for 11 of 10, got {other:?}"),
+        }
+
+        l.try_debit(&a, 10, Uuid::new_v4())
+            .await
+            .expect("debiting exactly the remaining balance must succeed on the persistent ledger");
+        assert_eq!(
+            l.tokens_remaining(&a).await.unwrap(),
+            0,
+            "a full-balance debit must drain the persistent bucket to exactly zero",
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_recent_debits_filters_by_agent() {
         let l = InMemoryLedger::new();
         let a = agent("a@local");

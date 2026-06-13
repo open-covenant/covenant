@@ -3039,10 +3039,10 @@ async fn main() -> Result<()> {
                     if !manifest_path.exists() {
                         continue;
                     }
-                    let raw = std::fs::read_to_string(&manifest_path)
-                        .with_context(|| format!("read {}", manifest_path.display()))?;
-                    let manifest = covenant_manifest::Manifest::parse(&raw)
-                        .with_context(|| format!("parse manifest {}", manifest_path.display()))?;
+                    // from_path caps the read at MAX_MANIFEST_BYTES so a hostile
+                    // or corrupt agent package cannot OOM the CLI on this scan.
+                    let manifest = covenant_manifest::Manifest::from_path(&manifest_path)
+                        .with_context(|| format!("load manifest {}", manifest_path.display()))?;
                     for action in manifest.capabilities.required.iter() {
                         required.insert(action.clone());
                     }

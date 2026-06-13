@@ -3917,6 +3917,57 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn verify_with_clock_and_trust_root_pins_signature_check_for_trusted_grantor() {
+        // verify_with_clock_and_trust_root (line 1152) checks
+        // granted_by == trust_root FIRST, then delegates to
+        // verify_with_clock -> verify for the ed25519 signature. The
+        // boundary test above pins (a) match+valid -> Ok, (b) mismatch+
+        // valid -> UntrustedGrantor, (c) mismatch+tampered -> UntrustedGrantor
+        // (the gate short-circuits before signature verification), and
+        // (d) match+expired -> Expired. None of them probe the symmetric
+        // ordering property: a grantor that MATCHES the trust root is still
+        // fully signature-verified.
+        //
+        // That is the residual attack after the trust-root gate. The doc
+        // comment names the out-of-band granted.jsonl writer who self-signs
+        // with their own key — closed by (b)/(c). But the same file access
+        // lets an attacker copy the trust root's PUBLIC key into granted_by
+        // and append an escalated capability; they cannot produce a valid
+        // signature (they lack the secret key), so the only thing rejecting
+        // the forgery is verify() inside the wrapper. A refactor that
+        // short-circuited a trusted grantor to an expiry-only check
+        // ('granted_by is us, just confirm it has not expired') would pass
+        // (a) and (b)/(c) unchanged; (d) catches a pure return-Ok short-
+        // circuit but NOT the trusted-then-expiry-only variant, which would
+        // accept this forgery as Ok.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let mut tampered = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), Some(1000)),
+            issuer.signing_key(),
+        );
+        // Escalate the action after signing: granted_by still names the
+        // trust root, so the gate passes, but canonical_message no longer
+        // matches the signature.
+        tampered.capability.action = "tool.gpu_inference".into();
+
+        // now_ms (999) is strictly BEFORE expiry (1000) so the expiry arm
+        // cannot mask a skipped signature check — a trusted-then-expiry-only
+        // short-circuit would return Ok here instead of BadSignature.
+        assert!(
+            matches!(
+                verify_with_clock_and_trust_root(&tampered, 999, issuer.pubkey_bytes()),
+                Err(PermissionError::BadSignature)
+            ),
+            "a capability whose granted_by matches the trust_root but whose \
+             signed content was tampered must surface as BadSignature, not \
+             Ok — the trust-root gate must not bypass ed25519 verification \
+             for a matching grantor, or anyone who can write the trust \
+             root's public key into granted.jsonl could forge capabilities",
+        );
+    }
+
     #[tokio::test]
     async fn in_memory_store_filters_by_subject() {
         let issuer = LocalIdentity::generate("authority@local");

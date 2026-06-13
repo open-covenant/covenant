@@ -2145,6 +2145,78 @@ mod tests {
         assert_eq!(hits[0].text, "e-alpha");
     }
 
+    /// `search_similar` must apply the `memory.read.<tier>` filter *before* the
+    /// limit: the page is the top-`limit` rows among the tier-matching rows,
+    /// not the tier-matching subset of the top-`limit` rows overall. The
+    /// `*_search_respects_tier_filter` tests seed equal-similarity rows under a
+    /// slack limit, so neither a binding limit nor a higher-similarity off-tier
+    /// row is exercised. Here a Working row outscores two Episodic matches under
+    /// a cap of one: filter-then-take returns the top Episodic row; a
+    /// `take -> filter` reorder takes the Working row first and filters it away,
+    /// collapsing to an empty page on the live `memory search --tier --limit`
+    /// path.
+    #[tokio::test]
+    async fn in_memory_search_tier_filter_with_binding_limit_keeps_matching_rows_beyond_cap() {
+        let s = InMemoryStore::new();
+        let mut w = record(Uuid::new_v4(), MemoryTier::Working, "w1", 1);
+        w.embedding = vec![1.0, 0.0, 0.0];
+        let mut e1 = record(Uuid::new_v4(), MemoryTier::Episodic, "e1", 2);
+        e1.embedding = vec![0.8, 0.6, 0.0];
+        let mut e2 = record(Uuid::new_v4(), MemoryTier::Episodic, "e2", 3);
+        e2.embedding = vec![0.6, 0.8, 0.0];
+        s.put(w).await.unwrap();
+        s.put(e1).await.unwrap();
+        s.put(e2).await.unwrap();
+
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], Some(MemoryTier::Episodic), 1, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "limit binds among the Episodic rows");
+        assert_eq!(
+            hits[0].tier,
+            MemoryTier::Episodic,
+            "the higher-similarity Working row must not consume the slot"
+        );
+        assert_eq!(
+            hits[0].text, "e1",
+            "the top-similarity Episodic row, with a second Episodic match beyond the cap"
+        );
+    }
+
+    /// SQLite mirror: the production backend filters with `WHERE tier = ?1`
+    /// before scoring and taking the limit in Rust, so the tier predicate binds
+    /// before the cap. Pin it so moving the tier filter to a post-`take` Rust
+    /// step regresses identically to the in-memory reorder.
+    #[tokio::test]
+    async fn sqlite_search_tier_filter_with_binding_limit_keeps_matching_rows_beyond_cap() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let mut w = record(Uuid::new_v4(), MemoryTier::Working, "w1", 1);
+        w.embedding = vec![1.0, 0.0, 0.0];
+        let mut e1 = record(Uuid::new_v4(), MemoryTier::Episodic, "e1", 2);
+        e1.embedding = vec![0.8, 0.6, 0.0];
+        let mut e2 = record(Uuid::new_v4(), MemoryTier::Episodic, "e2", 3);
+        e2.embedding = vec![0.6, 0.8, 0.0];
+        s.put(w).await.unwrap();
+        s.put(e1).await.unwrap();
+        s.put(e2).await.unwrap();
+
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], Some(MemoryTier::Episodic), 1, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "limit binds among the Episodic rows");
+        assert_eq!(
+            hits[0].tier,
+            MemoryTier::Episodic,
+            "the higher-similarity Working row must not consume the slot"
+        );
+        assert_eq!(
+            hits[0].text, "e1",
+            "the top-similarity Episodic row, with a second Episodic match beyond the cap"
+        );
+    }
+
     #[tokio::test]
     async fn in_memory_purge_older_than_drops_old_records() {
         let s = InMemoryStore::new();

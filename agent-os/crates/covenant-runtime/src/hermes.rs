@@ -1968,6 +1968,48 @@ network = "off"
     }
 
     #[tokio::test]
+    async fn poll_tolerates_exactly_max_consecutive_failures_then_completes() {
+        // poll_until_terminal gives up only when a failure streak *exceeds*
+        // the cap: `if consecutive_failures > MAX_CONSECUTIVE_POLL_FAILURES`
+        // (hermes.rs:341). The contract is that a long run rides out exactly
+        // MAX_CONSECUTIVE_POLL_FAILURES consecutive transient poll blips and
+        // aborts only on the next one. The two existing resilience tests
+        // bracket this boundary without landing on it:
+        // poll_tolerates_transient_failures uses fail_times=2 (`2 > 5` stays
+        // false either way) and poll_gives_up_after_max_consecutive_failures
+        // serves 503 forever (a `>` -> `>=` flip just gives up one poll
+        // sooner, still Remote 503). So a `>` -> `>=` off-by-one — abort *at*
+        // the cap instead of past it — passes every test today while killing a
+        // run one recoverable blip too early. Serve exactly the cap's worth of
+        // failures, then a completion: the run must survive the full streak
+        // and finish. A `>=` flip aborts on the MAX-th failure and surfaces
+        // RunnerError::Remote 503 instead, failing the completion assertion.
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(FlakyThenComplete {
+                fail_times: MAX_CONSECUTIVE_POLL_FAILURES as usize,
+                calls: AtomicUsize::new(0),
+                output: "survived the streak".into(),
+            })
+            .mount(&server)
+            .await;
+
+        let result = runner(&server)
+            .run(&hermes_card(30_000), &intent())
+            .await
+            .expect(
+            "a run must tolerate exactly MAX_CONSECUTIVE_POLL_FAILURES blips, not abort at the cap",
+        );
+        assert_eq!(
+            result.text, "survived the streak",
+            "the run must complete after riding out the full MAX_CONSECUTIVE_POLL_FAILURES streak; \
+             aborting at the cap (a > -> >= flip) surfaces RunnerError::Remote instead",
+        );
+    }
+
+    #[tokio::test]
     async fn poll_gives_up_after_max_consecutive_failures() {
         let server = MockServer::start().await;
         mount_submit(&server, "r1").await;

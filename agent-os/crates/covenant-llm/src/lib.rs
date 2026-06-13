@@ -201,11 +201,37 @@ struct OllamaChatRequest<'a> {
 #[derive(Deserialize)]
 struct OllamaChatResponse {
     message: OllamaMessage,
+    #[serde(default)]
+    done_reason: Option<String>,
+    #[serde(default)]
+    eval_count: u32,
 }
 
 #[derive(Deserialize)]
 struct OllamaMessage {
     content: String,
+}
+
+/// Post-process a parsed Ollama `/api/chat` response: surface a
+/// [`ProviderError::Truncated`] when `done_reason` is `"length"` (the model hit
+/// the `num_predict` ceiling), otherwise return the message text. Mirrors
+/// [`process_openai_response`] and [`process_anthropic_response`] so the
+/// truncation contract is unit-testable without a live HTTP path. Ollama does
+/// not echo the configured limit, so the reported `max_tokens` is `eval_count` —
+/// the number of tokens generated before the cut (0 if the build omits it). The
+/// `partial` text is always carried so a truncated plan / compaction summary
+/// stays inspectable instead of being returned as if it were complete.
+fn process_ollama_response(response: OllamaChatResponse) -> Result<String, ProviderError> {
+    if response.done_reason.as_deref() == Some("length") {
+        return Err(ProviderError::Truncated {
+            max_tokens: response.eval_count,
+            partial: response.message.content,
+        });
+    }
+    if response.message.content.is_empty() {
+        return Err(ProviderError::Empty);
+    }
+    Ok(response.message.content)
 }
 
 #[async_trait]
@@ -235,10 +261,7 @@ impl Provider for OllamaProvider {
         }
         let bytes = read_body_capped(resp, self.max_bytes).await?;
         let parsed: OllamaChatResponse = serde_json::from_slice(&bytes)?;
-        if parsed.message.content.is_empty() {
-            return Err(ProviderError::Empty);
-        }
-        Ok(parsed.message.content)
+        process_ollama_response(parsed)
     }
 }
 
@@ -2437,6 +2460,80 @@ model = "nomic-embed-text"
                 assert_eq!(
                     partial, "cut off here",
                     "the partial must survive a missing usage object"
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ollama_provider_surfaces_truncated_when_done_reason_is_length() {
+        // Ollama sets done_reason="length" when /api/chat stops at the
+        // num_predict ceiling. The prior parser read only message.content and
+        // ignored done_reason, so a truncated plan / compaction summary was
+        // returned via Ok exactly like the pre-hardening Anthropic and OpenAI
+        // paths. Truncated gives callers a signal to raise the cap and retry,
+        // carrying eval_count (Ollama's generated-token count, its analog of
+        // the ceiling that was hit) and the partial text.
+        let raw = r#"{
+            "message": {"role": "assistant", "content": "draft plan:\n1. "},
+            "done": true,
+            "done_reason": "length",
+            "eval_count": 256
+        }"#;
+        let response: OllamaChatResponse = serde_json::from_str(raw).unwrap();
+        let err = process_ollama_response(response).expect_err("length done_reason must error");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(
+                    max_tokens, 256,
+                    "Truncated.max_tokens must carry eval_count — the number of tokens \
+                     Ollama generated before hitting the num_predict ceiling",
+                );
+                assert_eq!(
+                    partial, "draft plan:\n1. ",
+                    "Truncated.partial must carry the content that arrived before the cut \
+                     so the operator can inspect it and retry with a higher cap",
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ollama_normal_done_reason_returns_text_and_missing_eval_count_defaults_to_zero() {
+        // A normal stop must NOT trip the truncation guard. A second response
+        // with done_reason="length" but no eval_count pins the 0 fallback and
+        // that the partial still surfaces, so an Ollama build omitting eval_count
+        // cannot turn a truncation into a swallowed Ok.
+        let raw = r#"{
+            "message": {"role": "assistant", "content": "the whole answer"},
+            "done": true,
+            "done_reason": "stop"
+        }"#;
+        let response: OllamaChatResponse = serde_json::from_str(raw).unwrap();
+        let text = process_ollama_response(response).expect("a normal stop must return Ok(text)");
+        assert_eq!(text, "the whole answer");
+
+        let raw = r#"{
+            "message": {"role": "assistant", "content": "cut"},
+            "done_reason": "length"
+        }"#;
+        let response: OllamaChatResponse = serde_json::from_str(raw).unwrap();
+        let err = process_ollama_response(response)
+            .expect_err("length must error even without eval_count");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(max_tokens, 0, "missing eval_count must default to 0");
+                assert_eq!(
+                    partial, "cut",
+                    "the partial must survive a missing eval_count"
                 );
             }
             other => panic!("expected ProviderError::Truncated, got {other:?}"),

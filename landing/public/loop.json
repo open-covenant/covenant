@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T00:43:57.829Z",
+  "updatedAt": "2026-06-13T01:04:01.243Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8730,
-    "tasks": 1036,
-    "integrated": 1038
+    "events": 8739,
+    "tasks": 1037,
+    "integrated": 1039
   },
   "throughput": {
     "last24h": 56,
-    "last7d": 186,
-    "velocity": 26.6
+    "last7d": 187,
+    "velocity": 26.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1038
+      "total": 1039
     }
   ],
   "states": {
-    "integrated": 1032,
+    "integrated": 1033,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T01:02:55.793Z",
+      "task": "hyre-paid-path-oversized-response-coverage",
+      "note": "Committed df1d655e and pushed to origin/loop/main-track (a39dd0bf..df1d655e). Two wiremock regression tests cover the oversized 402-challeng"
+    },
     {
       "at": "2026-06-13T00:36:08.197Z",
       "task": "cli-bootstrap-bound-agent-manifest-read",
@@ -310,11 +315,6 @@
       "at": "2026-06-12T11:06:54.817Z",
       "task": "bound-x402-solana-signer-response-bodies",
       "note": "Committed 2a351699 and pushed to origin/loop/main-track. Bounds the last unbounded reqwest read in production src/: PayaiSolanaSigner + Sola"
-    },
-    {
-      "at": "2026-06-12T10:38:59.357Z",
-      "task": "harden-zauth-reposcan-request-timeout",
-      "note": "Integrated as 3a26fad6, pushed to origin/loop/main-track (543400cf..3a26fad6). Changed: reposcan.rs (FIRST_REQUEST_TIMEOUT=20s client via ht"
     }
   ]
 }

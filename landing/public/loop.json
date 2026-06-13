@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T03:04:21.951Z",
+  "updatedAt": "2026-06-13T03:24:25.388Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8788,
+    "events": 8793,
     "tasks": 1043,
-    "integrated": 1044
+    "integrated": 1045
   },
   "throughput": {
-    "last24h": 61,
-    "last7d": 191,
-    "velocity": 27.3
+    "last24h": 59,
+    "last7d": 192,
+    "velocity": 27.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 8
+      "count": 9
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-13",
-      "total": 1044
+      "total": 1045
     }
   ],
   "states": {
-    "integrated": 1038,
+    "integrated": 1039,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sap-bridge-worker-error-routing-upstream-vs-rpc-coverage",
-    "state": "in_progress",
-    "since": "2026-06-13T03:04:01.707Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T03:09:18.957Z",
+      "task": "sap-bridge-worker-error-routing-upstream-vs-rpc-coverage",
+      "note": "Integrating into loop/main-track: covenant-sap-bridge worker ok:false error-routing coverage (Upstream name vs Rpc fold) + README test count"
+    },
     {
       "at": "2026-06-13T02:53:46.760Z",
       "task": "llm-ollama-provider-surface-truncated-done-reason-length",
@@ -315,11 +315,6 @@
       "at": "2026-06-12T13:45:47.683Z",
       "task": "bound-hyre-facilitator-response-body",
       "note": "committed d0f9bd16 on loop/main-track; last un-capped untrusted reqwest read in the workspace now bounded — covenant-hyre http.rs every-body"
-    },
-    {
-      "at": "2026-06-12T12:58:23.143Z",
-      "task": "harden-hermes-gateway-error-truncate-char-boundary",
-      "note": "Integrating to loop/main-track: truncate() now walks to the largest UTF-8 char boundary at or below max before slicing, closing the panic ax"
     }
   ]
 }

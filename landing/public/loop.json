@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T09:05:24.588Z",
+  "updatedAt": "2026-06-13T09:25:28.051Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9033,
-    "tasks": 1070,
-    "integrated": 1072
+    "events": 9042,
+    "tasks": 1071,
+    "integrated": 1073
   },
   "throughput": {
     "last24h": 58,
-    "last7d": 214,
-    "velocity": 30.6
+    "last7d": 215,
+    "velocity": 30.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 36
+      "count": 37
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1072
+      "total": 1073
     }
   ],
   "states": {
-    "integrated": 1066,
+    "integrated": 1067,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T09:23:45.916Z",
+      "task": "settlement-merkle-two-leaf-root-concatenation-order-coverage",
+      "note": "Pinning settlement two-leaf Merkle concatenation order; committing to loop/main-track."
+    },
     {
       "at": "2026-06-13T09:00:45.811Z",
       "task": "covenantd-recent-debits-truncate-after-merge-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-13T05:37:33.672Z",
       "task": "memory-recent-tier-filter-binding-limit-cross-product-covera",
       "note": "Landing on loop/main-track: two pinning unit tests in covenant-memory (in-memory + sqlite recent tier+limit cross-product) plus the regenera"
-    },
-    {
-      "at": "2026-06-13T05:23:19.885Z",
-      "task": "manifest-read-capped-size-cap-equality-boundary-coverage",
-      "note": "Landing on loop/main-track: one pinning unit test in covenant-manifest plus the regenerated README count."
     }
   ]
 }

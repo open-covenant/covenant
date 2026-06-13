@@ -3019,6 +3019,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_compact_keeps_debit_stamped_exactly_at_cutoff() {
+        // compact_older_than drops debits strictly older than the cutoff:
+        // retain(|d| d.at_ms >= before_ms) (lib.rs:463); the module doc
+        // (lib.rs:279) pins the contract as "drop events with at_ms <
+        // before_ms". So a debit stamped EXACTLY at before_ms is on the
+        // keep side. in_memory_compact_drops_old_debits_only only probes
+        // at_ms=50 vs cutoff 100 (strictly older); the at_ms == before_ms
+        // equality is pinned by no test. Seed two debits straddling the
+        // cutoff — one exactly at it, one a tick below — and compact at
+        // the cutoff: the below-cutoff debit drops, the at-cutoff debit
+        // survives. A `>=` -> `>` flip would also drop the at-cutoff debit
+        // (losing a spend-audit record the retention contract keeps),
+        // failing the survivor assertion with the suite otherwise green.
+        const CUTOFF: u64 = 100;
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        l.set_capacity(&a, 10).await.unwrap();
+        l.try_debit(&a, 1, Uuid::new_v4()).await.unwrap(); // keep: stamped at CUTOFF
+        l.try_debit(&a, 2, Uuid::new_v4()).await.unwrap(); // drop: stamped at CUTOFF - 1
+        {
+            let mut debits = l.debits.lock().await;
+            debits[0].at_ms = CUTOFF;
+            debits[1].at_ms = CUTOFF - 1;
+        }
+
+        assert_eq!(
+            l.compact_older_than(CUTOFF).await.unwrap(),
+            1,
+            "only the below-cutoff debit drops; the debit stamped exactly at the cutoff \
+             survives (at_ms >= before_ms is inclusive) — a `>=` -> `>` flip drops both",
+        );
+        let surviving = l.recent_debits(&a, 10).await.unwrap();
+        assert_eq!(
+            surviving.len(),
+            1,
+            "exactly the at-cutoff debit must survive"
+        );
+        assert_eq!(
+            surviving[0].credits, 1,
+            "the survivor must be the at-cutoff debit (credits 1), not the below-cutoff one",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_keeps_debit_stamped_exactly_at_cutoff() {
+        // JsonlLedger::compact_older_than mirrors the keep-arm: the Debit
+        // drop arm (d.at_ms < before_ms, lib.rs:981) drives the dropped
+        // count and the in-memory retain (:1076) drops the matching rows.
+        // Pin the exact-cutoff keep boundary on the persistent backend
+        // with two debits straddling the cutoff so both the dropped count
+        // and the surviving in-memory row are checked — a `<` -> `<=`
+        // (drop arm) or `>=` -> `>` (retain) flip is caught here too.
+        const CUTOFF: u64 = 100;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("a@local");
+        let l = JsonlLedger::open(path.clone()).await.unwrap();
+        l.set_capacity(&a, 10).await.unwrap();
+        l.try_debit(&a, 1, Uuid::new_v4()).await.unwrap(); // keep: stamped at CUTOFF
+        l.try_debit(&a, 2, Uuid::new_v4()).await.unwrap(); // drop: stamped at CUTOFF - 1
+
+        // Stamp each on-disk debit's at_ms by its credits, then reopen so
+        // the in-memory state matches the rewritten log.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = raw.lines().map(String::from).collect();
+        for line in lines.iter_mut() {
+            if line.contains("\"debit\"") {
+                if let BudgetEvent::Debit(mut d) = serde_json::from_str(line).unwrap() {
+                    d.at_ms = if d.credits == 1 { CUTOFF } else { CUTOFF - 1 };
+                    *line = serde_json::to_string(&BudgetEvent::Debit(d)).unwrap();
+                }
+            }
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let l2 = JsonlLedger::open(path.clone()).await.unwrap();
+
+        assert_eq!(
+            l2.compact_older_than(CUTOFF).await.unwrap(),
+            1,
+            "only the below-cutoff debit drops; the debit stamped exactly at the cutoff \
+             survives on the persistent ledger (at_ms >= before_ms is inclusive)",
+        );
+        let surviving = l2.recent_debits(&a, 10).await.unwrap();
+        assert_eq!(
+            surviving.len(),
+            1,
+            "exactly the at-cutoff debit must survive"
+        );
+        assert_eq!(
+            surviving[0].credits, 1,
+            "the survivor must be the at-cutoff debit (credits 1)",
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_set_capacity_clamps_tokens_when_shrinking() {
         let l = InMemoryLedger::new();
         let a = agent("a@local");

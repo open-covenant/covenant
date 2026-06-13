@@ -1129,6 +1129,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_integrity_report_pins_root_hash_as_genesis_seeded_chain_fold() {
+        // verify_integrity returns root_hash_hex (lib.rs:837) as the final
+        // accumulator of the audit hash chain: it seeds previous_hash_hex from
+        // ZERO_CHAIN_HASH (lib.rs:792), then folds each event line forward as
+        // previous = chain_hash(previous, sha256_hex(line)) (lib.rs:793-825).
+        // That root is the audit-root subject release signing binds
+        // (lib.rs:1824), so its exact byte construction is load-bearing for any
+        // independent verifier of the anchor.
+        //
+        // jsonl_integrity_report_accepts_untampered_chain pins root_hash_hex
+        // only by length (== 64) plus report.valid, and valid is RELATIONAL: it
+        // holds whenever the write-path build_chain_entries (lib.rs:543) agrees
+        // with the verify-path inline fold, so a mutation applied consistently
+        // to BOTH paths survives it. chain_hash_pins_separator_and_sha256_-
+        // composition pins the single LINK, but nothing recomputes the
+        // multi-entry ACCUMULATION end-to-end. This test folds the on-disk event
+        // lines independently from the ZERO_CHAIN_HASH genesis using the
+        // already-exact-pinned chain_hash/sha256_hex primitives and asserts the
+        // report root equals it. Mutation-check: seeding the fold from "" in
+        // both verify_integrity and build_chain_entries fails the eq; dropping
+        // the previous = chain_hash forward-threading in both paths collapses
+        // root to ZERO_CHAIN_HASH (fails both the eq and the ne); returning the
+        // last event_hash_hex instead of the chain accumulator fails the eq.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        log.record(dummy(intent_kind("error"))).await.unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(report.valid, "{report:?}");
+
+        // Independent fold of the exact lines verify_integrity reads
+        // (read_event_lines filters empty lines identically, lib.rs:568-574).
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut expected = ZERO_CHAIN_HASH.to_string();
+        for line in raw.lines().filter(|l| !l.is_empty()) {
+            expected = chain_hash(&expected, &sha256_hex(line.as_bytes()));
+        }
+        assert_eq!(
+            report.root_hash_hex, expected,
+            "root_hash_hex must equal the chain fold over the on-disk event \
+             lines seeded from ZERO_CHAIN_HASH; a changed genesis seed, dropped \
+             forward-threading, or a per-event-digest root would diverge here \
+             while keeping report.valid true and the length 64",
+        );
+        assert_ne!(
+            report.root_hash_hex, ZERO_CHAIN_HASH,
+            "a two-event fold must advance past the genesis seed; a root equal \
+             to ZERO_CHAIN_HASH means the chain stopped threading and no event \
+             content reaches the anchor",
+        );
+    }
+
+    #[tokio::test]
     async fn jsonl_integrity_report_detects_dangling_chain_anchor() {
         // verify_integrity flags a hash-chain sidecar that outruns the
         // event log: `if anchors.len() > event_lines.len()` (lib.rs:827)

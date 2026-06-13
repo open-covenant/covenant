@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T04:44:39.313Z",
+  "updatedAt": "2026-06-13T05:04:42.744Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8833,
-    "tasks": 1048,
-    "integrated": 1049
+    "events": 8847,
+    "tasks": 1049,
+    "integrated": 1051
   },
   "throughput": {
     "last24h": 54,
-    "last7d": 195,
-    "velocity": 27.9
+    "last7d": 197,
+    "velocity": 28.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 13
+      "count": 15
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-13",
-      "total": 1049
+      "total": 1051
     }
   ],
   "states": {
-    "integrated": 1043,
+    "integrated": 1045,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "permissions-trust-root-signature-check-coverage",
-    "state": "in_progress",
-    "since": "2026-06-13T04:43:19.336Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T04:59:53.055Z",
+      "task": "budget-project-overshoot-threshold-boundary-coverage",
+      "note": "Landing on loop/main-track: one pinning unit test in covenant-budget plus the regenerated README count."
+    },
+    {
+      "at": "2026-06-13T04:48:44.461Z",
+      "task": "permissions-trust-root-signature-check-coverage",
+      "note": "Landing as a single commit on loop/main-track: one pinning unit test in covenant-permissions plus the regenerated README count."
+    },
     {
       "at": "2026-06-13T04:30:17.349Z",
       "task": "memory-sqlite-purge-tier-isolation-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-12T16:46:23.667Z",
       "task": "bound-peer-auth-pagination-limit-take-overflow",
       "note": "Committed c03eaa02 and pushed to origin/loop/main-track (8108b6c4..c03eaa02). Made the peer-auth pagination peek increment saturating at all"
-    },
-    {
-      "at": "2026-06-12T16:13:27.958Z",
-      "task": "a2a-validate-inbound-task-intent-text-non-empty",
-      "note": "Committed 8108b6c4 and pushed to origin/loop/main-track (a5ddd11e..8108b6c4). Files: agent-os/crates/covenant-a2a/src/lib.rs (intent_text no"
-    },
-    {
-      "at": "2026-06-12T15:43:30.543Z",
-      "task": "bound-covenant-cli-x402-signer-subprocess-output",
-      "note": "Pushed a5ddd11e to origin/loop/main-track (51acac7a..a5ddd11e). CLI x402 signer subprocess output now bounded (16MiB/stream, 120s/phase, SIG"
     }
   ]
 }

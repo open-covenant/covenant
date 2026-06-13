@@ -4653,6 +4653,181 @@ mod tests {
         assert!(s.list_for_subject(subject.pubkey).await.unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn in_memory_purge_revoked_older_than_keeps_revocation_stamped_exactly_at_cutoff() {
+        // InMemoryCapabilityStore::purge_revoked_older_than drops a revocation
+        // (and its grant in lockstep) only when its timestamp is STRICTLY less
+        // than the cutoff: `filter(|(_, ts)| **ts < before_ms)`. The trait
+        // contract says "Drop every revocation with revoked_at < before_ms", so
+        // a revocation stamped EXACTLY at before_ms survives. The existing purge
+        // tests stamp revoked_at=50 with cutoff 100, so no revocation lands on
+        // the cutoff and the equality keep arm is untested. A `<` -> `<=` flip
+        // would purge cutoff-equal revocations (and their grants) a tick early
+        // on every retention cycle whose cutoff aligns to a revocation
+        // timestamp, with the strict-less-than test still green.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let s = InMemoryCapabilityStore::new();
+
+        let below = sign(
+            cap(subject.clone(), "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let boundary = sign(
+            cap(subject.clone(), "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let above = sign(
+            cap(subject.clone(), "memory.read", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        s.record(below.clone()).await.unwrap();
+        s.record(boundary.clone()).await.unwrap();
+        s.record(above.clone()).await.unwrap();
+        assert!(s.revoke(below.signature).await.unwrap());
+        assert!(s.revoke(boundary.signature).await.unwrap());
+        assert!(s.revoke(above.signature).await.unwrap());
+
+        // Override the epoch_ms revoke stamps with deterministic timestamps
+        // bracketing the cutoff: below=100, boundary=200, above=300.
+        {
+            let mut r = s.revoked.lock().await;
+            r.insert(below.signature, 100);
+            r.insert(boundary.signature, 200);
+            r.insert(above.signature, 300);
+        }
+
+        // cutoff=200: below(100) strictly older -> purged; boundary(200) on the
+        // cutoff -> kept; above(300) -> kept.
+        let purged = s.purge_revoked_older_than(200).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must purge only the 100-stamped revocation; the \
+             200-stamped revocation sits on the cutoff and `<` keeps it. A flip \
+             to `<=` would purge both and return 2, dropping the cutoff-equal \
+             revocation and its grant a cycle early. got: {purged}",
+        );
+        assert!(
+            !s.is_revoked(below.signature).await.unwrap(),
+            "the below-cutoff revocation (100) must be purged",
+        );
+        assert!(
+            s.is_revoked(boundary.signature).await.unwrap(),
+            "the cutoff-equal revocation (200) must survive — `<` keeps it",
+        );
+        assert!(
+            s.is_revoked(above.signature).await.unwrap(),
+            "the above-cutoff revocation (300) must survive",
+        );
+
+        // Re-purge with the boundary moved to 300 so the equality arm is pinned
+        // on a second cutoff value, not a phase-1 coincidence.
+        let purged = s.purge_revoked_older_than(300).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge at cutoff=300 drops the now-strictly-less 200 while \
+             keeping the cutoff-equal 300. got: {purged}",
+        );
+        assert!(
+            !s.is_revoked(boundary.signature).await.unwrap(),
+            "200 is now strictly less than 300 and must be purged",
+        );
+        assert!(
+            s.is_revoked(above.signature).await.unwrap(),
+            "the cutoff-equal revocation (300) must survive the second cycle",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_revoked_older_than_keeps_revocation_stamped_exactly_at_cutoff() {
+        // JsonlCapabilityStore::purge_revoked_older_than uses the same strict
+        // cutoff as the in-memory backend: `filter(|r| r.revoked_at < before_ms)`,
+        // so a Revocation stamped EXACTLY at before_ms survives the rewrite.
+        // jsonl_purge_rewrites_both_files_and_keeps_live_grants stamps
+        // revoked_at=50 with cutoff 100 and never lands a revocation on the
+        // cutoff. Mirror the in-memory equality pin so the two backends align.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("granted.jsonl");
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+
+        let below = sign(
+            cap(subject.clone(), "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let boundary = sign(
+            cap(subject.clone(), "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let above = sign(
+            cap(subject.clone(), "memory.read", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        s.record(below.clone()).await.unwrap();
+        s.record(boundary.clone()).await.unwrap();
+        s.record(above.clone()).await.unwrap();
+        assert!(s.revoke(below.signature).await.unwrap());
+        assert!(s.revoke(boundary.signature).await.unwrap());
+        assert!(s.revoke(above.signature).await.unwrap());
+
+        // Rewrite revoked.jsonl with deterministic timestamps bracketing the
+        // cutoff: below=100, boundary=200, above=300.
+        let rev_path = dir.path().join("revoked.jsonl");
+        let rows = [
+            (below.signature, 100u64),
+            (boundary.signature, 200),
+            (above.signature, 300),
+        ]
+        .iter()
+        .map(|(signature, revoked_at)| {
+            serde_json::to_string(&Revocation {
+                signature: *signature,
+                revoked_at: *revoked_at,
+            })
+            .unwrap()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+        std::fs::write(&rev_path, format!("{rows}\n")).unwrap();
+
+        let purged = s.purge_revoked_older_than(200).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must purge only the 100-stamped revocation; the \
+             200-stamped revocation sits on the cutoff and `<` keeps it. A flip \
+             to `<=` would rewrite both out of revoked.jsonl and return 2. \
+             got: {purged}",
+        );
+        assert!(
+            !s.is_revoked(below.signature).await.unwrap(),
+            "the below-cutoff revocation (100) must be purged",
+        );
+        assert!(
+            s.is_revoked(boundary.signature).await.unwrap(),
+            "the cutoff-equal revocation (200) must survive — `<` keeps it",
+        );
+        assert!(
+            s.is_revoked(above.signature).await.unwrap(),
+            "the above-cutoff revocation (300) must survive",
+        );
+
+        let purged = s.purge_revoked_older_than(300).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge at cutoff=300 drops the now-strictly-less 200 while \
+             keeping the cutoff-equal 300. got: {purged}",
+        );
+        assert!(
+            !s.is_revoked(boundary.signature).await.unwrap(),
+            "200 is now strictly less than 300 and must be purged",
+        );
+        assert!(
+            s.is_revoked(above.signature).await.unwrap(),
+            "the cutoff-equal revocation (300) must survive the second cycle",
+        );
+    }
+
     #[test]
     fn scope_allows_tiers_pins_absent_non_array_allow_and_all_requested_must_match() {
         let empty = serde_json::json!({});

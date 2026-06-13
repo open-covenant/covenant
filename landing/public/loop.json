@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T12:05:55.798Z",
+  "updatedAt": "2026-06-13T12:25:59.285Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9150,
-    "tasks": 1084,
-    "integrated": 1086
+    "events": 9159,
+    "tasks": 1085,
+    "integrated": 1087
   },
   "throughput": {
-    "last24h": 62,
-    "last7d": 223,
-    "velocity": 31.9
+    "last24h": 63,
+    "last7d": 224,
+    "velocity": 32
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 50
+      "count": 51
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-13",
-      "total": 1086
+      "total": 1087
     }
   ],
   "states": {
-    "integrated": 1080,
+    "integrated": 1081,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T12:22:53.142Z",
+      "task": "zauth-read-capped-exact-cap-boundary",
+      "note": "Committed 39ee244e and pushed to origin/loop/main-track (56829666..39ee244e). All pre-push guards passed (current-identity, github-cli-accou"
+    },
     {
       "at": "2026-06-13T11:50:56.506Z",
       "task": "manifest-from-path-non-utf8-routes-to-io-invaliddata-kind-pi",
@@ -310,11 +315,6 @@
       "at": "2026-06-13T08:16:12.038Z",
       "task": "covenant-tools-read-body-capped-exact-boundary-coverage",
       "note": "Committed on loop/main-track. test(covenant-tools): pin read_body_capped accepts a body sized exactly at the cap. Scope: lib.rs +48-line bou"
-    },
-    {
-      "at": "2026-06-13T08:11:08.085Z",
-      "task": "hermes-poll-loop-max-consecutive-failures-boundary-coverage",
-      "note": "Committed 52b9a97f on loop/main-track. test(covenant-runtime): pin hermes poll tolerates the max consecutive-failure streak. Scope: hermes.r"
     }
   ]
 }

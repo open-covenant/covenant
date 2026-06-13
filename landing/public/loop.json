@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-13T01:24:04.674Z",
+  "updatedAt": "2026-06-13T01:44:08.182Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8739,
-    "tasks": 1037,
+    "events": 8744,
+    "tasks": 1038,
     "integrated": 1039
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1033,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "self_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "hyre-paid-signer-failure-typed-sign-error",
+    "state": "self_review",
+    "since": "2026-06-13T01:43:56.636Z"
+  },
   "recent": [
     {
       "at": "2026-06-13T01:02:55.793Z",

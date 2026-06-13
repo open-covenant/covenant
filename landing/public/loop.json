@@ -1,21 +1,17 @@
 {
-  "updatedAt": "2026-06-12T23:43:47.365Z",
+  "updatedAt": "2026-06-13T00:03:50.906Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8703,
-    "tasks": 1033,
-    "integrated": 1035
+    "events": 8716,
+    "tasks": 1035,
+    "integrated": 1036
   },
   "throughput": {
-    "last24h": 58,
+    "last24h": 59,
     "last7d": 184,
     "velocity": 26.3
   },
   "daily": [
-    {
-      "date": "05-23",
-      "count": 220
-    },
     {
       "date": "05-24",
       "count": 64
@@ -94,14 +90,14 @@
     },
     {
       "date": "06-12",
-      "count": 58
+      "count": 59
+    },
+    {
+      "date": "06-13",
+      "count": 0
     }
   ],
   "cumulative": [
-    {
-      "date": "05-23",
-      "total": 405
-    },
     {
       "date": "05-24",
       "total": 469
@@ -180,13 +176,18 @@
     },
     {
       "date": "06-12",
-      "total": 1035
+      "total": 1036
+    },
+    {
+      "date": "06-13",
+      "total": 1036
     }
   ],
   "states": {
-    "integrated": 1029,
+    "integrated": 1030,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "payai-build-payment-missing-funder-ata-fail-closed-coverage",
+    "state": "in_progress",
+    "since": "2026-06-13T00:02:19.011Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-12T23:55:14.620Z",
+      "task": "manifest-from-path-read-size-bound",
+      "note": "Committed 79561e74 and pushed to origin/loop/main-track. Bounds Manifest::from_path at MAX_MANIFEST_BYTES with typed TooLarge; 3 new tests; "
+    },
     {
       "at": "2026-06-12T20:43:19.296Z",
       "task": "serialize-settlement-backfill-with-store-lock",
@@ -310,11 +320,6 @@
       "at": "2026-06-12T09:53:54.542Z",
       "task": "bound-jupiter-swap-client-response-bodies",
       "note": "Integrated as cd7ac5b1, pushed to origin/loop/main-track (3f800010..cd7ac5b1). Changed: jupiter.rs (read_body_capped 16 MiB cap, anyhow flav"
-    },
-    {
-      "at": "2026-06-12T09:34:58.966Z",
-      "task": "bound-llm-provider-response-bodies",
-      "note": "Integrated as 3f800010, pushed to origin/loop/main-track (36042af7..3f800010). Changed: covenant-llm/src/lib.rs (read_body_capped 16 MiB cap"
     }
   ]
 }

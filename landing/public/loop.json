@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-13T01:44:08.182Z",
+  "updatedAt": "2026-06-13T02:04:11.655Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 8744,
-    "tasks": 1038,
-    "integrated": 1039
+    "events": 8757,
+    "tasks": 1039,
+    "integrated": 1041
   },
   "throughput": {
-    "last24h": 56,
-    "last7d": 187,
-    "velocity": 26.7
+    "last24h": 58,
+    "last7d": 189,
+    "velocity": 27
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-13",
-      "count": 3
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-13",
-      "total": 1039
+      "total": 1041
     }
   ],
   "states": {
-    "integrated": 1033,
+    "integrated": 1035,
     "proposed": 1,
-    "blocked": 3,
-    "self_review": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "hyre-paid-signer-failure-typed-sign-error",
-    "state": "self_review",
-    "since": "2026-06-13T01:43:56.636Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-13T02:00:28.154Z",
+      "task": "router-load-agents-unreadable-dir-io-error-coverage",
+      "note": "Integrating into loop/main-track: covenant-router read_dir-failure fail-closed coverage + README test count, single conventional commit."
+    },
+    {
+      "at": "2026-06-13T01:51:06.106Z",
+      "task": "hyre-paid-signer-failure-typed-sign-error",
+      "note": "Integrating into loop/main-track: HyreError::Sign typed variant for paid-path signer failures + fail-closed coverage. Single conventional co"
+    },
     {
       "at": "2026-06-13T01:02:55.793Z",
       "task": "hyre-paid-path-oversized-response-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-12T11:44:51.893Z",
       "task": "bound-hermes-files-snapshot-response-body",
       "note": "Committed 7270bf00. fetch_files routed through read_capped + serde_json::from_str with best-effort empty-list fallback; test fetch_files_is_"
-    },
-    {
-      "at": "2026-06-12T11:23:56.960Z",
-      "task": "bound-runtime-subprocess-agent-output",
-      "note": "Committed 3f0d894c and pushed to origin/loop/main-track. Bounds agent subprocess stdout+stderr (both runners) at 16 MiB via AsyncReadExt::ta"
-    },
-    {
-      "at": "2026-06-12T11:06:54.817Z",
-      "task": "bound-x402-solana-signer-response-bodies",
-      "note": "Committed 2a351699 and pushed to origin/loop/main-track. Bounds the last unbounded reqwest read in production src/: PayaiSolanaSigner + Sola"
     }
   ]
 }

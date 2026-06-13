@@ -2188,6 +2188,55 @@ network = "off"
     }
 
     #[tokio::test]
+    async fn read_capped_keeps_a_body_sized_exactly_at_the_cap() {
+        // read_capped keeps a gateway body whose size is exactly the cap: both
+        // the Content-Length early reject (`len > max`, hermes.rs:665) and the
+        // running accumulation guard (`buf.len() + chunk.len() > max`,
+        // hermes.rs:671) use `>`, not `>=`, so a body of max bytes is allowed
+        // and only max+1 is refused. gateway_response_body_read_is_bounded
+        // brackets this far from the boundary — 5 bytes under a 64-byte cap,
+        // 4096 over it — and fetch_files probes only MAX+1, so a `>` -> `>=`
+        // flip on either guard, which would refuse a body sized exactly at the
+        // cap, passes every test. Read a body of known length N: cap=N returns
+        // it verbatim (re-pinning both keep-arms) and cap=N-1 refuses.
+        let server = MockServer::start().await;
+        let body = "a".repeat(64);
+        Mock::given(method("GET"))
+            .and(path("/exact"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let at_cap = http
+            .get(format!("{}/exact", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(
+            read_capped(at_cap, body.len())
+                .await
+                .expect("a gateway body sized exactly at the cap must read back whole"),
+            body,
+            "read_capped must return an at-cap gateway body verbatim — equality is the keep-arm; \
+             a > -> >= flip would refuse it as over-cap",
+        );
+
+        let over = http
+            .get(format!("{}/exact", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        let err = read_capped(over, body.len() - 1)
+            .await
+            .expect_err("a body one byte over the cap must be refused, not buffered");
+        assert!(
+            matches!(err, RunnerError::Remote { status: 0, .. }),
+            "one byte over the cap must surface RunnerError::Remote {{ status: 0 }}; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn fetch_files_is_bounded_and_best_effort() {
         // The gateway is untrusted: a normal /files body reads back whole, a
         // malformed one degrades to an empty list, and an oversized one is

@@ -3091,6 +3091,86 @@ mod tests {
         assert_eq!(rows[0].token_prefix, &live_tok.to_b58()[..6]);
     }
 
+    /// The returned page and `truncated` must be computed over the
+    /// *prefix-filtered* rows, not the raw newest-first window. The
+    /// `pubkey_prefix` tests all keep `limit` slack (take is a no-op) and
+    /// every truncation test passes `prefix=None`, so neither pins a
+    /// filtering prefix against a binding limit. Here three matching rows
+    /// sit behind two newer non-matching rows under a cap of two:
+    /// filter-then-take returns the two newest matching rows truncated;
+    /// a `status -> take -> pubkey` reorder takes the newer non-matching
+    /// rows first and filters them away, collapsing to one row with
+    /// `truncated == false` on the live `peers list --prefix --limit` path.
+    #[tokio::test]
+    async fn list_summaries_prefix_filter_with_binding_limit_truncates_matching_rows() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, m1) = entry_with_pubkey("m1@local", 0xff);
+        let (_, m2) = entry_with_pubkey("m2@local", 0xff);
+        let (_, m3) = entry_with_pubkey("m3@local", 0xff);
+        let (_, o1) = entry_with_pubkey("o1@local", 0x01);
+        let (_, o2) = entry_with_pubkey("o2@local", 0x01);
+        for e in [m1, m2, m3, o1, o2] {
+            r.register(e).await.unwrap();
+        }
+
+        let mut matching_pk = [0u8; 32];
+        matching_pk[0] = 0xff;
+        let target_b58 = bs58::encode(matching_pk).into_string();
+        let prefix: String = target_b58.chars().take(4).collect();
+
+        let (rows, truncated) = r.list_summaries(2, Some(&prefix), None).await.unwrap();
+        assert_eq!(rows.len(), 2, "limit binds among the matching rows");
+        assert!(truncated, "a third matching row exists beyond the cap");
+        let displays: Vec<&str> = rows.iter().map(|s| s.agent_id.display.as_str()).collect();
+        assert_eq!(
+            displays,
+            vec!["m3@local", "m2@local"],
+            "newest two matching rows, newest first; newer non-matching rows must not displace them"
+        );
+        assert!(
+            rows.iter()
+                .all(|s| s.agent_id.pubkey_base58().starts_with(&prefix)),
+            "every returned row matches the requested pubkey prefix"
+        );
+    }
+
+    /// JSONL mirror: the post-restart production registry must page the
+    /// prefix+limit interaction identically to the in-memory path.
+    #[tokio::test]
+    async fn jsonl_list_summaries_prefix_filter_with_binding_limit_truncates_matching_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (_, m1) = entry_with_pubkey("m1@local", 0xff);
+        let (_, m2) = entry_with_pubkey("m2@local", 0xff);
+        let (_, m3) = entry_with_pubkey("m3@local", 0xff);
+        let (_, o1) = entry_with_pubkey("o1@local", 0x01);
+        let (_, o2) = entry_with_pubkey("o2@local", 0x01);
+        for e in [m1, m2, m3, o1, o2] {
+            r.register(e).await.unwrap();
+        }
+
+        let mut matching_pk = [0u8; 32];
+        matching_pk[0] = 0xff;
+        let target_b58 = bs58::encode(matching_pk).into_string();
+        let prefix: String = target_b58.chars().take(4).collect();
+
+        let (rows, truncated) = r.list_summaries(2, Some(&prefix), None).await.unwrap();
+        assert_eq!(rows.len(), 2, "limit binds among the matching rows");
+        assert!(truncated, "a third matching row exists beyond the cap");
+        let displays: Vec<&str> = rows.iter().map(|s| s.agent_id.display.as_str()).collect();
+        assert_eq!(
+            displays,
+            vec!["m3@local", "m2@local"],
+            "newest two matching rows, newest first; newer non-matching rows must not displace them"
+        );
+        assert!(
+            rows.iter()
+                .all(|s| s.agent_id.pubkey_base58().starts_with(&prefix)),
+            "every returned row matches the requested pubkey prefix"
+        );
+    }
+
     #[test]
     fn peer_error_bad_token_b58_display_message_pins_prefix_encoding_qualifier_and_payload() {
         let err = PeerError::BadTokenB58("not-a-token".into());

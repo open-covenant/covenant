@@ -337,6 +337,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn directory_body_at_exact_cap_is_accepted() {
+        // oversized_directory_body_is_rejected_instead_of_buffered trips
+        // read_capped's Content-Length pre-check and returns before the
+        // streaming accumulation check (the doc's "real guard") runs. Both
+        // compare with `>`, so a body of exactly the cap must be accepted: an
+        // at-cap body is the only shape that drives both guards to their
+        // `== max` edge, where a `>`-to-`>=` regression on either would reject
+        // a body sitting precisely on the limit while every oversized test
+        // still passed.
+        let body = concat!(
+            r#"{"endpoints":[],"#,
+            r#""pagination":{"total":0,"limit":0,"offset":0,"hasMore":false},"#,
+            r#""stats":{"totalEndpoints":0,"verified":0,"working":0}}"#,
+        );
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/directory"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let at_cap = DirectoryClient::with_limits(reqwest::Client::new(), server.uri(), body.len());
+        let page = at_cap
+            .list(ListQuery::default())
+            .await
+            .expect("a body of exactly the cap must be accepted, not rejected at the boundary");
+        assert!(page.endpoints.is_empty());
+
+        let over_cap =
+            DirectoryClient::with_limits(reqwest::Client::new(), server.uri(), body.len() - 1);
+        let err = over_cap
+            .list(ListQuery::default())
+            .await
+            .expect_err("a body one byte over the cap must still be rejected");
+        assert!(matches!(err, ZauthError::DecodeDirectory(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
     async fn surfaces_unexpected_status() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))

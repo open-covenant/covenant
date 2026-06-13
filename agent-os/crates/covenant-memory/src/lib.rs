@@ -3554,6 +3554,58 @@ mod tests {
     }
 
     #[test]
+    fn plan_compaction_apply_mode_no_op_plan_is_not_marked_changed() {
+        // outcome.changed = (mode == Apply) && would_change (lib.rs:384), and
+        // would_change is false unless something was deleted, stale-marked, or
+        // detached (lib.rs:378-379). Every test that asserts changed seeds a
+        // plan that DOES change something; the DryRun tests assert !changed
+        // because mode != Apply, not because would_change is false. The
+        // Apply-mode no-op — a non-empty policy whose cutoffs match nothing —
+        // is pinned by no test, yet it is what gates the daemon from opening a
+        // write transaction and emitting a MemoryCompactionApplied audit row
+        // for a compaction that touched zero rows. Simplifying changed to
+        // (mode == Apply) would pass every existing test but flip changed to
+        // true here.
+        let untouched = Uuid::new_v4();
+        // created_at 100 is well above the cutoff, so nothing is deleted.
+        let records = vec![record(untouched, MemoryTier::Working, "fresh", 100)];
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(5),
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "no-op apply".into(),
+        };
+
+        let (outcome, updates) = plan_compaction(&records, &request);
+
+        assert!(
+            !outcome.would_change,
+            "a policy whose cutoff (5) matches no record (created_at 100) plans no change",
+        );
+        assert!(
+            !outcome.changed,
+            "changed must stay false on a no-op plan even in Apply mode — it is \
+             (mode == Apply) && would_change, not mode == Apply alone; a spurious true here \
+             makes the daemon emit a MemoryCompactionApplied audit row for zero rows",
+        );
+        assert!(outcome.deleted.is_empty(), "no record may be deleted");
+        assert!(
+            outcome.stale_marked.is_empty(),
+            "no record may be stale-marked"
+        );
+        assert!(
+            outcome.parents_detached.is_empty(),
+            "no record may be detached"
+        );
+        assert!(
+            updates.is_empty(),
+            "a no-op plan emits no record updates to apply"
+        );
+    }
+
+    #[test]
     fn memory_error_display_messages_pin_five_string_variant_format_strings() {
         let worker = format!("{}", MemoryError::Worker("channel closed".into()));
         assert_eq!(

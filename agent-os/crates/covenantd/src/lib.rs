@@ -52885,6 +52885,53 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn recent_debits_truncates_to_limit_after_cross_agent_merge() {
+        // recent_debits fetches up to `limit` debits per agent, merges them,
+        // sorts newest-first, then truncates to `limit` over the MERGED set
+        // (lib.rs:3178-3179). A binding limit must therefore surface the
+        // globally newest `limit` debits across agents, not the first `limit`
+        // before sorting and not `limit` per agent. The newest-first test
+        // uses a slack limit of 10 over two debits, so a truncate-before-sort
+        // or a missing global truncate survives it. Interleave four debits in
+        // time across two agents and bind the limit to 2.
+        let s = server_with(
+            vec![
+                stub_card_with_budget("alpha", vec![], 100),
+                stub_card_with_budget("beta", vec![], 100),
+            ],
+            "ignored",
+        );
+        s.register_agent_budgets().await.unwrap();
+        let alpha = agent_id_for_card(&stub_card_with_budget("alpha", vec![], 100));
+        let beta = agent_id_for_card(&stub_card_with_budget("beta", vec![], 100));
+        s.budget.try_debit(&alpha, 1, Uuid::new_v4()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        s.budget.try_debit(&beta, 1, Uuid::new_v4()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        s.budget.try_debit(&alpha, 1, Uuid::new_v4()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        s.budget.try_debit(&beta, 1, Uuid::new_v4()).await.unwrap();
+        match s.op_respond(Request::RecentDebits { limit: 2 }).await {
+            Response::Debits { debits } => {
+                assert_eq!(
+                    debits.len(),
+                    2,
+                    "binding limit caps the merged set, not per agent"
+                );
+                assert_eq!(
+                    debits[0].agent.display, "beta@agent",
+                    "globally newest debit (beta's last) must survive the truncate",
+                );
+                assert_eq!(
+                    debits[1].agent.display, "alpha@agent",
+                    "second-newest (alpha's last) must survive; the two oldest are dropped",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     /// Constructs a Server with a tempdir-bound home and a pre-seeded
     /// operator token (b58 written to `<home>/peers/operator.token` at
     /// mode 0600 + registered to the daemon identity in the peer

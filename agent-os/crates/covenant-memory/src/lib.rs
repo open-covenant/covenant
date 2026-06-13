@@ -3201,6 +3201,113 @@ mod tests {
     }
 
     #[test]
+    fn plan_compaction_pins_inclusive_keep_arm_at_each_cutoff_boundary() {
+        // plan_compaction gates all three age-based actions on a STRICT
+        // `created_at < before` comparison: delete_working_before_ms
+        // (lib.rs:297), delete_episodic_before_ms (:305), and
+        // mark_longterm_stale_before_ms (:342). The `<` is exclusive, so a
+        // record created EXACTLY at the cutoff is on the keep side —
+        // working/episodic records are not deleted and a long-term record
+        // is not marked stale. Every other compaction test seeds
+        // created_at strictly below the cutoff (10 vs 20, 10 vs 200), so
+        // the keep-arm at created_at == before is pinned by no test. A
+        // `<` -> `<=` flip on a delete site would silently destroy a
+        // record the operator's "delete strictly older than N" policy
+        // intended to keep — an irreversible loss of the boundary record;
+        // the same flip on the stale-mark site would mark a long-term
+        // record stale one tick early. Pin the equality keep-arm at all
+        // three sites and bracket each from below (created_at == before-1
+        // must still act) so the cutoff is proven exact, not off by one.
+        const CUTOFF: u64 = 100;
+        let working_at = Uuid::new_v4();
+        let working_below = Uuid::new_v4();
+        let episodic_at = Uuid::new_v4();
+        let episodic_below = Uuid::new_v4();
+        let longterm_at = Uuid::new_v4();
+        let longterm_below = Uuid::new_v4();
+
+        let records = vec![
+            record(working_at, MemoryTier::Working, "working at cutoff", CUTOFF),
+            record(
+                working_below,
+                MemoryTier::Working,
+                "working below",
+                CUTOFF - 1,
+            ),
+            record(
+                episodic_at,
+                MemoryTier::Episodic,
+                "episodic at cutoff",
+                CUTOFF,
+            ),
+            record(
+                episodic_below,
+                MemoryTier::Episodic,
+                "episodic below",
+                CUTOFF - 1,
+            ),
+            record(
+                longterm_at,
+                MemoryTier::LongTerm,
+                "longterm at cutoff",
+                CUTOFF,
+            ),
+            record(
+                longterm_below,
+                MemoryTier::LongTerm,
+                "longterm below",
+                CUTOFF - 1,
+            ),
+        ];
+        // plan_compaction is pure, so the mode only colors `changed`; the
+        // deleted/stale_marked sets are computed independent of mode.
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(CUTOFF),
+                delete_episodic_before_ms: Some(CUTOFF),
+                mark_longterm_stale_before_ms: Some(CUTOFF),
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "boundary-equality pin".into(),
+        };
+
+        let (outcome, _updates) = plan_compaction(&records, &request);
+
+        assert!(
+            !outcome.deleted.contains(&working_at),
+            "a Working record created exactly at delete_working_before_ms must be \
+             kept (created_at < before is strict); a `<` -> `<=` flip would delete it",
+        );
+        assert!(
+            !outcome.deleted.contains(&episodic_at),
+            "an Episodic record created exactly at delete_episodic_before_ms must be \
+             kept (created_at < before is strict); a `<` -> `<=` flip would delete it",
+        );
+        let mut expected_deleted = vec![working_below, episodic_below];
+        expected_deleted.sort();
+        assert_eq!(
+            outcome.deleted, expected_deleted,
+            "only the strictly-below-cutoff working/episodic records may be deleted — \
+             exactly the CUTOFF-1 pair and neither at-cutoff record; this brackets the \
+             `<` delete boundary from both sides so an off-by-one cannot pass",
+        );
+
+        assert!(
+            !outcome.stale_marked.contains(&longterm_at),
+            "a LongTerm record created exactly at mark_longterm_stale_before_ms must NOT \
+             be marked stale (created_at < before is strict); a `<` -> `<=` flip would \
+             mark it one tick early",
+        );
+        assert_eq!(
+            outcome.stale_marked,
+            vec![longterm_below],
+            "only the strictly-below-cutoff LongTerm record may be stale-marked, pinning \
+             the exclusive stale-mark cutoff against an off-by-one",
+        );
+    }
+
+    #[test]
     fn memory_error_display_messages_pin_five_string_variant_format_strings() {
         let worker = format!("{}", MemoryError::Worker("channel closed".into()));
         assert_eq!(

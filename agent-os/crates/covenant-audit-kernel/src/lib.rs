@@ -1461,12 +1461,13 @@ mod imp {
         macro_rules! push_line {
             ($end:expr) => {{
                 let end = $end;
-                let mut trimmed = end;
-                if trimmed > start && bytes[trimmed - 1] == b'\r' {
-                    trimmed -= 1;
-                }
-                if trimmed > start {
-                    lines.push(&bytes[start..trimmed]);
+                if end > start && bytes[end - 1] != b'\r' {
+                    lines.push(&bytes[start..end]);
+                } else if end > start {
+                    let trimmed = end - 1;
+                    if trimmed > start {
+                        lines.push(&bytes[start..trimmed]);
+                    }
                 }
                 start = end + 1;
             }};
@@ -1482,6 +1483,27 @@ mod imp {
                     push_line!(end);
                 }
             }};
+        }
+
+        while i + 1024 <= n {
+            let b: &[u8; 1024] = bytes[i..i + 1024].try_into().expect("1024-byte chunk");
+            handle_mask!(mask64!(b, 0, 16, 32, 48), i);
+            handle_mask!(mask64!(b, 64, 80, 96, 112), i + 64);
+            handle_mask!(mask64!(b, 128, 144, 160, 176), i + 128);
+            handle_mask!(mask64!(b, 192, 208, 224, 240), i + 192);
+            handle_mask!(mask64!(b, 256, 272, 288, 304), i + 256);
+            handle_mask!(mask64!(b, 320, 336, 352, 368), i + 320);
+            handle_mask!(mask64!(b, 384, 400, 416, 432), i + 384);
+            handle_mask!(mask64!(b, 448, 464, 480, 496), i + 448);
+            handle_mask!(mask64!(b, 512, 528, 544, 560), i + 512);
+            handle_mask!(mask64!(b, 576, 592, 608, 624), i + 576);
+            handle_mask!(mask64!(b, 640, 656, 672, 688), i + 640);
+            handle_mask!(mask64!(b, 704, 720, 736, 752), i + 704);
+            handle_mask!(mask64!(b, 768, 784, 800, 816), i + 768);
+            handle_mask!(mask64!(b, 832, 848, 864, 880), i + 832);
+            handle_mask!(mask64!(b, 896, 912, 928, 944), i + 896);
+            handle_mask!(mask64!(b, 960, 976, 992, 1008), i + 960);
+            i += 1024;
         }
 
         while i + 512 <= n {
@@ -1511,12 +1533,13 @@ mod imp {
         }
 
         if start < n {
-            let mut end = n;
-            if end > start && bytes[end - 1] == b'\r' {
-                end -= 1;
-            }
-            if end > start {
-                lines.push(&bytes[start..end]);
+            if bytes[n - 1] != b'\r' {
+                lines.push(&bytes[start..n]);
+            } else {
+                let end = n - 1;
+                if end > start {
+                    lines.push(&bytes[start..end]);
+                }
             }
         }
 

@@ -16490,6 +16490,71 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_repair_requeue_and_force_error_are_mutually_isolated_and_audited() {
+        // `a2a.repair.requeue` and `a2a.repair.force_error` are distinct,
+        // deny-by-default grants: holding one must never authorize the other.
+        // force_error is destructive (it errors a leased task), so a
+        // requeue-only grant reaching it would be a least-privilege break. The
+        // capability gate is the first thing repair_a2a_task does, before any
+        // queue lookup, so the denial is observable without an in-flight task.
+        async fn deny(granted: &str, command: covenant_a2a::A2ARepairCommand, required: &str) {
+            let s = server_with(vec![], "");
+            s.op_respond(Request::GrantCapability {
+                action: granted.into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+
+            let resp = s
+                .op_respond(Request::RepairA2ATask {
+                    request: covenant_a2a::A2ARepairRequest {
+                        task_id: Uuid::new_v4(),
+                        command,
+                        reason: "cross-verb isolation check".into(),
+                    },
+                })
+                .await;
+            match resp {
+                Response::Error { message } => assert!(
+                    message.contains(required) && message.contains("requires capability"),
+                    "a grant of {granted} must not authorize {required}: {message}"
+                ),
+                other => panic!("expected capability denial for {required}, got {other:?}"),
+            }
+
+            let events = s.audit.recent(10).await.unwrap();
+            assert!(
+                events.iter().any(|event| matches!(
+                    &event.kind,
+                    AuditKind::CapabilityCheck { missing_actions, passed: false, .. }
+                        if missing_actions.iter().any(|a| a == required)
+                )),
+                "denial of {required} must be audited as a failed CapabilityCheck"
+            );
+        }
+
+        deny(
+            "a2a.repair.requeue",
+            covenant_a2a::A2ARepairCommand::ForceError {
+                lease_id: None,
+                message: "force".into(),
+            },
+            "a2a.repair.force_error",
+        )
+        .await;
+        deny(
+            "a2a.repair.force_error",
+            covenant_a2a::A2ARepairCommand::Requeue {
+                lease_id: None,
+                duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+            },
+            "a2a.repair.requeue",
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn memory_purge_accepts_matching_scope() {
         let s = server_with(vec![], "");
         let id = Uuid::new_v4();

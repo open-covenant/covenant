@@ -93,6 +93,7 @@ Rules:
 - `task_id` narrows send, receive-admission, response, and repair flows to one task.
 - `lease_id` narrows manual repair to one in-flight lease.
 - `duplicate_risk` narrows `a2a.repair.requeue` posture and should be either `idempotent` or `operator-accepted`; the daemon also accepts the wire spelling `operator_accepted`.
+- Each verb is a distinct action and is matched exactly, so a grant for one verb authorizes no other: `a2a.repair.requeue` and `a2a.repair.force_error` are separate deny-by-default grants, and holding `requeue` never authorizes the destructive `force_error` arm.
 
 ### `audit.*`
 

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-15T15:17:48.986Z",
+  "updatedAt": "2026-06-15T15:37:53.345Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9221,
+    "events": 9225,
     "tasks": 1093,
     "integrated": 1094
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1087,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "self_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "provenance-record-schema-golden-vectors",
+    "state": "self_review",
+    "since": "2026-06-15T15:27:10.736Z"
+  },
   "recent": [
     {
       "at": "2026-06-15T15:13:27.335Z",

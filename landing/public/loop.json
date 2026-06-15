@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T18:38:27.966Z",
+  "updatedAt": "2026-06-15T18:58:31.892Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9254,
-    "tasks": 1096,
-    "integrated": 1097
+    "events": 9257,
+    "tasks": 1097,
+    "integrated": 1098
   },
   "throughput": {
-    "last24h": 10,
-    "last7d": 138,
-    "velocity": 19.7
+    "last24h": 11,
+    "last7d": 139,
+    "velocity": 19.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-15",
-      "count": 10
+      "count": 11
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-15",
-      "total": 1097
+      "total": 1098
     }
   ],
   "states": {
-    "integrated": 1090,
-    "proposed": 1,
-    "blocked": 4,
-    "validation": 1
+    "integrated": 1091,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "capscope-memory-write-scopes",
-    "state": "validation",
-    "since": "2026-06-15T18:38:01.045Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-15T18:55:17.015Z",
+      "task": "capscope-memory-write-scopes",
+      "note": "Pinned memory.write deny-by-default (failure modes #2+#3). Committing on loop/main-track: covenantd test + metrics (README 2836->2837). No p"
+    },
     {
       "at": "2026-06-15T18:29:57.972Z",
       "task": "capscope-tool-call-scoping",
@@ -315,11 +315,6 @@
       "at": "2026-06-13T10:42:33.307Z",
       "task": "memory-compaction-delete-cutoff-tier-isolation-pin",
       "note": "Pinned plan_compaction tier-matched delete cutoffs. Committing as test(covenant-memory)."
-    },
-    {
-      "at": "2026-06-13T10:27:41.034Z",
-      "task": "memory-receipt-backfill-anti-double-bind-pin",
-      "note": "Pushed c64246bf to origin/loop/main-track. Pins match_legacy_receipts_to_memory_records used_memory anti-double-bind (lib.rs:432) — bite-ver"
     }
   ]
 }

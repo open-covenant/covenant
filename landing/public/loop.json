@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T14:57:45.243Z",
+  "updatedAt": "2026-06-15T15:17:48.986Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9216,
-    "tasks": 1092,
-    "integrated": 1093
+    "events": 9221,
+    "tasks": 1093,
+    "integrated": 1094
   },
   "throughput": {
-    "last24h": 6,
-    "last7d": 136,
-    "velocity": 19.4
+    "last24h": 7,
+    "last7d": 137,
+    "velocity": 19.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-15",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-15",
-      "total": 1093
+      "total": 1094
     }
   ],
   "states": {
-    "integrated": 1086,
-    "proposed": 1,
-    "blocked": 4,
-    "self_review": 1
+    "integrated": 1087,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "provenance-privileged-action-query-surface",
-    "state": "self_review",
-    "since": "2026-06-15T14:22:13.822Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-15T15:13:27.335Z",
+      "task": "provenance-privileged-action-query-surface",
+      "note": "Committed b88100a4. IPC operator provenance query (QueryProvenance/ProvenanceActions) over chain-verified audit log; operator-gated, project"
+    },
     {
       "at": "2026-06-15T13:30:38.108Z",
       "task": "provenance-audit-successful-capability-revocation",
@@ -315,11 +315,6 @@
       "at": "2026-06-13T09:54:16.097Z",
       "task": "settlement-receipt-hash-canonical-json-field-order-coverage",
       "note": "Committed 8d4ca277 on loop/main-track. Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-13T09:44:01.042Z",
-      "task": "audit-integrity-report-root-hash-chain-fold-coverage",
-      "note": "Committed 70d84e7f on loop/main-track (README + covenant-audit/src/lib.rs). Pushing to origin/loop/main-track."
     }
   ]
 }

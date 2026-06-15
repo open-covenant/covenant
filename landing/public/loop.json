@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-15T08:56:38.181Z",
+  "updatedAt": "2026-06-15T09:16:42.153Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9183,
+    "events": 9184,
     "tasks": 1088,
     "integrated": 1089
   },
@@ -187,7 +187,7 @@
     "integrated": 1083,
     "proposed": 1,
     "blocked": 3,
-    "self_review": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "provenance-privileged-action-inventory",
-    "state": "self_review",
-    "since": "2026-06-15T08:55:06.564Z"
+    "state": "cross_review",
+    "since": "2026-06-15T09:00:09.618Z"
   },
   "recent": [
     {

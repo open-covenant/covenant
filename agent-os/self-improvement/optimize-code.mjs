@@ -36,6 +36,11 @@ const iters = parseInt(opt("--iters", "1"), 10);
 const attempts = parseInt(opt("--attempts", "3"), 10);
 const round = (n) => Math.round(n * 1000) / 1000;
 
+// Claude CLI model fallback: an unavailable model prints this and exits 0, so
+// detect the string. Resolved working model is cached across attempts in a run.
+const MODEL_UNAVAIL = /issue with the selected model|may not exist or you may not have access/i;
+let claudeModelResolved = null;
+
 function dotenv(name) {
   if (process.env[name]) return process.env[name];
   try {
@@ -270,9 +275,26 @@ ${block}
         const folded = messages
           .map((m) => (m.role === "user" ? m.content : `## Your previous attempt\n\n${m.content}`))
           .join("\n\n");
-        const r = sh("claude", ["-p", folded, "--model", proposerModel, "--dangerously-skip-permissions"], { cwd: scratch });
-        if (!r.ok) throw new Error(`claude proposer failed (attempt ${attempt}): ${r.out.slice(-400)}`);
-        return r.out;
+        // Model fallback: if the preferred model is shut down / access-revoked
+        // the CLI prints "issue with the selected model" and exits 0, so detect
+        // the string, not the exit code. Fall back to opus then the CLI default.
+        // A rate limit is NOT an unavailable model — surface it (don't switch
+        // the account's pool); the round continues with the other proposers.
+        const candidates = claudeModelResolved !== null ? [claudeModelResolved] : [proposerModel, "claude-opus-4-8", ""];
+        let last = "";
+        for (const m of candidates) {
+          const args = m ? ["-p", folded, "--model", m, "--dangerously-skip-permissions"] : ["-p", folded, "--dangerously-skip-permissions"];
+          const r = sh("claude", args, { cwd: scratch });
+          last = r.out;
+          if (MODEL_UNAVAIL.test(r.out)) {
+            console.log(`[${iter + 1}/${iters}] fable model ${m || "(default)"} unavailable — falling back`);
+            continue;
+          }
+          if (!r.ok) throw new Error(`claude proposer failed (attempt ${attempt}, model ${m || "default"}): ${r.out.slice(-400)}`);
+          claudeModelResolved = m;
+          return r.out;
+        }
+        throw new Error(`claude proposer: all model candidates unavailable: ${last.slice(-300)}`);
       },
     },
   ].filter((p) => (p.name !== "grok" || xaiKey) && (p.name !== "codex" || openaiKey));

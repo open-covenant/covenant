@@ -95,6 +95,7 @@ enum ScopeNamespace {
     Identity,
     Chain,
     Settlement,
+    X402,
 }
 
 impl ScopeNamespace {
@@ -119,6 +120,8 @@ impl ScopeNamespace {
             Some(Self::Chain)
         } else if action.starts_with("settlement.") {
             Some(Self::Settlement)
+        } else if action.starts_with("x402.") {
+            Some(Self::X402)
         } else {
             None
         }
@@ -155,6 +158,7 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         ScopeNamespace::Peers | ScopeNamespace::Identity => validate_peer_scope(action, obj),
         ScopeNamespace::Chain => validate_chain_scope(action, obj),
         ScopeNamespace::Settlement => validate_settlement_scope(action, obj),
+        ScopeNamespace::X402 => validate_x402_scope(action, obj),
     }
 }
 
@@ -518,6 +522,35 @@ pub fn settlement_backfill_scope_allows(
     Ok(scope_allows_apply(obj, apply) && scope_allows_before_ms(obj, before_ms))
 }
 
+/// Dispatch-time gate for an outbound x402 paid call. `x402.outbound.pay` is
+/// the one egress whose destination is free-form caller input — the daemon's
+/// `pay_x402` takes `provider`/`endpoint` straight from the request, so a
+/// blanket grant authorizes payment to *any* destination. A `provider`-bound
+/// scope restricts the grant to one destination class; an empty scope, or one
+/// that omits `provider` (or sets it to `null`), keeps the unbounded blanket
+/// behavior. Capabilities are additive, so several destinations are expressed
+/// as several grants — the same shape as per-tool `tool.call.<name>` grants.
+pub fn x402_pay_scope_allows(
+    action: &str,
+    scope: &Value,
+    provider: &str,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "x402.outbound.pay" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    match obj.get("provider").and_then(Value::as_str) {
+        Some(allowed) => Ok(allowed == provider),
+        None => Ok(true),
+    }
+}
+
 /// Dispatch-time gate for the memory-record receipt-backfill mutator. The
 /// action carries the mode (`memory.backfill.apply` vs
 /// `memory.backfill.dry_run`), so a dry-run-only grant cannot satisfy the
@@ -832,6 +865,11 @@ fn validate_settlement_scope(
 ) -> Result<(), PermissionError> {
     optional_bool(action, obj, "apply")?;
     optional_non_negative_integer_or_null(action, obj, "before_ms")?;
+    Ok(())
+}
+
+fn validate_x402_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_non_empty_string_or_null(action, obj, "provider")?;
     Ok(())
 }
 
@@ -3259,6 +3297,80 @@ mod tests {
             0
         )
         .unwrap());
+    }
+
+    #[test]
+    fn x402_pay_scope_allows_unscoped_grant_permits_any_provider() {
+        // An empty scope and a version-only scope are both unbounded: a blanket
+        // x402.outbound.pay grant authorizes payment to any destination. A
+        // regression that treated the version-only scope as a deny-all would
+        // break every existing unscoped grant.
+        for scope in [serde_json::json!({}), serde_json::json!({ "version": 1 })] {
+            assert!(
+                x402_pay_scope_allows("x402.outbound.pay", &scope, "xona").unwrap(),
+                "unscoped grant must permit any provider: {scope}"
+            );
+            assert!(
+                x402_pay_scope_allows("x402.outbound.pay", &scope, "anything-else").unwrap(),
+                "unscoped grant must permit any provider: {scope}"
+            );
+        }
+    }
+
+    #[test]
+    fn x402_pay_scope_allows_binds_grant_to_destination_class() {
+        // A provider-bound scope is the least-privilege case: it authorizes the
+        // named destination class and refuses every other. This is the security
+        // property — an agent granted egress to "xona" cannot pay "evil-corp".
+        let scope = serde_json::json!({ "version": 1, "provider": "xona" });
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &scope, "xona").unwrap());
+        assert!(
+            !x402_pay_scope_allows("x402.outbound.pay", &scope, "evil-corp").unwrap(),
+            "a provider-bound grant must refuse a destination outside its class"
+        );
+        // A null provider is the documented unbounded marker, distinct from an
+        // out-of-class string: it permits any destination, mirroring tool/null.
+        let null_scope = serde_json::json!({ "version": 1, "provider": null });
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &null_scope, "xona").unwrap());
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &null_scope, "evil-corp").unwrap());
+    }
+
+    #[test]
+    fn x402_pay_scope_allows_rejects_action_mismatch() {
+        // The matcher binds only the x402.outbound.pay action. A grant for any
+        // other action string must not satisfy an egress dispatch, even with a
+        // matching provider — a swap that dropped the action guard would let an
+        // unrelated grant authorize outbound payments.
+        let scope = serde_json::json!({ "version": 1, "provider": "xona" });
+        assert!(!x402_pay_scope_allows("x402.outbound.other", &scope, "xona").unwrap());
+        assert!(!x402_pay_scope_allows("tool.call.echo", &scope, "xona").unwrap());
+    }
+
+    #[test]
+    fn x402_pay_scope_allows_propagates_malformed_provider_rejection() {
+        // provider is validated as a non-empty string or null. A non-string or
+        // empty-string provider is a malformed grant the matcher must surface as
+        // an Err (caller fails closed), not silently treat as unbounded.
+        let non_string = serde_json::json!({ "version": 1, "provider": 42 });
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &non_string, "xona").is_err());
+        let empty = serde_json::json!({ "version": 1, "provider": "" });
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &empty, "xona").is_err());
+    }
+
+    #[test]
+    fn validate_x402_scope_routes_and_rejects_bad_provider() {
+        // x402.* must route to validate_x402_scope: a non-string provider is
+        // rejected at grant time, and a valid provider string is accepted.
+        assert!(validate_scope(
+            "x402.outbound.pay",
+            &serde_json::json!({ "version": 1, "provider": 42 })
+        )
+        .is_err());
+        assert!(validate_scope(
+            "x402.outbound.pay",
+            &serde_json::json!({ "version": 1, "provider": "xona" })
+        )
+        .is_ok());
     }
 
     #[test]

@@ -4231,6 +4231,47 @@ impl Server {
         Ok(false)
     }
 
+    /// True if the peer holds a live `x402.outbound.pay` capability whose scope
+    /// admits `provider`. Mirrors [`Self::tool_call_scope_allows`]: an unscoped
+    /// grant admits any destination, a `provider`-bound grant admits only its
+    /// class, and grants are additive (any matching capability suffices). A
+    /// malformed scope surfaces as `Err` so the caller fails closed.
+    async fn x402_pay_scope_allows(
+        &self,
+        action: &str,
+        provider: &str,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
+            match covenant_permissions::x402_pay_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                provider,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(false)
+    }
+
     fn check_ignore(&self, text: String) -> Response {
         let v = self.ignore.check(&text);
         Response::IgnoreReport {
@@ -5868,6 +5909,46 @@ impl Server {
                           Grant it with `covenant capabilities grant x402.outbound.pay`."
                     .into(),
             };
+        }
+
+        // The capability check above admits the holder of any x402.outbound.pay
+        // grant; this scope gate binds the grant to its destination class so a
+        // provider-scoped grant cannot egress to an unlisted destination. It
+        // runs before the dispatch-config check so a denial is auditable even
+        // on a daemon with no funding-key sidecar wired.
+        match self
+            .x402_pay_scope_allows("x402.outbound.pay", &provider, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason =
+                    format!("provider {provider:?} is outside this grant's destination scope");
+                self.record_capability_scope_rejected(
+                    peer,
+                    "x402:pay",
+                    "x402.outbound.pay",
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("x402 dispatch rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    "x402:pay",
+                    "x402.outbound.pay",
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!(
+                        "x402 dispatch rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
         }
 
         let Some(config) = self.x402_dispatch.clone() else {
@@ -57677,6 +57758,70 @@ budget_credits_per_hour = {credits}
                 "error must clearly say 'disabled' so the operator knows to flip the flag: {message}"
             ),
             other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pay_x402_enforces_destination_scope_and_audits_denied_provider() {
+        // A provider-scoped x402.outbound.pay grant is least-privilege egress:
+        // the agent may pay the granted destination class and nothing else. The
+        // scope gate runs before the dispatch-config check, so the denial is
+        // reachable and auditable on a daemon with no funding-key sidecar.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone()).with_x402_dispatch(x402::X402Config {
+            enabled: true,
+            signer_binary: std::path::PathBuf::from("/bin/true"),
+            signer_env: vec![],
+        });
+        grant_scoped_action(
+            &s,
+            "x402.outbound.pay",
+            serde_json::json!({ "version": 1, "provider": "xona" }),
+        )
+        .await;
+
+        // A destination outside the granted class is refused by the scope gate,
+        // not by the budget or signer further down the path.
+        let denied = s
+            .op_respond(Request::PayX402 {
+                provider: "evil-corp".into(),
+                endpoint: "https://evil.test/x".into(),
+                method: "POST".into(),
+                body: None,
+                network: "solana:mainnet".into(),
+                asset: "usdc-sol".into(),
+                per_call_cap: "100000".into(),
+                credits: 8,
+            })
+            .await;
+        match denied {
+            Response::Error { message } => assert!(
+                message.contains("capability scope"),
+                "an out-of-class destination must be refused by the scope gate: {message}"
+            ),
+            other => panic!("expected a scope-rejection Error, got: {other:?}"),
+        }
+
+        // The denial is recorded as CapabilityScopeRejected naming the action,
+        // so an operator reviewing an incident sees the blocked egress.
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "x402.outbound.pay"
+            )),
+            "a scope-denied egress must emit CapabilityScopeRejected: {events:?}"
+        );
+
+        // Positive control: the granted provider ("xona") clears the scope gate
+        // and the dispatch fails further down (no budget capacity), proving the
+        // gate is not a blanket deny — the error must NOT be a scope rejection.
+        match s.op_respond(pay_x402_req()).await {
+            Response::Error { message } => assert!(
+                !message.contains("capability scope"),
+                "the granted provider must clear the scope gate: {message}"
+            ),
+            _ => {}
         }
     }
 

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-15T17:38:16.375Z",
+  "updatedAt": "2026-06-15T17:58:20.298Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9233,
+    "events": 9236,
     "tasks": 1094,
     "integrated": 1095
   },
@@ -187,7 +187,7 @@
     "integrated": 1088,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "validation": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "capscope-a2a-verb-scopes",
-    "state": "in_progress",
-    "since": "2026-06-15T17:12:04.087Z"
+    "state": "validation",
+    "since": "2026-06-15T17:46:09.510Z"
   },
   "recent": [
     {

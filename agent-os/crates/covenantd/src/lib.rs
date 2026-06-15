@@ -46748,6 +46748,45 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn submit_intent_rejects_when_memory_write_capability_absent_and_audits() {
+        // `memory.write` is deny-by-default: dispatch persists the task
+        // summary to memory, so an agent that can otherwise handle the task
+        // (its tool capability is granted) is still blocked when `memory.write`
+        // is absent. The gate runs before the agent-capability check, so the
+        // denial is specifically the missing memory.write, audited as a failed
+        // CapabilityCheck.
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "summary",
+        );
+        grant_action(&s, "tool.web_search").await;
+
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers".into(),
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("requires capability") && message.contains("memory.write"),
+                "absent memory.write must block dispatch: {message}"
+            ),
+            other => panic!("expected memory.write capability denial, got {other:?}"),
+        }
+
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                AuditKind::CapabilityCheck { missing_actions, passed: false, .. }
+                    if missing_actions.iter().any(|a| a == "memory.write")
+            )),
+            "the absent-capability denial must be audited as a failed CapabilityCheck"
+        );
+    }
+
+    #[tokio::test]
     async fn grant_capability_signs_and_persists() {
         let s = server_with(vec![], "");
         let resp = s

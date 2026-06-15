@@ -100,6 +100,30 @@ describe('Connector dispatch flow', () => {
     expect(result.proof.declared_policy.exec.argv0Allow).toEqual(['pnpm']);
   });
 
+  it('finalizes via the poll watchdog when the SSE stream hangs', async () => {
+    const daemon = new FakeDaemon();
+    daemon.status = 'running';
+    // Simulate a half-open SSE that never delivers the terminal close.
+    daemon.streamEvents = () => new Promise<void>(() => {});
+    const transport = new StubTransport();
+    const connector = new Connector(daemon, transport, {
+      maxConcurrentDispatch: 2,
+      defaultDeadlineMs: 60_000,
+      manifestCapabilities: CAPS,
+      now: () => 1_000,
+      terminalPollMs: 5,
+    });
+    await connector.start();
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'hang', agent_id: 'PK', intent: { text: 'do work' } });
+    await flush();
+    expect(transport.sent.find((f) => f.type === 'result')).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 30));
+    const result = transport.sent.find((f) => f.type === 'result');
+    expect(result).toBeDefined();
+    expect((result as { status: string }).status).toBe('success');
+    expect(connector.inFlight).toBe(0);
+  });
+
   it('rejects dispatch with empty intent text and never calls the daemon', async () => {
     const daemon = new FakeDaemon();
     const submit = vi.spyOn(daemon, 'submitIntent');

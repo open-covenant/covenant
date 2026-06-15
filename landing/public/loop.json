@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T17:58:20.298Z",
+  "updatedAt": "2026-06-15T18:18:24.194Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9236,
-    "tasks": 1094,
-    "integrated": 1095
+    "events": 9242,
+    "tasks": 1095,
+    "integrated": 1096
   },
   "throughput": {
-    "last24h": 8,
-    "last7d": 136,
-    "velocity": 19.4
+    "last24h": 9,
+    "last7d": 137,
+    "velocity": 19.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-15",
-      "count": 8
+      "count": 9
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-15",
-      "total": 1095
+      "total": 1096
     }
   ],
   "states": {
-    "integrated": 1088,
+    "integrated": 1089,
     "proposed": 1,
     "blocked": 4,
-    "validation": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "capscope-a2a-verb-scopes",
-    "state": "validation",
-    "since": "2026-06-15T17:46:09.510Z"
+    "task": "capscope-tool-call-scoping",
+    "state": "in_progress",
+    "since": "2026-06-15T18:08:22.031Z"
   },
   "recent": [
+    {
+      "at": "2026-06-15T18:01:00.494Z",
+      "task": "capscope-a2a-verb-scopes",
+      "note": "Committed 742018df on loop/main-track: test(a2a) mutual isolation of a2a.repair.requeue vs force_error + docs/capabilities.md exact-match cl"
+    },
     {
       "at": "2026-06-15T16:57:41.369Z",
       "task": "provenance-record-schema-golden-vectors",
@@ -315,11 +320,6 @@
       "at": "2026-06-13T10:21:39.757Z",
       "task": "memory-compaction-idempotent-stale-mark-skip-pin",
       "note": "Pushed 2eff2ae1 to origin/loop/main-track. Pins plan_compaction idempotent-skip else arm (lib.rs:356) — bite-verified: test fails when guard"
-    },
-    {
-      "at": "2026-06-13T10:03:04.539Z",
-      "task": "settlement-merkle-four-leaf-two-level-across-pair-order-cove",
-      "note": "Committed a7352a7b on loop/main-track. Pushing."
     }
   ]
 }

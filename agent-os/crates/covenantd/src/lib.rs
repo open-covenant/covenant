@@ -1529,9 +1529,14 @@ impl Server {
             "witness-loop",
             "audit",
             epoch_ms() / 1000,
+        )
+        .with_subject(
+            (!state.config.agent_asset.is_empty()).then(|| state.config.agent_asset.clone()),
+            (!state.config.agent_registration.is_empty())
+                .then(|| state.config.agent_registration.clone()),
         );
         let request = covenant_metaplex::SignerRequest::AttestAuditRoot {
-            payload,
+            payload: Box::new(payload),
             asset: None,
             // The sidecar resolves the collection from its own env
             // (COVENANT_METAPLEX_COLLECTION), same as tool-driven writes.

@@ -184,20 +184,24 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
             if asset.is_some() {
                 bail!("append-to-existing-asset is not supported yet; omit `asset`");
             }
-            covenant_metaplex::validate_root_hash_hex(&payload.root_hash_hex)
+            covenant_metaplex::validate_root_hash_hex(&payload.response_hash)
                 .map_err(|e| anyhow!("{e}"))?;
             let collection = match req_collection {
                 Some(c) => Some(parse_pubkey(c).context("request collection")?),
                 None => collection_from_env()?,
             };
-            let data = serde_json::to_vec(payload).context("encode attestation payload")?;
+            // Stamp the validator with the key that actually signs, so the
+            // on-chain record can't claim an authority the daemon doesn't hold.
+            let mut payload = payload.clone();
+            payload.validator = payer.pubkey().to_string();
+            let data = serde_json::to_vec(&payload).context("encode attestation payload")?;
             let asset = Keypair::new();
             let create_ix = CreateV2Builder::new()
                 .asset(asset.pubkey())
                 .payer(payer.pubkey())
                 .collection(collection)
                 .data_state(DataState::AccountState)
-                .name(truncate(&format!("Covenant root {}", payload.release_target)))
+                .name(truncate(&format!("Covenant root {}", payload.covenant.release_target)))
                 .uri(String::new())
                 .external_plugin_adapters(vec![ExternalPluginAdapterInitInfo::AppData(
                     AppDataInitInfo {

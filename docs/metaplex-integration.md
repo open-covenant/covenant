@@ -74,44 +74,66 @@ COVENANT_METAPLEX_RPC_URL=                      # required for writes
 COVENANT_METAPLEX_SIGNER_BIN=                   # path to covenant-metaplex-signer
 COVENANT_METAPLEX_KEYPAIR=                      # minting keypair; read by the sidecar only
 COVENANT_METAPLEX_COLLECTION=                   # MPL Core collection to mint into
+COVENANT_METAPLEX_AGENT_ASSET=                  # this agent's identity asset (attestation subject)
+COVENANT_METAPLEX_AGENT_REGISTRATION=           # its 014 registry PDA (attestation subject)
 COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS=0     # refuse writes above this cost
 COVENANT_METAPLEX_ALLOW=                        # tool-slug allowlist; empty = all
 COVENANT_METAPLEX_AUTO_ATTEST=false             # anchor changed audit roots on a timer
 COVENANT_METAPLEX_ATTEST_INTERVAL_SECS=900
 ```
 
-## Attestation schema — `covenant.audit-root.appdata.v1`
+## Attestation schema — `covenant.audit-root.appdata.v2`
 
 Each attestation is a fresh MPL Core asset in the Covenant collection whose
-**AppData** external plugin holds one JSON document:
+**AppData** external plugin holds one JSON document, shaped as an
+[ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) validation response (a
+`validator` publishing a `responseHash` commitment about a `subject` agent)
+so any wallet/explorer decodes it without Covenant-specific code:
 
 ```json
 {
-  "schema": "covenant.audit-root.appdata.v1",
-  "rootHashHex": "7c375d0e0a749966541c7543b87b76f61fd4b64d41ff12473d68f3ff45caef26",
-  "releaseTarget": "covenant",
-  "releaseSubject": "witness-loop",
-  "releaseScope": "audit",
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#validation-v1",
+  "schema": "covenant.audit-root.appdata.v2",
+  "subject": {
+    "registry": "mpl-agent-014",
+    "asset": "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH",
+    "registration": "D3ezfMUeBuXQjdDkKmiY9mHeQxARxsEgrbjRgtPWA14g"
+  },
+  "validator": "96GsGo69kVfPZffudCexfnsSi5EuhAyd278MuJPwzGdu",
+  "hashAlg": "sha256-merkle",
+  "responseHash": "7c375d0e0a749966541c7543b87b76f61fd4b64d41ff12473d68f3ff45caef26",
+  "tag": "audit",
+  "covenant": {
+    "releaseTarget": "covenant",
+    "releaseSubject": "witness-loop",
+    "releaseScope": "audit"
+  },
   "recordedAt": 1781078761
 }
 ```
 
 | Field | Meaning |
 |---|---|
-| `schema` | Always `covenant.audit-root.appdata.v1`. Bumped if the field set changes. |
-| `rootHashHex` | The agent's audit-chain head: 64 lowercase hex chars (SHA-256). |
-| `releaseTarget` / `releaseSubject` / `releaseScope` | Identifiers naming what the root covers — never audit-log contents. |
+| `type` | ERC-8004 validation discriminator; tells a generic reader how to decode the envelope. |
+| `schema` | Always `covenant.audit-root.appdata.v2`. Bumped if the field set changes. |
+| `subject` | The agent this attests to: 014 `registry` slug, identity `asset`, `registration` PDA. `asset`/`registration` are omitted when the daemon isn't configured with them. |
+| `validator` | The attesting authority, stamped by the signer with the key that actually signs. Equals the AppData `data_authority`. |
+| `hashAlg` | Always `sha256-merkle`. ERC-8004 commitments are keccak256 `bytes32`; this declares ours is a SHA-256 merkle root. |
+| `responseHash` | The agent's audit-chain head: 64 lowercase hex chars. |
+| `tag` | ERC-8004 categorization; mirrors `covenant.releaseScope`. |
+| `covenant` | Domain identifiers naming what the root covers — never audit-log contents. |
 | `recordedAt` | Unix seconds, stamped by the daemon. |
 
 Notes for consumers:
 
 - The on-chain bytes are exactly the JSON above (camelCase). Some DAS
-  indexers re-case keys when indexing (Helius returns `root_hash_hex`);
+  indexers re-case keys when indexing (Helius returns `response_hash`);
   accept both.
 - **Authorship is a chain fact, not a payload claim.** MPL Core only lets
-  the AppData `data_authority` write the data. An attestation is
-  Covenant-authored iff that authority is the Covenant attestation
-  authority listed above.
+  the AppData `data_authority` write the data, and the signer stamps
+  `validator` with that same key. An attestation is Covenant-authored iff
+  that authority is the Covenant attestation authority listed above —
+  `validator` is a convenience mirror, not the source of trust.
 
 ### Verifying an attestation
 
@@ -126,7 +148,7 @@ Notes for consumers:
    ([`/audit/events.chain.jsonl`](https://opencovenant.org/audit/events.chain.jsonl)),
    then recompute: `event_hash = SHA-256(event line)`,
    `chain_hash = SHA-256(previous_chain_hash + "\n" + event_hash)` (first
-   `previous` is 64 zeros). The attested `rootHashHex` must equal one of the
+   `previous` is 64 zeros). The attested `responseHash` must equal one of the
    recomputed `chain_hash` values. [opencovenant.org/agents](https://opencovenant.org/agents)
    runs exactly this in the browser.
 4. **Registry binding** (identity assets) — derive
@@ -136,7 +158,8 @@ Notes for consumers:
 ### Relation to `mpl-agent-validation`
 
 The registry's validation program (`VALREG…`) is not yet deployed. Its
-design carries validation semantics in AppData payloads — the layer this
-schema already occupies. When it ships, Covenant attestations migrate onto
-it with the same payload; the schema is deliberately registry-shaped so
-that migration is a re-anchor, not a redesign.
+design carries the same validation semantics this payload already encodes
+(subject agent, validator, response commitment). When it ships, Covenant
+attestations migrate onto it with the same fields; the v2 envelope is
+deliberately ERC-8004 validation-shaped so that migration is a re-anchor,
+not a redesign.

@@ -67,6 +67,15 @@ pub struct MetaplexConfig {
     /// grouped under. Empty means no collection pin.
     #[serde(default)]
     pub collection: String,
+    /// This agent's MPL Core identity asset. Recorded as the subject of
+    /// every attestation so a reader resolves it back to the agent. Empty
+    /// means attestations carry the registry slug only.
+    #[serde(default)]
+    pub agent_asset: String,
+    /// The agent identity's 014 registry record (PDA), paired with
+    /// `agent_asset` as the attestation subject.
+    #[serde(default)]
+    pub agent_registration: String,
     /// Per-action ceiling in lamports. A signer request whose estimated
     /// cost (rent + protocol fee) exceeds this is refused before signing.
     /// `0` defers to the sidecar's built-in cap.
@@ -91,6 +100,8 @@ impl Default for MetaplexConfig {
             das_url: String::new(),
             signer_binary: String::new(),
             collection: String::new(),
+            agent_asset: String::new(),
+            agent_registration: String::new(),
             per_action_cap_lamports: 0,
             allow: None,
         }
@@ -118,6 +129,8 @@ impl MetaplexConfig {
             das_url: env("COVENANT_METAPLEX_DAS_URL").unwrap_or_default(),
             signer_binary: env("COVENANT_METAPLEX_SIGNER_BIN").unwrap_or_default(),
             collection: env("COVENANT_METAPLEX_COLLECTION").unwrap_or_default(),
+            agent_asset: env("COVENANT_METAPLEX_AGENT_ASSET").unwrap_or_default(),
+            agent_registration: env("COVENANT_METAPLEX_AGENT_REGISTRATION").unwrap_or_default(),
             per_action_cap_lamports: env("COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),

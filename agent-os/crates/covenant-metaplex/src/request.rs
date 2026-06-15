@@ -10,7 +10,21 @@ use serde::{Deserialize, Serialize};
 
 /// Schema tag written alongside an attestation so DAS consumers can
 /// decode the AppData payload. Bump the version if the field set changes.
-pub const ATTESTATION_SCHEMA: &str = "covenant.audit-root.appdata.v1";
+pub const ATTESTATION_SCHEMA: &str = "covenant.audit-root.appdata.v2";
+
+/// ERC-8004 validation discriminator. A generic reader can decode the
+/// envelope as a validation attestation about an agent without any
+/// Covenant-specific code; the MPL Agent validation registry is shaped
+/// the same way (see [`crate::config::MPL_AGENT_VALIDATION_PROGRAM_ID`]).
+pub const ATTESTATION_TYPE: &str = "https://eips.ethereum.org/EIPS/eip-8004#validation-v1";
+
+/// Construction of [`AttestationPayload::response_hash`]. Declared
+/// explicitly because ERC-8004 commitments are keccak256 `bytes32`; a
+/// reader must know ours is a SHA-256 merkle root instead.
+pub const ATTESTATION_HASH_ALG: &str = "sha256-merkle";
+
+/// Registry the attestation subject lives in.
+pub const SUBJECT_REGISTRY: &str = "mpl-agent-014";
 
 /// Validate a 32-byte audit/merkle root in its on-chain wire form: exactly
 /// 64 lowercase ASCII hex characters.
@@ -56,40 +70,106 @@ pub fn validate_registration_uri(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// JSON payload written into an MPL Core AppData plugin as a Covenant
-/// attestation. Mirrors the daemon's audit-root attestation envelope:
-/// identifiers and the 32-byte root only, never audit-log contents.
-/// Stored as a JSON-schema AppData plugin, so DAS indexes it as JSON and
-/// any wallet/explorer can read it without Covenant infrastructure.
+/// What the attestation is about: the agent's on-chain identity in the
+/// MPL Agent (014) registry. Mirrors ERC-8004's `agentId` subject so a
+/// reader resolves the attestation back to the agent it covers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct AttestationPayload {
-    /// Always [`ATTESTATION_SCHEMA`]. Lets a reader know how to decode.
-    pub schema: String,
-    /// 32-byte audit/merkle root as lowercase hex (64 chars).
-    pub root_hash_hex: String,
+pub struct AttestationSubject {
+    /// Always [`SUBJECT_REGISTRY`].
+    pub registry: String,
+    /// The agent identity's MPL Core asset, when the daemon knows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    /// The 014 registry record (PDA) bound to that asset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registration: Option<String>,
+    /// ERC-8004 numeric agent id, when one exists. Solana identities are
+    /// keyed by asset/PDA, so this is usually `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+}
+
+/// Covenant-domain identifiers naming what the root covers. Nested so the
+/// outer envelope stays standard; never carries audit-log contents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CovenantRelease {
     pub release_target: String,
     pub release_subject: String,
     pub release_scope: String,
+}
+
+/// JSON payload written into an MPL Core AppData plugin as a Covenant
+/// attestation, shaped as an ERC-8004 validation response: a `validator`
+/// publishing a `responseHash` commitment about a `subject` agent. Stored
+/// as a JSON-schema AppData plugin, so DAS indexes it as JSON and any
+/// wallet/explorer can read it without Covenant infrastructure.
+/// Identifiers and the 32-byte root only, never audit-log contents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AttestationPayload {
+    /// Always [`ATTESTATION_TYPE`].
+    #[serde(rename = "type")]
+    pub r#type: String,
+    /// Always [`ATTESTATION_SCHEMA`].
+    pub schema: String,
+    /// The agent this attests to.
+    pub subject: AttestationSubject,
+    /// The attesting authority. Stamped by the signer sidecar with its own
+    /// data-authority pubkey, so it always reflects the key that signed
+    /// rather than anything the daemon claimed; empty until then.
+    pub validator: String,
+    /// Always [`ATTESTATION_HASH_ALG`].
+    pub hash_alg: String,
+    /// 32-byte audit/merkle root as lowercase hex (64 chars): the ERC-8004
+    /// `responseHash` commitment.
+    pub response_hash: String,
+    /// ERC-8004 categorization tag; mirrors [`CovenantRelease::release_scope`].
+    pub tag: String,
+    /// Covenant-domain identifiers.
+    pub covenant: CovenantRelease,
+    /// Unix seconds, stamped by the daemon.
     pub recorded_at: u64,
 }
 
 impl AttestationPayload {
     pub fn new(
-        root_hash_hex: impl Into<String>,
+        response_hash: impl Into<String>,
         release_target: impl Into<String>,
         release_subject: impl Into<String>,
         release_scope: impl Into<String>,
         recorded_at: u64,
     ) -> Self {
+        let release_scope = release_scope.into();
         Self {
+            r#type: ATTESTATION_TYPE.to_string(),
             schema: ATTESTATION_SCHEMA.to_string(),
-            root_hash_hex: root_hash_hex.into(),
-            release_target: release_target.into(),
-            release_subject: release_subject.into(),
-            release_scope: release_scope.into(),
+            subject: AttestationSubject {
+                registry: SUBJECT_REGISTRY.to_string(),
+                asset: None,
+                registration: None,
+                agent_id: None,
+            },
+            validator: String::new(),
+            hash_alg: ATTESTATION_HASH_ALG.to_string(),
+            response_hash: response_hash.into(),
+            tag: release_scope.clone(),
+            covenant: CovenantRelease {
+                release_target: release_target.into(),
+                release_subject: release_subject.into(),
+                release_scope,
+            },
             recorded_at,
         }
+    }
+
+    /// Bind the attestation to the agent identity it covers: `asset` is the
+    /// identity's MPL Core asset, `registration` its 014 registry PDA.
+    pub fn with_subject(mut self, asset: Option<String>, registration: Option<String>) -> Self {
+        self.subject.asset = asset;
+        self.subject.registration = registration;
+        self
     }
 }
 
@@ -102,7 +182,7 @@ pub enum SignerRequest {
     /// mints a fresh attestation asset; `Some(_)` appends to an existing
     /// one.
     AttestAuditRoot {
-        payload: AttestationPayload,
+        payload: Box<AttestationPayload>,
         #[serde(default)]
         asset: Option<String>,
         #[serde(default)]
@@ -142,15 +222,42 @@ mod tests {
     #[test]
     fn attest_request_round_trips_tagged() {
         let req = SignerRequest::AttestAuditRoot {
-            payload: AttestationPayload::new("a".repeat(64), "v0.1.0", "covenant", "audit", 1_700_000_000),
+            payload: Box::new(AttestationPayload::new(
+                "a".repeat(64),
+                "v0.1.0",
+                "covenant",
+                "audit",
+                1_700_000_000,
+            )),
             asset: None,
             collection: Some("Coll1111111111111111111111111111111111111111".into()),
         };
         let wire = serde_json::to_value(&req).unwrap();
         assert_eq!(wire["action"], "attest-audit-root");
-        assert_eq!(wire["payload"]["schema"], ATTESTATION_SCHEMA);
+        let p = &wire["payload"];
+        assert_eq!(p["schema"], ATTESTATION_SCHEMA);
+        assert_eq!(p["type"], ATTESTATION_TYPE);
+        assert_eq!(p["hashAlg"], ATTESTATION_HASH_ALG);
+        assert_eq!(p["responseHash"], "a".repeat(64));
+        assert_eq!(p["tag"], "audit");
+        assert_eq!(p["subject"]["registry"], SUBJECT_REGISTRY);
+        assert_eq!(p["covenant"]["releaseTarget"], "v0.1.0");
         let back: SignerRequest = serde_json::from_value(wire).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn with_subject_binds_agent_identity_and_omits_unset() {
+        let p = AttestationPayload::new("b".repeat(64), "covenant", "witness-loop", "audit", 1)
+            .with_subject(Some("Asset111".into()), Some("Pda111".into()));
+        let wire = serde_json::to_value(&p).unwrap();
+        assert_eq!(wire["subject"]["asset"], "Asset111");
+        assert_eq!(wire["subject"]["registration"], "Pda111");
+        assert!(wire["subject"].get("agentId").is_none(), "unset subject fields omitted");
+        let bare = AttestationPayload::new("c".repeat(64), "t", "s", "sc", 2);
+        let bw = serde_json::to_value(&bare).unwrap();
+        assert!(bw["subject"].get("asset").is_none());
+        assert_eq!(bw["validator"], "", "validator empty until the signer stamps it");
     }
 
     #[test]

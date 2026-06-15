@@ -178,6 +178,8 @@ pub fn metaplex_tool(
             slug,
             name: format!("{TOOL_PREFIX}{slug}"),
             collection: config.collection.clone(),
+            agent_asset: non_empty(&config.agent_asset),
+            agent_registration: non_empty(&config.agent_registration),
             signer,
         }) as Arc<dyn Tool>);
     }
@@ -247,6 +249,8 @@ struct WriteTool {
     slug: &'static str,
     name: String,
     collection: String,
+    agent_asset: Option<String>,
+    agent_registration: Option<String>,
     signer: Arc<dyn MetaplexSigner>,
 }
 
@@ -265,12 +269,13 @@ impl WriteTool {
                     args.get("recordedAt").and_then(Value::as_u64).ok_or_else(|| {
                         ToolError::InvalidArguments("recordedAt (integer) is required".into())
                     })?,
-                );
+                )
+                .with_subject(self.agent_asset.clone(), self.agent_registration.clone());
                 // `asset` (append to an existing attestation asset) is not
                 // wired yet — v1 always mints a fresh asset, so we never
                 // pass one and never advertise the arg.
                 Ok(SignerRequest::AttestAuditRoot {
-                    payload,
+                    payload: Box::new(payload),
                     asset: None,
                     collection: if self.collection.is_empty() {
                         opt_str_arg(args, "collection")
@@ -336,6 +341,10 @@ fn opt_str_arg(args: &Value, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+fn non_empty(s: &str) -> Option<String> {
+    (!s.is_empty()).then(|| s.to_string())
 }
 
 fn das_err(e: crate::das::DasError) -> ToolError {

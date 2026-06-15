@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-15T09:56:49.691Z",
+  "updatedAt": "2026-06-15T10:16:53.318Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9189,
+    "events": 9192,
     "tasks": 1089,
     "integrated": 1091
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1084,
-    "proposed": 2,
-    "blocked": 3
+    "proposed": 1,
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "provenance-approver-and-rule-on-approval-records",
+    "state": "in_progress",
+    "since": "2026-06-15T10:05:16.281Z"
+  },
   "recent": [
     {
       "at": "2026-06-15T09:53:21.587Z",

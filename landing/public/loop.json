@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-15T14:17:37.715Z",
+  "updatedAt": "2026-06-15T14:37:41.460Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9215,
+    "events": 9216,
     "tasks": 1092,
     "integrated": 1093
   },
@@ -187,7 +187,7 @@
     "integrated": 1086,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "provenance-privileged-action-query-surface",
-    "state": "in_progress",
-    "since": "2026-06-15T14:04:26.584Z"
+    "state": "self_review",
+    "since": "2026-06-15T14:22:13.822Z"
   },
   "recent": [
     {

@@ -4,28 +4,28 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // intent_result envelope type-level pin line-ref drift guard.
-// docs/ipc-and-http-gateway.md cites three inner assertion ranges
-// inside intent_result_json_pins_top_level_schema:
-//
-//   - line 235 cites `intent_id` (string) type pin.
-//   - line 236 cites `status` (string) type pin.
-//   - line 239 cites `settlement` (object or null) type pin.
+// docs/ipc-and-http-gateway.md cites inner assertion ranges inside
+// intent_result_json_pins_top_level_schema for the intent_id,
+// settlement, and sources fields. The `status` and `text` fields each
+// carry a dedicated per-field validator
+// (validate-intent-result-status-type-level-pin-line-refs.mjs and
+// validate-intent-result-text-type-level-pin-line-refs.mjs), so they
+// are intentionally absent from the targets below.
 //
 // The existing validate-intent-result-line-refs.mjs covers the helper
 // fn, renders test, and pins test declaration lines, but not the
-// inner type-level selector ranges. The intent_id and status cites
-// were stale by ~222 lines before this slice (they pointed into the
-// intents_resume_ok_json_pins_top_level_schema body). The settlement
+// inner type-level selector ranges. The intent_id cite was stale by
+// ~222 lines at first (it pointed into the
+// intents_resume_ok_json_pins_top_level_schema body); the settlement
 // cite was already current.
 //
 // The validator scopes each lookup to the brace-balanced
 // `intent_result_json_pins_top_level_schema` fn body so the same
 // selectors inside intents_resume_ok/intents_resume_error/sibling tests
-// cannot contaminate the result. Each target declares its own range
-// convention: intent_id and status use assert!-opener-to-closer (the
-// 4-line shape preserved from their original cites), while settlement
-// uses selector-to-closer (the 3-line shape preserved from its
-// original cite).
+// cannot contaminate the result. intent_id uses the assert!-opener-to-
+// closer convention (the 4-line shape preserved from its original
+// cite); settlement and sources fall through to the same opener default
+// per their cited ranges.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -49,16 +49,6 @@ const targets = [
     docsLabel: "intent_result.intent_id type-level pin citation",
     docsTemplate:
       "Pinned as a string by the schema test (`main.rs:N-M`) — never a byte array or struct.",
-  },
-  {
-    field: "status",
-    selector: 'value["status"].is_string(),',
-    convention: "assert-opener",
-    docsRegex:
-      /- `status` \(string\): the outcome status \(e\.g\., `"ok"`\)\. The string shape is pinned by `main\.rs:(\d+)-(\d+)`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface\./,
-    docsLabel: "intent_result.status type-level pin citation",
-    docsTemplate:
-      "The string shape is pinned by `main.rs:N-M`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.",
   },
   {
     field: "settlement",

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-15T20:18:48.154Z",
+  "updatedAt": "2026-06-15T20:38:52.076Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9260,
+    "events": 9263,
     "tasks": 1097,
     "integrated": 1098
   },
@@ -187,7 +187,7 @@
     "integrated": 1091,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "validation": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "capscope-gateway-egress-scopes",
-    "state": "in_progress",
-    "since": "2026-06-15T19:10:03.344Z"
+    "state": "validation",
+    "since": "2026-06-15T20:38:14.949Z"
   },
   "recent": [
     {

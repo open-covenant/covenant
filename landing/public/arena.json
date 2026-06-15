@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-06-15T07:24:59.892Z",
+  "updatedAt": "2026-06-15T15:55:06.776Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
@@ -10,7 +10,7 @@
     "Claude": 8,
     "Grok": 0,
     "Codex": 4,
-    "rejectedRounds": 6
+    "rejectedRounds": 7
   },
   "curve": [
     {
@@ -127,6 +127,46 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k27",
+      "display": "Round 18",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.559,
+          "incumbent": 6.555,
+          "gain": 0.004,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0.004 < margin 0.005"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1, model claude-fable-5): Claude Fable 5 is currently unavailable. Learn more: https://www."
+        }
+      ]
+    },
     {
       "round": "k26",
       "display": "Round 17",

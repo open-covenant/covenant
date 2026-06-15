@@ -363,6 +363,35 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = {
+        let cfg = covenant_metaplex::MetaplexConfig::from_env();
+        if !cfg.enabled {
+            server
+        } else if cfg.reads_enabled() || cfg.writes_enabled() {
+            info!(
+                cluster = %cfg.cluster,
+                reads = cfg.reads_enabled(),
+                writes = cfg.writes_enabled(),
+                "metaplex profile enabled"
+            );
+            if cfg.writes_enabled() && std::env::var("COVENANT_METAPLEX_KEYPAIR").is_err() {
+                tracing::warn!(
+                    "metaplex writes are configured but COVENANT_METAPLEX_KEYPAIR is unset; \
+                     write tools will fail until the minting keypair path is provided"
+                );
+            }
+            server.with_metaplex(covenantd::metaplex::MetaplexState::new(cfg))
+        } else {
+            tracing::warn!(
+                "COVENANT_METAPLEX_ENABLED is set but neither reads \
+                 (COVENANT_METAPLEX_DAS_URL) nor writes \
+                 (COVENANT_METAPLEX_SIGNER_BIN + COVENANT_METAPLEX_RPC_URL) are \
+                 configured; metaplex profile disabled"
+            );
+            server
+        }
+    };
+
     server
         .register_agent_budgets()
         .await
@@ -395,6 +424,43 @@ async fn main() -> Result<()> {
     );
     let projection_tick_handle =
         covenantd::spawn_projection_tick_driver(server.clone(), projection_tick);
+
+    // Autonomous SAP audit-root anchoring (opt-in, default off). When on,
+    // the daemon anchors its audit-integrity root to the SAP ledger on a
+    // timer, but only when the root has changed — so it never re-pays for
+    // an unchanged root. No-op when the SAP bridge is disabled.
+    let sap_attest = covenantd::sap_attest_config_from_env();
+    let sap_attest_handle = if sap_attest.enabled {
+        info!(
+            interval_secs = sap_attest.interval.as_secs(),
+            "sap auto-attest driver enabled (anchors changed audit roots to SAP)"
+        );
+        Some(covenantd::spawn_sap_attest_driver(
+            server.clone(),
+            sap_attest,
+        ))
+    } else {
+        None
+    };
+
+    // Autonomous Metaplex audit-root anchoring (opt-in, default off). The
+    // second anchor: the same changed audit root is also written as an MPL
+    // Core AppData attestation, DAS-indexed and discoverable ecosystem-wide.
+    // Independent of the SAP driver — separate flag, interval, and last-root
+    // tracking. No-op when the Metaplex write surface is not configured.
+    let metaplex_attest = covenantd::metaplex_attest_config_from_env();
+    let metaplex_attest_handle = if metaplex_attest.enabled {
+        info!(
+            interval_secs = metaplex_attest.interval.as_secs(),
+            "metaplex auto-attest driver enabled (anchors changed audit roots to MPL Core AppData)"
+        );
+        Some(covenantd::spawn_metaplex_attest_driver(
+            server.clone(),
+            metaplex_attest,
+        ))
+    } else {
+        None
+    };
 
     // Fold live Hermes runtime traces into the audit chain as they stream in
     // (only when COVENANT_LIVE_TRACE=1; otherwise traces fold at run end).
@@ -492,6 +558,12 @@ async fn main() -> Result<()> {
         handle.abort();
     }
     projection_tick_handle.abort();
+    if let Some(handle) = sap_attest_handle {
+        handle.abort();
+    }
+    if let Some(handle) = metaplex_attest_handle {
+        handle.abort();
+    }
     if let Some(h) = runtime_event_drainer_handle {
         h.abort();
     }

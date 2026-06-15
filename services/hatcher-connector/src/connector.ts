@@ -4,8 +4,8 @@
 // are all verified (daemon.ts); the Hatcher side is behind HatcherTransport so
 // this logic is testable today with StubTransport.
 
-import { DaemonUnreachableError, type DaemonClient, type AgentEvent } from './daemon.js';
-import { mapManifest, baselineGrants, type ConsentPolicy } from './capabilities.js';
+import { DaemonUnreachableError, type DaemonClient, type AgentEvent, type GrantRequest } from './daemon.js';
+import { mapManifest, mapMeshGrants, baselineGrants, type ConsentPolicy } from './capabilities.js';
 import type { ManifestCapability } from './manifest.js';
 import type { HatcherTransport, InboundFrame } from './transport.js';
 
@@ -24,6 +24,10 @@ interface ActiveDispatch {
   events: AgentEvent[];
   abort: AbortController;
   policy?: ConsentPolicy;
+  // Covenant grants minted for this dispatch — echoed into the proof's capability_grants.
+  grants?: GrantRequest[];
+  // Hatcher's intent.context, carried into the proof for the auditable task record.
+  context?: Record<string, unknown>;
   // The IntentResult from the submit response — used as the proof result for the
   // synchronous fast path, where GET /intents/:id/result 404s after the fact.
   submitResult?: unknown;
@@ -83,10 +87,18 @@ export class Connector {
     // manifest contributes the enforced tool.call.<name>/a2a grants. filesystem/
     // terminal/browser are sandbox+audit governed (policy), not token grants.
     const deadline = frame.deadline_ms ?? this.now() + this.opts.defaultDeadlineMs;
-    const { grants, policy } = mapManifest(this.opts.manifestCapabilities, deadline);
+    // Hatcher sends per-dispatch grants in the frame (its consent UI); fall back to the
+    // paired manifest if none. fs/terminal/browser land in the consent policy
+    // (sandbox-gated), github/mcp/a2a become enforced covenant grants.
+    const { grants, policy } = frame.grants?.length
+      ? mapMeshGrants(frame.grants, deadline)
+      : mapManifest(this.opts.manifestCapabilities, deadline);
     entry.policy = policy;
+    entry.context = frame.intent.context;
+    const minted = [...baselineGrants(deadline), ...grants];
+    entry.grants = minted;
     try {
-      for (const g of [...baselineGrants(deadline), ...grants]) {
+      for (const g of minted) {
         await this.daemon.grant(g);
       }
     } catch (err) {
@@ -157,14 +169,21 @@ export class Connector {
     } catch (err) {
       this.log('audit verify failed', { dispatchId, err: String(err) });
     }
-    const status = typeof (result as { status?: string })?.status === 'string' ? (result as { status: string }).status : 'ok';
+    const daemonStatus = typeof (result as { status?: string })?.status === 'string' ? (result as { status: string }).status : 'ok';
+    const status = meshStatus(daemonStatus);
+    const receiptId = (result as { settlement?: { receipt_id?: string } | null })?.settlement?.receipt_id ?? null;
     const proof = {
       spec: 'covenant.connector-trace.v0',
       intent_id: entry.intentId,
       result,
+      status,
       audit_root: auditRoot,
       audit_verified: auditVerified,
+      receipt_id: receiptId,
+      memory_ids: [] as string[], // best-effort v1: populated once memory↔intent linkage is wired
+      capability_grants: entry.grants ?? [],
       declared_policy: entry.policy ?? null,
+      context: entry.context ?? null,
       events: entry.events,
     };
     this.active.delete(dispatchId);
@@ -176,12 +195,29 @@ export class Connector {
     if (!entry) return;
     entry.abort.abort();
     this.active.delete(dispatchId);
-    // The daemon-side run stop (POST /intents/.../stop via runner cancel) is wired
-    // through the daemon; here we stop relaying and report terminal state.
-    await this.transport.send({ v: 1, type: 'error', dispatch_id: dispatchId, code: 'cancelled', message: 'dispatch cancelled' });
+    // Stop relaying and report a terminal cancelled result (the mesh contract's
+    // result.status enum is success|failed|cancelled). Daemon-side run stop is wired
+    // through the runner cancel.
+    const proof = {
+      spec: 'covenant.connector-trace.v0',
+      intent_id: entry.intentId,
+      status: 'cancelled',
+      audit_root: null,
+      capability_grants: entry.grants ?? [],
+      declared_policy: entry.policy ?? null,
+      context: entry.context ?? null,
+      events: entry.events,
+    };
+    await this.transport.send({ v: 1, type: 'result', dispatch_id: dispatchId, status: 'cancelled', result: null, proof });
   }
 
   get inFlight(): number {
     return this.active.size;
   }
+}
+
+function meshStatus(s: string): 'success' | 'failed' | 'cancelled' {
+  if (s === 'ok' || s === 'success') return 'success';
+  if (s === 'cancelled') return 'cancelled';
+  return 'failed';
 }

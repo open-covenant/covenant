@@ -1,0 +1,10 @@
+{
+  "skill": {
+    "name": "covenant",
+    "digest": "sha256:5d80941ae3790a8a895663d840dbc29fdc1e4be58a0335ebdf560b37a3b8c464"
+  },
+  "capabilities": [
+    "skill.use.covenant"
+  ],
+  "tx": null
+}

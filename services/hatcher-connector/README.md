@@ -15,11 +15,12 @@ The 6 integration deliverables for the Hatcher team: [`docs/hatcher-handoff.md`]
   `WsTransport`; pairing leg-3 (`POST /identity/sign`, ed25519-verified). 32 tests
   (incl. real-socket mesh integration), typecheck clean.
 - **Reference Hatcher mesh:** `src/demo/meshServer.ts` — a real `ws` server speaking the
-  proposed `covenant.connector-mesh.v0` frame contract, with an HTTP control plane
-  (`pnpm mesh`) so you can drive dispatches by hand.
-- **Inferred (the one unverified seam):** Hatcher's *actual* mesh frame contract
-  (handoff §7). The connector speaks the proposed contract; reconciling with the live
-  mesh is build step C2.
+  `covenant.connector-mesh.v1` frame contract (confirmed with Hatcher), with an HTTP
+  control plane (`pnpm mesh`) so you can drive dispatches by hand.
+- **Confirmed (C2):** Hatcher confirmed the `covenant.connector-mesh.v1` frame contract
+  (2026-06-04) and the connector implements it (connector_id, intent.context, structured
+  grants, success/failed/cancelled status, enriched proof). Awaiting their staging
+  endpoint for live transport testing.
 - **Roadmap:** scope-predicate depth (path/argv/domain), gateway→daemon tool delegation
   for token-gated fs/terminal, sandbox hardening. See handoff §§5–6.
 

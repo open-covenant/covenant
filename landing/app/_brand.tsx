@@ -17,6 +17,7 @@ export const DOCS_PUBLISHED_DATE = "2026-05-13";
 
 export const NAV_LINKS = [
   { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
+  { label: "arena", href: "/arena", external: false as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
   { label: "roadmap", href: "/roadmap", external: false as const },
   { label: "about", href: "/about", external: false as const },
@@ -27,6 +28,7 @@ export const NAV_LINKS = [
 export const FOOTER_LINKS = [
   { label: "FAQ", href: "/faq", external: false as const },
   { label: "Changelog", href: "/changelog", external: false as const },
+  { label: "Partners", href: "/partners", external: false as const },
   { label: "Treasury", href: "/treasury", external: false as const },
   { label: "Paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true as const },
   { label: "Terms of Service", href: "/terms", external: false as const },

@@ -1,0 +1,8 @@
+{
+  "tx": "2EU2YPbwqEPRdQ3xMYfUYNjpFYJ5oK6Vhf3hzTsbu2dLVcJ2GgeJK4YeKzCrX7W5LPrqE1Fk1aq9pWQAu6JWSdnf",
+  "batch_pda": "2WyHr5kHMsu7gnqR2ZAuokfK4tpr9ndg3KtRHuPLPsvb",
+  "merkle_root": "99bb9f889f6104f4305a5c69c3489acbfd6c9c0bd74935b475474fbb09b44e7b",
+  "slot": 467843578,
+  "authority": "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM",
+  "cluster": "devnet"
+}

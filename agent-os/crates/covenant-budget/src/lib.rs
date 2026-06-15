@@ -266,6 +266,16 @@ pub trait BudgetLedger: Send + Sync {
         limit: usize,
     ) -> Result<Vec<BudgetDebit>, BudgetError>;
 
+    /// The most recent `limit` debits across every agent, in
+    /// chronological order (same tail windowing as the settlement and
+    /// audit `recent` readers). Unlike [`recent_debits`] this does not
+    /// filter by agent: the settlement-reconciliation join keys on
+    /// [`BudgetDebit::paired_receipt`], not the debiting identity, and
+    /// the x402/Hyre payer is frequently not a registered router agent,
+    /// so a per-agent sweep would miss those debits entirely.
+    /// Verifier-facing.
+    async fn recent_debits_all(&self, limit: usize) -> Result<Vec<BudgetDebit>, BudgetError>;
+
     /// Drop debit events with `at_ms < before_ms`. See module docs for
     /// the snapshot-based non-destructive compaction model.
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError>;
@@ -439,6 +449,12 @@ impl BudgetLedger for InMemoryLedger {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn recent_debits_all(&self, limit: usize) -> Result<Vec<BudgetDebit>, BudgetError> {
+        let debits = self.debits.lock().await;
+        let start = debits.len().saturating_sub(limit);
+        Ok(debits[start..].to_vec())
     }
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
@@ -911,6 +927,12 @@ impl BudgetLedger for JsonlLedger {
             .take(limit)
             .cloned()
             .collect())
+    }
+
+    async fn recent_debits_all(&self, limit: usize) -> Result<Vec<BudgetDebit>, BudgetError> {
+        let debits = self.debits.lock().await;
+        let start = debits.len().saturating_sub(limit);
+        Ok(debits[start..].to_vec())
     }
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
@@ -2766,6 +2788,59 @@ mod tests {
         let b_debits = l.recent_debits(&b, 10).await.unwrap();
         assert_eq!(b_debits.len(), 1);
         assert_eq!(b_debits[0].credits, 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_recent_debits_all_spans_agents_and_windows_to_tail() {
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        let b = agent("b@local");
+        l.set_capacity(&a, 100).await.unwrap();
+        l.set_capacity(&b, 100).await.unwrap();
+        let r1 = Uuid::new_v4();
+        let r2 = Uuid::new_v4();
+        let r3 = Uuid::new_v4();
+        l.try_debit(&a, 1, r1).await.unwrap();
+        l.try_debit(&b, 2, r2).await.unwrap();
+        l.try_debit(&a, 3, r3).await.unwrap();
+        // Unlike recent_debits, this does not filter by agent: all three surface.
+        let all = l.recent_debits_all(10).await.unwrap();
+        assert_eq!(
+            all.iter().map(|d| d.paired_receipt).collect::<Vec<_>>(),
+            vec![r1, r2, r3]
+        );
+        // Windows to the most recent `limit`, dropping the oldest debit.
+        let tail = l.recent_debits_all(2).await.unwrap();
+        assert_eq!(
+            tail.iter().map(|d| d.paired_receipt).collect::<Vec<_>>(),
+            vec![r2, r3]
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_recent_debits_all_spans_agents_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget").join("ledger.jsonl");
+        let a = agent("alice@local");
+        let b = agent("bob@local");
+        let ra = Uuid::new_v4();
+        let rb = Uuid::new_v4();
+        {
+            let l = JsonlLedger::open(path.clone()).await.unwrap();
+            l.set_capacity(&a, 10).await.unwrap();
+            l.set_capacity(&b, 10).await.unwrap();
+            l.try_debit(&a, 3, ra).await.unwrap();
+            l.try_debit(&b, 2, rb).await.unwrap();
+        }
+        // Reopen replays both agents' debits from the log.
+        let l2 = JsonlLedger::open(path).await.unwrap();
+        // The per-agent reader still scopes to one agent...
+        assert_eq!(l2.recent_debits(&a, 10).await.unwrap().len(), 1);
+        // ...while recent_debits_all returns both agents' debits.
+        let all = l2.recent_debits_all(10).await.unwrap();
+        let receipts: Vec<_> = all.iter().map(|d| d.paired_receipt).collect();
+        assert_eq!(all.len(), 2);
+        assert!(receipts.contains(&ra) && receipts.contains(&rb));
     }
 
     #[tokio::test]

@@ -96,7 +96,7 @@ function formatLines(n) {
 
 function renderBlock({ crates, lines, tests, live }) {
   return `${START}
-**Status.** Local control plane is real and live-tested (${crates} Rust crates, ${formatLines(lines)}, ${tests} source-discovered Rust tests including ${live} live boundary tests). Production-grade sandboxing for hostile agent code, networked multi-peer operation, and on-chain settlement are roadmap. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
+**Status.** Local control plane is real and live-tested (${crates} Rust crates, ${formatLines(lines)}, ${tests} source-discovered Rust tests including ${live} live boundary tests). Production-grade sandboxing for hostile agent code, networked multi-peer operation, and daemon-driven on-chain settlement are roadmap. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
 ${END}`;
 }
 

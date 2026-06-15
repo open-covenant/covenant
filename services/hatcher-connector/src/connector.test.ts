@@ -91,7 +91,7 @@ describe('Connector dispatch flow', () => {
         declared_policy: { fs: { read: string[] }; exec: { argv0Allow: string[] } };
       };
     };
-    expect(result.status).toBe('ok');
+    expect(result.status).toBe('success');
     expect(result.proof.audit_root).toBe('deadbeef');
     expect(result.proof.audit_verified).toBe(true);
     expect(result.proof.events).toHaveLength(2);
@@ -190,5 +190,50 @@ describe('Connector dispatch flow', () => {
     const result = transport.sent.at(-1) as { type: string; proof: { result: { intent_id?: string } } };
     expect(result.type).toBe('result');
     expect(result.proof.result.intent_id).toBe('int-1'); // submit-time IntentResult, not null
+  });
+
+  it('mints grants from the dispatch frame (mesh grants), maps status, and enriches the proof', async () => {
+    const daemon = new FakeDaemon();
+    daemon.status = 'ok';
+    const { transport, connector } = build(daemon, []); // empty manifest — grants come from the frame
+    await connector.start();
+
+    transport.inject({
+      v: 1,
+      type: 'dispatch',
+      dispatch_id: 'mg',
+      agent_id: 'PK',
+      intent: { text: 'inspect the repo', context: { repo: 'o/r' } },
+      grants: [
+        { scope: 'github.read', constraints: { repo: 'o/r' } },
+        { scope: 'filesystem.read', constraints: { paths: ['./'] } },
+        { scope: 'terminal.exec', constraints: { approval: 'required', timeout_ms: 120000 } },
+      ],
+    });
+    await flush();
+    await flush();
+
+    // baseline memory.write + tool.call.github (github is token-gated); fs/terminal -> policy
+    expect(daemon.grants.map((g) => g.action)).toEqual(['memory.write', 'tool.call.github']);
+
+    const result = transport.sent.at(-1) as {
+      type: string;
+      status: string;
+      proof: {
+        status: string;
+        context: unknown;
+        capability_grants: { action: string }[];
+        declared_policy: { fs: { read: string[] }; exec: { approval?: string } };
+        receipt_id: unknown;
+        memory_ids: unknown[];
+      };
+    };
+    expect(result.status).toBe('success'); // daemon "ok" -> mesh "success"
+    expect(result.proof.context).toEqual({ repo: 'o/r' });
+    expect(result.proof.capability_grants.map((g) => g.action)).toEqual(['memory.write', 'tool.call.github']);
+    expect(result.proof.declared_policy.fs.read).toEqual(['./']);
+    expect(result.proof.declared_policy.exec.approval).toBe('required');
+    expect(result.proof.receipt_id).toBeNull();
+    expect(result.proof.memory_ids).toEqual([]);
   });
 });

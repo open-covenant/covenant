@@ -75,7 +75,7 @@ async function main(): Promise<void> {
   if (final.type === 'result') {
     console.log('\n── proof envelope (covenant.connector-trace.v0) ──');
     console.log(JSON.stringify(final.proof, null, 2));
-    const ok = final.status === 'ok';
+    const ok = final.status === 'success';
     console.log(`\n${ok ? '✓' : '✗'} dispatch ${final.status}\n`);
     process.exit(ok ? 0 : 1);
   } else if (final.type === 'error') {

@@ -501,16 +501,19 @@ pub enum AuditKind {
         dry_run: bool,
     },
     /// Logged when the operator runs the memory-record receipt-correlation
-    /// backfill. A dry run records the planner-derived `row_count` with
-    /// `dry_run = true` and no `savepoint_name`; an apply records the
-    /// committed `row_count` and the `savepoint_name` the mutator wrapped
-    /// the batch in (absent on a no-op apply that changed nothing, so the
-    /// audit row never claims a SAVEPOINT was reserved for an empty
-    /// batch). The daemon emits this only after
-    /// [`SqliteStore::backfill_receipt_correlation`] returns Ok, i.e.
-    /// after BEGIN IMMEDIATE + SAVEPOINT + per-row UPDATE + RELEASE
-    /// SAVEPOINT + COMMIT all succeed, so the audit log never claims a
-    /// mutation whose data did not durably land.
+    /// backfill. Both a dry run and an apply record `savepoint_name =
+    /// Some("backfill_receipt_correlation")` — covenant-memory's fixed
+    /// `MEMORY_BACKFILL_SAVEPOINT_NAME` slug, stable across releases — so the
+    /// field is a constant operation discriminator, not a signal that a
+    /// physical SAVEPOINT was opened: a dry run reports the planner-derived
+    /// `row_count` with `dry_run = true` without opening a transaction, while
+    /// an apply reports the committed `row_count` after wrapping the batch in
+    /// the named SAVEPOINT. The daemon emits this only after
+    /// [`SqliteStore::backfill_receipt_correlation`] returns Ok — after
+    /// BEGIN IMMEDIATE + SAVEPOINT + per-row UPDATE + RELEASE SAVEPOINT +
+    /// COMMIT all succeed on an apply, or the read-only dry-run plan completes
+    /// — so the audit log never claims a mutation whose data did not durably
+    /// land.
     ///
     /// Issuer is the acting peer (the operator), matching the
     /// [`AuditKind::MemoryRepairApplied`] and

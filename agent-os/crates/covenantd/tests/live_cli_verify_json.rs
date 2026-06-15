@@ -1651,9 +1651,9 @@ async fn live_cli_verify_json_reports_receipt_chain_empty_drift() {
         chain: Some(String::new()),
         cluster: Some("devnet".to_string()),
         batch_id: Some("b".repeat(64)),
-        merkle_root: Some("m".repeat(64)),
+        merkle_root: Some("a".repeat(64)),
         tx_sig: None,
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: None,
     };
@@ -1750,7 +1750,7 @@ async fn live_cli_verify_json_reports_receipt_confirmed_at_zero_drift() {
         chain: Some("solana".to_string()),
         cluster: Some("devnet".to_string()),
         batch_id: Some("b".repeat(64)),
-        merkle_root: Some("m".repeat(64)),
+        merkle_root: Some("a".repeat(64)),
         tx_sig: Some("t".repeat(88)),
         slot: Some(42),
         confirmed_at: Some(0),
@@ -1852,7 +1852,7 @@ async fn live_cli_verify_json_reports_receipt_slot_zero_drift() {
         chain: Some("solana".to_string()),
         cluster: Some("devnet".to_string()),
         batch_id: Some("b".repeat(64)),
-        merkle_root: Some("m".repeat(64)),
+        merkle_root: Some("a".repeat(64)),
         tx_sig: Some("t".repeat(88)),
         slot: Some(0),
         confirmed_at: Some(42),
@@ -2050,9 +2050,9 @@ async fn live_cli_verify_json_reports_receipt_batch_id_empty_drift() {
         chain: Some("solana".to_string()),
         cluster: Some("devnet".to_string()),
         batch_id: Some(String::new()),
-        merkle_root: Some("m".repeat(64)),
+        merkle_root: Some("a".repeat(64)),
         tx_sig: None,
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: None,
     };
@@ -2153,9 +2153,9 @@ async fn live_cli_verify_json_reports_receipt_onchain_sig_empty_drift() {
         chain: Some("solana".to_string()),
         cluster: Some("devnet".to_string()),
         batch_id: Some("b".repeat(64)),
-        merkle_root: Some("m".repeat(64)),
+        merkle_root: Some("a".repeat(64)),
         tx_sig: None,
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: Some(String::new()),
     };
@@ -2263,9 +2263,9 @@ async fn live_cli_verify_json_reports_receipt_tx_sig_empty_drift() {
         chain: Some("solana".to_string()),
         cluster: Some("devnet".to_string()),
         batch_id: Some("b".repeat(64)),
-        merkle_root: Some("m".repeat(64)),
+        merkle_root: Some("a".repeat(64)),
         tx_sig: Some(String::new()),
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: Some(String::new()),
     };
@@ -2368,7 +2368,7 @@ async fn live_cli_verify_json_reports_receipt_merkle_root_empty_drift() {
         batch_id: Some("b".repeat(64)),
         merkle_root: Some(String::new()),
         tx_sig: None,
-        slot: None,
+        slot: Some(2_000),
         confirmed_at: Some(2_000),
         onchain_sig: None,
     };
@@ -15708,7 +15708,7 @@ async fn live_cli_verify_json_reports_audit_memory_record_backfill_applied_savep
     );
     assert!(
         row["repair"].as_str().is_some_and(|repair| repair
-            .contains("memory_record_backfill_apply")
+            .contains("backfill_memory_records")
             && repair.contains("Some(outcome.savepoint_name.clone())")
             && repair.contains("MEMORY_BACKFILL_SAVEPOINT_NAME")),
         "none-savepoint-name MemoryRecordBackfillApplied drift repair string should name the writer, the Some(...) wrap, and the savepoint const: {row:?}"

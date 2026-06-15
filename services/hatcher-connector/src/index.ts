@@ -40,6 +40,7 @@ async function main(): Promise<void> {
     token: cfg.hatcherToken,
     pairingCode: cfg.pairingCode,
     agentId: process.env.HATCHER_AGENT_ID,
+    connectorId: process.env.HATCHER_CONNECTOR_ID,
     log: (msg, extra) => log.info(extra ?? {}, msg),
   });
 

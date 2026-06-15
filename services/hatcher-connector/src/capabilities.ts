@@ -25,12 +25,13 @@
 
 import type { GrantRequest } from './daemon.js';
 import type { ManifestCapability } from './manifest.js';
+import type { MeshGrant } from './transport.js';
 
 export interface ConsentPolicy {
   fs?: { read: string[]; write: string[] };
-  exec?: { argv0Allow: string[] };
+  exec?: { argv0Allow?: string[]; approval?: string; timeout_ms?: number };
   net?: { domains: string[] };
-  github?: { scopes: string[] };
+  github?: { scopes?: string[]; repo?: string };
   mcpWildcard?: boolean;
   // Human-readable notes on why an entry is sandbox/consent-governed vs token-enforced.
   notes: string[];
@@ -62,7 +63,7 @@ export function mapManifest(caps: ManifestCapability[], expiresAt: number): Mapp
       }
       case 'terminal': {
         const exec = (policy.exec ??= { argv0Allow: [] });
-        exec.argv0Allow.push(...cap.commands.map(firstToken));
+        (exec.argv0Allow ??= []).push(...cap.commands.map(firstToken));
         policy.notes.push('terminal (bash) is sandbox-enforced + audited (not token-gated in v0)');
         break;
       }
@@ -102,6 +103,70 @@ export function mapManifest(caps: ManifestCapability[], expiresAt: number): Mapp
   }
 
   return { grants, policy };
+}
+
+// Maps Hatcher's per-dispatch grants ({scope, constraints}, sent in the dispatch frame)
+// into covenant grants + consent policy. Same honest tiering as mapManifest:
+// filesystem/terminal/browser are sandbox-enforced (consent policy), github/mcp/a2a are
+// token-gated covenant grants.
+export function mapMeshGrants(grants: MeshGrant[], expiresAt: number): MappedManifest {
+  const out: GrantRequest[] = [];
+  const policy: ConsentPolicy = { notes: [] };
+
+  for (const g of grants) {
+    const c = (g.constraints ?? {}) as Record<string, unknown>;
+    switch (g.scope.split('.')[0]) {
+      case 'filesystem': {
+        const fs = (policy.fs ??= { read: [], write: [] });
+        const paths = Array.isArray(c.paths) ? (c.paths as string[]) : [];
+        (g.scope.endsWith('.write') ? fs.write : fs.read).push(...paths);
+        policy.notes.push(`${g.scope} is sandbox-enforced + audited (not token-gated)`);
+        break;
+      }
+      case 'terminal': {
+        const exec = (policy.exec ??= {});
+        if (typeof c.approval === 'string') exec.approval = c.approval;
+        if (typeof c.timeout_ms === 'number') exec.timeout_ms = c.timeout_ms;
+        policy.notes.push(`${g.scope} is sandbox-enforced + audited (not token-gated)`);
+        break;
+      }
+      case 'browser':
+      case 'network': {
+        const net = (policy.net ??= { domains: [] });
+        if (Array.isArray(c.domains)) net.domains.push(...(c.domains as string[]));
+        policy.notes.push(`${g.scope} egress is sandbox-enforced (not token-gated)`);
+        break;
+      }
+      case 'github': {
+        out.push({ action: 'tool.call.github', scope: { version: 1, tool: 'github' }, expires_at: expiresAt });
+        policy.github = {
+          scopes: [...(policy.github?.scopes ?? []), g.scope],
+          ...(typeof c.repo === 'string' ? { repo: c.repo } : {}),
+        };
+        break;
+      }
+      case 'mcp': {
+        const tool = g.scope.split('.')[1];
+        if (tool && tool !== '*') {
+          out.push({ action: `tool.call.${tool}`, scope: { version: 1, tool }, expires_at: expiresAt });
+        } else {
+          policy.mcpWildcard = true;
+          policy.notes.push('mcp wildcard is not enforceable as a single grant; enumerate tool names');
+        }
+        break;
+      }
+      case 'a2a': {
+        const verb = g.scope.split('.')[1];
+        const peer = typeof c.peer === 'string' ? c.peer : undefined;
+        if (verb && peer) out.push({ action: `a2a.${verb}.${peer}`, scope: { peer_pubkey_b58: peer }, expires_at: expiresAt });
+        break;
+      }
+      default:
+        policy.notes.push(`unrecognized grant scope "${g.scope}" — ignored`);
+    }
+  }
+
+  return { grants: out, policy };
 }
 
 function firstToken(command: string): string {

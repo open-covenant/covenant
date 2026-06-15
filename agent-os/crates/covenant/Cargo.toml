@@ -21,8 +21,12 @@ covenant-types = { path = "../covenant-types" }
 covenant-mcp = { path = "../covenant-mcp" }
 covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
+covenant-x402 = { path = "../covenant-x402" }
+covenant-zauth = { path = "../covenant-zauth" }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 borsh = { workspace = true }
+reqwest = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 solana-client = { workspace = true }

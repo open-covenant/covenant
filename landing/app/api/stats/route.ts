@@ -9,6 +9,9 @@ export const dynamic = "force-dynamic";
 
 const REPO = "open-covenant/covenant";
 const BRANCH = "main";
+// The strip counts only the autonomous loop's own commits — the work the
+// agent shipped, not human or merge commits. The loop authors as "Covenant".
+const LOOP_AUTHOR = "covenant@users.noreply.github.com";
 // The loop's first commit — the moment Covenant began building in the open.
 // Immutable history, so a constant is authoritative.
 const ALPHA_SINCE = "2026-05-09T20:43:52+02:00";
@@ -41,17 +44,30 @@ function ghHeaders() {
 // is frozen at deploy time and shallow, so its own git can't tell. per_page=1
 // returns the latest sha; the Link header's last page is the commit total.
 async function githubHead(signal: AbortSignal) {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/commits?sha=${BRANCH}&per_page=1`, {
+  // Two reads: the total commit count tracks the remote exactly, while the
+  // linked "committed" sha points at the loop's own latest commit (not a
+  // human or merge commit at the tip).
+  const total = fetch(`https://api.github.com/repos/${REPO}/commits?sha=${BRANCH}&per_page=1`, {
     headers: ghHeaders(),
     signal,
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`gh ${res.status}`);
-  const arr = (await res.json()) as Array<{ sha?: string }>;
-  const last = (res.headers.get("link") ?? "").match(/[?&]page=(\d+)>;\s*rel="last"/i);
+  const loop = fetch(
+    `https://api.github.com/repos/${REPO}/commits?sha=${BRANCH}&author=${encodeURIComponent(LOOP_AUTHOR)}&per_page=1`,
+    { headers: ghHeaders(), signal, cache: "no-store" },
+  );
+  const [tRes, lRes] = await Promise.all([total, loop]);
+  if (!tRes.ok) throw new Error(`gh ${tRes.status}`);
+  const last = (tRes.headers.get("link") ?? "").match(/[?&]page=(\d+)>;\s*rel="last"/i);
+  const tArr = (await tRes.json()) as Array<{ sha?: string }>;
+  let head = tArr[0]?.sha?.slice(0, 7) ?? null;
+  if (lRes.ok) {
+    const lArr = (await lRes.json()) as Array<{ sha?: string }>;
+    if (lArr[0]?.sha) head = lArr[0].sha.slice(0, 7);
+  }
   return {
-    head: arr[0]?.sha?.slice(0, 7) ?? null,
-    commits: last ? Number(last[1]) : arr.length ? 1 : null,
+    head,
+    commits: last ? Number(last[1]) : tArr.length ? 1 : null,
   };
 }
 
@@ -87,7 +103,7 @@ export async function GET() {
   if (root) {
     if (head === null) {
       try {
-        head = git(root, ["rev-parse", "--short", "HEAD"]) || null;
+        head = git(root, ["log", `--author=${LOOP_AUTHOR}`, "-1", "--format=%h"]) || null;
       } catch {}
     }
     if (commits === null) {

@@ -1,0 +1,325 @@
+{
+  "updatedAt": "2026-06-12T10:55:11.527Z",
+  "branch": "loop/main-track",
+  "totals": {
+    "events": 8573,
+    "tasks": 1019,
+    "integrated": 1019
+  },
+  "throughput": {
+    "last24h": 60,
+    "last7d": 192,
+    "velocity": 27.4
+  },
+  "daily": [
+    {
+      "date": "05-23",
+      "count": 220
+    },
+    {
+      "date": "05-24",
+      "count": 64
+    },
+    {
+      "date": "05-25",
+      "count": 0
+    },
+    {
+      "date": "05-26",
+      "count": 3
+    },
+    {
+      "date": "05-27",
+      "count": 6
+    },
+    {
+      "date": "05-28",
+      "count": 11
+    },
+    {
+      "date": "05-29",
+      "count": 10
+    },
+    {
+      "date": "05-30",
+      "count": 19
+    },
+    {
+      "date": "05-31",
+      "count": 47
+    },
+    {
+      "date": "06-01",
+      "count": 4
+    },
+    {
+      "date": "06-02",
+      "count": 35
+    },
+    {
+      "date": "06-03",
+      "count": 91
+    },
+    {
+      "date": "06-04",
+      "count": 107
+    },
+    {
+      "date": "06-05",
+      "count": 50
+    },
+    {
+      "date": "06-06",
+      "count": 42
+    },
+    {
+      "date": "06-07",
+      "count": 50
+    },
+    {
+      "date": "06-08",
+      "count": 15
+    },
+    {
+      "date": "06-09",
+      "count": 0
+    },
+    {
+      "date": "06-10",
+      "count": 0
+    },
+    {
+      "date": "06-11",
+      "count": 18
+    },
+    {
+      "date": "06-12",
+      "count": 42
+    }
+  ],
+  "cumulative": [
+    {
+      "date": "05-23",
+      "total": 405
+    },
+    {
+      "date": "05-24",
+      "total": 469
+    },
+    {
+      "date": "05-25",
+      "total": 469
+    },
+    {
+      "date": "05-26",
+      "total": 472
+    },
+    {
+      "date": "05-27",
+      "total": 478
+    },
+    {
+      "date": "05-28",
+      "total": 489
+    },
+    {
+      "date": "05-29",
+      "total": 499
+    },
+    {
+      "date": "05-30",
+      "total": 518
+    },
+    {
+      "date": "05-31",
+      "total": 565
+    },
+    {
+      "date": "06-01",
+      "total": 569
+    },
+    {
+      "date": "06-02",
+      "total": 604
+    },
+    {
+      "date": "06-03",
+      "total": 695
+    },
+    {
+      "date": "06-04",
+      "total": 802
+    },
+    {
+      "date": "06-05",
+      "total": 852
+    },
+    {
+      "date": "06-06",
+      "total": 894
+    },
+    {
+      "date": "06-07",
+      "total": 944
+    },
+    {
+      "date": "06-08",
+      "total": 959
+    },
+    {
+      "date": "06-09",
+      "total": 959
+    },
+    {
+      "date": "06-10",
+      "total": 959
+    },
+    {
+      "date": "06-11",
+      "total": 977
+    },
+    {
+      "date": "06-12",
+      "total": 1019
+    }
+  ],
+  "states": {
+    "integrated": 1014,
+    "proposed": 1,
+    "blocked": 3,
+    "in_progress": 1
+  },
+  "areas": [
+    {
+      "name": "ipc",
+      "count": 137
+    },
+    {
+      "name": "covenant",
+      "count": 96
+    },
+    {
+      "name": "audit",
+      "count": 89
+    },
+    {
+      "name": "live",
+      "count": 88
+    },
+    {
+      "name": "detect",
+      "count": 84
+    },
+    {
+      "name": "validate",
+      "count": 62
+    }
+  ],
+  "inFlight": {
+    "task": "bound-x402-solana-signer-response-bodies",
+    "state": "in_progress",
+    "since": "2026-06-12T10:50:59.939Z"
+  },
+  "recent": [
+    {
+      "at": "2026-06-12T10:38:59.357Z",
+      "task": "harden-zauth-reposcan-request-timeout",
+      "note": "Integrated as 3a26fad6, pushed to origin/loop/main-track (543400cf..3a26fad6). Changed: reposcan.rs (FIRST_REQUEST_TIMEOUT=20s client via ht"
+    },
+    {
+      "at": "2026-06-12T10:14:50.677Z",
+      "task": "harden-zauth-reposcan-response-size",
+      "note": "Integrated as 543400cf, pushed to origin/loop/main-track (cd7ac5b1..543400cf). Changed: covenant-zauth/src/http.rs (new shared read_capped 1"
+    },
+    {
+      "at": "2026-06-12T09:53:54.542Z",
+      "task": "bound-jupiter-swap-client-response-bodies",
+      "note": "Integrated as cd7ac5b1, pushed to origin/loop/main-track (3f800010..cd7ac5b1). Changed: jupiter.rs (read_body_capped 16 MiB cap, anyhow flav"
+    },
+    {
+      "at": "2026-06-12T09:34:58.966Z",
+      "task": "bound-llm-provider-response-bodies",
+      "note": "Integrated as 3f800010, pushed to origin/loop/main-track (36042af7..3f800010). Changed: covenant-llm/src/lib.rs (read_body_capped 16 MiB cap"
+    },
+    {
+      "at": "2026-06-12T09:20:15.585Z",
+      "task": "bound-web-search-tool-response-bodies",
+      "note": "Integrated as 36042af7, pushed to origin/loop/main-track (6a485544..36042af7). Changed: covenant-tools/src/lib.rs (read_body_capped 16 MiB c"
+    },
+    {
+      "at": "2026-06-12T08:57:32.692Z",
+      "task": "bound-hermes-gateway-response-body",
+      "note": "Integrated as 6a485544 on loop/main-track (pushed e3e02157..6a485544). Bounds the 3 Hermes gateway response reads (submit/poll/probe) — the "
+    },
+    {
+      "at": "2026-06-12T08:44:02.586Z",
+      "task": "bound-covenantd-x402-paid-response-body",
+      "note": "Integrated as e3e02157 on loop/main-track (pushed 516ae861..e3e02157). Bounds the last unbounded untrusted reqwest body read in the http-res"
+    },
+    {
+      "at": "2026-06-12T08:13:53.707Z",
+      "task": "consolidate-hyre-bounded-read-helper",
+      "note": "Committed. Shared crate::http::read_capped; both local copies removed; 70 tests; scripts gate green; review SHIP."
+    },
+    {
+      "at": "2026-06-12T08:06:45.294Z",
+      "task": "harden-hyre-catalog-manifest-response-size",
+      "note": "Committed. catalog.rs read_capped over the manifest read; README 2705; scripts gate green; review SHIP."
+    },
+    {
+      "at": "2026-06-12T07:54:52.087Z",
+      "task": "harden-zauth-directory-response-size",
+      "note": "Committed. directory.rs read_capped over the listing read; README 2704; scripts gate green; independent review SHIP."
+    },
+    {
+      "at": "2026-06-12T07:49:13.336Z",
+      "task": "harden-x402-client-challenge-response-size",
+      "note": "Committed. client.rs read_capped over the 402 challenge; README 2703; scripts gate green; independent review SHIP."
+    },
+    {
+      "at": "2026-06-12T07:43:16.126Z",
+      "task": "harden-hyre-paid-http-response-size",
+      "note": "Committed e22cf407. x402.rs read_capped over all 4 paid-loop reads; README 2702; scripts gate green; independent review SHIP."
+    },
+    {
+      "at": "2026-06-12T07:34:15.977Z",
+      "task": "harden-metaplex-das-http-response-size",
+      "note": "Committed 9243e964. das.rs response-size cap + regression test; README metrics 2701; scripts gate green; independent security review SHIP."
+    },
+    {
+      "at": "2026-06-12T07:17:18.402Z",
+      "task": "harden-zauth-directory-http-read-timeout",
+      "note": "Committed c2b1cdf8, pushed origin/loop/main-track. zauth directory CLI read now bounded at 20s; test pins it. README 2699->2700."
+    },
+    {
+      "at": "2026-06-12T07:06:37.190Z",
+      "task": "harden-x402-paid-client-http-timeout",
+      "note": "Committed 0b7f27e9, pushed origin/loop/main-track. Daemon x402 pay path now bounded at 120s via covenant_x402::http_client(); test pins it. "
+    },
+    {
+      "at": "2026-06-12T06:58:38.236Z",
+      "task": "harden-hyre-paid-execution-http-timeout",
+      "note": "Committed 877cc852, pushed origin/loop/main-track. Daemon Hyre paid loop now bounded at 120s via covenant_hyre::http_client(); test pins it."
+    },
+    {
+      "at": "2026-06-12T06:47:02.546Z",
+      "task": "harden-metaplex-das-http-request-timeout",
+      "note": "Committed bdc1c579, pushed to origin/loop/main-track. DAS client now bounded at 20s; failure-mode test pins it. README metrics 2696->2697."
+    },
+    {
+      "at": "2026-06-12T06:06:39.787Z",
+      "task": "harden-metaplex-onchain-string-bidi-zerowidth-rejection",
+      "note": "Committed 1b601da6 on loop/main-track: shared is_unsafe_onchain_char rejects bidi-override + zero-width + LS/PS chars in validate_registrati"
+    },
+    {
+      "at": "2026-06-12T05:58:14.059Z",
+      "task": "harden-metaplex-attestation-field-onchain-validation",
+      "note": "Committed 5ffcc854 on loop/main-track: validate_attestation_field guards releaseTarget/Subject/Scope (len<=200 + control-char rejection) at "
+    },
+    {
+      "at": "2026-06-12T05:40:46.336Z",
+      "task": "harden-metaplex-das-pagination-bounds",
+      "note": "Committed bd37c6c2 on loop/main-track: bounded_u32_arg enforces das.assets_by_owner limit (1..=1000) and page (1..=u32::MAX) per the publish"
+    }
+  ]
+}

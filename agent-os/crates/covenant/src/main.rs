@@ -54,6 +54,9 @@
 //!   covenant peers revoke <token-prefix> [--force] [--limit-matches <N>] [--json]
 //!   covenant intents resume <intent-id> [--json]
 //!   covenant intents resume latest [--json]
+//!   covenant zauth list [--verified] [--unverified] [--network N] [--limit N] [--offset N] [--json]
+//!   covenant zauth search <query> [--limit N] [--json]
+//!   covenant zauth scan <repo-url> [--keypair PATH] [--cluster NAME] [--rpc-url URL] [--per-call-cap-atomic N] [--json]
 //! ```
 
 #![deny(unsafe_code)]
@@ -2162,6 +2165,12 @@ fn print_usage() {
     eprintln!(
         "  covenant sap publish --manifest <file> [--json]  publish the daemon's agent through the SAP bridge"
     );
+    eprintln!(
+        "  covenant sap attest-root --root <hex> [--target/--subject/--scope] [--json]  anchor an audit root to the SAP ledger"
+    );
+    eprintln!(
+        "  covenant sap attest-agent --agent-pda <pda> --root <hex> [--type --expires] [--json]  cross-party attestation via the verifier"
+    );
 }
 
 struct MemoryReadJsonArgs {
@@ -2502,6 +2511,357 @@ async fn dispatch_daemon_free_chain(args: &[String]) -> Result<()> {
     }
 }
 
+#[derive(Clone)]
+struct SubprocessSigner {
+    bin_path: String,
+    keypair_path: PathBuf,
+    rpc_url: String,
+}
+
+#[async_trait::async_trait]
+impl covenant_x402::Signer for SubprocessSigner {
+    async fn build_payment(
+        &self,
+        requirements: &covenant_x402::PaymentRequirements,
+    ) -> covenant_x402::Result<String> {
+        use tokio::io::AsyncWriteExt;
+        let body = serde_json::to_vec(requirements)
+            .map_err(|e| covenant_x402::X402Error::Sign(format!("encode requirements: {e}")))?;
+        let mut child = tokio::process::Command::new(&self.bin_path)
+            .env(
+                "COVENANT_X402_FUNDING_KEYPAIR",
+                self.keypair_path.as_os_str(),
+            )
+            .env("COVENANT_X402_RPC_URL", &self.rpc_url)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                covenant_x402::X402Error::Sign(format!(
+                    "spawn '{}' (set COVENANT_X402_SIGNER_BIN to override): {e}",
+                    self.bin_path
+                ))
+            })?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(&body).await.map_err(|e| {
+                covenant_x402::X402Error::Sign(format!("write sidecar stdin: {e}"))
+            })?;
+        }
+        let out = child
+            .wait_with_output()
+            .await
+            .map_err(|e| covenant_x402::X402Error::Sign(format!("wait sidecar: {e}")))?;
+        if !out.status.success() {
+            return Err(covenant_x402::X402Error::Sign(format!(
+                "sidecar exit {}: {}",
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+}
+
+async fn run_zauth(args: &[String]) -> Result<()> {
+    let (verb, rest) = args
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("covenant zauth: missing subcommand (list|search|scan)"))?;
+    match verb.as_str() {
+        "list" => run_zauth_list(rest).await,
+        "search" => run_zauth_search(rest).await,
+        "scan" => run_zauth_scan(rest).await,
+        other => bail!("unknown zauth subcommand '{other}'"),
+    }
+}
+
+async fn run_zauth_list(args: &[String]) -> Result<()> {
+    let mut verified: Option<bool> = None;
+    let mut network: Option<String> = None;
+    let mut limit: Option<u32> = None;
+    let mut offset: Option<u32> = None;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--verified" => {
+                verified = Some(true);
+                i += 1;
+            }
+            "--unverified" => {
+                verified = Some(false);
+                i += 1;
+            }
+            "--network" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--network needs a value"))?;
+                network = Some(v.clone());
+                i += 2;
+            }
+            "--limit" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--limit needs a value"))?;
+                limit = Some(v.parse().context("--limit must be an unsigned integer")?);
+                i += 2;
+            }
+            "--offset" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--offset needs a value"))?;
+                offset = Some(v.parse().context("--offset must be an unsigned integer")?);
+                i += 2;
+            }
+            "--json" => {
+                as_json = true;
+                i += 1;
+            }
+            other => bail!("unknown flag '{other}'"),
+        }
+    }
+
+    let client = covenant_zauth::DirectoryClient::new(reqwest::Client::new());
+    let page = client
+        .list(covenant_zauth::ListQuery {
+            verified,
+            network,
+            limit,
+            offset,
+        })
+        .await
+        .context("zauth directory list")?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&page)?);
+    } else {
+        println!(
+            "{} of {} endpoints (verified={} working={})",
+            page.endpoints.len(),
+            page.pagination.total,
+            page.stats.verified,
+            page.stats.working
+        );
+        for ep in &page.endpoints {
+            let mark = if ep.verified { "[v]" } else { "[ ]" };
+            let price = ep.price_usdc.as_deref().unwrap_or("-");
+            let network = ep.network.as_deref().unwrap_or("?");
+            println!(
+                "  {mark} {:6} {:38} {:9} ${:>6}  {}",
+                ep.method,
+                network,
+                endpoint_status_str(ep.status),
+                price,
+                ep.url
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn run_zauth_search(args: &[String]) -> Result<()> {
+    let mut query: Option<String> = None;
+    let mut limit: Option<u32> = None;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--limit needs a value"))?;
+                limit = Some(v.parse().context("--limit must be an unsigned integer")?);
+                i += 2;
+            }
+            "--json" => {
+                as_json = true;
+                i += 1;
+            }
+            other if other.starts_with("--") => bail!("unknown flag '{other}'"),
+            other => {
+                if query.is_some() {
+                    bail!("unexpected extra positional '{other}'");
+                }
+                query = Some(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let query = query.ok_or_else(|| anyhow::anyhow!("covenant zauth search: missing <query>"))?;
+
+    let client = covenant_zauth::DirectoryClient::new(reqwest::Client::new());
+    let page = client
+        .list(covenant_zauth::ListQuery {
+            verified: Some(true),
+            network: None,
+            limit: Some(limit.unwrap_or(200)),
+            offset: None,
+        })
+        .await
+        .context("zauth directory list (for search)")?;
+
+    let q = query.to_lowercase();
+    let matched: Vec<&covenant_zauth::DirectoryEndpoint> = page
+        .endpoints
+        .iter()
+        .filter(|ep| {
+            ep.url.to_lowercase().contains(&q)
+                || ep
+                    .title
+                    .as_deref()
+                    .map(|s| s.to_lowercase().contains(&q))
+                    .unwrap_or(false)
+                || ep
+                    .description
+                    .as_deref()
+                    .map(|s| s.to_lowercase().contains(&q))
+                    .unwrap_or(false)
+                || ep
+                    .category
+                    .as_deref()
+                    .map(|s| s.to_lowercase().contains(&q))
+                    .unwrap_or(false)
+                || ep.tags.iter().any(|t| t.to_lowercase().contains(&q))
+        })
+        .collect();
+
+    if as_json {
+        let out = serde_json::json!({
+            "query": query,
+            "matched": matched.len(),
+            "scanned": page.endpoints.len(),
+            "endpoints": matched,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "matched {} of {} verified endpoints scanned",
+            matched.len(),
+            page.endpoints.len()
+        );
+        for ep in &matched {
+            let price = ep.price_usdc.as_deref().unwrap_or("-");
+            let network = ep.network.as_deref().unwrap_or("?");
+            println!(
+                "  [v] {:6} {:38} ${:>6}  {}",
+                ep.method, network, price, ep.url
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn run_zauth_scan(args: &[String]) -> Result<()> {
+    let mut repo_url: Option<String> = None;
+    let mut keypair_path: Option<PathBuf> = None;
+    let mut rpc_url: Option<String> = None;
+    let mut cluster: Option<String> = None;
+    let mut per_call_cap: u128 = 50_000;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--keypair" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--keypair needs a value"))?;
+                keypair_path = Some(PathBuf::from(v));
+                i += 2;
+            }
+            "--rpc-url" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--rpc-url needs a value"))?;
+                rpc_url = Some(v.clone());
+                i += 2;
+            }
+            "--cluster" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--cluster needs a value"))?;
+                cluster = Some(v.clone());
+                i += 2;
+            }
+            "--per-call-cap-atomic" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--per-call-cap-atomic needs a value"))?;
+                per_call_cap = v
+                    .parse()
+                    .context("--per-call-cap-atomic must be an unsigned integer")?;
+                i += 2;
+            }
+            "--json" => {
+                as_json = true;
+                i += 1;
+            }
+            other if other.starts_with("--") => bail!("unknown flag '{other}'"),
+            other => {
+                if repo_url.is_some() {
+                    bail!("unexpected extra positional '{other}'");
+                }
+                repo_url = Some(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let repo_url = repo_url
+        .ok_or_else(|| anyhow::anyhow!("covenant zauth scan: missing <repo-url>"))?;
+
+    let resolved_keypair_path = resolve_operator_keypair_path(keypair_path)?;
+    check_keypair_mode(&resolved_keypair_path)?;
+    // RepoScan settles on Solana mainnet; default cluster reflects that
+    // unless the operator overrides.
+    let cluster_str = cluster.as_deref().or(Some("mainnet-beta"));
+    let final_rpc_url = resolve_solana_rpc_url(cluster_str, rpc_url.as_deref())?;
+
+    let signer = SubprocessSigner {
+        bin_path: std::env::var("COVENANT_X402_SIGNER_BIN")
+            .unwrap_or_else(|_| "covenant-x402-signer".to_string()),
+        keypair_path: resolved_keypair_path,
+        rpc_url: final_rpc_url,
+    };
+
+    let req = covenant_zauth::RepoScanRequest {
+        repo_url: &repo_url,
+        network: covenant_zauth::networks::SOLANA_MAINNET,
+        asset: covenant_zauth::assets::USDC_SOLANA,
+        expected_pay_to: covenant_zauth::treasury::SOLANA,
+        per_call_cap,
+    };
+
+    let client = covenant_zauth::RepoScanClient::new(reqwest::Client::new());
+    let result = client
+        .scan(&req, &signer)
+        .await
+        .context("zauth reposcan")?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("status: {}", result.status);
+        match &result.paid_amount {
+            Some(p) => {
+                let usdc = p.parse::<f64>().unwrap_or(0.0) / 1_000_000.0;
+                println!("paid:   {p} atomic USDC ({usdc:.6} USDC)");
+            }
+            None => println!("paid:   0 (gratis cached or rejected)"),
+        }
+        println!("body:   {}", result.body);
+    }
+    Ok(())
+}
+
+fn endpoint_status_str(s: covenant_zauth::EndpointStatus) -> &'static str {
+    match s {
+        covenant_zauth::EndpointStatus::Working => "WORKING",
+        covenant_zauth::EndpointStatus::Failing => "FAILING",
+        covenant_zauth::EndpointStatus::Flaky => "FLAKY",
+        covenant_zauth::EndpointStatus::Untested => "UNTESTED",
+        covenant_zauth::EndpointStatus::OverBudget => "OVER_BUDG",
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -2518,6 +2878,14 @@ async fn main() -> Result<()> {
     // errors behind a connect timeout.
     if args[0] == "chain" && args.len() >= 2 && !chain_verb_needs_daemon(&args[1]) {
         return dispatch_daemon_free_chain(&args).await;
+    }
+
+    // Daemon-free zauth dispatch. list/search are pure HTTP reads of
+    // zauth's public directory; scan shells out to the
+    // covenant-x402-signer sidecar for the Solana funder signature.
+    // Neither needs covenantd.
+    if args[0] == "zauth" {
+        return run_zauth(&args[1..]).await;
     }
 
     let home = covenant_home()?;
@@ -4864,6 +5232,166 @@ async fn main() -> Result<()> {
                                 });
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
+                                println!("agent_pda: {agent_pda}");
+                                println!("signature: {signature}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "attest-root" => {
+                    let mut root_hash_hex: Option<String> = None;
+                    let mut release_target = "covenant".to_string();
+                    let mut release_subject = "witness-loop".to_string();
+                    let mut release_scope = "audit".to_string();
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--root" => {
+                                i += 1;
+                                root_hash_hex = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--root needs a 64-char hex value")
+                                })?);
+                            }
+                            "--target" => {
+                                i += 1;
+                                release_target = args
+                                    .get(i)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("--target needs a value"))?;
+                            }
+                            "--subject" => {
+                                i += 1;
+                                release_subject = args
+                                    .get(i)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("--subject needs a value"))?;
+                            }
+                            "--scope" => {
+                                i += 1;
+                                release_scope = args
+                                    .get(i)
+                                    .cloned()
+                                    .ok_or_else(|| anyhow::anyhow!("--scope needs a value"))?;
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let root_hash_hex = root_hash_hex.ok_or_else(|| {
+                        anyhow::anyhow!("covenant sap attest-root requires --root <64-char hex>")
+                    })?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SapPublishAuditRoot {
+                            root_hash_hex,
+                            release_target,
+                            release_subject,
+                            release_scope,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SapPublishedAuditRoot {
+                            ledger_pda,
+                            signature,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "sap_published_audit_root",
+                                    "ledger_pda": ledger_pda,
+                                    "signature": signature,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("ledger_pda: {ledger_pda}");
+                                println!("signature: {signature}");
+                            }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "attest-agent" => {
+                    let mut agent_pda: Option<String> = None;
+                    let mut root_hash_hex: Option<String> = None;
+                    let mut attestation_type: Option<String> = None;
+                    let mut expires_at_unix: Option<u64> = None;
+                    let mut as_json = false;
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--agent-pda" => {
+                                i += 1;
+                                agent_pda = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--agent-pda needs a value")
+                                })?);
+                            }
+                            "--root" => {
+                                i += 1;
+                                root_hash_hex = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--root needs a 64-char hex value")
+                                })?);
+                            }
+                            "--type" => {
+                                i += 1;
+                                attestation_type = Some(args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--type needs a value")
+                                })?);
+                            }
+                            "--expires" => {
+                                i += 1;
+                                let v = args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--expires needs a unix timestamp")
+                                })?;
+                                expires_at_unix = Some(
+                                    v.parse::<u64>()
+                                        .with_context(|| format!("parse --expires '{v}'"))?,
+                                );
+                            }
+                            "--json" => as_json = true,
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let agent_pda = agent_pda.ok_or_else(|| {
+                        anyhow::anyhow!("covenant sap attest-agent requires --agent-pda <pda>")
+                    })?;
+                    let root_hash_hex = root_hash_hex.ok_or_else(|| {
+                        anyhow::anyhow!("covenant sap attest-agent requires --root <64-char hex>")
+                    })?;
+                    write_frame(
+                        &mut stream,
+                        &Request::SapPublishAttestation {
+                            agent_pda,
+                            root_hash_hex,
+                            attestation_type,
+                            expires_at_unix,
+                        },
+                    )
+                    .await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::SapPublishedAttestation {
+                            attestation_pda,
+                            attester,
+                            agent_pda,
+                            signature,
+                        } => {
+                            if as_json {
+                                let value = serde_json::json!({
+                                    "kind": "sap_published_attestation",
+                                    "attestation_pda": attestation_pda,
+                                    "attester": attester,
+                                    "agent_pda": agent_pda,
+                                    "signature": signature,
+                                });
+                                println!("{}", serde_json::to_string(&value)?);
+                            } else {
+                                println!("attestation_pda: {attestation_pda}");
+                                println!("attester: {attester}");
                                 println!("agent_pda: {agent_pda}");
                                 println!("signature: {signature}");
                             }

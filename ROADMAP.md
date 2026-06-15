@@ -42,7 +42,7 @@ The runtime needs stronger isolation and clearer policy boundaries before it can
 
 - Multi-peer operation across authenticated hosts.
 - Public provenance through signed artifacts and transparency-log attestation.
-- Solana settlement program wired to real credit mint, burn, treasury, and provider-payout flows.
+- Daemon-driven on-chain settlement and provider-payout escrow, built on the deployed Solana settlement program (credit mint, burn, treasury, staking, slashing, credit metering, and receipt-batch anchoring are live on mainnet today).
 - SDKs for agent authors.
 - Installer and upgrade path for local machines.
 - Marketplace and registry infrastructure for authenticated agent networks.

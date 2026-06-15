@@ -71,7 +71,7 @@ async function main(): Promise<void> {
 
   await transport.close();
   await mesh.stop();
-  process.exit(final.type === 'result' && final.status === 'ok' ? 0 : 1);
+  process.exit(final.type === 'result' && final.status === 'success' ? 0 : 1);
 }
 
 main().catch((err) => {

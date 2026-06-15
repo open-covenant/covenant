@@ -781,6 +781,28 @@ pub enum Request {
     SapPublishAgent {
         manifest_json: String,
     },
+    /// Anchor a Covenant audit root into the SAP ledger (the self-anchored,
+    /// append-only provenance trail). The 32-byte root travels as 64-char
+    /// lowercase hex; the daemon stamps the on-chain envelope's timestamp
+    /// itself. Failures surface as [`Response::Error`].
+    SapPublishAuditRoot {
+        root_hash_hex: String,
+        release_target: String,
+        release_subject: String,
+        release_scope: String,
+    },
+    /// Cross-party attestation of an agent + audit root via SAP's
+    /// `create_attestation`, signed by the separately-keyed verifier
+    /// (`COVENANT_SAP_VERIFIER_KEYPAIR`). The program rejects
+    /// self-attestation, so the verifier must differ from the agent owner.
+    SapPublishAttestation {
+        agent_pda: String,
+        root_hash_hex: String,
+        #[serde(default)]
+        attestation_type: Option<String>,
+        #[serde(default)]
+        expires_at_unix: Option<u64>,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -1039,6 +1061,16 @@ pub enum Response {
         has_signer: bool,
     },
     SapPublishedAgent {
+        agent_pda: String,
+        signature: String,
+    },
+    SapPublishedAuditRoot {
+        ledger_pda: String,
+        signature: String,
+    },
+    SapPublishedAttestation {
+        attestation_pda: String,
+        attester: String,
         agent_pda: String,
         signature: String,
     },

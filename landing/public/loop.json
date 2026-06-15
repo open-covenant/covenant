@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T16:58:08.449Z",
+  "updatedAt": "2026-06-15T17:18:12.273Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9229,
-    "tasks": 1093,
+    "events": 9233,
+    "tasks": 1094,
     "integrated": 1095
   },
   "throughput": {
     "last24h": 8,
-    "last7d": 137,
-    "velocity": 19.6
+    "last7d": 136,
+    "velocity": 19.4
   },
   "daily": [
     {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1088,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "capscope-a2a-verb-scopes",
+    "state": "in_progress",
+    "since": "2026-06-15T17:12:04.087Z"
+  },
   "recent": [
     {
       "at": "2026-06-15T16:57:41.369Z",

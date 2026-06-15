@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T03:14:57.615Z",
+  "updatedAt": "2026-06-15T03:35:06.491Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9159,
-    "tasks": 1085,
+    "events": 9163,
+    "tasks": 1086,
     "integrated": 1087
   },
   "throughput": {
     "last24h": 0,
-    "last7d": 138,
-    "velocity": 19.7
+    "last7d": 137,
+    "velocity": 19.6
   },
   "daily": [
     {
@@ -186,7 +186,7 @@
   "states": {
     "integrated": 1081,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 4
   },
   "areas": [
     {

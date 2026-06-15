@@ -147,6 +147,7 @@ function startRun(
   const wall = setTimeout(() => run.abort.abort(), config.wallMs);
   const startedAt = Date.now();
   const unsubscribeKill = ledger.onKill(() => run.abort.abort());
+  console.log(`run ${id} started (input=${input.length}b, provider=${provider.id}, model=${config.model})`);
 
   void (async () => {
     let sandbox: Awaited<ReturnType<SandboxProvider["create"]>> | undefined;
@@ -169,6 +170,7 @@ function startRun(
         wallMs: config.wallMs,
       });
       if (run.abort.signal.aborted) throw new Error("aborted during sandbox create");
+      console.log(`run ${id} sandbox ready (${Date.now() - startedAt}ms) -> backend start`);
       const backend = selectBackend("anthropic");
       const { output, usage } = await backend.run({
         input,
@@ -183,6 +185,7 @@ function startRun(
       run.files = await captureFiles(sandbox).catch(() => []);
       run.status = "completed";
       const seconds = (Date.now() - startedAt) / 1000;
+      console.log(`run ${id} completed (${Math.round(seconds * 1000)}ms, ${run.files?.length ?? 0} files, ${run.events.length} events)`);
       ledger.commit(
         reservationId,
         reservedMax,
@@ -191,6 +194,7 @@ function startRun(
       );
     } catch (e) {
       run.error = (e as Error).message;
+      console.error(`run ${id} ${run.abort.signal.aborted ? "cancelled" : "FAILED"} (${Date.now() - startedAt}ms): ${run.error}`);
       // After abort (kill or stop) skip the file snapshot: it would exec
       // inside the still-alive sandbox for up to 15s, accruing spend the
       // operator just signalled they want to stop.
@@ -228,6 +232,47 @@ function startRun(
 function json(res: ServerResponse, code: number, body: unknown): void {
   res.writeHead(code, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+// Logged once at startup so the container's coding prerequisites are visible
+// without a dispatch: a sandbox that can exec node/bash, and reachability to the
+// model API. A coding run that hangs with zero events is almost always one of
+// these failing silently inside the run loop.
+async function bootSelfCheck(): Promise<void> {
+  console.log(`selfcheck: node=${process.version} provider=${provider.id} anthropicKey=${process.env.ANTHROPIC_API_KEY ? "set" : "MISSING"}`);
+  try {
+    const sb = await provider.create({
+      runId: "selfcheck",
+      egressAllowlist: ["api.anthropic.com"],
+      cpuMs: 30_000,
+      memoryMb: 256,
+      diskMb: 64,
+      wallMs: 30_000,
+    });
+    try {
+      const r = await sb.exec("node -e \"process.stdout.write('node-ok')\"", { timeoutMs: 15_000 });
+      console.log(`selfcheck: sandbox exec node -> exit=${r.exitCode} out=${JSON.stringify((r.stdout || r.stderr).slice(0, 80))}`);
+    } finally {
+      await sb.destroy().catch(() => {});
+    }
+  } catch (e) {
+    console.error(`selfcheck: sandbox FAILED: ${(e as Error).message}`);
+  }
+  try {
+    const t0 = Date.now();
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 10_000);
+    const res = await fetch("https://api.anthropic.com/v1/models", {
+      headers: {
+        "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
+        "anthropic-version": "2023-06-01",
+      },
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(to));
+    console.log(`selfcheck: anthropic GET /v1/models -> ${res.status} (${Date.now() - t0}ms)`);
+  } catch (e) {
+    console.error(`selfcheck: anthropic UNREACHABLE: ${(e as Error).message}`);
+  }
 }
 
 function streamEvents(run: Run, req: IncomingMessage, res: ServerResponse): void {
@@ -339,5 +384,6 @@ if (process.env.NODE_ENV !== "test") {
   });
   server.listen(PORT, () => {
     console.log(`coding-gateway listening on :${PORT} (model=${config.model}, effort=${config.effort})`);
+    void bootSelfCheck();
   });
 }

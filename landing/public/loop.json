@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T22:59:17.886Z",
+  "updatedAt": "2026-06-15T23:19:21.522Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9263,
-    "tasks": 1097,
-    "integrated": 1098
+    "events": 9266,
+    "tasks": 1098,
+    "integrated": 1099
   },
   "throughput": {
-    "last24h": 11,
-    "last7d": 139,
-    "velocity": 19.9
+    "last24h": 12,
+    "last7d": 140,
+    "velocity": 20
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-15",
-      "count": 11
+      "count": 12
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-15",
-      "total": 1098
+      "total": 1099
     }
   ],
   "states": {
-    "integrated": 1091,
-    "proposed": 1,
-    "blocked": 4,
-    "validation": 1
+    "integrated": 1092,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "capscope-gateway-egress-scopes",
-    "state": "validation",
-    "since": "2026-06-15T20:38:14.949Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-15T23:11:55.101Z",
+      "task": "capscope-gateway-egress-scopes",
+      "note": "Committed 78d4b680 on loop/main-track: feat(permissions) destination-scoped x402 outbound egress. covenant-permissions adds ScopeNamespace::"
+    },
     {
       "at": "2026-06-15T18:55:17.015Z",
       "task": "capscope-memory-write-scopes",
@@ -315,11 +315,6 @@
       "at": "2026-06-13T10:47:41.941Z",
       "task": "memory-compaction-detach-stale-parents-flag-gate-pin",
       "note": "Pinned detach_stale_parents flag gate. Committing as test(covenant-memory)."
-    },
-    {
-      "at": "2026-06-13T10:42:33.307Z",
-      "task": "memory-compaction-delete-cutoff-tier-isolation-pin",
-      "note": "Pinned plan_compaction tier-matched delete cutoffs. Committing as test(covenant-memory)."
     }
   ]
 }

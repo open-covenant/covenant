@@ -15094,6 +15094,418 @@ required = {caps:?}
         }
     }
 
+    /// Success-path audit exposure of an IPC [`Request`]. This enum and the
+    /// exhaustive [`audit_exposure`] match are the single source of truth for
+    /// which privileged daemon actions land on the audit log; the operator
+    /// contract is documented in `docs/audit-integrity.md` (Privileged Action
+    /// Coverage).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum AuditExposure {
+        /// Read-only query/inspection — not a privileged action. A few are
+        /// capability-gated and emit a `CapabilityCheck` row, but that is
+        /// authorization logging, not an action record.
+        ReadQuery,
+        /// Privileged action that emits an action-specific audit row on its
+        /// success path (`IntentDispatched`, `CapabilityGranted`, `PeerRevoked`,
+        /// `MemoryCompactionApplied`, ...).
+        ActionAudited,
+        /// Privileged action whose success path is recorded only by the
+        /// `CapabilityCheck` authorization row (`passed = true`); there is no
+        /// action-specific row. The authorized attempt still lands on the chain.
+        AuthorizationAudited,
+        /// Privileged action that records nothing on its success path. A tracked
+        /// accountability gap — see the assertion below and the doc.
+        Unaudited,
+    }
+
+    /// Classify every IPC [`Request`] by its success-path audit exposure.
+    ///
+    /// Exhaustive by design: a new `Request` variant fails to compile here until
+    /// it is classified, so privileged-action audit coverage cannot silently
+    /// shrink as handlers are added.
+    fn audit_exposure(req: &Request) -> AuditExposure {
+        use AuditExposure::*;
+        match req {
+            Request::Ping
+            | Request::ProtocolInfo
+            | Request::RecentMemory { .. }
+            | Request::RecentReceipts { .. }
+            | Request::ChainStatus
+            | Request::ReceiptBatches { .. }
+            | Request::SearchMemory { .. }
+            | Request::RecentCapabilities { .. }
+            | Request::Verify { .. }
+            | Request::IgnoreCheck { .. }
+            | Request::ListTools
+            | Request::RecentAudit { .. }
+            | Request::VerifyAuditIntegrity
+            | Request::TryRecvA2ATask
+            | Request::TryRecvA2AResult
+            | Request::RecentA2ATasks { .. }
+            | Request::RecentA2AResults { .. }
+            | Request::A2AQueue { .. }
+            | Request::RecentDebits { .. }
+            | Request::ListPeers { .. }
+            | Request::SapStatus => ReadQuery,
+            Request::SubmitIntent { .. }
+            | Request::ResumeIntent { .. }
+            | Request::PayX402 { .. }
+            | Request::GrantCapability { .. }
+            | Request::RevokePeer { .. }
+            | Request::RotateOperatorToken
+            | Request::RepairMemory { .. }
+            | Request::CompactMemory { .. }
+            | Request::BackfillSettlementReceipts { .. }
+            | Request::BackfillMemoryRecords { .. }
+            | Request::RepairA2ATask { .. }
+            | Request::RetryA2AStale { .. } => ActionAudited,
+            Request::CallTool { .. }
+            | Request::PurgeMemory { .. }
+            | Request::PurgeAudit { .. }
+            | Request::PurgeCapabilities { .. }
+            | Request::PurgePeers { .. }
+            | Request::FlushReceipts { .. }
+            | Request::SignAttestation { .. }
+            | Request::SendA2ATask { .. }
+            | Request::PostA2AResult { .. }
+            | Request::CompactA2A => AuthorizationAudited,
+            Request::Authenticate { .. }
+            | Request::RevokeCapability { .. }
+            | Request::SapPublishAgent { .. }
+            | Request::SapPublishAuditRoot { .. }
+            | Request::SapPublishAttestation { .. } => Unaudited,
+        }
+    }
+
+    #[test]
+    fn privileged_action_audit_inventory_pins_exposure_and_tracks_unaudited_gaps() {
+        use AuditExposure::*;
+
+        let repair_request = covenant_memory::MemoryRepairRequest {
+            mode: MemoryRepairMode::DryRun,
+            command: MemoryRepairCommand::DetachParent {
+                id: Uuid::nil(),
+                expected_parent: None,
+            },
+            reason: String::new(),
+        };
+        let compaction_request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::DryRun,
+            policy: covenant_types::MemoryCompactionPolicy::default(),
+            reason: String::new(),
+        };
+        let a2a_task = covenant_a2a::A2ATask {
+            id: Uuid::nil(),
+            sender: AgentId::new("sender@local", [0u8; 32]),
+            recipient: AgentId::new("recipient@local", [0u8; 32]),
+            intent_text: String::new(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let a2a_result = covenant_a2a::A2ATaskResult::ok(Uuid::nil(), vec![]);
+        let a2a_repair = covenant_a2a::A2ARepairRequest {
+            task_id: Uuid::nil(),
+            command: covenant_a2a::A2ARepairCommand::Requeue {
+                lease_id: None,
+                duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+            },
+            reason: String::new(),
+        };
+
+        // Every IPC Request and its success-path audit exposure. This list and
+        // the `audit_exposure` match must change together: a one-sided
+        // reclassification trips the per-row assertion below, and a brand-new
+        // variant fails to compile in `audit_exposure` until both are updated.
+        let inventory: Vec<(Request, AuditExposure)> = vec![
+            (Request::Ping, ReadQuery),
+            (Request::ProtocolInfo, ReadQuery),
+            (
+                Request::RecentMemory {
+                    tier: None,
+                    limit: 0,
+                    prefer_stream: None,
+                },
+                ReadQuery,
+            ),
+            (
+                Request::RecentReceipts {
+                    limit: 0,
+                    since_ms: None,
+                },
+                ReadQuery,
+            ),
+            (Request::ChainStatus, ReadQuery),
+            (Request::ReceiptBatches { limit: 0 }, ReadQuery),
+            (
+                Request::SearchMemory {
+                    query: String::new(),
+                    tier: None,
+                    limit: 0,
+                    min_relevance: None,
+                },
+                ReadQuery,
+            ),
+            (Request::RecentCapabilities { limit: 0 }, ReadQuery),
+            (Request::Verify { window: 0 }, ReadQuery),
+            (
+                Request::IgnoreCheck {
+                    text: String::new(),
+                },
+                ReadQuery,
+            ),
+            (Request::ListTools, ReadQuery),
+            (
+                Request::RecentAudit {
+                    limit: 0,
+                    since_ms: None,
+                    prefer_stream: None,
+                },
+                ReadQuery,
+            ),
+            (Request::VerifyAuditIntegrity, ReadQuery),
+            (Request::TryRecvA2ATask, ReadQuery),
+            (Request::TryRecvA2AResult, ReadQuery),
+            (Request::RecentA2ATasks { limit: 0 }, ReadQuery),
+            (Request::RecentA2AResults { limit: 0 }, ReadQuery),
+            (
+                Request::A2AQueue {
+                    limit: 0,
+                    min_lease_age_ms: None,
+                    deadline_within_ms: None,
+                    state_filter: None,
+                },
+                ReadQuery,
+            ),
+            (Request::RecentDebits { limit: 0 }, ReadQuery),
+            (
+                Request::ListPeers {
+                    limit: 0,
+                    pubkey_prefix: None,
+                    status_filter: None,
+                },
+                ReadQuery,
+            ),
+            (Request::SapStatus, ReadQuery),
+            (
+                Request::SubmitIntent {
+                    text: String::new(),
+                    prefer_stream: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::ResumeIntent {
+                    intent_id: Uuid::nil(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::PayX402 {
+                    provider: String::new(),
+                    endpoint: String::new(),
+                    method: String::new(),
+                    body: None,
+                    network: String::new(),
+                    asset: String::new(),
+                    per_call_cap: String::new(),
+                    credits: 0,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::GrantCapability {
+                    action: String::new(),
+                    scope: None,
+                    expires_at: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::RevokePeer {
+                    token_prefix: String::new(),
+                    force: false,
+                    match_limit: None,
+                },
+                ActionAudited,
+            ),
+            (Request::RotateOperatorToken, ActionAudited),
+            (
+                Request::RepairMemory {
+                    request: repair_request,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::CompactMemory {
+                    request: compaction_request,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::BackfillSettlementReceipts {
+                    dry_run: true,
+                    scope_pubkey: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::BackfillMemoryRecords {
+                    dry_run: true,
+                    scope_pubkey: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::RepairA2ATask {
+                    request: a2a_repair,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::RetryA2AStale {
+                    policy: covenant_a2a::A2AAutoRetryPolicy::default(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::CallTool {
+                    name: String::new(),
+                    arguments: serde_json::Value::Null,
+                },
+                AuthorizationAudited,
+            ),
+            (
+                Request::PurgeMemory {
+                    tier: None,
+                    before_ms: 0,
+                },
+                AuthorizationAudited,
+            ),
+            (Request::PurgeAudit { before_ms: 0 }, AuthorizationAudited),
+            (
+                Request::PurgeCapabilities { before_ms: 0 },
+                AuthorizationAudited,
+            ),
+            (Request::PurgePeers { before_ms: 0 }, AuthorizationAudited),
+            (Request::FlushReceipts { limit: 0 }, AuthorizationAudited),
+            (
+                Request::SignAttestation {
+                    message_b58: String::new(),
+                    ts: 0,
+                },
+                AuthorizationAudited,
+            ),
+            (
+                Request::SendA2ATask { task: a2a_task },
+                AuthorizationAudited,
+            ),
+            (
+                Request::PostA2AResult { result: a2a_result },
+                AuthorizationAudited,
+            ),
+            (Request::CompactA2A, AuthorizationAudited),
+            (
+                Request::Authenticate {
+                    token_b58: String::new(),
+                },
+                Unaudited,
+            ),
+            (
+                Request::RevokeCapability {
+                    signature_b58: String::new(),
+                },
+                Unaudited,
+            ),
+            (
+                Request::SapPublishAgent {
+                    manifest_json: String::new(),
+                },
+                Unaudited,
+            ),
+            (
+                Request::SapPublishAuditRoot {
+                    root_hash_hex: String::new(),
+                    release_target: String::new(),
+                    release_subject: String::new(),
+                    release_scope: String::new(),
+                },
+                Unaudited,
+            ),
+            (
+                Request::SapPublishAttestation {
+                    agent_pda: String::new(),
+                    root_hash_hex: String::new(),
+                    attestation_type: None,
+                    expires_at_unix: None,
+                },
+                Unaudited,
+            ),
+        ];
+
+        let kind_of = |req: &Request| -> String {
+            let value = serde_json::to_value(req).expect("Request serializes to JSON");
+            value
+                .get("kind")
+                .and_then(|k| k.as_str())
+                .expect("Request serializes to a tagged object with a string kind")
+                .to_string()
+        };
+
+        for (req, expected) in &inventory {
+            assert_eq!(
+                audit_exposure(req),
+                *expected,
+                "audit_exposure drifted from the inventory for {}; update BOTH the match in \
+             audit_exposure and this inventory, and reflect the change in \
+             docs/audit-integrity.md",
+                kind_of(req),
+            );
+        }
+
+        let kinds: std::collections::BTreeSet<String> =
+            inventory.iter().map(|(req, _)| kind_of(req)).collect();
+        assert_eq!(
+            kinds.len(),
+            inventory.len(),
+            "duplicate Request kind in the audit inventory"
+        );
+        assert_eq!(
+            inventory.len(),
+            48,
+            "every IPC Request variant must appear in the audit inventory exactly once; a new \
+         variant must be added here and classified in audit_exposure",
+        );
+
+        // Tracked accountability gaps: privileged actions that record nothing on
+        // their success path. Kept explicit so a new unaudited privileged action
+        // cannot land silently — adding one means extending this set AND
+        // docs/audit-integrity.md; closing one means shrinking it.
+        let unaudited: std::collections::BTreeSet<String> = inventory
+            .iter()
+            .filter(|(_, exposure)| *exposure == Unaudited)
+            .map(|(req, _)| kind_of(req))
+            .collect();
+        let expected_unaudited: std::collections::BTreeSet<String> = [
+            "authenticate",
+            "revoke_capability",
+            "sap_publish_agent",
+            "sap_publish_audit_root",
+            "sap_publish_attestation",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(
+            unaudited, expected_unaudited,
+            "the set of privileged-but-unaudited actions changed. If you added an audit emission \
+         and closed a gap, drop it here and in docs/audit-integrity.md. If a new privileged \
+         action records nothing on success, that is an accountability hole: add an audit \
+         emission, or — if the omission is intentional — document the reason here and in the doc.",
+        );
+    }
+
     #[tokio::test]
     async fn spawn_runtime_event_drainer_publishes_each_trace_to_broadcast_subscribers() {
         // The /intents/:id/events SSE handler subscribes to the broadcast

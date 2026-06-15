@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T09:36:45.852Z",
+  "updatedAt": "2026-06-15T09:56:49.691Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9184,
-    "tasks": 1088,
-    "integrated": 1089
+    "events": 9189,
+    "tasks": 1089,
+    "integrated": 1091
   },
   "throughput": {
-    "last24h": 2,
-    "last7d": 133,
-    "velocity": 19
+    "last24h": 4,
+    "last7d": 134,
+    "velocity": 19.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-15",
-      "count": 2
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-15",
-      "total": 1089
+      "total": 1091
     }
   ],
   "states": {
-    "integrated": 1083,
-    "proposed": 1,
-    "blocked": 3,
-    "cross_review": 1
+    "integrated": 1084,
+    "proposed": 2,
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "provenance-privileged-action-inventory",
-    "state": "cross_review",
-    "since": "2026-06-15T09:00:09.618Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-15T09:53:21.587Z",
+      "task": "provenance-privileged-action-inventory",
+      "note": "probe"
+    },
+    {
+      "at": "2026-06-15T09:50:33.484Z",
+      "task": "provenance-privileged-action-inventory",
+      "note": "Integrated as 89d47995, pushed to origin/loop/main-track (7b35c0fb..89d47995). Tracked diff: README.md (metrics 2818->2819), agent-os/crates"
+    },
     {
       "at": "2026-06-15T07:14:32.440Z",
       "task": "ipc-docs-intents-resume-ok-status-type-level-pin",
@@ -310,16 +315,6 @@
       "at": "2026-06-13T09:00:45.811Z",
       "task": "covenantd-recent-debits-truncate-after-merge-coverage",
       "note": "Committed on loop/main-track. Scope: covenantd/src/lib.rs +47 (recent_debits_truncates_to_limit_after_cross_agent_merge), README 2802->2803."
-    },
-    {
-      "at": "2026-06-13T08:46:59.273Z",
-      "task": "a2a-task-queue-leased-ordering-tie-break-coverage",
-      "note": "Committed 8987101e on loop/main-track. Scope: covenant-a2a/src/lib.rs +111 (in_memory_/jsonl_task_queue_orders_leased_entries_by_lease_age_t"
-    },
-    {
-      "at": "2026-06-13T08:25:21.538Z",
-      "task": "covenant-runtime-hermes-read-capped-exact-boundary-coverage",
-      "note": "Committed on loop/main-track. Scope: hermes.rs +49-line boundary test, README 2799->2800."
     }
   ]
 }

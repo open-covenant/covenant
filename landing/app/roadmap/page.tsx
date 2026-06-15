@@ -40,6 +40,7 @@ const MILESTONES: Milestone[] = [
     code: "M0",
     title: "Foundation",
     status: "Available",
+    live: true,
     intro:
       "Local control plane for engineers and researchers building governed autonomous software systems.",
     bullets: [

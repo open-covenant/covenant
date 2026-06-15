@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T18:18:24.194Z",
+  "updatedAt": "2026-06-15T18:38:27.966Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9242,
-    "tasks": 1095,
-    "integrated": 1096
+    "events": 9254,
+    "tasks": 1096,
+    "integrated": 1097
   },
   "throughput": {
-    "last24h": 9,
-    "last7d": 137,
-    "velocity": 19.6
+    "last24h": 10,
+    "last7d": 138,
+    "velocity": 19.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-15",
-      "count": 9
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-15",
-      "total": 1096
+      "total": 1097
     }
   ],
   "states": {
-    "integrated": 1089,
+    "integrated": 1090,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "validation": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "capscope-tool-call-scoping",
-    "state": "in_progress",
-    "since": "2026-06-15T18:08:22.031Z"
+    "task": "capscope-memory-write-scopes",
+    "state": "validation",
+    "since": "2026-06-15T18:38:01.045Z"
   },
   "recent": [
+    {
+      "at": "2026-06-15T18:29:57.972Z",
+      "task": "capscope-tool-call-scoping",
+      "note": "Pinned cross-tool capability isolation (failure mode #1). Committing on loop/main-track: covenantd test + metrics count (README 2835->2836)."
+    },
     {
       "at": "2026-06-15T18:01:00.494Z",
       "task": "capscope-a2a-verb-scopes",
@@ -315,11 +320,6 @@
       "at": "2026-06-13T10:27:41.034Z",
       "task": "memory-receipt-backfill-anti-double-bind-pin",
       "note": "Pushed c64246bf to origin/loop/main-track. Pins match_legacy_receipts_to_memory_records used_memory anti-double-bind (lib.rs:432) — bite-ver"
-    },
-    {
-      "at": "2026-06-13T10:21:39.757Z",
-      "task": "memory-compaction-idempotent-stale-mark-skip-pin",
-      "note": "Pushed 2eff2ae1 to origin/loop/main-track. Pins plan_compaction idempotent-skip else arm (lib.rs:356) — bite-verified: test fails when guard"
     }
   ]
 }

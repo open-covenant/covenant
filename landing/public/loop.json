@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T06:15:57.465Z",
+  "updatedAt": "2026-06-15T06:36:04.311Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9163,
+    "events": 9170,
     "tasks": 1086,
-    "integrated": 1087
+    "integrated": 1088
   },
   "throughput": {
-    "last24h": 0,
-    "last7d": 137,
-    "velocity": 19.6
+    "last24h": 1,
+    "last7d": 138,
+    "velocity": 19.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-15",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,18 +180,18 @@
     },
     {
       "date": "06-15",
-      "total": 1087
+      "total": 1088
     }
   ],
   "states": {
-    "integrated": 1081,
+    "integrated": 1082,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 3
   },
   "areas": [
     {
       "name": "ipc",
-      "count": 137
+      "count": 138
     },
     {
       "name": "covenant",
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-15T06:24:44.892Z",
+      "task": "ipc-docs-intent-result-status-type-level-pin",
+      "note": "Integrated as 3aa743b4 on loop/main-track. Docs status bullet canonicalized; dedicated validator added + registered in validate.sh; status t"
+    },
     {
       "at": "2026-06-13T12:22:53.142Z",
       "task": "zauth-read-capped-exact-cap-boundary",
@@ -310,11 +315,6 @@
       "at": "2026-06-13T08:20:38.028Z",
       "task": "covenant-runtime-truncate-stderr-cap-boundary-coverage",
       "note": "Committed on loop/main-track. Scope: lib.rs +29-line boundary test, README 2798->2799."
-    },
-    {
-      "at": "2026-06-13T08:16:12.038Z",
-      "task": "covenant-tools-read-body-capped-exact-boundary-coverage",
-      "note": "Committed on loop/main-track. test(covenant-tools): pin read_body_capped accepts a body sized exactly at the cap. Scope: lib.rs +48-line bou"
     }
   ]
 }

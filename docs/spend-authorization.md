@@ -176,6 +176,13 @@ Response:
 this path does not yet verify it names a prior approved authorization, so
 treat the join as accounting, not enforcement.
 
+Settlement is idempotent on `decision_id`. Retry it freely: if the original
+response was lost, or it failed after the debit landed, a repeat returns the
+**same** `receipt_id` without debiting the budget again or writing a second
+`spend_settled` row. One on-chain payment yields exactly one debit and one
+row, so a client can safely retry (the reference OrbWallet client retries 3×
+automatically and exposes `retryFailedSettlement(decisionId)`).
+
 ## Audit
 
 Every decision writes one `spend_authorization_decided` row to the audit

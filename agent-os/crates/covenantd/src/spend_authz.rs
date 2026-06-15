@@ -268,6 +268,16 @@ pub struct SettleContext<'a> {
 /// debit, then receipt, then audit, so the logs never carry a half-recorded
 /// settlement.
 ///
+/// Idempotent on `decision_id`: a wallet retries settlement when our
+/// success response is lost or a settle failed after the debit landed (the
+/// reference OrbWallet client retries 3× automatically and exposes a manual
+/// `retryFailedSettlement(decisionId)`). A repeat for a `decision_id` that
+/// already settled returns the original receipt id without debiting or
+/// recording again, so one on-chain payment yields exactly one debit and
+/// one `spend_settled` row. This covers the sequential retries a client
+/// actually issues; it does not serialize two settles racing on the same
+/// `decision_id`, which the client does not produce.
+///
 /// The `decision_id` is recorded for correlation; this path does not yet
 /// verify it names a prior *approved* authorization. The caller is
 /// authenticated and capability-gated, so this is an accounting join, not
@@ -281,6 +291,20 @@ pub async fn record_spend_settlement(
 ) -> Result<Uuid, SpendAuthzError> {
     if !config.enabled {
         return Err(SpendAuthzError::Disabled);
+    }
+
+    if let Some(receipt_id) = ctx
+        .audit
+        .settled_receipt_for(facts.decision_id)
+        .await
+        .map_err(|e| SpendAuthzError::Audit(e.to_string()))?
+    {
+        debug!(
+            decision_id = %facts.decision_id,
+            %receipt_id,
+            "spend settlement already recorded; returning original receipt"
+        );
+        return Ok(receipt_id);
     }
 
     let receipt_id = Uuid::new_v4();
@@ -597,6 +621,44 @@ mod tests {
             other => panic!("unexpected audit kind: {other:?}"),
         }
         // 1000 capacity - 8 debited = 992 remaining.
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+    }
+
+    #[tokio::test]
+    async fn settlement_is_idempotent_on_decision_id() {
+        // A retried settlement (lost response, or a retry of one that failed
+        // after the debit) must join the original receipt: one debit, one
+        // receipt, one audit row, no matter how many times it is replayed.
+        let settlement = covenant_settlement::InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(1);
+        budget.set_capacity(&payer, 1000).await.unwrap();
+
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let facts = settle_facts();
+
+        let first = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect("first settle");
+        let second = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect("retry settle");
+        let third = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect("retry settle again");
+
+        assert_eq!(first, second, "retry returns the original receipt id");
+        assert_eq!(first, third);
+        assert_eq!(settlement.recent(10).await.unwrap().len(), 1, "one receipt");
+        assert_eq!(audit.recent(10).await.unwrap().len(), 1, "one settled row");
+        // Debited exactly once: 1000 - 8 = 992, not 976.
         assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
     }
 

@@ -536,6 +536,24 @@ pub enum AuditKind {
 pub trait AuditLog: Send + Sync {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError>;
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, AuditError>;
+    /// Receipt id of an already-recorded `SpendSettled` row for
+    /// `decision_id`, if one exists. Lets settlement be idempotent: a wallet
+    /// that retries a settlement (its success response was lost, or it
+    /// retries one that failed after the debit landed) joins back to the
+    /// original receipt instead of double-debiting and writing a duplicate
+    /// row. Scans the log — the same whole-file cost `record` already pays —
+    /// and is only on the infrequent settle path.
+    async fn settled_receipt_for(&self, decision_id: Uuid) -> Result<Option<Uuid>, AuditError> {
+        let events = self.recent(usize::MAX).await?;
+        Ok(events.iter().rev().find_map(|e| match &e.kind {
+            AuditKind::SpendSettled {
+                decision_id: d,
+                receipt_id,
+                ..
+            } if *d == decision_id => Some(*receipt_id),
+            _ => None,
+        }))
+    }
     /// Drop every event with `timestamp_ms < before_ms`. Returns the
     /// count deleted. Operator-driven retention: with no purge call the
     /// log grows unbounded for the lifetime of the daemon. Mirrors the

@@ -216,12 +216,15 @@ export class HttpDaemonClient implements DaemonClient, A2ADaemon {
         const json = dataLine.slice('data:'.length).trim();
         if (!json) continue;
         try {
-          const env = JSON.parse(json) as { kind?: string; chunk?: AgentEvent };
-          if (env.kind === 'stream_chunk' && env.chunk && typeof env.chunk.type === 'string') {
-            onEvent(env.chunk);
+          // /intents/:id/events emits the raw AgentEvent per frame
+          // (`data: {"type":...}`, covenantd http.rs agent_event_sse_frame), not
+          // the v2 stream_chunk envelope. Parse the event directly.
+          const ev = JSON.parse(json) as AgentEvent;
+          if (ev && typeof (ev as { type?: unknown }).type === 'string') {
+            onEvent(ev);
           }
         } catch {
-          // tolerate partial / non-chunk frames (stream_begin/stream_end)
+          // tolerate partial frames / keepalive comments
         }
       }
     }

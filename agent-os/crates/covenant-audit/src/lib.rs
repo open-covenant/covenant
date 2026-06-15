@@ -4918,4 +4918,170 @@ mod tests {
         ));
         assert_eq!(rows[0].timestamp_ms, 42);
     }
+
+    fn golden_provenance_records() -> Vec<(&'static str, AuditEvent)> {
+        let issuer = AgentId::new("operator@covenant", [7u8; 32]);
+        let ev = |n: u128, ts: u64, kind: AuditKind| AuditEvent {
+            id: Uuid::from_u128(n),
+            timestamp_ms: ts,
+            issuer: issuer.clone(),
+            kind,
+        };
+        vec![
+            (
+                "capability_check_partial_grant",
+                ev(
+                    1,
+                    1_700_000_000_000,
+                    AuditKind::CapabilityCheck {
+                        agent_id: "research@agent".into(),
+                        required_actions: vec!["memory.write".into(), "a2a.send".into()],
+                        missing_actions: vec!["a2a.send".into()],
+                        passed: false,
+                        authorized_by: vec![CapabilityAuthorization {
+                            action: "memory.write".into(),
+                            granted_by_display: "operator@covenant".into(),
+                            signature_b58: "GrantSigWrite".into(),
+                        }],
+                    },
+                ),
+            ),
+            (
+                "capability_granted",
+                ev(
+                    2,
+                    1_700_000_000_001,
+                    AuditKind::CapabilityGranted {
+                        subject_display: "research@agent".into(),
+                        action: "memory.write".into(),
+                        granted_by_display: "operator@covenant".into(),
+                        signature_b58: "GrantSigWrite".into(),
+                    },
+                ),
+            ),
+            (
+                "capability_grant_rejected",
+                ev(
+                    3,
+                    1_700_000_000_002,
+                    AuditKind::CapabilityGrantRejected {
+                        subject_display: "research@agent".into(),
+                        action: "memory.write".into(),
+                        reason: "capability expired".into(),
+                    },
+                ),
+            ),
+            (
+                "capability_scope_rejected",
+                ev(
+                    4,
+                    1_700_000_000_003,
+                    AuditKind::CapabilityScopeRejected {
+                        agent_id: "research@agent".into(),
+                        action: "audit.purge".into(),
+                        reason: "before_ms exceeds granted scope".into(),
+                    },
+                ),
+            ),
+            (
+                "capability_revoked",
+                ev(
+                    5,
+                    1_700_000_000_004,
+                    AuditKind::CapabilityRevoked {
+                        subject_display: "research@agent".into(),
+                        action: "memory.write".into(),
+                        signature_b58: "GrantSigWrite".into(),
+                        removed: true,
+                    },
+                ),
+            ),
+            (
+                "capability_revoke_rejected",
+                ev(
+                    6,
+                    1_700_000_000_005,
+                    AuditKind::CapabilityRevokeRejected {
+                        signature_b58: "OtherSig".into(),
+                        reason: "not the capability subject".into(),
+                    },
+                ),
+            ),
+        ]
+    }
+
+    fn provenance_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("provenance-records.v1.json")
+    }
+
+    /// Freezes the provenance/audit record schema as an external
+    /// conformance contract. The committed fixture pins, for a
+    /// deterministic sequence of capability-family records: the exact
+    /// serde_json wire form of each `AuditEvent` (the bytes hashed into
+    /// the chain), its `sha256` event hash, and the genesis-seeded chain
+    /// root over the whole sequence as computed by production
+    /// `verify_integrity`. A drift in fields, field ordering, the
+    /// discriminator, the `AgentId` envelope, or the hashing breaks one
+    /// of these assertions instead of silently changing the contract.
+    #[tokio::test]
+    async fn provenance_record_schema_golden_vectors_are_frozen() {
+        const DRIFT: &str = "provenance record schema/hash drift: \
+            tests/fixtures/provenance-records.v1.json is a frozen external conformance contract. \
+            A mismatch means the AuditEvent wire shape, field ordering, discriminator, or hashing \
+            changed and every downstream verifier would break. Update the fixture only as a \
+            deliberate, reviewed schema change (bump the .v<n> suffix for an incompatible shape) — \
+            never blindly regenerate to silence this test.";
+
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(provenance_fixture_path()).unwrap())
+                .expect("golden fixture is valid JSON");
+        let golden = fixture["records"]
+            .as_array()
+            .expect("fixture.records is an array");
+
+        let records = golden_provenance_records();
+        assert_eq!(
+            records.len(),
+            golden.len(),
+            "{DRIFT} (record count: code has {}, fixture has {})",
+            records.len(),
+            golden.len(),
+        );
+
+        let log = InMemoryAuditLog::new();
+        for ((name, event), expected) in records.iter().zip(golden) {
+            assert_eq!(
+                Some(*name),
+                expected["name"].as_str(),
+                "{DRIFT} (record order/name mismatch near {name})",
+            );
+            let canonical = serde_json::to_string(event).unwrap();
+            assert_eq!(
+                canonical,
+                expected["canonical_json"].as_str().unwrap(),
+                "{DRIFT} (canonical wire form for {name})",
+            );
+            assert_eq!(
+                sha256_hex(canonical.as_bytes()),
+                expected["event_hash_hex"].as_str().unwrap(),
+                "{DRIFT} (event hash for {name})",
+            );
+            log.record(event.clone()).await.unwrap();
+        }
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(
+            report.valid,
+            "golden records must form a valid chain: {:?}",
+            report.failures,
+        );
+        assert_eq!(
+            report.root_hash_hex,
+            fixture["chain_root_hash_hex"].as_str().unwrap(),
+            "{DRIFT} (genesis-seeded chain root over the full sequence)",
+        );
+    }
 }

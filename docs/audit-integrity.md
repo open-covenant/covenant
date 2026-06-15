@@ -33,6 +33,18 @@ covenant audit purge --before-ms 1700000000000 --json
 }
 ```
 
+## Record Schema Golden Vectors
+
+The audit record schema is a frozen external contract. Because the event hash is `sha256(serde_json::to_string(event))`, the serialized `AuditEvent` *is* the byte sequence hashed into the chain — any drift in fields, field ordering, the `kind` discriminator, or the `AgentId` envelope silently changes every downstream event hash and root. Committed golden vectors pin that contract so other implementations can verify against it.
+
+`agent-os/crates/covenant-audit/tests/fixtures/provenance-records.v1.json` records, for a deterministic sequence of the capability family of audit kinds (`capability_check`, `capability_granted`, `capability_grant_rejected`, `capability_scope_rejected`, `capability_revoked`, `capability_revoke_rejected`):
+
+- `canonical_json` — the exact `AuditEvent` wire form;
+- `event_hash_hex` — its SHA-256 event hash;
+- `chain_root_hash_hex` — the genesis-seeded chain fold over the whole sequence, as computed by production `verify_integrity`.
+
+The `provenance_record_schema_golden_vectors_are_frozen` test reconstructs the same records from typed Rust, re-serializes and re-hashes them through production code, and asserts byte-for-byte equality with the fixture. A mismatch fails the test rather than silently changing the contract. Update the fixture only as a deliberate, reviewed schema change — bump the `.v<n>` suffix for an incompatible shape — never blindly regenerate it to make a failing test pass.
+
 ## Verification
 
 Operators can verify the local chain through all daemon surfaces:

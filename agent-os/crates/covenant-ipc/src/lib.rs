@@ -12,7 +12,7 @@ use covenant_a2a::{
     A2AAutoRetryPolicy, A2AAutoRetryReport, A2ARepairOutcome, A2ARepairRequest, A2ATask,
     A2ATaskQueueEntry, A2ATaskQueueState, A2ATaskResult,
 };
-use covenant_audit::{AuditEvent, AuditIntegrityReport};
+use covenant_audit::{AuditEvent, AuditIntegrityReport, PrivilegedAction};
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
@@ -762,6 +762,39 @@ pub enum Request {
         #[serde(default)]
         expires_at_unix: Option<u64>,
     },
+    /// Operator-only provenance query: every privileged action in a
+    /// window, projected from the capability family of audit kinds and
+    /// filtered by actor, approver, authorizing rule, and outcome. The
+    /// daemon verifies the audit hash-chain and returns the verdict
+    /// alongside the rows in [`Response::ProvenanceActions`], so a
+    /// provenance answer can never silently read tampered rows. Gated on
+    /// the operator identity (mirrors [`Request::VerifyAuditIntegrity`])
+    /// because the response carries the global integrity report and a
+    /// cross-actor view, not the caller's own feed.
+    ///
+    /// `since_ms`/`until_ms` bound the window inclusively; absent fields
+    /// leave that end open. `actor`, `approver`, and `outcome` are exact
+    /// matches; `rule` matches a base58 signature prefix. `limit` bounds
+    /// the result to the most recent matching rows (chronological order,
+    /// matching the other recent-tail verbs) — the same silent-default
+    /// reasoning, so a frame that omits it scans the window but truncates
+    /// to a bounded slice rather than streaming an unbounded result.
+    QueryProvenance {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approver: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -1015,6 +1048,19 @@ pub enum Response {
         attester: String,
         agent_pda: String,
         signature: String,
+    },
+    /// Result of a [`Request::QueryProvenance`]. `actions` are the
+    /// projected privileged-action rows matching the filter — the most
+    /// recent matches in chronological order, bounded by the request
+    /// `limit`. `integrity` is the
+    /// audit hash-chain verdict computed during the same query so the
+    /// operator sees whether the underlying rows are tamper-evident.
+    /// `scanned` is the number of audit events examined within the
+    /// window, so the cost and coverage of the answer are visible.
+    ProvenanceActions {
+        integrity: AuditIntegrityReport,
+        actions: Vec<PrivilegedAction>,
+        scanned: u64,
     },
     Error {
         message: String,
@@ -11570,5 +11616,122 @@ mod tests {
             }
             other => panic!("expected Ipc(Io(UnexpectedEof)), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn request_query_provenance_serde_pins_slug_and_omits_absent_filters() {
+        // Request::QueryProvenance is the operator provenance query.
+        // With #[serde(tag = "kind", rename_all = "snake_case")] and
+        // skip_serializing_if on every optional filter, a query with
+        // only a since_ms bound must serialize to exactly the kind
+        // slug, since_ms, and the defaulted limit — no null actor /
+        // approver / rule / outcome / until_ms keys. A regression that
+        // dropped skip_serializing_if would widen every frame with
+        // nulls and a slug regression would strand the query at the
+        // daemon's catch-all Error arm, hiding the privileged-action
+        // provenance the operator queried for.
+        let event = Request::QueryProvenance {
+            since_ms: Some(1_000),
+            until_ms: None,
+            actor: None,
+            approver: None,
+            rule: None,
+            outcome: None,
+            limit: 10,
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit", "since_ms"],
+            "an only-since_ms QueryProvenance frame must carry exactly \
+             kind, limit, and since_ms — absent optional filters are \
+             dropped, not serialized as null",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("query_provenance")),
+            "Request discriminator slug must be the durable \
+             'query_provenance'; a slug regression strands the \
+             provenance query at the daemon Error arm",
+        );
+
+        let full = Request::QueryProvenance {
+            since_ms: Some(1),
+            until_ms: Some(2),
+            actor: Some("research@agent".into()),
+            approver: Some("operator@local".into()),
+            rule: Some("Sig".into()),
+            outcome: Some("granted".into()),
+            limit: 5,
+        };
+        let back: Request = serde_json::from_value(serde_json::to_value(&full).unwrap()).unwrap();
+        assert_eq!(
+            back, full,
+            "Request::QueryProvenance must round-trip every filter field verbatim",
+        );
+
+        let defaulted: Request =
+            serde_json::from_value(serde_json::json!({"kind": "query_provenance"})).unwrap();
+        assert_eq!(
+            defaulted,
+            Request::QueryProvenance {
+                since_ms: None,
+                until_ms: None,
+                actor: None,
+                approver: None,
+                rule: None,
+                outcome: None,
+                limit: 10,
+            },
+            "a bare query_provenance frame defaults limit to default_recent_limit and leaves \
+             every filter open",
+        );
+    }
+
+    #[test]
+    fn response_provenance_actions_serde_pins_slug_and_round_trips() {
+        // Response::ProvenanceActions pairs with QueryProvenance and
+        // carries the projected privileged-action rows plus the audit
+        // chain integrity verdict the operator relies on to know the
+        // rows are tamper-evident. Pin the kind slug and a full
+        // round-trip so a discriminator or field regression can't
+        // silently strand the provenance answer.
+        let event = Response::ProvenanceActions {
+            integrity: AuditIntegrityReport {
+                events: 3,
+                anchors: 3,
+                valid: true,
+                root_hash_hex: "ab".repeat(32),
+                failures: vec![],
+            },
+            actions: vec![PrivilegedAction {
+                event_id: uuid::Uuid::nil(),
+                timestamp_ms: 1_000,
+                kind: "capability_granted".into(),
+                actor: "research@agent".into(),
+                action: "memory.write".into(),
+                approver: Some("operator@local".into()),
+                rule: Some("GrantSig".into()),
+                outcome: "granted".into(),
+            }],
+            scanned: 7,
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            wire.get("kind"),
+            Some(&serde_json::json!("provenance_actions")),
+            "Response discriminator slug must be the durable 'provenance_actions'",
+        );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::ProvenanceActions must round-trip the integrity report, action rows, \
+             and scanned count verbatim",
+        );
     }
 }

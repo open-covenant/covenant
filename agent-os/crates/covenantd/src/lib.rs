@@ -19,7 +19,8 @@ pub mod x402;
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
 use covenant_audit::{
-    hash_hex, AuditError, AuditEvent, AuditKind, AuditLog, CapabilityAuthorization,
+    hash_hex, project_privileged_actions, AuditError, AuditEvent, AuditKind, AuditLog,
+    CapabilityAuthorization, ProvenanceFilter,
 };
 use covenant_budget::{
     BudgetCheckpointError, BudgetError, BudgetLedger, JsonlPauseCheckpointStore,
@@ -2393,6 +2394,29 @@ impl Server {
                 prefer_stream: _,
             } => self.recent_audit(limit, since_ms, peer).await,
             Request::VerifyAuditIntegrity => self.verify_audit_integrity(peer).await,
+            Request::QueryProvenance {
+                since_ms,
+                until_ms,
+                actor,
+                approver,
+                rule,
+                outcome,
+                limit,
+            } => {
+                self.query_provenance(
+                    ProvenanceFilter {
+                        since_ms,
+                        until_ms,
+                        actor,
+                        approver,
+                        rule,
+                        outcome,
+                    },
+                    limit,
+                    peer,
+                )
+                .await
+            }
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::PurgeCapabilities { before_ms } => {
                 self.purge_capabilities(before_ms, peer).await
@@ -3860,6 +3884,80 @@ impl Server {
             Err(e) => Response::Error {
                 message: format!("audit: {e}"),
             },
+        }
+    }
+
+    /// Operator-only provenance query (mirrors
+    /// [`Self::verify_audit_integrity`]'s operator gate): returns every
+    /// privileged action in the requested window, projected from the
+    /// capability family of audit kinds and narrowed by
+    /// [`ProvenanceFilter`]. The audit hash-chain is verified in the same
+    /// call and the verdict travels in the response, so a provenance
+    /// answer is never silently read from tampered rows. `limit` bounds
+    /// the result to the most recent matching rows (chronological order,
+    /// matching `recent_audit`); `scanned` reports how many in-window
+    /// events were examined so the cost and coverage are visible.
+    ///
+    /// Unlike `recent_audit` this is not scoped to the caller's own feed:
+    /// the operator gate is the access control and the operator wants the
+    /// global privileged-action set. The integrity verdict and the audit
+    /// read are separate calls, so a concurrent append between them can
+    /// leave one extra row in `actions` beyond the verified root — benign
+    /// for v0 single-writer triage; the operator re-runs for a consistent
+    /// snapshot.
+    async fn query_provenance(
+        &self,
+        filter: ProvenanceFilter,
+        limit: usize,
+        peer: &AgentId,
+    ) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "provenance query requires the operator identity".into(),
+            };
+        }
+        let integrity = match self.audit.verify_integrity().await {
+            Ok(report) => report,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("audit: {e}"),
+                }
+            }
+        };
+        let events = match self.audit.recent(usize::MAX).await {
+            Ok(events) => events,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("audit: {e}"),
+                }
+            }
+        };
+        let mut scanned: u64 = 0;
+        let mut actions = Vec::new();
+        for event in &events {
+            if let Some(since) = filter.since_ms {
+                if event.timestamp_ms < since {
+                    continue;
+                }
+            }
+            if let Some(until) = filter.until_ms {
+                if event.timestamp_ms > until {
+                    continue;
+                }
+            }
+            scanned += 1;
+            for action in project_privileged_actions(event) {
+                if filter.matches(&action) {
+                    actions.push(action);
+                }
+            }
+        }
+        let start = actions.len().saturating_sub(limit);
+        let actions = actions.split_off(start);
+        Response::ProvenanceActions {
+            integrity,
+            actions,
+            scanned,
         }
     }
 
@@ -15178,6 +15276,7 @@ required = {caps:?}
             | Request::ListTools
             | Request::RecentAudit { .. }
             | Request::VerifyAuditIntegrity
+            | Request::QueryProvenance { .. }
             | Request::TryRecvA2ATask
             | Request::TryRecvA2AResult
             | Request::RecentA2ATasks { .. }
@@ -15667,6 +15766,194 @@ required = {caps:?}
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
             Arc::new(covenant_budget::InMemoryLedger::new()),
         )
+    }
+
+    #[tokio::test]
+    async fn query_provenance_projects_filters_and_gates_on_operator() {
+        use covenant_audit::{AuditEvent, AuditKind, CapabilityAuthorization, InMemoryAuditLog};
+
+        let audit = Arc::new(InMemoryAuditLog::new());
+        let issuer = AgentId::new("user@local", [0u8; 32]);
+        let mk = |timestamp_ms: u64, kind: AuditKind| AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms,
+            issuer: issuer.clone(),
+            kind,
+        };
+        audit
+            .record(mk(
+                1_000,
+                AuditKind::CapabilityGranted {
+                    subject_display: "research@agent".into(),
+                    action: "memory.write".into(),
+                    granted_by_display: "operator@local".into(),
+                    signature_b58: "GrantSig".into(),
+                },
+            ))
+            .await
+            .unwrap();
+        audit
+            .record(mk(
+                2_000,
+                AuditKind::CapabilityCheck {
+                    agent_id: "research@agent".into(),
+                    required_actions: vec!["memory.write".into()],
+                    missing_actions: vec![],
+                    passed: true,
+                    authorized_by: vec![CapabilityAuthorization {
+                        action: "memory.write".into(),
+                        granted_by_display: "operator@local".into(),
+                        signature_b58: "GrantSig".into(),
+                    }],
+                },
+            ))
+            .await
+            .unwrap();
+        audit
+            .record(mk(
+                2_500,
+                AuditKind::AuthenticationFailed {
+                    transport: "ipc".into(),
+                    reason: "bad token".into(),
+                },
+            ))
+            .await
+            .unwrap();
+        audit
+            .record(mk(
+                3_000,
+                AuditKind::CapabilityRevoked {
+                    subject_display: "research@agent".into(),
+                    action: "memory.write".into(),
+                    signature_b58: "GrantSig".into(),
+                    removed: true,
+                },
+            ))
+            .await
+            .unwrap();
+
+        let server = server_with_audit(audit.clone());
+
+        let query = |since_ms, until_ms, actor: Option<&str>, approver: Option<&str>, rule: Option<&str>, outcome: Option<&str>, limit| {
+            Request::QueryProvenance {
+                since_ms,
+                until_ms,
+                actor: actor.map(str::to_string),
+                approver: approver.map(str::to_string),
+                rule: rule.map(str::to_string),
+                outcome: outcome.map(str::to_string),
+                limit,
+            }
+        };
+
+        // Unfiltered: three privileged rows (the auth failure has no
+        // authorizing rule and projects to nothing), all four in-window
+        // events scanned, and the verified chain verdict travels along.
+        let resp = server
+            .op_respond(query(None, None, None, None, None, None, 10))
+            .await;
+        let (integrity, actions, scanned) = match resp {
+            Response::ProvenanceActions {
+                integrity,
+                actions,
+                scanned,
+            } => (integrity, actions, scanned),
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        };
+        assert!(
+            integrity.valid,
+            "a provenance answer carries the verified audit-chain verdict, not raw rows",
+        );
+        assert_eq!(scanned, 4, "every in-window event was examined");
+        assert_eq!(
+            actions
+                .iter()
+                .map(|a| a.outcome.as_str())
+                .collect::<Vec<_>>(),
+            vec!["granted", "authorized", "revoked"],
+            "rows project in chronological order and the auth failure is dropped",
+        );
+
+        // Outcome is an exact filter.
+        let resp = server
+            .op_respond(query(None, None, None, None, None, Some("granted"), 10))
+            .await;
+        let granted = match resp {
+            Response::ProvenanceActions { actions, .. } => actions,
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        };
+        assert_eq!(granted.len(), 1);
+        assert_eq!(granted[0].outcome, "granted");
+
+        // Rule prefix spans every row that names the grant signature.
+        let resp = server
+            .op_respond(query(None, None, None, None, Some("GrantSig"), None, 10))
+            .await;
+        match resp {
+            Response::ProvenanceActions { actions, .. } => assert_eq!(actions.len(), 3),
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        }
+
+        // Approver filter excludes the self-revoke, which records none.
+        let resp = server
+            .op_respond(query(None, None, None, Some("operator@local"), None, None, 10))
+            .await;
+        match resp {
+            Response::ProvenanceActions { actions, .. } => {
+                assert_eq!(
+                    actions.len(),
+                    2,
+                    "grant + authorized check name the approver; the self-revoke does not",
+                );
+                assert!(actions
+                    .iter()
+                    .all(|a| a.approver.as_deref() == Some("operator@local")));
+            }
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        }
+
+        // The window bounds the scan and the result.
+        let resp = server
+            .op_respond(query(Some(2_500), None, None, None, None, None, 10))
+            .await;
+        match resp {
+            Response::ProvenanceActions {
+                actions, scanned, ..
+            } => {
+                assert_eq!(scanned, 2, "only the auth failure and the revoke are in window");
+                assert_eq!(actions.len(), 1);
+                assert_eq!(actions[0].outcome, "revoked");
+            }
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        }
+
+        // limit keeps the most recent matching row.
+        let resp = server
+            .op_respond(query(None, None, None, None, None, None, 1))
+            .await;
+        match resp {
+            Response::ProvenanceActions { actions, .. } => {
+                assert_eq!(actions.len(), 1);
+                assert_eq!(
+                    actions[0].outcome, "revoked",
+                    "the newest matching row survives the bound",
+                );
+            }
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        }
+
+        // Non-operator peers are rejected before any projection runs.
+        let intruder = AgentId::new("intruder@local", [9u8; 32]);
+        let resp = server
+            .respond(query(None, None, None, None, None, None, 10), &intruder)
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("operator identity"),
+                "a non-operator provenance query must be rejected, got: {message}",
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     fn server_with_budget(budget: Arc<dyn covenant_budget::BudgetLedger>) -> Server {

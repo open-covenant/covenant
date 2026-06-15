@@ -959,6 +959,207 @@ pub fn hash_hex(bytes: &[u8]) -> String {
     sha256_hex(bytes)
 }
 
+/// One privileged action distilled from an [`AuditEvent`] for the
+/// operator provenance view: who acted, under which signed rule, who
+/// approved it, and how it resolved. Projected from the capability
+/// family of [`AuditKind`] variants — the rows that carry an
+/// authorizing rule — so an operator can answer "what privileged
+/// actions happened, by whom, under what rule" without re-deriving the
+/// mapping from raw audit JSON. Crosses the wire inside the provenance
+/// query response, so the field set is part of the IPC contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrivilegedAction {
+    pub event_id: Uuid,
+    pub timestamp_ms: u64,
+    /// Audit kind discriminator slug, e.g. `capability_check`.
+    pub kind: String,
+    /// Subject the action is attributed to — the capability holder,
+    /// grantee, or revoker. Empty when the source row names only a rule
+    /// signature and no subject display (a daemon-issued revoke
+    /// rejection).
+    pub actor: String,
+    /// The capability action string, e.g. `memory.write`. Empty when the
+    /// source row is keyed by rule signature alone.
+    pub action: String,
+    /// Display of the identity that signed the authorizing capability.
+    /// `Some` only when an authorizing grant was matched.
+    pub approver: Option<String>,
+    /// Base58 signature identifying the signed capability — the rule.
+    /// `Some` on rows that name an authorizing or affected capability.
+    pub rule: Option<String>,
+    /// How the action resolved: `authorized`, `denied`, `granted`,
+    /// `grant_rejected`, `revoked`, `revoke_noop`, `scope_rejected`, or
+    /// `revoke_rejected`.
+    pub outcome: String,
+}
+
+/// Project one audit event into its privileged-action rows. A
+/// [`AuditKind::CapabilityCheck`] fans out to one `authorized` row per
+/// granted required action (each naming its approver and rule) plus one
+/// `denied` row per missing action; the single-row grant, revoke, and
+/// rejection kinds produce exactly one row. Every other kind — intent
+/// dispatch, Hermes tool calls, budget enforcement, peer/operator
+/// administration — has no authorizing rule and projects to an empty
+/// vec, so the provenance view stays scoped to capability provenance.
+pub fn project_privileged_actions(event: &AuditEvent) -> Vec<PrivilegedAction> {
+    let row = |actor: String,
+               action: String,
+               approver: Option<String>,
+               rule: Option<String>,
+               outcome: &str,
+               kind: &str| PrivilegedAction {
+        event_id: event.id,
+        timestamp_ms: event.timestamp_ms,
+        kind: kind.to_string(),
+        actor,
+        action,
+        approver,
+        rule,
+        outcome: outcome.to_string(),
+    };
+    match &event.kind {
+        AuditKind::CapabilityCheck {
+            agent_id,
+            missing_actions,
+            authorized_by,
+            ..
+        } => {
+            let mut rows = Vec::with_capacity(authorized_by.len() + missing_actions.len());
+            for auth in authorized_by {
+                rows.push(row(
+                    agent_id.clone(),
+                    auth.action.clone(),
+                    Some(auth.granted_by_display.clone()),
+                    Some(auth.signature_b58.clone()),
+                    "authorized",
+                    "capability_check",
+                ));
+            }
+            for missing in missing_actions {
+                rows.push(row(
+                    agent_id.clone(),
+                    missing.clone(),
+                    None,
+                    None,
+                    "denied",
+                    "capability_check",
+                ));
+            }
+            rows
+        }
+        AuditKind::CapabilityGranted {
+            subject_display,
+            action,
+            granted_by_display,
+            signature_b58,
+        } => vec![row(
+            subject_display.clone(),
+            action.clone(),
+            Some(granted_by_display.clone()),
+            Some(signature_b58.clone()),
+            "granted",
+            "capability_granted",
+        )],
+        AuditKind::CapabilityGrantRejected {
+            subject_display,
+            action,
+            ..
+        } => vec![row(
+            subject_display.clone(),
+            action.clone(),
+            None,
+            None,
+            "grant_rejected",
+            "capability_grant_rejected",
+        )],
+        AuditKind::CapabilityRevoked {
+            subject_display,
+            action,
+            signature_b58,
+            removed,
+        } => vec![row(
+            subject_display.clone(),
+            action.clone(),
+            None,
+            Some(signature_b58.clone()),
+            if *removed { "revoked" } else { "revoke_noop" },
+            "capability_revoked",
+        )],
+        AuditKind::CapabilityScopeRejected {
+            agent_id, action, ..
+        } => vec![row(
+            agent_id.clone(),
+            action.clone(),
+            None,
+            None,
+            "scope_rejected",
+            "capability_scope_rejected",
+        )],
+        AuditKind::CapabilityRevokeRejected { signature_b58, .. } => vec![row(
+            String::new(),
+            String::new(),
+            None,
+            Some(signature_b58.clone()),
+            "revoke_rejected",
+            "capability_revoke_rejected",
+        )],
+        _ => Vec::new(),
+    }
+}
+
+/// Filter over projected [`PrivilegedAction`] rows for the provenance
+/// query. Every set field must match for a row to pass; `None` fields
+/// match everything. `actor`, `approver`, and `outcome` are exact;
+/// `rule` matches a base58 signature prefix so an operator can paste a
+/// short fragment from an audit row (mirroring `peers list --prefix`).
+/// The time window is inclusive on both ends.
+#[derive(Debug, Clone, Default)]
+pub struct ProvenanceFilter {
+    pub since_ms: Option<u64>,
+    pub until_ms: Option<u64>,
+    pub actor: Option<String>,
+    pub approver: Option<String>,
+    pub rule: Option<String>,
+    pub outcome: Option<String>,
+}
+
+impl ProvenanceFilter {
+    pub fn matches(&self, action: &PrivilegedAction) -> bool {
+        if let Some(since) = self.since_ms {
+            if action.timestamp_ms < since {
+                return false;
+            }
+        }
+        if let Some(until) = self.until_ms {
+            if action.timestamp_ms > until {
+                return false;
+            }
+        }
+        if let Some(actor) = &self.actor {
+            if action.actor != *actor {
+                return false;
+            }
+        }
+        if let Some(approver) = &self.approver {
+            if action.approver.as_deref() != Some(approver.as_str()) {
+                return false;
+            }
+        }
+        if let Some(outcome) = &self.outcome {
+            if action.outcome != *outcome {
+                return false;
+            }
+        }
+        if let Some(rule) = &self.rule {
+            match &action.rule {
+                Some(signature) if signature.starts_with(rule.as_str()) => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4497,5 +4698,224 @@ mod tests {
             source.downcast_ref::<serde_json::Error>().is_some(),
             "AuditError::Serde source() must downcast_ref to serde_json::Error so daemon-side audit-chain integrity diagnostics can call serde_json::Error::line/column/classify for malformed-event-row identification; a refactor that wrapped the inner in a project-local newtype (e.g., AuditSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies audit-event row parse faults (concrete-source-type downcast regression class)"
         );
+    }
+
+    fn event_at(timestamp_ms: u64, kind: AuditKind) -> AuditEvent {
+        AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms,
+            issuer: AgentId::new("user@local", [0u8; 32]),
+            kind,
+        }
+    }
+
+    #[test]
+    fn capability_check_fans_out_granted_and_missing_actions() {
+        let event = dummy(AuditKind::CapabilityCheck {
+            agent_id: "research".into(),
+            required_actions: vec!["memory.write".into(), "memory.read".into(), "a2a.send".into()],
+            missing_actions: vec!["a2a.send".into()],
+            passed: false,
+            authorized_by: vec![
+                CapabilityAuthorization {
+                    action: "memory.write".into(),
+                    granted_by_display: "operator@local".into(),
+                    signature_b58: "SigWrite".into(),
+                },
+                CapabilityAuthorization {
+                    action: "memory.read".into(),
+                    granted_by_display: "operator@local".into(),
+                    signature_b58: "SigRead".into(),
+                },
+            ],
+        });
+        let rows = project_privileged_actions(&event);
+        assert_eq!(rows.len(), 3, "two granted actions plus one missing action");
+
+        let write = &rows[0];
+        assert_eq!(write.actor, "research");
+        assert_eq!(write.action, "memory.write");
+        assert_eq!(write.approver.as_deref(), Some("operator@local"));
+        assert_eq!(write.rule.as_deref(), Some("SigWrite"));
+        assert_eq!(write.outcome, "authorized");
+        assert_eq!(write.kind, "capability_check");
+        assert_eq!(write.event_id, event.id);
+
+        let denied = &rows[2];
+        assert_eq!(denied.action, "a2a.send");
+        assert_eq!(denied.outcome, "denied");
+        assert!(
+            denied.approver.is_none() && denied.rule.is_none(),
+            "a denied action names no approver or authorizing rule",
+        );
+    }
+
+    #[test]
+    fn capability_grant_revoke_and_rejections_project_one_row_each() {
+        let granted = project_privileged_actions(&dummy(AuditKind::CapabilityGranted {
+            subject_display: "research@agent".into(),
+            action: "memory.write".into(),
+            granted_by_display: "operator@local".into(),
+            signature_b58: "GrantSig".into(),
+        }));
+        assert_eq!(granted.len(), 1);
+        assert_eq!(granted[0].outcome, "granted");
+        assert_eq!(granted[0].approver.as_deref(), Some("operator@local"));
+        assert_eq!(granted[0].rule.as_deref(), Some("GrantSig"));
+
+        let revoked = project_privileged_actions(&dummy(AuditKind::CapabilityRevoked {
+            subject_display: "research@agent".into(),
+            action: "memory.write".into(),
+            signature_b58: "GrantSig".into(),
+            removed: true,
+        }));
+        assert_eq!(revoked[0].outcome, "revoked");
+        assert_eq!(revoked[0].rule.as_deref(), Some("GrantSig"));
+        assert!(revoked[0].approver.is_none(), "self-revoke names no approver");
+
+        let noop = project_privileged_actions(&dummy(AuditKind::CapabilityRevoked {
+            subject_display: "research@agent".into(),
+            action: "memory.write".into(),
+            signature_b58: "GrantSig".into(),
+            removed: false,
+        }));
+        assert_eq!(
+            noop[0].outcome, "revoke_noop",
+            "an idempotent re-revoke is distinguished from a real authority change",
+        );
+
+        let grant_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityGrantRejected {
+            subject_display: "research@agent".into(),
+            action: "memory.write".into(),
+            reason: "expired".into(),
+        }));
+        assert_eq!(grant_rejected[0].outcome, "grant_rejected");
+        assert!(grant_rejected[0].rule.is_none());
+
+        let scope_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityScopeRejected {
+            agent_id: "audit:purge".into(),
+            action: "audit.purge".into(),
+            reason: "before_ms exceeds scope".into(),
+        }));
+        assert_eq!(scope_rejected[0].actor, "audit:purge");
+        assert_eq!(scope_rejected[0].outcome, "scope_rejected");
+
+        let revoke_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityRevokeRejected {
+            signature_b58: "OtherSig".into(),
+            reason: "not subject".into(),
+        }));
+        assert_eq!(revoke_rejected[0].outcome, "revoke_rejected");
+        assert_eq!(revoke_rejected[0].rule.as_deref(), Some("OtherSig"));
+        assert!(
+            revoke_rejected[0].actor.is_empty(),
+            "a cross-peer revoke rejection is keyed by signature, not a subject display",
+        );
+    }
+
+    #[test]
+    fn non_capability_kinds_project_no_privileged_actions() {
+        let rows = project_privileged_actions(&dummy(AuditKind::AuthenticationFailed {
+            transport: "ipc".into(),
+            reason: "bad token".into(),
+        }));
+        assert!(rows.is_empty(), "auth failures carry no authorizing rule");
+    }
+
+    #[test]
+    fn filter_matches_on_each_dimension_and_window() {
+        let action = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 1_000,
+            kind: "capability_granted".into(),
+            actor: "research@agent".into(),
+            action: "memory.write".into(),
+            approver: Some("operator@local".into()),
+            rule: Some("GrantSignatureABC".into()),
+            outcome: "granted".into(),
+        };
+
+        assert!(ProvenanceFilter::default().matches(&action), "empty filter matches everything");
+
+        let by_actor = ProvenanceFilter {
+            actor: Some("research@agent".into()),
+            ..Default::default()
+        };
+        assert!(by_actor.matches(&action));
+        let wrong_actor = ProvenanceFilter {
+            actor: Some("other@agent".into()),
+            ..Default::default()
+        };
+        assert!(!wrong_actor.matches(&action));
+
+        let by_approver = ProvenanceFilter {
+            approver: Some("operator@local".into()),
+            ..Default::default()
+        };
+        assert!(by_approver.matches(&action));
+
+        let by_outcome = ProvenanceFilter {
+            outcome: Some("denied".into()),
+            ..Default::default()
+        };
+        assert!(!by_outcome.matches(&action));
+
+        let by_rule_prefix = ProvenanceFilter {
+            rule: Some("GrantSig".into()),
+            ..Default::default()
+        };
+        assert!(by_rule_prefix.matches(&action), "rule matches on a signature prefix");
+        let wrong_rule = ProvenanceFilter {
+            rule: Some("DifferentSig".into()),
+            ..Default::default()
+        };
+        assert!(!wrong_rule.matches(&action));
+
+        let in_window = ProvenanceFilter {
+            since_ms: Some(1_000),
+            until_ms: Some(1_000),
+            ..Default::default()
+        };
+        assert!(in_window.matches(&action), "window bounds are inclusive on both ends");
+        let after_window = ProvenanceFilter {
+            since_ms: Some(1_001),
+            ..Default::default()
+        };
+        assert!(!after_window.matches(&action));
+    }
+
+    #[test]
+    fn filter_approver_skips_rows_without_an_approver() {
+        let denied = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 0,
+            kind: "capability_check".into(),
+            actor: "research".into(),
+            action: "a2a.send".into(),
+            approver: None,
+            rule: None,
+            outcome: "denied".into(),
+        };
+        let by_approver = ProvenanceFilter {
+            approver: Some("operator@local".into()),
+            ..Default::default()
+        };
+        assert!(
+            !by_approver.matches(&denied),
+            "filtering by approver must exclude rows that record no approver",
+        );
+    }
+
+    #[test]
+    fn event_at_helper_threads_timestamp_into_projection() {
+        let rows = project_privileged_actions(&event_at(
+            42,
+            AuditKind::CapabilityGranted {
+                subject_display: "a@agent".into(),
+                action: "memory.read".into(),
+                granted_by_display: "operator@local".into(),
+                signature_b58: "S".into(),
+            },
+        ));
+        assert_eq!(rows[0].timestamp_ms, 42);
     }
 }

@@ -85,7 +85,7 @@ Each privileged action falls into one of three tiers:
 
 | Tier | Meaning |
 |---|---|
-| Action-audited | Emits an action-specific row on success — for example `IntentDispatched`, `CapabilityGranted`, `PeerRevoked`, `OperatorTokenRotated`, `MemoryRepairApplied`, `MemoryCompactionApplied`, `ExternalPaymentSettled`, the settlement and memory backfill rows, and the A2A repair rows. |
+| Action-audited | Emits an action-specific row on success — for example `IntentDispatched`, `CapabilityGranted`, `CapabilityRevoked`, `PeerRevoked`, `OperatorTokenRotated`, `MemoryRepairApplied`, `MemoryCompactionApplied`, `ExternalPaymentSettled`, the settlement and memory backfill rows, and the A2A repair rows. `CapabilityRevoked` records `signature_b58` (the join key back to the matching `CapabilityGranted` row) and `removed` (a real withdrawal versus an idempotent re-revoke), completing the grant→revoke lifecycle on the chain. |
 | Authorization-audited | The success path is recorded only by the `CapabilityCheck` row (`passed = true`) emitted when the action's capability is verified. The row also answers *who* authorized the action and *under which rule*: `authorized_by` lists, for each granted action, the identity that signed the matching grant (`granted_by_display`) and the base58 signature identifying the exact signed capability (`signature_b58`). `authorized_by` is empty on a failed check and always present on the wire, so a `passed = true` row can never silently omit its approver and rule. The authorized attempt — and its approver and rule — is on the chain, but there is no action-outcome row. Covers `CallTool`, the operator purges (`PurgeMemory`, `PurgeAudit`, `PurgeCapabilities`, `PurgePeers`), `FlushReceipts`, `SignAttestation`, `SendA2ATask`, `PostA2AResult`, and `CompactA2A`. |
 | Unaudited | Records nothing on the success path. Tracked below. |
 
@@ -96,7 +96,6 @@ Read-only queries are not privileged actions and are excluded. Some are capabili
 The following privileged actions currently record nothing on their success path. They are enumerated explicitly in the inventory test so a new gap cannot land silently:
 
 - **`Authenticate` (success).** Authentication *failures* are audited (`AuthenticationFailed`); a successful handshake is not. Every action a peer subsequently takes is individually audited, so a successful auth carries no standalone accountability requirement today.
-- **`RevokeCapability` (success).** A rejected revoke is audited (`CapabilityRevokeRejected`); a successful revoke is not. Revocation is a privilege change and should leave a record — closing this gap means adding a success-path audit row.
 - **SAP bridge publishes** (`SapPublishAgent`, `SapPublishAuditRoot`, `SapPublishAttestation`). These cross into the external Synapse Agent Protocol ledger and do not yet emit a local audit row for the publish. The publish authorization model is still being defined; audit emission should land with that work.
 
 Closing a gap means adding the audit emission and removing the entry from both the inventory test and this list.

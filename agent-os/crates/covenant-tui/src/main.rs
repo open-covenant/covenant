@@ -102,6 +102,7 @@ fn audit_kind_label(kind: &covenant_audit::AuditKind) -> &'static str {
         CapabilityGranted { .. } => "capability.granted",
         CapabilityGrantRejected { .. } => "capability.grant_rejected",
         CapabilityScopeRejected { .. } => "capability.scope_rejected",
+        CapabilityRevoked { .. } => "capability.revoked",
         CapabilityRevokeRejected { .. } => "capability.revoke_rejected",
         MemoryRepairApplied { .. } => "memory.repair_applied",
         MemoryCompactionApplied { .. } => "memory.compaction_applied",

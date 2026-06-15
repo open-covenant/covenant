@@ -14486,7 +14486,11 @@ impl Server {
                 };
             }
         };
-        if !owned.iter().any(|c| c.signature == bytes) {
+        let Some(action) = owned
+            .iter()
+            .find(|c| c.signature == bytes)
+            .map(|c| c.capability.action.clone())
+        else {
             match self.capabilities.is_revoked(bytes).await {
                 Ok(true) => {
                     return Response::CapabilityRevoked {
@@ -14522,12 +14526,30 @@ impl Server {
                 message: "revoke rejected: capability subject does not match authenticated peer"
                     .into(),
             };
-        }
+        };
         match self.capabilities.revoke(bytes).await {
-            Ok(removed) => Response::CapabilityRevoked {
-                signature_b58,
-                removed,
-            },
+            Ok(removed) => {
+                // Issued by the subject, mirroring CapabilityGranted: the
+                // legitimate owner is withdrawing its own grant, so the row
+                // belongs on its `/audit/recent` feed. (The cross-peer
+                // rejection above is daemon-issued for the operator feed.)
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityRevoked {
+                        subject_display: peer.display.clone(),
+                        action,
+                        signature_b58: signature_b58.clone(),
+                        removed,
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                Response::CapabilityRevoked {
+                    signature_b58,
+                    removed,
+                }
+            }
             Err(e) => Response::Error {
                 message: format!("permissions: {e}"),
             },
@@ -15168,6 +15190,7 @@ required = {caps:?}
             | Request::ResumeIntent { .. }
             | Request::PayX402 { .. }
             | Request::GrantCapability { .. }
+            | Request::RevokeCapability { .. }
             | Request::RevokePeer { .. }
             | Request::RotateOperatorToken
             | Request::RepairMemory { .. }
@@ -15187,7 +15210,6 @@ required = {caps:?}
             | Request::PostA2AResult { .. }
             | Request::CompactA2A => AuthorizationAudited,
             Request::Authenticate { .. }
-            | Request::RevokeCapability { .. }
             | Request::SapPublishAgent { .. }
             | Request::SapPublishAuditRoot { .. }
             | Request::SapPublishAttestation { .. } => Unaudited,
@@ -15340,6 +15362,12 @@ required = {caps:?}
                 ActionAudited,
             ),
             (
+                Request::RevokeCapability {
+                    signature_b58: String::new(),
+                },
+                ActionAudited,
+            ),
+            (
                 Request::RevokePeer {
                     token_prefix: String::new(),
                     force: false,
@@ -15430,12 +15458,6 @@ required = {caps:?}
                 Unaudited,
             ),
             (
-                Request::RevokeCapability {
-                    signature_b58: String::new(),
-                },
-                Unaudited,
-            ),
-            (
                 Request::SapPublishAgent {
                     manifest_json: String::new(),
                 },
@@ -15506,7 +15528,6 @@ required = {caps:?}
             .collect();
         let expected_unaudited: std::collections::BTreeSet<String> = [
             "authenticate",
-            "revoke_capability",
             "sap_publish_agent",
             "sap_publish_audit_root",
             "sap_publish_attestation",
@@ -49755,6 +49776,109 @@ required = {caps:?}
         match second {
             Response::CapabilityRevoked { removed, .. } => assert!(!removed),
             other => panic!("expected idempotent CapabilityRevoked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_success_records_capability_revoked_audit_row() {
+        // The success path that actually withdraws a granted capability
+        // must emit a CapabilityRevoked audit row, completing the
+        // grant→revoke lifecycle on the chain. Without it the log shows a
+        // CapabilityGranted row with no record the grant was withdrawn,
+        // overstating live authority. The row records signature_b58 (the
+        // join key back to the grant), the action, the owner that revoked
+        // its own grant (subject_display), and removed=true for a real
+        // authority change. A sequential idempotent re-revoke takes the
+        // already-revoked branch and must NOT add a second row.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let (signature_b58, action) = match s
+            .op_respond(Request::GrantCapability {
+                action: "memory.read".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await
+        {
+            Response::CapabilityGranted {
+                signature_b58,
+                action,
+                ..
+            } => (signature_b58, action),
+            other => panic!("expected CapabilityGranted, got {other:?}"),
+        };
+
+        match s
+            .op_respond(Request::RevokeCapability {
+                signature_b58: signature_b58.clone(),
+            })
+            .await
+        {
+            Response::CapabilityRevoked { removed, .. } => {
+                assert!(
+                    removed,
+                    "first revoke of an active cap must report removed=true"
+                )
+            }
+            other => panic!("expected CapabilityRevoked, got {other:?}"),
+        }
+
+        // Sequential idempotent re-revoke: the cap is already filtered out
+        // of list_for_subject, so it takes the already-revoked branch and
+        // must not emit another row.
+        s.op_respond(Request::RevokeCapability {
+            signature_b58: signature_b58.clone(),
+        })
+        .await;
+
+        let events = audit.recent(20).await.unwrap();
+        let rows: Vec<&AuditEvent> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, AuditKind::CapabilityRevoked { .. }))
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "exactly one CapabilityRevoked row — the real withdrawal; the sequential idempotent re-revoke must not spam the audit log",
+        );
+        let row = rows[0];
+        assert_eq!(
+            row.issuer.display, "user@local",
+            "issued by the subject so the revoke surfaces on the owner's audit feed, mirroring CapabilityGranted",
+        );
+        match &row.kind {
+            AuditKind::CapabilityRevoked {
+                subject_display,
+                action: row_action,
+                signature_b58: row_sig,
+                removed,
+            } => {
+                assert_eq!(
+                    row_sig, &signature_b58,
+                    "the row must record the revoked capability's signature to join back to its CapabilityGranted row",
+                );
+                assert_eq!(
+                    row_action, &action,
+                    "the row must record the revoked action"
+                );
+                assert_eq!(subject_display, "user@local");
+                assert!(removed, "removed=true marks a real authority change");
+            }
+            other => panic!("unexpected: {other:?}"),
         }
     }
 

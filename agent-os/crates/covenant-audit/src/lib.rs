@@ -270,6 +270,25 @@ pub enum AuditKind {
         stale_marked: Vec<Uuid>,
         parents_detached: Vec<Uuid>,
     },
+    /// Logged when `RevokeCapability` succeeds against a capability the
+    /// authenticated peer owns — the subject withdrawing its own grant.
+    /// Completes the grant→revoke lifecycle on the chain: without it the
+    /// log shows a [`AuditKind::CapabilityGranted`] row with no record the
+    /// grant was ever withdrawn, overstating live authority.
+    /// `signature_b58` is the base58 signature of the revoked capability,
+    /// the join key back to its `CapabilityGranted` row; `action` makes the
+    /// row self-describing. `removed` separates a real authority change
+    /// (`true` — the capability was active and is now revoked) from an
+    /// idempotent re-revoke (`false` — already revoked). Issued by the
+    /// subject, mirroring [`AuditKind::CapabilityGranted`]; the cross-peer
+    /// rejection path is the daemon-issued
+    /// [`AuditKind::CapabilityRevokeRejected`] below.
+    CapabilityRevoked {
+        subject_display: String,
+        action: String,
+        signature_b58: String,
+        removed: bool,
+    },
     /// Logged when `RevokeCapability` is rejected because the
     /// authenticated peer is not the subject of the capability they
     /// asked to revoke. Enforces the subject-ownership invariant on
@@ -2674,6 +2693,75 @@ mod tests {
         assert!(
             serde_json::from_value::<AuditKind>(titlecase).is_err(),
             "titlecase 'CapabilityGranted' must reject — the rename_all = snake_case contract is what keeps every prior grant audit row decoding stably across rebuilds",
+        );
+    }
+
+    #[test]
+    fn audit_kind_capability_revoked_serde_pins_four_field_variant() {
+        // AuditKind::CapabilityRevoked completes the grant→revoke lifecycle
+        // on the chain: it ties the revoked capability's signature_b58 back
+        // to its CapabilityGranted row and records whether the revoke was a
+        // real authority change (removed = true) or an idempotent no-op
+        // (removed = false). The four fields (subject_display, action,
+        // signature_b58, removed) are load-bearing — a #[serde(default)] on
+        // signature_b58 would detach the revoke from its grant, and a
+        // default on removed would let a no-op decode as a real withdrawal
+        // (or vice versa), erasing the distinction operator triage joins on.
+        let kind = AuditKind::CapabilityRevoked {
+            subject_display: "research@local".into(),
+            action: "memory.write".into(),
+            signature_b58: "deadbeef".into(),
+            removed: true,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "action",
+                "removed",
+                "signature_b58",
+                "subject_display",
+                "type",
+            ],
+            "AuditKind::CapabilityRevoked wire form must be exactly five keys: the four variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("capability_revoked")),
+            "AuditKind discriminator slug must be snake_case 'capability_revoked'; a titlecase 'CapabilityRevoked' regression breaks every prior revoke audit row",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::CapabilityRevoked must round-trip through serde_json verbatim — the PartialEq derive is the contract the grant→revoke correlation chain leans on",
+        );
+
+        for required in ["subject_display", "action", "signature_b58", "removed"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::CapabilityRevoked wire form must reject a payload missing {required:?}; a stray #[serde(default)] on signature_b58 would detach the revoke from its CapabilityGranted row, and a default on removed would collapse the real-withdrawal vs idempotent-no-op distinction",
+            );
+        }
+
+        let titlecase = serde_json::json!({
+            "type": "CapabilityRevoked",
+            "subject_display": "research@local",
+            "action": "memory.write",
+            "signature_b58": "deadbeef",
+            "removed": true,
+        });
+        assert!(
+            serde_json::from_value::<AuditKind>(titlecase).is_err(),
+            "titlecase 'CapabilityRevoked' must reject — the rename_all = snake_case contract is what keeps every prior revoke audit row decoding stably across rebuilds",
         );
     }
 

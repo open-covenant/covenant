@@ -47266,6 +47266,61 @@ required = {caps:?}
         }
     }
 
+    #[tokio::test]
+    async fn call_tool_capability_is_per_tool_and_does_not_leak_across_tools() {
+        // `tool.call.<name>` is per-tool: a grant for one tool must not
+        // authorize a different tool, even one that exists in the registry
+        // and is otherwise callable. The capability gate runs before the
+        // registry lookup, so a cross-tool call is denied as a capability
+        // failure naming the ungranted tool, not as "tool not found".
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        // The grant is effective and scoped to echo (keeps the isolation
+        // assertion below non-vacuous).
+        match s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+        {
+            Response::ToolResult { is_error, .. } => assert!(!is_error),
+            other => panic!("echo grant must authorize echo, got {other:?}"),
+        }
+
+        // `clock` is registered and would dispatch, but the echo grant does
+        // not reach it.
+        match s
+            .op_respond(Request::CallTool {
+                name: "clock".into(),
+                arguments: serde_json::Value::Null,
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("requires capability") && message.contains("tool.call.clock"),
+                "an echo-only grant must not authorize clock: {message}"
+            ),
+            other => panic!("expected capability denial for clock, got {other:?}"),
+        }
+
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                AuditKind::CapabilityCheck { missing_actions, passed: false, .. }
+                    if missing_actions.iter().any(|a| a == "tool.call.clock")
+            )),
+            "the cross-tool denial must be audited as a failed CapabilityCheck"
+        );
+    }
+
     /// Builds a task whose `sender` matches `s.identity.agent_id()` so it
     /// passes the send-time sender-spoof check. Tests that need a
     /// mismatched sender construct the task inline.

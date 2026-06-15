@@ -20,9 +20,9 @@ import { fileURLToPath } from "node:url";
 //   - line 615 cites the ok envelope's `settlement` (object or null)
 //     at main.rs:5389-5392 — inside
 //     intents_resume_ok_json_pins_top_level_schema.
-//   - line 612 cites the ok envelope's `status` (string) at
-//     main.rs:5380-5383 — inside
-//     intents_resume_ok_json_pins_top_level_schema.
+//   - the ok envelope's `status` (string) field now carries a dedicated
+//     validate-intents-resume-status-type-level-pin-line-refs.mjs, so it
+//     is intentionally absent from the targets below.
 //   - line 611 cites the ok envelope's `intent_id` (string) at
 //     main.rs:5377-5379 — inside
 //     intents_resume_ok_json_pins_top_level_schema. This cite uses the
@@ -100,16 +100,6 @@ const targets = [
     docsLabel: "intents_resume_error.ok type-level pin citation",
     docsTemplate:
       "Pinned as a JSON boolean by the schema tests at `main.rs:N-M` and `main.rs:N-M` — never `0`/`1` or a string-truthy value.",
-  },
-  {
-    field: "status",
-    testFnName: "intents_resume_ok_json_pins_top_level_schema",
-    selector: 'value["status"].is_string(),',
-    docsRegex:
-      /- `status` \(string\) — the daemon-returned outcome status \(typically `"ok"`\)\. The string shape is pinned at `main\.rs:(\d+)-(\d+)`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface\./,
-    docsLabel: "intents_resume_ok.status type-level pin citation",
-    docsTemplate:
-      "The string shape is pinned at `main.rs:N-M`; specific value enumeration lives with the daemon's intent dispatcher rather than this docs surface.",
   },
   {
     field: "error",

@@ -8,7 +8,7 @@ export default function Page() {
   return (
     <main
       id="main-content"
-      className="relative h-[100dvh] min-h-[100svh] overflow-hidden bg-[#030303]"
+      className="relative flex min-h-[100svh] flex-col overflow-x-hidden bg-[#030303] sm:block sm:h-[100dvh] sm:overflow-hidden"
     >
       <link
         rel="preload"
@@ -44,12 +44,12 @@ export default function Page() {
 
       <AgentTerminalDock />
 
-      <div className="absolute inset-0 z-10 flex flex-col items-center justify-start gap-3 px-6 pt-24 text-center sm:justify-center sm:gap-6 sm:pt-0 xl:pr-[31rem]">
+      <div className="relative z-10 flex flex-1 flex-col items-center justify-start gap-3 px-6 pb-8 pt-24 text-center sm:absolute sm:inset-0 sm:flex-none sm:justify-center sm:gap-6 sm:pb-0 sm:pt-0 xl:pr-[31rem]">
         <div className="relative aspect-[1168/774] w-full overflow-hidden sm:aspect-auto sm:h-[53vh]">
           <HeroMesh src="/hero-bg.jpg" />
         </div>
         <div className="flex max-w-2xl flex-col gap-3 sm:gap-4">
-          <h2 className="text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white">
+          <h2 className="text-balance text-[1.6rem] font-extralight uppercase leading-[1.15] tracking-[1px] text-white sm:text-[2.2rem] sm:leading-[1.1] sm:tracking-[2px]">
             An operating system that builds itself
           </h2>
           <p className="text-balance text-[15px] font-light leading-relaxed text-neutral-200 sm:text-lg">
@@ -79,10 +79,7 @@ export default function Page() {
         </div>
       </div>
 
-      <SiteFooter
-        className="absolute inset-x-0 z-20 xl:pr-[31rem]"
-        style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
-      />
+      <SiteFooter className="relative z-20 w-full shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 sm:absolute sm:inset-x-0 sm:bottom-[max(1.5rem,env(safe-area-inset-bottom))] sm:w-auto sm:pb-0 sm:pt-0 xl:pr-[31rem]" />
     </main>
   );
 }

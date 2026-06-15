@@ -18,7 +18,9 @@ pub mod x402;
 
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
-use covenant_audit::{hash_hex, AuditError, AuditEvent, AuditKind, AuditLog};
+use covenant_audit::{
+    hash_hex, AuditError, AuditEvent, AuditKind, AuditLog, CapabilityAuthorization,
+};
 use covenant_budget::{
     BudgetCheckpointError, BudgetError, BudgetLedger, JsonlPauseCheckpointStore,
 };
@@ -4664,17 +4666,30 @@ impl Server {
             .list_for_subject(peer.pubkey)
             .await
             .unwrap_or_default();
-        let valid_actions: Vec<String> = user_caps
+        let valid_caps: Vec<_> = user_caps
             .iter()
             .filter(|c| verify_with_clock_and_trust_root(c, now, trust_root).is_ok())
-            .map(|c| c.capability.action.clone())
             .collect();
         let mut required: Vec<String> = Vec::with_capacity(alternatives_per_required.len());
         let mut missing: Vec<String> = Vec::new();
+        let mut authorized_by: Vec<CapabilityAuthorization> = Vec::new();
         for group in &alternatives_per_required {
-            let matched = group.iter().find(|a| valid_actions.iter().any(|v| v == *a));
+            let matched = group.iter().find_map(|a| {
+                valid_caps
+                    .iter()
+                    .copied()
+                    .find(|c| c.capability.action == *a)
+                    .map(|c| (a.clone(), c))
+            });
             match matched {
-                Some(form) => required.push(form.clone()),
+                Some((form, cap)) => {
+                    required.push(form.clone());
+                    authorized_by.push(CapabilityAuthorization {
+                        action: form,
+                        granted_by_display: cap.capability.granted_by.display.clone(),
+                        signature_b58: bs58::encode(cap.signature).into_string(),
+                    });
+                }
                 None => {
                     let canonical = group.first().cloned().unwrap_or_default();
                     required.push(canonical.clone());
@@ -4692,6 +4707,7 @@ impl Server {
                 required_actions: required.clone(),
                 missing_actions: missing.clone(),
                 passed,
+                authorized_by,
             },
         };
         self.record_peer_event(peer, event).await;
@@ -11129,6 +11145,7 @@ impl Server {
                 required_actions,
                 missing_actions,
                 passed,
+                authorized_by: _,
             } = &event.kind
             {
                 if agent_id.is_empty() {
@@ -35972,6 +35989,7 @@ required = {caps:?}
                     required_actions: vec![],
                     missing_actions: vec![],
                     passed: true,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36044,6 +36062,7 @@ required = {caps:?}
                     required_actions: vec!["memory.read".into(), "".into()],
                     missing_actions: vec![],
                     passed: true,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36120,6 +36139,7 @@ required = {caps:?}
                     required_actions: vec!["memory.read".into()],
                     missing_actions: vec!["memory.read".into()],
                     passed: true,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36135,6 +36155,7 @@ required = {caps:?}
                     required_actions: vec!["memory.read".into()],
                     missing_actions: vec![],
                     passed: false,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36229,6 +36250,7 @@ required = {caps:?}
                     required_actions: vec!["mem.read".into(), "mem.write".into()],
                     missing_actions: vec!["foreign.action".into()],
                     passed: false,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36303,6 +36325,7 @@ required = {caps:?}
                     required_actions: vec!["tool.call.test".into()],
                     missing_actions: vec![],
                     passed: true,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -48936,6 +48959,157 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn capability_check_records_approver_and_rule_on_pass() {
+        // A passing capability check must answer "who approved this and
+        // under which rule" on its own audit row: authorized_by names the
+        // identity that signed the matching grant (granted_by_display) and
+        // the exact signed capability (signature_b58). The signature equals
+        // the one the grant returned, so the audit row joins back to the
+        // specific SignedCapability that authorized the action.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let task = dummy_a2a_task_for(&s);
+        let alternatives = task.recipient.scoped_action_alternatives("a2a.send");
+        let b58_form = alternatives[1].clone();
+        let signature_b58 = match s
+            .op_respond(Request::GrantCapability {
+                action: b58_form.clone(),
+                scope: None,
+                expires_at: None,
+            })
+            .await
+        {
+            Response::CapabilityGranted { signature_b58, .. } => signature_b58,
+            other => panic!("expected CapabilityGranted, got {other:?}"),
+        };
+        s.op_respond(Request::SendA2ATask { task }).await;
+
+        let events = audit.recent(20).await.unwrap();
+        let cap = events
+            .iter()
+            .find(|e| match &e.kind {
+                AuditKind::CapabilityCheck {
+                    agent_id, passed, ..
+                } => agent_id.starts_with("a2a-send:") && *passed,
+                _ => false,
+            })
+            .expect("expected a passing CapabilityCheck for the send call");
+        match &cap.kind {
+            AuditKind::CapabilityCheck { authorized_by, .. } => {
+                assert_eq!(
+                    authorized_by,
+                    &vec![covenant_audit::CapabilityAuthorization {
+                        action: b58_form.clone(),
+                        granted_by_display: "user@local".to_string(),
+                        signature_b58,
+                    }],
+                    "a passing check must record the approver (granted_by_display) and the exact signed rule (signature_b58) that authorized each granted action",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn capability_check_records_partial_grant_authorization_on_fail() {
+        // A multi-action check where one required action is granted and
+        // another is missing fails overall (passed = false) but must
+        // still record who authorized the granted action under which
+        // rule. authorized_by is "one entry per granted required action",
+        // not "empty whenever the check failed" — a partial grant leaves
+        // a failed row naming the action it did authorize. dispatch_intent
+        // is the only production caller that passes several required
+        // actions (the agent manifest's capabilities.required); we drive
+        // the sole write-site, check_capabilities, directly because no
+        // single-call handler exposes a multi-action check without
+        // manifest/card scaffolding.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let subject = dummy_a2a_task_for(&s).recipient;
+        let held = subject.scoped_action_alternatives("a2a.send")[1].clone();
+        let signature_b58 = match s
+            .op_respond(Request::GrantCapability {
+                action: held.clone(),
+                scope: None,
+                expires_at: None,
+            })
+            .await
+        {
+            Response::CapabilityGranted { signature_b58, .. } => signature_b58,
+            other => panic!("expected CapabilityGranted, got {other:?}"),
+        };
+
+        let unheld = "a2a.send.unheld@local".to_string();
+        let outcome = s
+            .check_capabilities(
+                "test:partial-grant".into(),
+                vec![held.clone(), unheld.clone()],
+                &subject,
+            )
+            .await;
+        assert!(!outcome.passed);
+        assert_eq!(outcome.missing, vec![unheld]);
+
+        let events = audit.recent(20).await.unwrap();
+        let cap = events
+            .iter()
+            .find(|e| match &e.kind {
+                AuditKind::CapabilityCheck { agent_id, .. } => {
+                    agent_id.as_str() == "test:partial-grant"
+                }
+                _ => false,
+            })
+            .expect("partial-grant capability check audit row present");
+        match &cap.kind {
+            AuditKind::CapabilityCheck {
+                passed,
+                authorized_by,
+                ..
+            } => {
+                assert!(!passed);
+                assert_eq!(
+                    authorized_by,
+                    &vec![covenant_audit::CapabilityAuthorization {
+                        action: held,
+                        granted_by_display: "user@local".to_string(),
+                        signature_b58,
+                    }],
+                    "a partial grant must record the approver and signed rule for the granted action even though the overall check failed — authorized_by is one entry per granted action, never empty-on-fail",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_send_audit_records_display_on_miss() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let s = Server::new(
@@ -48970,6 +49144,7 @@ required = {caps:?}
                 required_actions,
                 missing_actions,
                 passed,
+                authorized_by,
                 ..
             } => {
                 assert_eq!(
@@ -48981,6 +49156,10 @@ required = {caps:?}
                     &vec!["a2a.send.research@local".to_string()]
                 );
                 assert!(!passed);
+                assert!(
+                    authorized_by.is_empty(),
+                    "this check's only required action (a2a.send) matched no granted capability, so authorized_by is empty — no approver or rule may be recorded for an action that was not authorized",
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -53474,6 +53653,7 @@ budget_credits_per_hour = {credits}
                 required_actions: vec!["tool.call.test".into()],
                 missing_actions: vec![],
                 passed: true,
+                authorized_by: vec![],
             },
         }
     }
@@ -53508,6 +53688,7 @@ budget_credits_per_hour = {credits}
                 required_actions: vec!["tool.call.positive".into()],
                 missing_actions: vec![],
                 passed: true,
+                authorized_by: vec![],
             },
         };
         let event_id = event.id;

@@ -9644,6 +9644,7 @@ async fn live_cli_verify_json_reports_audit_capability_check_required_actions_em
             required_actions: vec![],
             missing_actions: vec![],
             passed: true,
+            authorized_by: vec![],
         },
     };
     let audit_path = audit_dir.join("events.jsonl");
@@ -9737,6 +9738,7 @@ async fn live_cli_verify_json_reports_audit_capability_check_passed_missing_mism
             required_actions: vec!["memory.read".into()],
             missing_actions: vec!["memory.read".into()],
             passed: true,
+            authorized_by: vec![],
         },
     };
     let audit_path = audit_dir.join("events.jsonl");
@@ -9830,6 +9832,7 @@ async fn live_cli_verify_json_reports_audit_capability_check_agent_id_empty_drif
             required_actions: vec!["tool.call.test".into()],
             missing_actions: vec![],
             passed: true,
+            authorized_by: vec![],
         },
     };
     let audit_path = audit_dir.join("events.jsonl");
@@ -15552,6 +15555,7 @@ async fn live_cli_verify_json_reports_audit_capability_check_missing_not_subset_
             required_actions: vec!["mem.read".into(), "mem.write".into()],
             missing_actions: vec!["foreign.action".into()],
             passed: false,
+            authorized_by: vec![],
         },
     };
     let audit_path = audit_dir.join("events.jsonl");

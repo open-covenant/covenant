@@ -250,7 +250,7 @@ The envelope source-of-truth lives at `intent_result_json` in `agent-os/crates/c
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, see `main.rs:3710`). Pinned at the type level by the schema test (`main.rs:7365-7368`) — JSON consumers must never receive a string here.
 - `capabilities` (array of `SignedCapability`): the filtered live capabilities. Each element has shape `{capability: Capability, signature: <base58>}` where `Capability` is defined at `agent-os/crates/covenant-types/src/lib.rs:224` (fields: `subject`, `action`, `scope`, `granted_by`, `expires_at`) and `SignedCapability` is defined at `agent-os/crates/covenant-permissions/src/lib.rs:58`. The `signature` field is the base58 encoding of the 64-byte ed25519 signature (per the `sig_b58` serde module at `lib.rs:64-84`), never the raw byte array. Pinned as an array by `main.rs:7369-7372` — never null or a string.
 
-The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:14424-14440`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
+The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:14441-14457`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:7348` (`capability_list_json_pins_top_level_schema`), which exercises both a populated single-capability case and an empty list.
 
@@ -362,7 +362,7 @@ The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib
 - `id` (string) — event UUID.
 - `timestamp_ms` (u64) — Unix-epoch milliseconds when the event was recorded.
 - `issuer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:177`.
-- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:71` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
+- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:89` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7829` (`audit_recent_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, empty with `since_ms`, and empty without `since_ms`.
 

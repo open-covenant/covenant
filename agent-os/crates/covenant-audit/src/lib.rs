@@ -66,6 +66,24 @@ pub struct AuditIntegrityReport {
     pub failures: Vec<String>,
 }
 
+/// Attribution for one capability that authorized an action during a
+/// [`AuditKind::CapabilityCheck`]. Answers "who approved this and under
+/// which rule": `granted_by_display` is the identity that signed the
+/// grant; `signature_b58` is the base58 signature identifying the
+/// signed capability that matched the action — the rule. Matching is
+/// action-level, so when a subject holds several valid same-action
+/// caps this names the first match; scope is enforced by a later
+/// check. `action` is the matched action form so each entry is
+/// self-describing — `authorized_by` carries one entry per *granted*
+/// required action and is not positionally aligned with
+/// `required_actions`. Mirrors [`AuditKind::CapabilityGranted`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityAuthorization {
+    pub action: String,
+    pub granted_by_display: String,
+    pub signature_b58: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuditKind {
@@ -130,6 +148,17 @@ pub enum AuditKind {
         required_actions: Vec<String>,
         missing_actions: Vec<String>,
         passed: bool,
+        /// Per granted required action, the capability that authorized
+        /// it: who granted it and the signature identifying the signed
+        /// rule. One entry per *granted* required action, so it is empty
+        /// only when no required action was granted — on a single-action
+        /// check that coincides with `passed = false`, but a multi-action
+        /// check with a partial grant leaves a `passed = false` row still
+        /// naming the actions it did authorize. Always present on the
+        /// wire — no `#[serde(default)]` — so a `passed = true` row can
+        /// never silently omit who authorized the allowed action under
+        /// which rule.
+        authorized_by: Vec<CapabilityAuthorization>,
     },
     CapabilityGranted {
         subject_display: String,
@@ -1980,6 +2009,11 @@ mod tests {
                 required_actions: vec!["memory.read".into()],
                 missing_actions: vec![],
                 passed: true,
+                authorized_by: vec![CapabilityAuthorization {
+                    action: "memory.read".into(),
+                    granted_by_display: "operator@local".into(),
+                    signature_b58: "sig".into(),
+                }],
             },
         };
 
@@ -2030,25 +2064,33 @@ mod tests {
     }
 
     #[test]
-    fn audit_kind_capability_check_serde_pins_four_field_variant() {
+    fn audit_kind_capability_check_serde_pins_five_field_variant() {
         // AuditKind::CapabilityCheck is the load-bearing audit row
         // emitted on every dispatch-time capability check through
-        // covenantd::Server. Four required fields: agent_id (String),
+        // covenantd::Server. Five required fields: agent_id (String),
         // required_actions (Vec<String>), missing_actions (Vec<String>),
-        // passed (bool). audit_event_serde_pins_four_required_fields
-        // uses CapabilityCheck only as the envelope's payload carrier
-        // and does not pin the variant fields directly — a refactor
-        // that flipped missing_actions to #[serde(default)] would let
-        // a row with passed=false silently decode with an empty list
-        // and erase the triage signal naming which capability was
-        // short, and a bool→Option<bool> flip on passed would collapse
-        // the pass/fail discriminator into policy-dependent None
-        // handling.
+        // passed (bool), authorized_by (Vec<CapabilityAuthorization>).
+        // audit_event_serde_pins_four_required_fields uses CapabilityCheck
+        // only as the envelope's payload carrier and does not pin the
+        // variant fields directly — a refactor that flipped missing_actions
+        // to #[serde(default)] would let a row with passed=false silently
+        // decode with an empty list and erase the triage signal naming
+        // which capability was short, a bool→Option<bool> flip on passed
+        // would collapse the pass/fail discriminator into policy-dependent
+        // None handling, and a #[serde(default)] on authorized_by would let
+        // a passed=true row decode with no approver/rule attribution and
+        // erase who authorized the allowed action under which rule. This
+        // failing-check fixture carries an empty authorized_by because a
+        // check that authorized nothing must record nothing as the
+        // authorizer; the populated path round-trips through serde in
+        // audit_event_serde_pins_four_required_fields, whose CapabilityCheck
+        // fixture carries a non-empty authorized_by.
         let kind = AuditKind::CapabilityCheck {
             agent_id: "agent@local".into(),
             required_actions: vec!["memory.read".into()],
             missing_actions: vec!["memory.write".into()],
             passed: false,
+            authorized_by: vec![],
         };
 
         let wire = serde_json::to_value(&kind).unwrap();
@@ -2061,12 +2103,18 @@ mod tests {
             keys,
             vec![
                 "agent_id",
+                "authorized_by",
                 "missing_actions",
                 "passed",
                 "required_actions",
                 "type",
             ],
-            "AuditKind::CapabilityCheck wire form must be exactly five keys: the four variant fields plus the 'type' discriminator",
+            "AuditKind::CapabilityCheck wire form must be exactly six keys: the five variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("authorized_by"),
+            Some(&serde_json::json!([])),
+            "authorized_by must serialize as an empty JSON array on a failed check — it has no #[serde(skip_serializing_if)] so the key stays present whether or not anything was authorized, keeping the wire shape stable across pass and fail rows",
         );
         assert_eq!(
             obj.get("type"),
@@ -2080,12 +2128,64 @@ mod tests {
             "AuditKind::CapabilityCheck must round-trip through serde_json verbatim — the PartialEq derive is the contract dispatch-time capability-enforcement triage joins on",
         );
 
-        for required in ["agent_id", "required_actions", "missing_actions", "passed"] {
+        for required in [
+            "agent_id",
+            "required_actions",
+            "missing_actions",
+            "passed",
+            "authorized_by",
+        ] {
             let mut missing = obj.clone();
             missing.remove(required);
             assert!(
                 serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
-                "AuditKind::CapabilityCheck wire form must reject a payload missing {required:?}; a stray #[serde(default)] on missing_actions would silently let a passed=false row decode with an empty list and erase which capability was short, and a bool→Option<bool> flip on passed would collapse the pass/fail discriminator into policy-dependent None handling",
+                "AuditKind::CapabilityCheck wire form must reject a payload missing {required:?}; a stray #[serde(default)] on missing_actions would silently let a passed=false row decode with an empty list and erase which capability was short, a bool→Option<bool> flip on passed would collapse the pass/fail discriminator into policy-dependent None handling, and a default on authorized_by would let a passed=true row decode with no approver/rule attribution",
+            );
+        }
+    }
+
+    #[test]
+    fn audit_kind_capability_authorization_serde_pins_three_field_struct() {
+        // CapabilityAuthorization is the per-grant attribution carried in
+        // AuditKind::CapabilityCheck.authorized_by. Three required fields:
+        // action (String — the matched action form), granted_by_display
+        // (String — who signed the grant), signature_b58 (String — the
+        // base58 signature identifying the exact signed rule). None carry
+        // #[serde(default)], so a row can never decode with a missing
+        // attribution field silently defaulted to empty; the signature is
+        // the join key back to the SignedCapability that authorized the
+        // action.
+        let auth = CapabilityAuthorization {
+            action: "memory.read".into(),
+            granted_by_display: "operator@local".into(),
+            signature_b58: "3Qx9".into(),
+        };
+
+        let wire = serde_json::to_value(&auth).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("CapabilityAuthorization serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["action", "granted_by_display", "signature_b58"],
+            "CapabilityAuthorization wire form must be exactly three keys",
+        );
+
+        let back: CapabilityAuthorization = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, auth,
+            "CapabilityAuthorization must round-trip verbatim"
+        );
+
+        for required in ["action", "granted_by_display", "signature_b58"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<CapabilityAuthorization>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "CapabilityAuthorization wire form must reject a payload missing {required:?}; a #[serde(default)] regression would let an approval row decode with a blank approver or rule and erase the accountability the field exists to carry",
             );
         }
     }

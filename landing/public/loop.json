@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-15T08:36:33.495Z",
+  "updatedAt": "2026-06-15T08:56:38.181Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9181,
+    "events": 9183,
     "tasks": 1088,
     "integrated": 1089
   },
   "throughput": {
     "last24h": 2,
-    "last7d": 135,
-    "velocity": 19.3
+    "last7d": 133,
+    "velocity": 19
   },
   "daily": [
     {
@@ -187,7 +187,7 @@
     "integrated": 1083,
     "proposed": 1,
     "blocked": 3,
-    "planned": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -215,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "provenance-privileged-action-inventory",
+    "state": "self_review",
+    "since": "2026-06-15T08:55:06.564Z"
+  },
   "recent": [
     {
       "at": "2026-06-15T07:14:32.440Z",

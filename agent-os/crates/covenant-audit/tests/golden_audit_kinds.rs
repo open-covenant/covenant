@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use covenant_audit::{hash_hex, AuditEvent, AuditKind, CapabilityAuthorization};
+use covenant_audit::{hash_hex, AuditEvent, AuditKind, CapabilityAuthorization, ToolCallOutcome};
 use covenant_types::AgentId;
 use uuid::Uuid;
 
@@ -97,6 +97,7 @@ const EXPECTED_KINDS: &[&str] = &[
     "external_payment_settled",
     "settlement_receipt_backfill_applied",
     "memory_record_backfill_applied",
+    "tool_call_completed",
 ];
 
 /// The serde discriminator for one audit kind. A wildcard-free `match`: adding
@@ -142,6 +143,7 @@ fn audit_kind_slug(kind: &AuditKind) -> &'static str {
         AuditKind::ExternalPaymentSettled { .. } => "external_payment_settled",
         AuditKind::SettlementReceiptBackfillApplied { .. } => "settlement_receipt_backfill_applied",
         AuditKind::MemoryRecordBackfillApplied { .. } => "memory_record_backfill_applied",
+        AuditKind::ToolCallCompleted { .. } => "tool_call_completed",
     }
 }
 
@@ -480,6 +482,15 @@ fn golden_audit_kind_records() -> Vec<AuditEvent> {
                 row_count: 8,
                 savepoint_name: Some("backfill_receipt_correlation".into()),
                 dry_run: false,
+            },
+        ),
+        event(
+            37,
+            AuditKind::ToolCallCompleted {
+                tool: "echo".into(),
+                arguments_hash_hex: hash_hex(b"{\"text\":\"hi\"}"),
+                duration_ms: 5,
+                outcome: ToolCallOutcome::Ok,
             },
         ),
     ]

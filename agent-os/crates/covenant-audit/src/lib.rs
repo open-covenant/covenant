@@ -84,6 +84,22 @@ pub struct CapabilityAuthorization {
     pub signature_b58: String,
 }
 
+/// How a direct tool call resolved, recorded on [`AuditKind::ToolCallCompleted`].
+/// Separates the tool raising an error (`Failed`) from the tool running and
+/// returning an error *result* (`ErrorResult`): operationally different signals
+/// — an infrastructure fault versus a tool-reported failure — that a single
+/// `error: bool` would collapse.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallOutcome {
+    /// The tool returned a result with `is_error = false`.
+    Ok,
+    /// The tool ran but returned a result with `is_error = true`.
+    ErrorResult,
+    /// The tool raised a `ToolError` (not found, invalid arguments, or failure).
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuditKind {
@@ -554,6 +570,21 @@ pub enum AuditKind {
         row_count: u64,
         savepoint_name: Option<String>,
         dry_run: bool,
+    },
+    /// A direct tool call (`CallTool` / `/tools/call`) finished. Recorded on
+    /// both the success and execution-error paths so the *executed* action is
+    /// auditable, not only the capability and scope *denial* paths. `tool` is
+    /// the tool name; `arguments_hash_hex` is [`hash_hex`] of the call's JSON
+    /// arguments — the same redaction barrier as `preview_hash_hex`, so raw
+    /// tool input never enters the chain; `duration_ms` is wall-clock execution
+    /// time; `outcome` separates a clean result, a returned error result, and a
+    /// raised error. The Hyre and Metaplex tool paths emit their own domain
+    /// audit (payment receipts, mint records) and are not double-recorded here.
+    ToolCallCompleted {
+        tool: String,
+        arguments_hash_hex: String,
+        duration_ms: u64,
+        outcome: ToolCallOutcome,
     },
 }
 

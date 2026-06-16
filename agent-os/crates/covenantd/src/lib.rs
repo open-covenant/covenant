@@ -21,7 +21,7 @@ use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
 use covenant_audit::{
     hash_hex, project_privileged_actions, AuditError, AuditEvent, AuditKind, AuditLog,
-    CapabilityAuthorization, ProvenanceFilter,
+    CapabilityAuthorization, ProvenanceFilter, ToolCallOutcome,
 };
 use covenant_budget::{
     BudgetCheckpointError, BudgetError, BudgetLedger, JsonlPauseCheckpointStore,
@@ -4110,7 +4110,35 @@ impl Server {
             return self.metaplex_tool_call(name, arguments).await;
         }
 
-        match self.tools.call(&name, arguments).await {
+        // Record the invocation on both the success and execution-error paths,
+        // so the *executed* action is auditable and not only the capability and
+        // scope denials above. The arguments are hashed (never persisted raw),
+        // the same redaction barrier the Hermes tool-preview path uses.
+        let arguments_hash_hex = hash_hex(arguments.to_string().as_bytes());
+        let started = std::time::Instant::now();
+        let result = self.tools.call(&name, arguments).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let outcome = match &result {
+            Ok(r) if r.is_error => ToolCallOutcome::ErrorResult,
+            Ok(_) => ToolCallOutcome::Ok,
+            Err(_) => ToolCallOutcome::Failed,
+        };
+        self.record_peer_event(
+            peer,
+            AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: peer.clone(),
+                kind: AuditKind::ToolCallCompleted {
+                    tool: name.clone(),
+                    arguments_hash_hex,
+                    duration_ms,
+                    outcome,
+                },
+            },
+        )
+        .await;
+        match result {
             Ok(r) => Response::ToolResult {
                 content: r.content,
                 is_error: r.is_error,
@@ -15546,9 +15574,9 @@ required = {caps:?}
             | Request::BackfillMemoryRecords { .. }
             | Request::RepairA2ATask { .. }
             | Request::RetryA2AStale { .. }
-            | Request::GetSecret { .. } => ActionAudited,
-            Request::CallTool { .. }
-            | Request::PurgeMemory { .. }
+            | Request::GetSecret { .. }
+            | Request::CallTool { .. } => ActionAudited,
+            Request::PurgeMemory { .. }
             | Request::PurgeAudit { .. }
             | Request::PurgeCapabilities { .. }
             | Request::PurgePeers { .. }
@@ -15773,7 +15801,7 @@ required = {caps:?}
                     name: String::new(),
                     arguments: serde_json::Value::Null,
                 },
-                AuthorizationAudited,
+                ActionAudited,
             ),
             (
                 Request::PurgeMemory {
@@ -47264,6 +47292,76 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn call_tool_records_completion_audit_with_hashed_arguments() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let arguments = serde_json::json!({ "text": "hi" });
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: arguments.clone(),
+            })
+            .await;
+        assert!(matches!(resp, Response::ToolResult { is_error: false, .. }));
+
+        let events = s.audit.recent(50).await.unwrap();
+        let (tool, hash, outcome) = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ToolCallCompleted {
+                    tool,
+                    arguments_hash_hex,
+                    outcome,
+                    ..
+                } => Some((tool.clone(), arguments_hash_hex.clone(), *outcome)),
+                _ => None,
+            })
+            .expect("a ToolCallCompleted row is recorded for a successful call");
+        assert_eq!(tool, "echo");
+        assert_eq!(outcome, ToolCallOutcome::Ok);
+        // Redaction barrier: the row carries the digest of the arguments, not
+        // the raw arguments. The digest is lowercase hex (0-9a-f), so neither
+        // 'h' nor 'i' from the cleartext "hi" can appear in it.
+        assert_eq!(hash, hash_hex(arguments.to_string().as_bytes()));
+        assert!(!hash.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn call_tool_records_failed_outcome_when_tool_raises() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.does-not-exist".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "does-not-exist".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        assert!(matches!(resp, Response::Error { .. }));
+
+        let events = s.audit.recent(50).await.unwrap();
+        let outcome = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ToolCallCompleted { tool, outcome, .. } if tool == "does-not-exist" => {
+                    Some(*outcome)
+                }
+                _ => None,
+            })
+            .expect("a ToolCallCompleted row is recorded when the tool raises");
+        assert_eq!(outcome, ToolCallOutcome::Failed);
     }
 
     /// Full Hyre path: capability gate → executor → 402-then-pay loop

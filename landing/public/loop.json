@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T16:04:37.244Z",
+  "updatedAt": "2026-06-16T16:24:41.062Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9369,
-    "tasks": 1109,
-    "integrated": 1110
+    "events": 9373,
+    "tasks": 1110,
+    "integrated": 1111
   },
   "throughput": {
-    "last24h": 16,
-    "last7d": 151,
-    "velocity": 21.6
+    "last24h": 17,
+    "last7d": 152,
+    "velocity": 21.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 11
+      "count": 12
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-16",
-      "total": 1110
+      "total": 1111
     }
   ],
   "states": {
-    "integrated": 1103,
-    "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "integrated": 1104,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "tool-exec-direct-call-audit",
-    "state": "cross_review",
-    "since": "2026-06-16T15:45:41.559Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-16T16:18:39.595Z",
+      "task": "tool-exec-direct-call-audit",
+      "note": "Integrated as 154ca5b3 on origin/loop/main-track. AuditKind::ToolCallCompleted {tool, arguments_hash_hex, duration_ms, outcome:ToolCallOutco"
+    },
     {
       "at": "2026-06-16T14:49:59.453Z",
       "task": "sdk-quickstart-docs",
@@ -315,11 +315,6 @@
       "at": "2026-06-15T12:38:27.269Z",
       "task": "provenance-approver-and-rule-on-approval-records",
       "note": "Committed 691f6faf on loop/main-track. Scope: covenant-audit (CapabilityAuthorization + authorized_by field), covenantd (write-site check_ca"
-    },
-    {
-      "at": "2026-06-15T09:53:21.587Z",
-      "task": "provenance-privileged-action-inventory",
-      "note": "probe"
     }
   ]
 }

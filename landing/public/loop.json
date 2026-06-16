@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-16T15:04:10.589Z",
+  "updatedAt": "2026-06-16T15:24:14.395Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9363,
-    "tasks": 1108,
+    "events": 9367,
+    "tasks": 1109,
     "integrated": 1110
   },
   "throughput": {
-    "last24h": 17,
+    "last24h": 16,
     "last7d": 151,
     "velocity": 21.6
   },
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1103,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "tool-exec-direct-call-audit",
+    "state": "in_progress",
+    "since": "2026-06-16T15:19:51.500Z"
+  },
   "recent": [
     {
       "at": "2026-06-16T14:49:59.453Z",

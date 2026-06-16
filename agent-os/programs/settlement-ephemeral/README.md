@@ -127,11 +127,16 @@ agent-to-agent pay-per-call at a price mainnet can't touch, demonstrated live.
 
 Run: `K=5 PRICE=1 node x402-demo.mjs`.
 
-Production path (not yet built): the same settlement as a `Signer` impl
-(`EphemeralSigner`) inside the `covenant-x402` crate — its `build_payment()` would
-run the ER consume and return the signature envelope, so the daemon's
-`pay_and_record()` path works unmodified. A facilitator that accepts ER-settled
-proofs is the counterpart.
+Production path — BUILT and live-verified. `EphemeralSigner` in the `covenant-x402`
+crate implements the `Signer` trait by metering: `build_payment()` submits a
+`consume_credits` to the pinned ER validator and returns the signature envelope, so
+the daemon's `pay_and_record()` path works unmodified. Gated by the crate's `solana`
+feature, no on-chain ER SDK dep. Unit + wiremock tested, and live-verified against
+devnet-eu via `cargo run -p covenant-x402 --features solana --example ephemeral_live`
+(delegate with `spike/er-session.mjs delegate` first): it metered 3 credits in the
+ER, balance dropped by exactly 3, reconciled to L1 on undelegate. Remaining
+counterpart: a facilitator service that accepts ER-settled proofs (the
+`spike/x402-demo.mjs` facilitator is the reference).
 
 > Status: program + artifact verified; the live ER reconciliation ran (exact, 75.5
 > ms/op, ~0.0003 SOL/session); and the x402-over-ER pay-per-call demo ran end to end

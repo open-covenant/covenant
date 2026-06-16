@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T06:01:43.415Z",
+  "updatedAt": "2026-06-16T06:21:47.107Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9272,
-    "tasks": 1098,
-    "integrated": 1099
+    "events": 9278,
+    "tasks": 1099,
+    "integrated": 1100
   },
   "throughput": {
-    "last24h": 12,
-    "last7d": 140,
-    "velocity": 20
+    "last24h": 13,
+    "last7d": 141,
+    "velocity": 20.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-16",
-      "total": 1099
+      "total": 1100
     }
   ],
   "states": {
-    "integrated": 1092,
+    "integrated": 1093,
     "proposed": 1,
     "blocked": 4,
-    "validation": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "secret-broker-daemon-mediated",
-    "state": "validation",
-    "since": "2026-06-16T02:54:09.569Z"
+    "task": "secret-scope-and-audit",
+    "state": "in_progress",
+    "since": "2026-06-16T06:10:24.308Z"
   },
   "recent": [
+    {
+      "at": "2026-06-16T06:02:42.715Z",
+      "task": "secret-broker-daemon-mediated",
+      "note": "Daemon-mediated secret broker landed: secret.access scope matcher + GetSecret/Response::Secret IPC + SecretAccess audit kinds + fail-closed "
+    },
     {
       "at": "2026-06-15T23:11:55.101Z",
       "task": "capscope-gateway-egress-scopes",
@@ -315,11 +320,6 @@
       "at": "2026-06-13T10:51:28.925Z",
       "task": "memory-compaction-apply-no-op-changed-flag-pin",
       "note": "Pinned Apply-mode no-op changed flag. Committing as test(covenant-memory)."
-    },
-    {
-      "at": "2026-06-13T10:47:41.941Z",
-      "task": "memory-compaction-detach-stale-parents-flag-gate-pin",
-      "note": "Pinned detach_stale_parents flag gate. Committing as test(covenant-memory)."
     }
   ]
 }

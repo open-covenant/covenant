@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-16T06:21:47.107Z",
+  "updatedAt": "2026-06-16T06:41:50.860Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9278,
+    "events": 9280,
     "tasks": 1099,
     "integrated": 1100
   },
   "throughput": {
-    "last24h": 13,
+    "last24h": 12,
     "last7d": 141,
     "velocity": 20.1
   },
@@ -187,7 +187,7 @@
     "integrated": 1093,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "secret-scope-and-audit",
-    "state": "in_progress",
-    "since": "2026-06-16T06:10:24.308Z"
+    "state": "cross_review",
+    "since": "2026-06-16T06:28:19.191Z"
   },
   "recent": [
     {

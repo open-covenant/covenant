@@ -186,6 +186,34 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
             }
             covenant_metaplex::validate_root_hash_hex(&payload.response_hash)
                 .map_err(|e| anyhow!("{e}"))?;
+            // The signer is the trust boundary: stdin is untrusted, so every
+            // string inscribed on-chain is validated here regardless of who
+            // built the payload (the daemon validates too; this is the gate).
+            for (name, value) in [
+                ("type", payload.r#type.as_str()),
+                ("schema", payload.schema.as_str()),
+                ("hashAlg", payload.hash_alg.as_str()),
+                ("tag", payload.tag.as_str()),
+                ("subject.registry", payload.subject.registry.as_str()),
+                ("covenant.releaseTarget", payload.covenant.release_target.as_str()),
+                ("covenant.releaseSubject", payload.covenant.release_subject.as_str()),
+                ("covenant.releaseScope", payload.covenant.release_scope.as_str()),
+            ] {
+                covenant_metaplex::validate_attestation_field(name, value)
+                    .map_err(|e| anyhow!("{e}"))?;
+            }
+            if let Some(agent_id) = &payload.subject.agent_id {
+                covenant_metaplex::validate_attestation_field("subject.agentId", agent_id)
+                    .map_err(|e| anyhow!("{e}"))?;
+            }
+            for (name, pk) in [
+                ("subject.asset", &payload.subject.asset),
+                ("subject.registration", &payload.subject.registration),
+            ] {
+                if let Some(pk) = pk {
+                    parse_pubkey(pk).with_context(|| name.to_string())?;
+                }
+            }
             let collection = match req_collection {
                 Some(c) => Some(parse_pubkey(c).context("request collection")?),
                 None => collection_from_env()?,

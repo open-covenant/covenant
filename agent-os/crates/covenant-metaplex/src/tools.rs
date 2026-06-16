@@ -261,11 +261,31 @@ impl WriteTool {
                 let root = str_arg(args, "rootHashHex")?;
                 crate::request::validate_root_hash_hex(root)
                     .map_err(ToolError::InvalidArguments)?;
+                let release_target = str_arg(args, "releaseTarget")?;
+                let release_subject = str_arg(args, "releaseSubject")?;
+                let release_scope = str_arg(args, "releaseScope")?;
+                for (name, value) in [
+                    ("releaseTarget", release_target),
+                    ("releaseSubject", release_subject),
+                    ("releaseScope", release_scope),
+                ] {
+                    crate::request::validate_attestation_field(name, value)
+                        .map_err(ToolError::InvalidArguments)?;
+                }
+                for (name, pk) in [
+                    ("agentAsset", &self.agent_asset),
+                    ("agentRegistration", &self.agent_registration),
+                ] {
+                    if let Some(pk) = pk {
+                        crate::request::validate_onchain_pubkey(name, pk)
+                            .map_err(ToolError::InvalidArguments)?;
+                    }
+                }
                 let payload = AttestationPayload::new(
                     root,
-                    str_arg(args, "releaseTarget")?,
-                    str_arg(args, "releaseSubject")?,
-                    str_arg(args, "releaseScope")?,
+                    release_target,
+                    release_subject,
+                    release_scope,
                     args.get("recordedAt").and_then(Value::as_u64).ok_or_else(|| {
                         ToolError::InvalidArguments("recordedAt (integer) is required".into())
                     })?,

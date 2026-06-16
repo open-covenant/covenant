@@ -49,23 +49,85 @@ pub fn validate_root_hash_hex(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate an ERC-8004 registration document URI before it is recorded
-/// on-chain: `https://` or `ar://` only, no whitespace/control characters,
-/// bounded length. Shared by the daemon-side tool and the signer sidecar
-/// so a malformed URI is rejected before any subprocess spawn or send.
-pub fn validate_registration_uri(s: &str) -> Result<(), String> {
-    const MAX_LEN: usize = 200;
-    if s.len() > MAX_LEN {
+/// Max bytes for any free-text string inscribed into the AppData payload.
+const ONCHAIN_FIELD_MAX_LEN: usize = 200;
+
+/// Control characters plus the bidirectional-override and zero-width /
+/// invisible format characters of the Trojan-Source class (CVE-2021-42574):
+/// these survive a `is_control()` check but can make an on-chain record
+/// render as something other than its bytes. Rejected from every string
+/// written on-chain. Kept byte-for-byte in sync with the SAP anchor.
+fn is_unsafe_onchain_char(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{200B}'..='\u{200F}'   // ZWSP, ZWNJ, ZWJ, LRM, RLM
+            | '\u{2028}'..='\u{2029}' // line + paragraph separators (forced breaks)
+            | '\u{202A}'..='\u{202E}' // LRE, RLE, PDF, LRO, RLO
+            | '\u{2060}'..='\u{2064}' // word joiner + invisible operators
+            | '\u{2066}'..='\u{2069}' // LRI, RLI, FSI, PDI
+            | '\u{FEFF}'              // BOM / zero-width no-break space
+            | '\u{061C}',             // Arabic letter mark
+        )
+}
+
+/// Validate a free-text identifier before it is inscribed into the AppData
+/// JSON: bounded length, no control or bidi/zero-width formatting. `name`
+/// is the field label for the error. Used for every non-pubkey, non-hash
+/// string in the payload, on both the daemon and the signer.
+pub fn validate_attestation_field(name: &str, s: &str) -> Result<(), String> {
+    if s.len() > ONCHAIN_FIELD_MAX_LEN {
         return Err(format!(
-            "registrationUri must be at most {MAX_LEN} bytes, got {}",
+            "{name} must be at most {ONCHAIN_FIELD_MAX_LEN} bytes, got {}",
+            s.len()
+        ));
+    }
+    if s.chars().any(is_unsafe_onchain_char) {
+        return Err(format!(
+            "{name} must not contain control characters or bidirectional/zero-width formatting"
+        ));
+    }
+    Ok(())
+}
+
+/// Base58 charset + length sanity for a Solana pubkey written into the
+/// AppData JSON, in this deliberately `solana-sdk`-free crate. Rejects a
+/// poisoned/typo'd config value before it is inscribed; the signer
+/// sidecar re-checks with a full pubkey parse before signing.
+pub fn validate_onchain_pubkey(name: &str, s: &str) -> Result<(), String> {
+    const BASE58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    if !(32..=44).contains(&s.len()) {
+        return Err(format!(
+            "{name} must be a base58 pubkey of 32-44 chars, got {}",
+            s.len()
+        ));
+    }
+    if !s.bytes().all(|b| BASE58.contains(&b)) {
+        return Err(format!(
+            "{name} must be base58 (no 0, O, I, l or other non-base58 characters)"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate an ERC-8004 registration document URI before it is recorded
+/// on-chain: `https://` or `ar://` only, no whitespace and no control or
+/// bidi/zero-width formatting, bounded length. Shared by the daemon-side
+/// tool and the signer so a malformed URI is rejected before any
+/// subprocess spawn or send.
+pub fn validate_registration_uri(s: &str) -> Result<(), String> {
+    if s.len() > ONCHAIN_FIELD_MAX_LEN {
+        return Err(format!(
+            "registrationUri must be at most {ONCHAIN_FIELD_MAX_LEN} bytes, got {}",
             s.len()
         ));
     }
     if !(s.starts_with("https://") || s.starts_with("ar://")) {
         return Err("registrationUri must start with https:// or ar://".to_string());
     }
-    if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err("registrationUri must not contain whitespace or control characters".to_string());
+    if s.chars().any(|c| c.is_whitespace() || is_unsafe_onchain_char(c)) {
+        return Err(
+            "registrationUri must not contain whitespace, control characters, or bidirectional/zero-width formatting".to_string(),
+        );
     }
     Ok(())
 }
@@ -258,6 +320,63 @@ mod tests {
         let bw = serde_json::to_value(&bare).unwrap();
         assert!(bw["subject"].get("asset").is_none());
         assert_eq!(bw["validator"], "", "validator empty until the signer stamps it");
+    }
+
+    #[test]
+    fn attestation_field_rejects_overlong_and_trojan_source_chars() {
+        validate_attestation_field("tag", "audit").expect("plain ascii");
+        validate_attestation_field("tag", "release-audit_v2").expect("dashes/underscores");
+        assert!(
+            validate_attestation_field("tag", &"x".repeat(201)).is_err(),
+            "over 200 bytes"
+        );
+        // Trojan Source (CVE-2021-42574): pass is_control() but must be rejected.
+        for bad in [
+            "cove\u{202e}tnan", // RLO bidirectional override
+            "covenant\u{200b}", // zero-width space
+            "audit\u{2028}",    // line separator (forced break, not is_control)
+            "tag\u{feff}",      // BOM
+            "x\u{0007}",        // control (BEL)
+        ] {
+            assert!(
+                validate_attestation_field("tag", bad).is_err(),
+                "unsafe char in {bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn onchain_pubkey_validation_is_base58_and_length_bounded() {
+        validate_onchain_pubkey("subject.asset", "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH")
+            .expect("real mainnet pubkey");
+        assert!(
+            validate_onchain_pubkey("x", "deadbeef").is_err(),
+            "too short"
+        );
+        assert!(
+            validate_onchain_pubkey("x", &"1".repeat(45)).is_err(),
+            "too long"
+        );
+        assert!(
+            validate_onchain_pubkey("x", &"0".repeat(40)).is_err(),
+            "0 is not in the base58 alphabet"
+        );
+        assert!(
+            validate_onchain_pubkey("x", "OIl0_______________________________________").is_err(),
+            "non-base58 chars"
+        );
+    }
+
+    #[test]
+    fn registration_uri_rejects_bidi_and_zero_width_chars() {
+        assert!(
+            validate_registration_uri("https://a.example/\u{202e}evil.json").is_err(),
+            "bidi override in URI must be rejected"
+        );
+        assert!(
+            validate_registration_uri("https://a.example/\u{200b}.json").is_err(),
+            "zero-width space in URI must be rejected"
+        );
     }
 
     #[test]

@@ -34,6 +34,19 @@ Every non-empty scope for a known action namespace must be a JSON object with a 
 
 `{}` remains valid and means unscoped within the named action. Grant requests for known namespaces reject non-object scopes, missing versions, unsupported versions, and malformed known fields. Unknown future fields are preserved as signed metadata until dispatch-time enforcement defines them.
 
+### `max_uses` (usage budget)
+
+`max_uses` is a cross-namespace field accepted on any recognized scope alongside `version`. It bounds how many times a grant may authorize its action — a usage budget that complements the time budget of `expires_at`:
+
+```json
+{
+  "version": 1,
+  "max_uses": 5
+}
+```
+
+It must be a positive integer; grant requests reject `0`, negative, fractional, and non-numeric values. Because the signature covers `scope`, a budget is tamper-evident — a holder cannot raise it without a fresh daemon-signed grant. An absent `max_uses` means unlimited, which is the behavior of every grant issued before budgets existed. Grant-time validation of the field is enforced today; dispatch-time consumption of the budget is part of the metered-capabilities work and is not yet enforced.
+
 ## Namespaces
 
 ### `intent.*` and `agent.*`

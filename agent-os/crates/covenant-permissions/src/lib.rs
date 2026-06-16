@@ -152,6 +152,12 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         None => return Err(invalid_scope(action, "non-empty scopes must set version 1")),
     }
 
+    // `max_uses` is a cross-namespace usage budget: it bounds how many times a
+    // grant may authorize an action and is enforced at dispatch, not here, so it
+    // is validated centrally rather than threaded through every namespace arm.
+    // Absent means unlimited, preserving every grant issued before budgets existed.
+    optional_positive_integer(action, obj, "max_uses")?;
+
     match namespace {
         ScopeNamespace::Intent | ScopeNamespace::Agent => Ok(()),
         ScopeNamespace::Tool => validate_tool_scope(action, obj),
@@ -1649,6 +1655,45 @@ mod tests {
     fn validate_scope_accepts_empty_and_unknown_scopes() {
         assert!(validate_scope("tool.web_search", &serde_json::json!({})).is_ok());
         assert!(validate_scope("custom.action", &serde_json::json!("opaque")).is_ok());
+    }
+
+    #[test]
+    fn validate_scope_accepts_max_uses_budget_across_namespaces() {
+        // max_uses is cross-cutting: any recognized namespace may carry it.
+        assert!(validate_scope(
+            "tool.call.echo",
+            &serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 3 })
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "intent.publish",
+            &serde_json::json!({ "version": 1, "max_uses": 1 })
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.read",
+            &serde_json::json!({ "version": 1, "max_uses": 100 })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_scope_rejects_non_positive_or_non_integer_max_uses() {
+        for bad in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("5"),
+        ] {
+            let scope = serde_json::json!({ "version": 1, "max_uses": bad });
+            assert!(
+                matches!(
+                    validate_scope("tool.call.echo", &scope),
+                    Err(PermissionError::InvalidScope(_))
+                ),
+                "max_uses = {bad} must be rejected"
+            );
+        }
     }
 
     #[test]

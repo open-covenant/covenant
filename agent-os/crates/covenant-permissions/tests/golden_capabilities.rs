@@ -83,7 +83,8 @@ fn golden_vectors() -> Vec<GrammarVector> {
             json!({
                 "version": 1,
                 "tool": "echo",
-                "arguments": { "allow": { "text": "hi" } }
+                "arguments": { "allow": { "text": "hi" } },
+                "max_uses": 5
             }),
         ),
         grant(

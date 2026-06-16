@@ -10,6 +10,7 @@
         "text": "hi"
       }
     },
+    "max_uses": 5,
     "tool": "echo",
     "version": 1
   },

@@ -57,10 +57,26 @@ Others: US `MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd`, Asia
 
 Fee schedule: 0.0001 SOL/commit to L1, 0.0003 SOL/ER session (charged at undelegate).
 
-## Live spike (the remaining manual step — needs a funded devnet keypair)
+## Live spike — RUN AND VERIFIED on devnet (2026-06-16)
 
-This is the one thing not yet run: it requires deploying the ER artifact to devnet
-and a funded payer. The flow, which `spike/run-spike.mjs` drives, is:
+The ER build is deployed to `cov9UDyp…` on devnet (an upgrade; authority is the
+local `id.json`) and `spike/run-spike.mjs` ran the full flow end to end:
+
+- delegate on L1 → N×consume in the EU ER validator → undelegate → reconcile on L1.
+- **N=100, amount=2: reconciled exactly** (4,999,999,995 → 4,999,999,795). Earlier
+  N=5 run also exact.
+- **75.5 ms/op** confirmed for the ER consumes (vs ~400–800 ms L1 confirmed).
+- **Whole session cost: ~0.000305 SOL** — the delegate + commit + session overhead.
+  The 100 consumes themselves are gasless, so the cost is ~constant in N: thousands
+  of metered consumes per session cost the same fixed ~0.0003 SOL. That is the
+  unit-economics result we wanted.
+
+The harness uses hand-encoded instructions (anchor global discriminators + the exact
+`#[delegate]`/`#[commit]` account order) and the MagicBlock JS SDK only for the
+delegation PDAs, so it needs no generated IDL. `check.mjs <owner>` dumps current
+config/credit state. Re-run: `N=100 AMOUNT=2 node run-spike.mjs`.
+
+Original spec of the flow that `spike/run-spike.mjs` drives:
 
 1. **L1 setup**: `initialize` (if needed), `open_credit_account`, `buy_credits` so the
    owner has a known starting balance `B`.
@@ -89,5 +105,6 @@ The client uses the program IDL (run `anchor build` once to emit it — the
 `#[delegate]`/`#[commit]` macros add their accounts to the IDL) and the MagicBlock
 JS SDK for the delegation PDAs + `GetCommitmentSignature`. See `spike/run-spike.mjs`.
 
-> Status: program + artifact verified; the live ER reconciliation is unrun pending a
-> funded devnet deploy. Do not report the latency/cost numbers until this runs.
+> Status: program + artifact verified AND the live ER reconciliation ran on devnet
+> (2026-06-16) — exact reconciliation, 75.5 ms/op, ~0.0003 SOL fixed session cost.
+> Numbers above are from a real run, not the spec.

@@ -1,0 +1,6 @@
+{
+  "kind": "revoke_peer",
+  "token_prefix": "abc123",
+  "force": true,
+  "match_limit": 7
+}

@@ -1,0 +1,5 @@
+{
+  "kind": "purge_memory",
+  "tier": "working",
+  "before_ms": 1700000000000
+}

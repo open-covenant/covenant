@@ -1,0 +1,7 @@
+{
+  "kind": "search_memory",
+  "query": "hello",
+  "tier": "working",
+  "limit": 25,
+  "min_relevance": 0.75
+}

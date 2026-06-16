@@ -1,0 +1,7 @@
+{
+  "kind": "call_tool",
+  "name": "echo",
+  "arguments": {
+    "text": "hi"
+  }
+}

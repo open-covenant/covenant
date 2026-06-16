@@ -1,0 +1,5 @@
+{
+  "kind": "capability_revoked",
+  "signature_b58": "sig-xyz",
+  "removed": true
+}

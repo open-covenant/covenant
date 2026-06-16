@@ -1,0 +1,10 @@
+{
+  "kind": "compact_memory",
+  "request": {
+    "mode": "dry_run",
+    "policy": {
+      "detach_stale_parents": false
+    },
+    "reason": "retention sweep"
+  }
+}

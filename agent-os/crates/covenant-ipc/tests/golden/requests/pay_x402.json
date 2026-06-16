@@ -1,0 +1,13 @@
+{
+  "kind": "pay_x402",
+  "provider": "xona",
+  "endpoint": "https://api.xona-agent.com/img",
+  "method": "POST",
+  "body": {
+    "prompt": "hi"
+  },
+  "network": "solana:mainnet",
+  "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "per_call_cap": "100000",
+  "credits": 8
+}

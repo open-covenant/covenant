@@ -43,3 +43,20 @@ The current harness replays every root `*.v1.json` response fixture through the 
 - a supported protocol version lacks `docs/protocol-migrations/vN.md`.
 
 The canonical record for what landed in the v2 promotion is [docs/protocol-migrations/v2.md](./protocol-migrations/v2.md). Future migrations follow the same pattern: add `*.vN.json` fixtures, write `docs/protocol-migrations/vN.md`, bump the relevant constants, and let the migration-evidence test verify the bundle.
+
+## Conformance Golden Vectors
+
+The migration fixtures above replay the daemon's emitted responses through the current parser across versions. The full IPC message surface — every request a client **sends** and every terminal response the daemon **emits** — is additionally frozen as an exhaustive, byte-exact golden-vector contract under `agent-os/crates/covenant-ipc/tests/golden/` (`requests/` and `responses/`).
+
+Each `Request` and `Response` variant has one committed `<kind>.json` file holding the canonical serialized frame, named for its wire `kind` discriminator (e.g. `requests/submit_intent.json`, `responses/intent_result.json`). The `tests/golden_requests.rs` and `tests/golden_responses.rs` runners (sharing `tests/common/mod.rs`) re-serialize each in-code value and assert it is byte-for-byte equal to the committed file, deserialize the file back and assert it round-trips to the same value, and verify each corpus is exhaustive — one file per variant, no orphans, none missing. A compile-time `match` over each enum breaks the build when a variant is added or removed, so the contract cannot silently drift from the type. `responses/` freezes the v1 terminal frames; the v2 streaming envelopes stay under `tests/fixtures/v2/`.
+
+Any unreviewed change to a message's wire shape (renamed field, reordered struct, changed discriminator, removed field) fails the build. Regeneration is deliberate and reviewable — never blind:
+
+```sh
+cd agent-os
+COVENANT_BLESS_IPC_GOLDEN=1 cargo test -p covenant-ipc \
+  --test golden_requests --test golden_responses \
+  golden_vectors_match_committed_corpus
+```
+
+The re-blessed files surface in `git diff` as the record of the wire change. See [the corpus README](../agent-os/crates/covenant-ipc/tests/golden/README.md) for the layout and blessing workflow.

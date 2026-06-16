@@ -1,0 +1,5 @@
+{
+  "kind": "recent_receipts",
+  "limit": 25,
+  "since_ms": 1700000000000
+}

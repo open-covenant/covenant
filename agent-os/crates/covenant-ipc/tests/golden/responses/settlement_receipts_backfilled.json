@@ -1,0 +1,6 @@
+{
+  "kind": "settlement_receipts_backfilled",
+  "row_count": 0,
+  "rollback_path": null,
+  "dry_run": true
+}

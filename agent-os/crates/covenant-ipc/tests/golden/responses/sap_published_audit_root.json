@@ -1,0 +1,5 @@
+{
+  "kind": "sap_published_audit_root",
+  "ledger_pda": "Ledger11111111111111111111111111111111111111",
+  "signature": "5sigPublishAuditRootExampleBase58Signature"
+}

@@ -1,0 +1,10 @@
+{
+  "kind": "retry_a2_a_stale",
+  "policy": {
+    "enabled": false,
+    "min_lease_age_ms": 300000,
+    "max_attempts": 3,
+    "max_requeues": 1,
+    "scan_limit": 100
+  }
+}

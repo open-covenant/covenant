@@ -1,0 +1,6 @@
+{
+  "kind": "capability_granted",
+  "signature_b58": "sig-abc",
+  "subject_display": "research@host",
+  "action": "tool.call.fs.read"
+}

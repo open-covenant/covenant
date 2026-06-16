@@ -1,0 +1,13 @@
+{
+  "kind": "chain_status",
+  "status": {
+    "chain": "solana",
+    "cluster": "devnet",
+    "rpc_url": null,
+    "ws_url": null,
+    "program_id": null,
+    "covnt_mint": null,
+    "ready": false,
+    "missing": []
+  }
+}

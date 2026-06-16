@@ -1,0 +1,8 @@
+{
+  "kind": "grant_capability",
+  "action": "memory.read",
+  "scope": {
+    "tier": "working"
+  },
+  "expires_at": 1700000000000
+}

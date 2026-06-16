@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-16T09:02:18.076Z",
+  "updatedAt": "2026-06-16T09:22:23.379Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9296,
+    "events": 9297,
     "tasks": 1101,
     "integrated": 1102
   },
@@ -187,7 +187,7 @@
     "integrated": 1095,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "conformance-ipc-golden-vectors",
-    "state": "in_progress",
-    "since": "2026-06-16T08:30:34.811Z"
+    "state": "self_review",
+    "since": "2026-06-16T09:22:11.270Z"
   },
   "recent": [
     {

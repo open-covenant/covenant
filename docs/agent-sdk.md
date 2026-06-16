@@ -9,6 +9,9 @@ The client borrows the daemon's own protocol types (`covenant-ipc`'s
 `Request`/`Response`), so the typed surface here cannot drift from the wire
 shapes the daemon accepts.
 
+New here? [`docs/agent-quickstart.md`](./agent-quickstart.md) walks from install
+to a running, capability-scoped agent. This page is the surface reference.
+
 ## Connecting
 
 `Client::connect_default()` resolves the daemon home from the environment

@@ -7,6 +7,7 @@ export const DOCS_NAV: DocsSection[] = [
     items: [
       { href: "/", label: "Overview" },
       { href: "/getting-started", label: "Getting started" },
+      { href: "/agent-quickstart", label: "Agent quickstart" },
       { href: "/concepts", label: "Concepts" },
       { href: "/autonomy", label: "Autonomous workflow" },
       { href: "/validation", label: "Validation profile" },

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T08:02:06.747Z",
+  "updatedAt": "2026-06-16T08:22:10.619Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9288,
-    "tasks": 1100,
-    "integrated": 1101
+    "events": 9294,
+    "tasks": 1101,
+    "integrated": 1102
   },
   "throughput": {
-    "last24h": 12,
-    "last7d": 142,
-    "velocity": 20.3
+    "last24h": 13,
+    "last7d": 143,
+    "velocity": 20.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-16",
-      "total": 1101
+      "total": 1102
     }
   ],
   "states": {
-    "integrated": 1094,
+    "integrated": 1095,
     "proposed": 1,
     "blocked": 4,
-    "self_review": 1
+    "triaged": 1
   },
   "areas": [
     {
@@ -215,12 +215,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "secret-remove-env-exposure",
-    "state": "self_review",
-    "since": "2026-06-16T07:51:48.765Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-16T08:11:57.243Z",
+      "task": "secret-remove-env-exposure",
+      "note": "Committed 17ac0b27 on loop/main-track. SubprocessRunner now clears the child env and passes only PATH/HOME/COVENANT_*; daemon env secrets no"
+    },
     {
       "at": "2026-06-16T07:17:27.494Z",
       "task": "secret-scope-and-audit",
@@ -315,11 +316,6 @@
       "at": "2026-06-13T11:12:56.759Z",
       "task": "a2a-auto-retry-scan-max-requeues-cap-limit-reached-pin",
       "note": "Committed 1b2ec9b1 on loop/main-track. test(covenantd) cap pin + README metrics 2814. Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-13T10:56:26.789Z",
-      "task": "memory-compaction-detach-only-stale-not-live-parent-pin",
-      "note": "Pinned stale-only detach detection. Committing as test(covenant-memory)."
     }
   ]
 }

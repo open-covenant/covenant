@@ -519,6 +519,13 @@ pub enum Request {
         #[serde(default)]
         tx_sig: Option<String>,
     },
+    /// Read a worker's audit-derived reputation. Requires capability
+    /// `reputation.read`; the daemon computes the standing from the escrow
+    /// rows in its audit chain and returns [`Response::Reputation`].
+    /// `worker_pubkey` is the bs58 key the completion proofs name. Read-only.
+    GetReputation {
+        worker_pubkey: String,
+    },
     /// Operator-driven repair of legacy settlement-receipt rows in the
     /// JSONL store. `dry_run` reports the would-change row count without
     /// writing; an apply rewrites the store atomically after a rollback
@@ -1093,6 +1100,20 @@ pub enum Response {
     EscrowReleased {
         receipt_id: Uuid,
         proof_id: Uuid,
+    },
+    /// A worker's audit-derived reputation, the result of
+    /// [`Request::GetReputation`]. All counts come from the escrow rows in the
+    /// audit chain; `completion_rate_bps` is `validations_passed /
+    /// proofs_total` in basis points; `computed_audit_root_hex` pins the score
+    /// to the chain state it was read over, so it is reproducible.
+    Reputation {
+        worker_pubkey: String,
+        proofs_total: u64,
+        validations_passed: u64,
+        validations_failed: u64,
+        releases: u64,
+        completion_rate_bps: u32,
+        computed_audit_root_hex: String,
     },
     /// Snapshot of the SAP bridge config as the daemon resolved it at
     /// boot. `enabled = false` means the bridge is off (default) and
@@ -11718,6 +11739,40 @@ mod tests {
         assert_eq!(obj.get("kind"), Some(&serde_json::json!("escrow_released")));
         assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(receipt_id)));
         assert_eq!(obj.get("proof_id"), Some(&serde_json::json!(proof_id)));
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn request_get_reputation_serde_pins_wire_shape() {
+        let event = Request::GetReputation {
+            worker_pubkey: "7Np41oeYqPefeNQEHSv1UDhYrehxin3NStpvxbiyN".into(),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("get_reputation")));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "GetReputation must round-trip verbatim");
+    }
+
+    #[test]
+    fn response_reputation_serde_pins_wire_shape() {
+        let resp = Response::Reputation {
+            worker_pubkey: "7Np41oeYqPefeNQEHSv1UDhYrehxin3NStpvxbiyN".into(),
+            proofs_total: 3,
+            validations_passed: 2,
+            validations_failed: 1,
+            releases: 2,
+            completion_rate_bps: 6666,
+            computed_audit_root_hex: "deadbeef".into(),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("reputation")));
+        assert_eq!(
+            obj.get("completion_rate_bps"),
+            Some(&serde_json::json!(6666))
+        );
         let back: Response = serde_json::from_value(wire).unwrap();
         assert_eq!(back, resp);
     }

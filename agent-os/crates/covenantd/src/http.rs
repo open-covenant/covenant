@@ -170,6 +170,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/spend/settle", post(settle_spend_route))
         .route("/escrow/prove", post(prove_completion_route))
         .route("/escrow/release", post(record_escrow_release_route))
+        .route("/reputation/:worker_pubkey", get(reputation_route))
         .route(
             "/settlement/receipts/backfill",
             post(settlement_backfill_receipts),
@@ -1473,6 +1474,20 @@ async fn record_escrow_release_route(
                 },
                 &peer,
             )
+            .await,
+    ))
+}
+
+/// `GET /reputation/:worker_pubkey` — a worker's audit-derived standing.
+/// `worker_pubkey` is bs58, which is URL-safe so it rides the path directly.
+async fn reputation_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Path(worker_pubkey): Path<String>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(Request::GetReputation { worker_pubkey }, &peer)
             .await,
     ))
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T13:23:25.650Z",
+  "updatedAt": "2026-06-16T13:43:55.248Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9334,
-    "tasks": 1105,
-    "integrated": 1106
+    "events": 9337,
+    "tasks": 1106,
+    "integrated": 1107
   },
   "throughput": {
     "last24h": 14,
-    "last7d": 147,
-    "velocity": 21
+    "last7d": 148,
+    "velocity": 21.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-16",
-      "total": 1106
+      "total": 1107
     }
   ],
   "states": {
-    "integrated": 1099,
-    "proposed": 1,
-    "blocked": 4,
-    "validation": 1
+    "integrated": 1100,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sdk-author-surface",
-    "state": "validation",
-    "since": "2026-06-16T13:15:59.320Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-16T13:38:00.179Z",
+      "task": "sdk-author-surface",
+      "note": "Integrated as 1ed231b1, pushed to origin/loop/main-track (9ee9315a..1ed231b1). covenant-sdk async author Client over covenant-ipc: connect_d"
+    },
     {
       "at": "2026-06-16T11:38:32.203Z",
       "task": "conformance-runner-and-docs",
@@ -315,11 +315,6 @@
       "at": "2026-06-15T06:24:44.892Z",
       "task": "ipc-docs-intent-result-status-type-level-pin",
       "note": "Integrated as 3aa743b4 on loop/main-track. Docs status bullet canonicalized; dedicated validator added + registered in validate.sh; status t"
-    },
-    {
-      "at": "2026-06-13T12:22:53.142Z",
-      "task": "zauth-read-capped-exact-cap-boundary",
-      "note": "Committed 39ee244e and pushed to origin/loop/main-track (56829666..39ee244e). All pre-push guards passed (current-identity, github-cli-accou"
     }
   ]
 }

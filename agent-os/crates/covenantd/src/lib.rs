@@ -8,6 +8,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod escrow;
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
@@ -1205,6 +1206,10 @@ pub struct Server {
     /// enabled it; in that state every `Request::AuthorizeSpend` returns a
     /// "not configured" error and no spend is ever authorized.
     spend_authz: Option<Arc<spend_authz::SpendAuthzConfig>>,
+    /// Opt-in escrow surface. When `None` the daemon never issued a
+    /// completion proof; `Request::ProveCompletion` returns a "not
+    /// configured" error and no release signal is ever produced.
+    escrow: Option<Arc<escrow::EscrowConfig>>,
     /// Opt-in Hyre provider profile: the materialised catalog + config.
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
@@ -1264,6 +1269,7 @@ impl Server {
             home: None,
             x402_dispatch: None,
             spend_authz: None,
+            escrow: None,
             hyre: None,
             metaplex: None,
             sap_bridge: None,
@@ -1348,6 +1354,17 @@ impl Server {
     /// default, mirroring [`Self::with_x402_dispatch`].
     pub fn with_spend_authz(mut self, config: spend_authz::SpendAuthzConfig) -> Self {
         self.spend_authz = Some(Arc::new(config));
+        self
+    }
+
+    /// Enable the escrow surface. Once wired, an authenticated peer holding
+    /// `escrow.completion.prove` can ask the daemon to issue a signed
+    /// completion proof an external escrow releases against, and a peer
+    /// holding `escrow.release.record` can report the release back into the
+    /// audit chain. Covenant holds no funds. Opt-in and off by default,
+    /// mirroring [`Self::with_spend_authz`].
+    pub fn with_escrow(mut self, config: escrow::EscrowConfig) -> Self {
+        self.escrow = Some(Arc::new(config));
         self
     }
 
@@ -2398,6 +2415,34 @@ impl Server {
                     peer,
                 )
                 .await
+            }
+            Request::ProveCompletion {
+                task_id,
+                worker_pubkey,
+                provider,
+                result_hash_hex,
+                validation_passed,
+            } => {
+                self.prove_completion(
+                    task_id,
+                    worker_pubkey,
+                    provider,
+                    result_hash_hex,
+                    validation_passed,
+                    peer,
+                )
+                .await
+            }
+            Request::RecordEscrowRelease {
+                proof_id,
+                provider,
+                network,
+                asset,
+                amount,
+                tx_sig,
+            } => {
+                self.record_escrow_release(proof_id, provider, network, asset, amount, tx_sig, peer)
+                    .await
             }
             Request::BackfillSettlementReceipts {
                 dry_run,
@@ -6067,6 +6112,138 @@ impl Server {
             },
             Err(e) => Response::Error {
                 message: format!("spend settlement failed: {e}"),
+            },
+        }
+    }
+
+    async fn prove_completion(
+        &self,
+        task_id: Uuid,
+        worker_pubkey: String,
+        provider: String,
+        result_hash_hex: String,
+        validation_passed: bool,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "escrow:prove".into(),
+                vec!["escrow.completion.prove".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "escrow completion proofs require capability \
+                          \"escrow.completion.prove\". Grant it with \
+                          `covenant capabilities grant escrow.completion.prove`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.escrow.clone() else {
+            return Response::Error {
+                message: "the escrow surface is not configured on this daemon. \
+                          Wire it via Server::with_escrow and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "the escrow surface is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let facts = escrow::CompletionFacts {
+            task_id,
+            worker_pubkey,
+            provider,
+            result_hash_hex,
+            validation_passed,
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = escrow::ProveContext {
+            identity: self.identity.as_ref(),
+            audit: self.audit.as_ref(),
+            issuer: &issuer,
+        };
+
+        match escrow::prove_completion(&context, config.as_ref(), &facts).await {
+            Ok(signed) => Response::CompletionProven {
+                proof_json: signed.proof_json,
+                signature_b58: signed.signature_b58,
+                signer_pubkey_b58: signed.signer_pubkey_b58,
+            },
+            Err(e) => Response::Error {
+                message: format!("escrow completion proof failed: {e}"),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn record_escrow_release(
+        &self,
+        proof_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        tx_sig: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "escrow:release".into(),
+                vec!["escrow.release.record".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "recording an escrow release requires capability \
+                          \"escrow.release.record\". Grant it with \
+                          `covenant capabilities grant escrow.release.record`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.escrow.clone() else {
+            return Response::Error {
+                message: "the escrow surface is not configured on this daemon. \
+                          Wire it via Server::with_escrow and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "the escrow surface is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let facts = escrow::ReleaseFacts {
+            proof_id,
+            provider,
+            network,
+            asset,
+            amount,
+            tx_sig,
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = escrow::ReleaseContext {
+            settlement: self.settlement.as_ref(),
+            audit: self.audit.as_ref(),
+            issuer: &issuer,
+        };
+
+        match escrow::record_escrow_release(&context, config.as_ref(), peer, &facts).await {
+            Ok(receipt_id) => Response::EscrowReleased {
+                receipt_id,
+                proof_id,
+            },
+            Err(e) => Response::Error {
+                message: format!("escrow release recording failed: {e}"),
             },
         }
     }

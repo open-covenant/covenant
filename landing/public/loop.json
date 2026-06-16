@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-16T10:42:38.792Z",
+  "updatedAt": "2026-06-16T11:02:42.418Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9309,
-    "tasks": 1102,
+    "events": 9313,
+    "tasks": 1103,
     "integrated": 1104
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1097,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "conformance-audit-record-vectors",
+    "state": "in_progress",
+    "since": "2026-06-16T10:57:41.853Z"
+  },
   "recent": [
     {
       "at": "2026-06-16T10:42:35.518Z",

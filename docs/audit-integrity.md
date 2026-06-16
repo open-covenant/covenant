@@ -45,6 +45,10 @@ The audit record schema is a frozen external contract. Because the event hash is
 
 The `provenance_record_schema_golden_vectors_are_frozen` test reconstructs the same records from typed Rust, re-serializes and re-hashes them through production code, and asserts byte-for-byte equality with the fixture. A mismatch fails the test rather than silently changing the contract. Update the fixture only as a deliberate, reviewed schema change — bump the `.v<n>` suffix for an incompatible shape — never blindly regenerate it to make a failing test pass.
 
+That fixture freezes the capability family and the genesis-seeded chain fold. `agent-os/crates/covenant-audit/tests/fixtures/audit-kinds.v1.json` completes the surface: it pins the `canonical_json` and `event_hash_hex` of one representative `AuditEvent` for **every** recognized `AuditKind` variant, so a schema change to any audit kind — not only the capability family — fails loudly instead of silently changing that event's hash. The `audit_kind_wire_schema_golden_vectors_are_frozen` test (in `tests/golden_audit_kinds.rs`) drives the same production serializer and hash.
+
+The corpus is kept exhaustive by `audit_kind_slug`, a wildcard-free `match` over `AuditKind`: adding a variant fails to compile until a slug — and therefore a golden vector — is added for it, so a new audit kind can never ship unfrozen. The companion `audit_kind_corpus_is_exhaustive` test asserts the typed records, the slug inventory, and the committed fixture all cover exactly the same set.
+
 ## Verification
 
 Operators can verify the local chain through all daemon surfaces:

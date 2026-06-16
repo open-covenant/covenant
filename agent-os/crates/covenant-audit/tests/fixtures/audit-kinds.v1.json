@@ -1,0 +1,185 @@
+{
+  "description": "Frozen golden vectors for the full audit record wire schema: one representative AuditEvent per AuditKind variant. canonical_json is the exact serde_json::to_string wire form of the event — the byte sequence hashed into the tamper-evident chain — and event_hash_hex is sha256(canonical_json). Every recognized audit kind has one vector; covenant-audit's audit_kind_slug match is the compile-time tripwire that keeps this corpus exhaustive. This is an external conformance contract other implementations verify against: a change here changes the on-chain event hash and breaks every downstream verifier. Update only as a deliberate, reviewed schema change (bump the .v<n> suffix for an incompatible shape) — never blindly regenerate to make a failing test pass. The genesis-seeded chain fold over an ordered sequence is frozen separately in provenance-records.v1.json.",
+  "records": [
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000001\",\"timestamp_ms\":1700000000001,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"intent_dispatched\",\"intent_id\":\"00000000-0000-0000-0000-0000000000a1\",\"intent_text\":\"summarize the q3 report\",\"matched_agent\":\"research@agent\",\"result_hash_hex\":\"eb0b084edeffe5969a3b289bd7b498f4f79302e46a917f889e8a677734164d07\",\"status\":\"ok\"}}",
+      "event_hash_hex": "d79707390bac9353adb097d935ceb1d301535e82d5ebe2b52f6e37009cdf6a50",
+      "name": "intent_dispatched"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000002\",\"timestamp_ms\":1700000000002,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"hermes_tool_invoked\",\"intent_id\":\"00000000-0000-0000-0000-0000000000a2\",\"run_id\":\"run-7c1f\",\"tool\":\"fs.write\",\"preview_hash_hex\":\"b245ad230c56dc45bbc5937a08de5332614d185727bce69c08cf7e56cfdd0e1c\"}}",
+      "event_hash_hex": "2fee4401047a44a48eea1b6db2d262921518016722fb83bea3126d08ba826f5e",
+      "name": "hermes_tool_invoked"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000003\",\"timestamp_ms\":1700000000003,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"hermes_tool_completed\",\"intent_id\":\"00000000-0000-0000-0000-0000000000a3\",\"run_id\":\"run-7c1f\",\"tool\":\"fs.write\",\"duration_ms\":1234,\"error\":false}}",
+      "event_hash_hex": "5cfd7609366ba7380bdc2b9311c83ce7b8df40304c7a3ceb32897e16c7eb9a6e",
+      "name": "hermes_tool_completed"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000004\",\"timestamp_ms\":1700000000004,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"hermes_approval_requested\",\"intent_id\":\"00000000-0000-0000-0000-0000000000a4\",\"run_id\":\"run-7c1f\",\"choices\":[\"approve\",\"deny\"]}}",
+      "event_hash_hex": "6eb4e53b7aabb10b4349fa34a0bccc1de0a1d4f9966eb21edb92e375f43601f7",
+      "name": "hermes_approval_requested"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000005\",\"timestamp_ms\":1700000000005,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"hermes_approval_resolved\",\"intent_id\":\"00000000-0000-0000-0000-0000000000a5\",\"run_id\":\"run-7c1f\",\"choice\":\"approve\",\"resolved\":1}}",
+      "event_hash_hex": "9c4b51ad30f82fe4f1e4ea4fa9701346c34ff4a111586f7ba48c164b8302990d",
+      "name": "hermes_approval_resolved"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000006\",\"timestamp_ms\":1700000000006,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"hermes_file_written\",\"intent_id\":\"00000000-0000-0000-0000-0000000000a6\",\"run_id\":\"run-7c1f\",\"path\":\"src/main.rs\",\"bytes\":2048}}",
+      "event_hash_hex": "913389cce14d37de1bca89d52465e2cb84d9eac48c465c9ef4796693561729e8",
+      "name": "hermes_file_written"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000007\",\"timestamp_ms\":1700000000007,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_check\",\"agent_id\":\"research@agent\",\"required_actions\":[\"memory.write\",\"a2a.send\"],\"missing_actions\":[\"a2a.send\"],\"passed\":false,\"authorized_by\":[{\"action\":\"memory.write\",\"granted_by_display\":\"operator@covenant\",\"signature_b58\":\"GrantSigWrite\"}]}}",
+      "event_hash_hex": "4490c51de3bb7ad74480a49be9a01cd6a1aa4c5eae67a1fdf964f44eb8c4c9d4",
+      "name": "capability_check"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000008\",\"timestamp_ms\":1700000000008,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_granted\",\"subject_display\":\"research@agent\",\"action\":\"memory.write\",\"granted_by_display\":\"operator@covenant\",\"signature_b58\":\"GrantSigWrite\"}}",
+      "event_hash_hex": "fea303055260fb048fee4a65eeb298aca5ae8cd43a0d3b21e22f71f977a1bbbf",
+      "name": "capability_granted"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000009\",\"timestamp_ms\":1700000000009,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_grant_rejected\",\"subject_display\":\"research@agent\",\"action\":\"memory.write\",\"reason\":\"capability expired\"}}",
+      "event_hash_hex": "1b3b39cbba2c5bb8e7c715c2d6b4f4b759aef734346731e0608bdbe8d89f0c3e",
+      "name": "capability_grant_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000000a\",\"timestamp_ms\":1700000000010,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_scope_rejected\",\"agent_id\":\"research@agent\",\"action\":\"audit.purge\",\"reason\":\"before_ms exceeds granted scope\"}}",
+      "event_hash_hex": "dd48344a26a4eef32859b5393c539409216bb2e7153d0ae7b35ec82c1fb3df20",
+      "name": "capability_scope_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000000b\",\"timestamp_ms\":1700000000011,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"secret_access_granted\",\"agent_id\":\"research@agent\",\"secret_name\":\"openai-api-key\",\"signature_b58\":\"GrantSigSecret\"}}",
+      "event_hash_hex": "416b469a79691805054c461046af9130ddf0640e99984069714e68cf53e0e10b",
+      "name": "secret_access_granted"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000000c\",\"timestamp_ms\":1700000000012,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"secret_access_denied\",\"agent_id\":\"research@agent\",\"secret_name\":\"stripe-key\",\"reason\":\"scope does not admit secret name\"}}",
+      "event_hash_hex": "85a60e1ad608ecaa362e9839afa73324ea1548359d0f4a53aa50e669197fe049",
+      "name": "secret_access_denied"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000000d\",\"timestamp_ms\":1700000000013,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"intent_ignored\",\"intent_id\":\"00000000-0000-0000-0000-0000000000b1\",\"intent_text\":\"thanks!\",\"matched_pattern\":\"^thanks\"}}",
+      "event_hash_hex": "ebe8fe9c78cd661e6066076303b430e1cad2627dd3731f1c6fe6b884817a3816",
+      "name": "intent_ignored"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000000e\",\"timestamp_ms\":1700000000014,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"a2_a_result_rejected\",\"task_id\":\"00000000-0000-0000-0000-0000000000b2\",\"reason\":\"task_id was never dispatched through this daemon\"}}",
+      "event_hash_hex": "fb7e4817eb57e82bcf9a91142f107788aef17c75f3ebb929567bdb9ca14ce723",
+      "name": "a2_a_result_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000000f\",\"timestamp_ms\":1700000000015,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"authentication_failed\",\"transport\":\"ipc\",\"reason\":\"unknown peer token\"}}",
+      "event_hash_hex": "5773d416bc824d716ccffdac1eac900a21469740ad60d54d1b82161a0faffd43",
+      "name": "authentication_failed"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000010\",\"timestamp_ms\":1700000000016,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"a2_a_sender_mismatch\",\"peer_display\":\"peer@remote\",\"claimed_sender_display\":\"other@remote\"}}",
+      "event_hash_hex": "fd9ebcbe040ba931fb488b319d4b27d60bd662af6bfd1d52288d1c65864f6766",
+      "name": "a2_a_sender_mismatch"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000011\",\"timestamp_ms\":1700000000017,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"a2_a_recipient_rejected\",\"sender_display\":\"peer@remote\",\"recipient_display\":\"research@agent\",\"action\":\"a2a.recv.peer@remote\"}}",
+      "event_hash_hex": "ceb9113d0438891b290d0ad07108dbc587599012287c5aa9340dbd0b85528b66",
+      "name": "a2_a_recipient_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000012\",\"timestamp_ms\":1700000000018,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"a2_a_repair_applied\",\"task_id\":\"00000000-0000-0000-0000-0000000000b3\",\"action\":\"requeue\",\"reason\":\"operator repair\",\"lease_id\":\"00000000-0000-0000-0000-0000000000b4\",\"duplicate_risk\":\"idempotent\",\"attempt\":2}}",
+      "event_hash_hex": "fc357d229952d458e284c8c8ff02086015a89cd5d9b6198af813373c8b2741ac",
+      "name": "a2_a_repair_applied"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000013\",\"timestamp_ms\":1700000000019,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"a2_a_auto_retry_scheduler_scan\",\"enabled\":true,\"considered\":5,\"requeued\":2,\"skipped\":3,\"skipped_by_reason\":{\"lease_too_young\":2,\"max_attempts\":1},\"min_lease_age_ms\":60000,\"max_attempts\":5,\"max_requeues\":3,\"scan_limit\":100,\"error\":null}}",
+      "event_hash_hex": "707aa336dd07399b46cd83c95f3ac8184826dbd6498c92e111104d506339c2f1",
+      "name": "a2_a_auto_retry_scheduler_scan"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000014\",\"timestamp_ms\":1700000000020,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"memory_repair_applied\",\"memory_id\":\"00000000-0000-0000-0000-0000000000c1\",\"action\":\"delete\",\"mode\":\"apply\",\"changed\":true,\"reason\":\"operator repair\"}}",
+      "event_hash_hex": "b8740fe6b763a8126b9163c682f2d68b14af1c95abeeacbe70f48ec86248e248",
+      "name": "memory_repair_applied"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000015\",\"timestamp_ms\":1700000000021,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"memory_compaction_applied\",\"mode\":\"apply\",\"changed\":true,\"reason\":\"scheduled compaction\",\"deleted\":[\"00000000-0000-0000-0000-0000000000c2\"],\"stale_marked\":[\"00000000-0000-0000-0000-0000000000c3\"],\"parents_detached\":[\"00000000-0000-0000-0000-0000000000c4\"]}}",
+      "event_hash_hex": "a937ddf7cf1dfaa8b65bd466a63917b805ddf1b20bdc76b03a60222953669961",
+      "name": "memory_compaction_applied"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000016\",\"timestamp_ms\":1700000000022,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_revoked\",\"subject_display\":\"research@agent\",\"action\":\"memory.write\",\"signature_b58\":\"GrantSigWrite\",\"removed\":true}}",
+      "event_hash_hex": "6b77a3db519583e9318d18ffe0c977d34a41d0221fa63f7fa02f03f2b1ddf7cc",
+      "name": "capability_revoked"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000017\",\"timestamp_ms\":1700000000023,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_revoke_rejected\",\"signature_b58\":\"OtherSig\",\"reason\":\"not the capability subject\"}}",
+      "event_hash_hex": "a2e2cb9e54c329fbe13111add13cacdd68c09cee8759a9437bc3f3eab1553552",
+      "name": "capability_revoke_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000018\",\"timestamp_ms\":1700000000024,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"budget_exhausted\",\"agent_display\":\"research@agent\",\"intent_id\":\"00000000-0000-0000-0000-0000000000d1\",\"intent_text\":\"expensive task\",\"requested\":1000,\"tokens_remaining\":250,\"refill_eta_ms\":45000}}",
+      "event_hash_hex": "13121da9bbf976637df371a463756b2c2e69303c1fd47699a810c6bcf9db5ed1",
+      "name": "budget_exhausted"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000019\",\"timestamp_ms\":1700000000025,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"budget_preempted\",\"agent_display\":\"research@agent\",\"intent_id\":\"00000000-0000-0000-0000-0000000000d2\",\"reason\":\"budget exceeded mid-run\",\"signal_sent\":\"SIGTERM\",\"exit_code\":143}}",
+      "event_hash_hex": "38275c2c2bdb0e7c58bc83ae44cf50e445887884799ca35a982241651efd65b0",
+      "name": "budget_preempted"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000001a\",\"timestamp_ms\":1700000000026,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"budget_preempt_failed\",\"agent_display\":\"research@agent\",\"intent_id\":\"00000000-0000-0000-0000-0000000000d3\",\"reason\":\"signal syscall failed\",\"errno\":1}}",
+      "event_hash_hex": "7922b552f358532889852f3a0bd3f863ededc57490dceb5a4c7a3b6b75321f88",
+      "name": "budget_preempt_failed"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000001b\",\"timestamp_ms\":1700000000027,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"budget_unseeded\",\"agent_display\":\"research@agent\",\"intent_id\":\"00000000-0000-0000-0000-0000000000d4\",\"requested\":1000}}",
+      "event_hash_hex": "81c24ee8186d1ad6715b88fe78ceb37004bbd6e5fbde3a4f4c4933337ed69d77",
+      "name": "budget_unseeded"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000001c\",\"timestamp_ms\":1700000000028,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"operator_token_rotated\",\"peer_display\":\"operator@local\",\"old_token_prefix\":\"abc123\",\"new_token_prefix\":\"def456\"}}",
+      "event_hash_hex": "7ed7868b1d71a88e75cc5539b9ef0af965e729f12fe2701e5c8db98fc04b85c2",
+      "name": "operator_token_rotated"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000001d\",\"timestamp_ms\":1700000000029,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"operator_token_rotation_rejected\",\"peer_display\":\"guest@remote\",\"peer_pubkey_b58\":\"11111111111111111111111111111111\"}}",
+      "event_hash_hex": "8c85e03cc3f1299b4e7ab3ad5a7d81b20bfb84ca1a3ff3ce24c571940caed888",
+      "name": "operator_token_rotation_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000001e\",\"timestamp_ms\":1700000000030,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"operator_peers_list_rejected\",\"peer_display\":\"guest@remote\",\"peer_pubkey_b58\":\"11111111111111111111111111111111\"}}",
+      "event_hash_hex": "9b2dfae260c9120c47729433a2683f0d4bcb1d18da88ec55332600069d040ec9",
+      "name": "operator_peers_list_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-00000000001f\",\"timestamp_ms\":1700000000031,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"peer_revoked\",\"peer_display\":\"guest@remote\",\"peer_pubkey_b58\":\"11111111111111111111111111111111\",\"token_prefix\":\"ghi789\"}}",
+      "event_hash_hex": "bdd4da6ec135f48be663a632bddb9cdf38fa5b6efa928746c8c544c18bab0e2d",
+      "name": "peer_revoked"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000020\",\"timestamp_ms\":1700000000032,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"operator_peer_revoke_rejected\",\"peer_display\":\"guest@remote\",\"peer_pubkey_b58\":\"11111111111111111111111111111111\"}}",
+      "event_hash_hex": "3200839ed104467737b84118c2eae919a4279a3bda6b9f7a582883d4aa6ab656",
+      "name": "operator_peer_revoke_rejected"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000021\",\"timestamp_ms\":1700000000033,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"peer_self_revoke_blocked\",\"peer_display\":\"operator@local\",\"peer_pubkey_b58\":\"22222222222222222222222222222222\",\"token_prefix\":\"jkl012\"}}",
+      "event_hash_hex": "320202b97ab4a61b1c793ccdb8b63abf8c0c7c9610cbb72cb1d141da50d75eb4",
+      "name": "peer_self_revoke_blocked"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000022\",\"timestamp_ms\":1700000000034,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"external_payment_settled\",\"provider\":\"xona\",\"endpoint\":\"https://api.example.com/x402\",\"network\":\"solana\",\"asset\":\"USDC\",\"amount\":\"1000000\",\"receipt_id\":\"00000000-0000-0000-0000-0000000000e1\"}}",
+      "event_hash_hex": "d43a1da0e3460374d1d06cdf5e90b750061057d4bdd4a020efc397ecfa76dbc4",
+      "name": "external_payment_settled"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000023\",\"timestamp_ms\":1700000000035,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"settlement_receipt_backfill_applied\",\"row_count\":12,\"rollback_path\":\"/var/covenant/receipts.rollback.jsonl\",\"dry_run\":false}}",
+      "event_hash_hex": "27d768ccda47bc580c7d7ab72688e0729bfe8a19b3d2124327aef55f68e1eadf",
+      "name": "settlement_receipt_backfill_applied"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000024\",\"timestamp_ms\":1700000000036,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"memory_record_backfill_applied\",\"row_count\":8,\"savepoint_name\":\"backfill_receipt_correlation\",\"dry_run\":false}}",
+      "event_hash_hex": "7dc86ecee918db34c6e80d3922de8c00583acdad348fb02165af7b2e7505fc22",
+      "name": "memory_record_backfill_applied"
+    }
+  ]
+}

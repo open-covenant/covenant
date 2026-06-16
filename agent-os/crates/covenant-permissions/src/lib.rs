@@ -1652,6 +1652,73 @@ mod tests {
     }
 
     #[test]
+    fn scope_namespace_inventory_is_frozen() {
+        // Compile-time tripwire for the capability namespace grammar. A new
+        // ScopeNamespace variant makes the `prefix` match non-exhaustive and
+        // breaks the build, forcing a matching golden vector under
+        // tests/golden/capabilities/ and a bump to EXPECTED_NAMESPACES in
+        // tests/golden_capabilities.rs. The asserted list freezes the inventory
+        // and its order; each entry is the action's leading namespace segment.
+        fn prefix(ns: ScopeNamespace) -> &'static str {
+            match ns {
+                ScopeNamespace::Intent => "intent",
+                ScopeNamespace::Tool => "tool",
+                ScopeNamespace::Memory => "memory",
+                ScopeNamespace::Agent => "agent",
+                ScopeNamespace::A2a => "a2a",
+                ScopeNamespace::Audit => "audit",
+                ScopeNamespace::Peers => "peers",
+                ScopeNamespace::Identity => "identity",
+                ScopeNamespace::Chain => "chain",
+                ScopeNamespace::Settlement => "settlement",
+                ScopeNamespace::X402 => "x402",
+                ScopeNamespace::Secret => "secret",
+            }
+        }
+        let inventory: Vec<&str> = [
+            ScopeNamespace::Intent,
+            ScopeNamespace::Tool,
+            ScopeNamespace::Memory,
+            ScopeNamespace::Agent,
+            ScopeNamespace::A2a,
+            ScopeNamespace::Audit,
+            ScopeNamespace::Peers,
+            ScopeNamespace::Identity,
+            ScopeNamespace::Chain,
+            ScopeNamespace::Settlement,
+            ScopeNamespace::X402,
+            ScopeNamespace::Secret,
+        ]
+        .into_iter()
+        .map(prefix)
+        .collect();
+        assert_eq!(
+            inventory,
+            [
+                "intent",
+                "tool",
+                "memory",
+                "agent",
+                "a2a",
+                "audit",
+                "peers",
+                "identity",
+                "chain",
+                "settlement",
+                "x402",
+                "secret",
+            ],
+            "capability namespace inventory changed — freeze the new namespace as a golden vector in tests/golden/capabilities/ and update EXPECTED_NAMESPACES in tests/golden_capabilities.rs",
+        );
+        for namespace in &inventory {
+            assert!(
+                ScopeNamespace::from_action(&format!("{namespace}.example")).is_some(),
+                "every frozen namespace prefix must route through the live matcher",
+            );
+        }
+    }
+
+    #[test]
     fn scope_namespace_from_action_pins_each_prefix_and_unknown_fallthrough() {
         // covenant_permissions::ScopeNamespace::from_action (line 88-111)
         // is the prefix-to-namespace dispatch table that routes every

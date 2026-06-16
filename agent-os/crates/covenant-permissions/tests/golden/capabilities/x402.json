@@ -1,0 +1,16 @@
+{
+  "subject": {
+    "display": "research@agent",
+    "pubkey": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+  },
+  "action": "x402.outbound.pay",
+  "scope": {
+    "provider": "xona",
+    "version": 1
+  },
+  "granted_by": {
+    "display": "operator@local",
+    "pubkey": "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR"
+  },
+  "expires_at": 1700000000000
+}

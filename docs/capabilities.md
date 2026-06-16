@@ -4,6 +4,24 @@ Capability tokens bind an agent subject, an action string, an optional JSON scop
 
 Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` and `capabilities.purge` `before_ms` cutoffs, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, the `settlement.backfill.*` predicate for receipt backfill, the `x402.outbound.pay` destination-class predicate for outbound paid-call egress, and the `secret.access` named-secret predicate for daemon-mediated secret reads at dispatch.
 
+## Action Grammar
+
+A capability `action` is a dotted identifier — a namespace segment, a method, and an optional sub-method (`namespace.method[.sub]`, e.g. `memory.read`, `tool.call.echo`, `x402.outbound.pay`). The separator is `.`. There is no wildcard form, so each granted action is matched literally; the one hierarchical exception is that an umbrella `memory.read` grant also satisfies a tier-scoped `memory.read.<tier>` request.
+
+The leading segment selects the scope validator. Twelve namespaces are recognized at grant time:
+
+`intent`, `tool`, `memory`, `agent`, `a2a`, `audit`, `peers`, `identity`, `chain`, `settlement`, `x402`, `secret`.
+
+`capabilities.*` is enforced only at dispatch (the `before_ms` retention cutoff) and is not bound at grant time, so its non-empty scope is preserved as signed metadata. An action outside every recognized namespace passes grant-time scope validation unchanged.
+
+This grammar — the dotted action form, the namespace inventory, and one representative grant per namespace — is frozen as a versioned conformance contract under [`agent-os/crates/covenant-permissions/tests/golden/capabilities/`](../agent-os/crates/covenant-permissions/tests/golden/capabilities/). For every namespace, `tests/golden_capabilities.rs` re-serializes the in-code grant and asserts it is byte-for-byte equal to the committed `<namespace>.json`, round-trips it back to the same grant, and asserts the frozen scope still passes the live `validate_scope` — so tightening the validator against a grant already in the field fails the build rather than breaking it silently. A compile-time `match` over the namespace enum (`scope_namespace_inventory_is_frozen`) breaks the build when a namespace is added, forcing a matching vector. Regenerate deliberately, only after reviewing the diff:
+
+```sh
+cd agent-os
+COVENANT_BLESS_CAPABILITY_GOLDEN=1 cargo test -p covenant-permissions \
+  --test golden_capabilities grammar_vectors_match_committed_corpus
+```
+
 ## Scope Envelope
 
 Every non-empty scope for a known action namespace must be a JSON object with a version field:

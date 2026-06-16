@@ -1,0 +1,19 @@
+{
+  "subject": {
+    "display": "research@agent",
+    "pubkey": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+  },
+  "action": "a2a.repair.requeue",
+  "scope": {
+    "duplicate_risk": "idempotent",
+    "lease_id": null,
+    "peer_pubkey_b58": "11111111111111111111111111111111",
+    "task_id": null,
+    "version": 1
+  },
+  "granted_by": {
+    "display": "operator@local",
+    "pubkey": "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR"
+  },
+  "expires_at": 1700000000000
+}

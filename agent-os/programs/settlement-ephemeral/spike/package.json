@@ -1,0 +1,12 @@
+{
+  "name": "settlement-er-spike",
+  "private": true,
+  "type": "module",
+  "description": "Devnet spike: delegate a Covenant credit account, meter in the MagicBlock ER, undelegate, reconcile on L1.",
+  "scripts": { "spike": "node run-spike.mjs" },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.31.1",
+    "@solana/web3.js": "^1.98.0",
+    "@magicblock-labs/ephemeral-rollups-sdk": "^0.2.6"
+  }
+}

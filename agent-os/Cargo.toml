@@ -32,6 +32,11 @@ members = [
     "programs/settlement",
     "programs/stake",
 ]
+# settlement-ephemeral is the MagicBlock ER build of the settlement program. It is
+# excluded from the workspace so its ephemeral-rollups-sdk graph (which forces the
+# solana runtime crates to 2.2.20) resolves in its own lock and never perturbs the
+# litesvm 0.6 test dependencies that the rest of the workspace pins to 2.2.1.
+exclude = ["programs/settlement-ephemeral"]
 
 [workspace.package]
 edition = "2021"

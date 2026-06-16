@@ -1,0 +1,33 @@
+[package]
+name = "covenant-settlement-program-er"
+version = "0.1.0"
+description = "MagicBlock Ephemeral Rollup build of the Covenant settlement program. Reuses ../settlement/src/lib.rs verbatim with the `ephemeral` feature on, adding the credit-account delegate/commit/undelegate lifecycle. Kept out of the agent-os workspace so its ephemeral-rollups-sdk lock (solana 2.2.20) stays isolated from the litesvm 2.2.1 test deps."
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "covenant_settlement_program_er"
+
+[features]
+default = ["ephemeral"]
+ephemeral = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+task-escrow = []
+
+[dependencies]
+anchor-lang = "0.31.1"
+anchor-spl = { version = "0.31.1", features = ["token_2022"] }
+solana-security-txt = "1.1"
+ephemeral-rollups-sdk = { version = "0.15.4", features = ["anchor-compat"] }
+
+[lints.rust]
+deprecated = "allow"
+unexpected_cfgs = "allow"
+
+[profile.release]
+overflow-checks = true

@@ -1,16 +1,24 @@
-//! Covenant Solana protocol program.
-//!
-//! `$COVNT` is an external SPL mint. The program never mints it; protocol
-//! utility comes from staking, escrowing, burning, and metering it into
-//! non-transferable credits.
-
-#![allow(deprecated)]
-#![allow(unexpected_cfgs)]
+// Covenant Solana protocol program.
+//
+// `$COVNT` is an external SPL mint. The program never mints it; protocol
+// utility comes from staking, escrowing, burning, and metering it into
+// non-transferable credits.
+//
+// `allow(deprecated)` / `allow(unexpected_cfgs)` live in `[lints]` (Cargo.toml)
+// rather than as crate inner attributes, so this file can be `include!`d verbatim
+// by the isolated ER crate (settlement-ephemeral). Inner attributes break include!.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{
     self, Burn, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
+
+#[cfg(feature = "ephemeral")]
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+#[cfg(feature = "ephemeral")]
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+#[cfg(feature = "ephemeral")]
+use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
 
 declare_id!("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
 
@@ -26,6 +34,7 @@ solana_security_txt::security_txt! {
     auditors: "None"
 }
 
+#[cfg_attr(feature = "ephemeral", ephemeral)]
 #[program]
 pub mod settlement {
     use super::*;
@@ -553,6 +562,55 @@ pub mod settlement {
         data[off..new_len].copy_from_slice(&min_stake_lock.to_le_bytes());
 
         emit!(ConfigMigrated { min_stake_lock });
+        Ok(())
+    }
+
+    /// Delegate the caller's credit account `[b"credits", owner]` to the
+    /// MagicBlock delegation program so metering (`consume_credits`) can run in
+    /// an ephemeral rollup. Only the program-owned accounting PDA moves; no token
+    /// custody is involved. Pass an ER validator pubkey as the first remaining
+    /// account to pin it (see `DelegateConfig.validator`).
+    #[cfg(feature = "ephemeral")]
+    pub fn delegate_credits(ctx: Context<DelegateCredits>) -> Result<()> {
+        let owner = ctx.accounts.payer.key();
+        ctx.accounts.delegate_pda(
+            &ctx.accounts.payer,
+            &[b"credits".as_ref(), owner.as_ref()],
+            DelegateConfig {
+                validator: ctx.remaining_accounts.first().map(|acc| acc.key()),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Checkpoint the delegated credit account's state back to L1 without
+    /// releasing it. Runs in the ER; the operator finalizes the commit on the
+    /// base layer.
+    #[cfg(feature = "ephemeral")]
+    pub fn commit_credits(ctx: Context<CommitCredits>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.owner.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit(&[ctx.accounts.credits.to_account_info()])
+        .build_and_invoke()?;
+        Ok(())
+    }
+
+    /// Commit the final credit balance and undelegate, returning the account to
+    /// L1 writability. Triggered before any L1 op that must move tokens against
+    /// this owner (e.g. a top-up via `buy_credits`) or on idle timeout.
+    #[cfg(feature = "ephemeral")]
+    pub fn undelegate_credits(ctx: Context<CommitCredits>) -> Result<()> {
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.owner.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[ctx.accounts.credits.to_account_info()])
+        .build_and_invoke()?;
         Ok(())
     }
 }
@@ -1113,6 +1171,39 @@ pub struct MigrateConfig<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+/// Delegate the credit-account PDA to the ER. `#[delegate]` adds the
+/// `delegate_pda` helper plus the buffer/record/metadata accounts and the
+/// delegation + owner programs. The PDA is passed unchecked because delegation
+/// transfers its ownership to the delegation program.
+#[cfg(feature = "ephemeral")]
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateCredits<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    /// CHECK: the `[b"credits", payer]` PDA, validated by the seeds passed to
+    /// `delegate_pda`.
+    #[account(mut, del)]
+    pub pda: UncheckedAccount<'info>,
+}
+
+/// Commit / undelegate the delegated credit account. `#[commit]` injects
+/// `magic_context` and `magic_program`. The owner signs and funds the commit.
+#[cfg(feature = "ephemeral")]
+#[commit]
+#[derive(Accounts)]
+pub struct CommitCredits<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        has_one = owner @ CovenantError::Unauthorized,
+        seeds = [b"credits", owner.key().as_ref()],
+        bump = credits.bump,
+    )]
+    pub credits: Account<'info, CreditAccount>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]

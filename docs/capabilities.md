@@ -49,6 +49,8 @@ It must be a positive integer; grant requests reject `0`, negative, fractional, 
 
 The budget is enforced at capability-check time. Each authorized use consumes one unit, the count is durable across daemon restart, and the check-and-consume is atomic per signature so two concurrent checks cannot both spend the final unit. Once the count reaches `max_uses` the action is refused and the daemon records a [`CapabilityBudgetExhausted`](./audit-integrity.md) audit event naming the spent grant's signature — distinct from a never-granted action, which records a failed capability check instead. `max_uses` is a lifetime budget: a spent grant stays spent, so the use count is never purged. Revoking and re-granting issues a fresh signature with a fresh budget.
 
+Opt-in live coverage pins this boundary through the real daemon: a `max_uses = 1` grant runs once, the second call is refused with a `CapabilityBudgetExhausted` row, and after the daemon is restarted against the same state the refusal still holds — the spent budget is not refilled.
+
 ## Namespaces
 
 ### `intent.*` and `agent.*`

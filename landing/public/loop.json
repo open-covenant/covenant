@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-16T00:59:42.120Z",
+  "updatedAt": "2026-06-16T01:19:45.804Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9270,
+    "events": 9271,
     "tasks": 1098,
     "integrated": 1099
   },
@@ -187,7 +187,7 @@
     "integrated": 1092,
     "proposed": 1,
     "blocked": 4,
-    "self_review": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "secret-broker-daemon-mediated",
-    "state": "self_review",
-    "since": "2026-06-16T00:00:38.973Z"
+    "state": "cross_review",
+    "since": "2026-06-16T01:00:43.179Z"
   },
   "recent": [
     {

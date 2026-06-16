@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-16T18:05:00.762Z",
+  "updatedAt": "2026-06-16T18:25:04.618Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9381,
-    "tasks": 1110,
+    "events": 9385,
+    "tasks": 1111,
     "integrated": 1112
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1105,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "capability-usage-budget-grammar",
+    "state": "in_progress",
+    "since": "2026-06-16T18:12:17.511Z"
+  },
   "recent": [
     {
       "at": "2026-06-16T17:22:18.908Z",

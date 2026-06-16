@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-15T23:59:28.879Z",
+  "updatedAt": "2026-06-16T00:19:32.453Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9269,
+    "events": 9270,
     "tasks": 1098,
     "integrated": 1099
   },
@@ -12,10 +12,6 @@
     "velocity": 20
   },
   "daily": [
-    {
-      "date": "05-26",
-      "count": 3
-    },
     {
       "date": "05-27",
       "count": 6
@@ -95,13 +91,13 @@
     {
       "date": "06-15",
       "count": 12
+    },
+    {
+      "date": "06-16",
+      "count": 0
     }
   ],
   "cumulative": [
-    {
-      "date": "05-26",
-      "total": 472
-    },
     {
       "date": "05-27",
       "total": 478
@@ -181,13 +177,17 @@
     {
       "date": "06-15",
       "total": 1099
+    },
+    {
+      "date": "06-16",
+      "total": 1099
     }
   ],
   "states": {
     "integrated": 1092,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "secret-broker-daemon-mediated",
-    "state": "in_progress",
-    "since": "2026-06-15T23:25:25.065Z"
+    "state": "self_review",
+    "since": "2026-06-16T00:00:38.973Z"
   },
   "recent": [
     {

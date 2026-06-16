@@ -11,6 +11,7 @@
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
+pub mod secret;
 pub mod sse;
 pub mod stream_dispatch;
 pub mod stream_tracker;
@@ -1203,6 +1204,10 @@ pub struct Server {
     /// `Request::PayX402` returns a "not configured" error and no
     /// USDC is ever spent.
     x402_dispatch: Option<Arc<x402::X402Config>>,
+    /// Opt-in secret broker backend. `None` when no operator has wired a
+    /// secret source; in that state every `Request::GetSecret` returns a
+    /// "not configured" error and no secret is ever released.
+    secret_source: Option<Arc<dyn secret::SecretSource>>,
     /// Opt-in Hyre provider profile: the materialised catalog + config.
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
@@ -1261,6 +1266,7 @@ impl Server {
             subprocess_tracker: Arc::new(covenant_runtime::SubprocessTracker::new()),
             home: None,
             x402_dispatch: None,
+            secret_source: None,
             hyre: None,
             metaplex: None,
             sap_bridge: None,
@@ -1335,6 +1341,13 @@ impl Server {
     /// after [`Server::new`] when the operator has opted in via env.
     pub fn with_x402_dispatch(mut self, config: x402::X402Config) -> Self {
         self.x402_dispatch = Some(Arc::new(config));
+        self
+    }
+
+    /// Wire a backend for the daemon's secret broker. Until this is set, every
+    /// `Request::GetSecret` is refused as "not configured".
+    pub fn with_secret_source(mut self, source: Arc<dyn secret::SecretSource>) -> Self {
+        self.secret_source = Some(source);
         self
     }
 
@@ -2388,6 +2401,7 @@ impl Server {
             Request::IgnoreCheck { text } => self.check_ignore(text),
             Request::ListTools => self.list_tools(),
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
+            Request::GetSecret { name } => self.get_secret(name, peer).await,
             Request::RecentAudit {
                 limit,
                 since_ms,
@@ -14635,6 +14649,148 @@ impl Server {
         }
     }
 
+    /// True if the peer holds a live `secret.access` capability whose scope
+    /// admits `name`. Mirrors [`Self::x402_pay_scope_allows`]: an unscoped
+    /// grant admits any secret, a `name`-bound grant admits only its secret,
+    /// and grants are additive (any matching capability suffices). A malformed
+    /// scope surfaces as `Err` so the caller fails closed.
+    async fn secret_access_scope_allows(
+        &self,
+        action: &str,
+        name: &str,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
+            match covenant_permissions::secret_access_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                name,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(false)
+    }
+
+    /// Release a named secret to a peer that holds the `secret.access`
+    /// capability and a scope admitting `name`. The capability check binds the
+    /// action; the scope gate binds the destination secret. Every release and
+    /// refusal is recorded for accountability — the secret *name*, never the
+    /// value. With no secret source wired the broker refuses every request.
+    async fn get_secret(&self, name: String, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities("secret:access".into(), vec!["secret.access".into()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "secret access requires capability \"secret.access\". \
+                          Grant it with `covenant capabilities grant secret.access`."
+                    .into(),
+            };
+        }
+
+        // The capability check above admits the holder of any secret.access
+        // grant; this scope gate binds the grant to its named secret so a
+        // name-scoped grant cannot read an unlisted secret. It runs before the
+        // not-configured guard so a denial is auditable even on a daemon with
+        // no secret backend wired.
+        match self
+            .secret_access_scope_allows("secret.access", &name, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = format!("secret {name:?} is outside this grant's scope");
+                self.record_secret_access_denied(peer, &name, &reason).await;
+                return Response::Error {
+                    message: format!("secret access rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_secret_access_denied(peer, &name, &reason).await;
+                return Response::Error {
+                    message: format!(
+                        "secret access rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        }
+
+        let Some(source) = self.secret_source.clone() else {
+            return Response::Error {
+                message: "secret broker is not configured on this daemon. \
+                          Wire a secret source via Server::with_secret_source and restart."
+                    .into(),
+            };
+        };
+
+        match source.get(&name).await {
+            Ok(Some(value)) => {
+                self.record_secret_access_granted(peer, &name).await;
+                Response::Secret { name, value }
+            }
+            Ok(None) => {
+                let reason = "no secret is registered under that name".to_string();
+                self.record_secret_access_denied(peer, &name, &reason).await;
+                Response::Error {
+                    message: format!("secret access denied: {reason}"),
+                }
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                self.record_secret_access_denied(peer, &name, &reason).await;
+                Response::Error {
+                    message: format!("secret broker backend error: {reason}"),
+                }
+            }
+        }
+    }
+
+    async fn record_secret_access_granted(&self, peer: &AgentId, secret_name: &str) {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::SecretAccessGranted {
+                agent_id: peer.display.clone(),
+                secret_name: secret_name.to_string(),
+            },
+        };
+        self.record_peer_event(peer, event).await;
+    }
+
+    async fn record_secret_access_denied(&self, peer: &AgentId, secret_name: &str, reason: &str) {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::SecretAccessDenied {
+                agent_id: peer.display.clone(),
+                secret_name: secret_name.to_string(),
+                reason: reason.to_string(),
+            },
+        };
+        self.record_peer_event(peer, event).await;
+    }
+
     async fn revoke_capability(&self, signature_b58: String, peer: &AgentId) -> Response {
         let bytes = match bs58::decode(&signature_b58).into_vec() {
             Ok(b) if b.len() == 64 => {
@@ -15378,7 +15534,8 @@ required = {caps:?}
             | Request::BackfillSettlementReceipts { .. }
             | Request::BackfillMemoryRecords { .. }
             | Request::RepairA2ATask { .. }
-            | Request::RetryA2AStale { .. } => ActionAudited,
+            | Request::RetryA2AStale { .. }
+            | Request::GetSecret { .. } => ActionAudited,
             Request::CallTool { .. }
             | Request::PurgeMemory { .. }
             | Request::PurgeAudit { .. }
@@ -15530,6 +15687,12 @@ required = {caps:?}
                     asset: String::new(),
                     per_call_cap: String::new(),
                     credits: 0,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::GetSecret {
+                    name: String::new(),
                 },
                 ActionAudited,
             ),
@@ -15692,7 +15855,7 @@ required = {caps:?}
         );
         assert_eq!(
             inventory.len(),
-            48,
+            49,
             "every IPC Request variant must appear in the audit inventory exactly once; a new \
          variant must be added here and classified in audit_exposure",
         );
@@ -57822,6 +57985,133 @@ budget_credits_per_hour = {credits}
                 "the granted provider must clear the scope gate: {message}"
             ),
             _ => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn get_secret_enforces_name_scope_and_audits_access() {
+        // A name-scoped secret.access grant is least-privilege secret access:
+        // the agent reads the granted secret and nothing else. The scope gate
+        // runs before the not-configured guard, so a denial is reachable and
+        // auditable; a granted read returns the live value and records the
+        // access by name — never the value.
+        use std::collections::BTreeMap;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let mut secrets = BTreeMap::new();
+        secrets.insert("openai-api-key".to_string(), "sk-live-value".to_string());
+        let s = server_with_audit(audit.clone())
+            .with_secret_source(Arc::new(secret::MapSecretSource::new(secrets)));
+        grant_scoped_action(
+            &s,
+            "secret.access",
+            serde_json::json!({ "version": 1, "name": "openai-api-key" }),
+        )
+        .await;
+
+        // A secret outside the granted name is refused by the scope gate, not
+        // by the broker backend further down the path.
+        let denied = s
+            .op_respond(Request::GetSecret {
+                name: "stripe-secret-key".into(),
+            })
+            .await;
+        match denied {
+            Response::Error { message } => assert!(
+                message.contains("capability scope"),
+                "an out-of-scope secret must be refused by the scope gate: {message}"
+            ),
+            other => panic!("expected a scope-rejection Error, got: {other:?}"),
+        }
+
+        // The denial is recorded as SecretAccessDenied naming the secret, so an
+        // operator reviewing an incident sees the blocked access by name.
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessDenied { secret_name, .. }
+                    if secret_name == "stripe-secret-key"
+            )),
+            "a scope-denied secret read must emit SecretAccessDenied naming it: {events:?}"
+        );
+
+        // Positive control: the granted secret clears the gate, the broker
+        // returns the live value, and the access is recorded as
+        // SecretAccessGranted by name — proving the gate is not a blanket deny.
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Secret { name, value } => {
+                assert_eq!(name, "openai-api-key");
+                assert_eq!(
+                    value, "sk-live-value",
+                    "the broker must return the live secret value to the holder"
+                );
+            }
+            other => panic!("the granted secret must be released: {other:?}"),
+        }
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessGranted { secret_name, .. }
+                    if secret_name == "openai-api-key"
+            )),
+            "a granted secret read must emit SecretAccessGranted by name: {events:?}"
+        );
+        // The value must never enter the audit chain — accountability records
+        // who read which secret, not the material itself.
+        assert!(
+            !events
+                .iter()
+                .any(|e| format!("{:?}", e.kind).contains("sk-live-value")),
+            "the secret value must never appear in any audit record: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_secret_rejects_when_capability_missing() {
+        // Failure mode: the broker returns a secret without a capability check.
+        // A peer with no secret.access grant is refused before any source read.
+        use std::collections::BTreeMap;
+        let mut secrets = BTreeMap::new();
+        secrets.insert("openai-api-key".to_string(), "sk-live-value".to_string());
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_secret_source(Arc::new(secret::MapSecretSource::new(secrets)));
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("requires capability"),
+                "a request without secret.access must be refused for the capability: {message}"
+            ),
+            other => panic!("expected a missing-capability Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_secret_rejects_when_not_configured() {
+        // With a valid grant but no secret source wired, the broker refuses the
+        // request as not-configured — it never fabricates or leaks a value.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_scoped_action(&s, "secret.access", serde_json::json!({})).await;
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "a daemon with no secret source must refuse with not-configured: {message}"
+            ),
+            other => panic!("expected a not-configured Error, got: {other:?}"),
         }
     }
 

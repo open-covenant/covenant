@@ -96,6 +96,7 @@ enum ScopeNamespace {
     Chain,
     Settlement,
     X402,
+    Secret,
 }
 
 impl ScopeNamespace {
@@ -122,6 +123,8 @@ impl ScopeNamespace {
             Some(Self::Settlement)
         } else if action.starts_with("x402.") {
             Some(Self::X402)
+        } else if action.starts_with("secret.") {
+            Some(Self::Secret)
         } else {
             None
         }
@@ -159,6 +162,7 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         ScopeNamespace::Chain => validate_chain_scope(action, obj),
         ScopeNamespace::Settlement => validate_settlement_scope(action, obj),
         ScopeNamespace::X402 => validate_x402_scope(action, obj),
+        ScopeNamespace::Secret => validate_secret_scope(action, obj),
     }
 }
 
@@ -551,6 +555,35 @@ pub fn x402_pay_scope_allows(
     }
 }
 
+/// Dispatch-time gate for a daemon-mediated secret read. `secret.access` lets
+/// a holder pull a named secret from the daemon's broker instead of the secret
+/// sitting in the agent's environment; the secret `name` is free-form caller
+/// input, so a blanket grant authorizes reading *any* secret. A `name`-bound
+/// scope restricts the grant to one secret; an empty scope, or one that omits
+/// `name` (or sets it to `null`), keeps the unbounded blanket behavior.
+/// Capabilities are additive, so several secrets are expressed as several
+/// grants — the same shape as per-tool `tool.call.<name>` grants.
+pub fn secret_access_scope_allows(
+    action: &str,
+    scope: &Value,
+    name: &str,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "secret.access" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    match obj.get("name").and_then(Value::as_str) {
+        Some(allowed) => Ok(allowed == name),
+        None => Ok(true),
+    }
+}
+
 /// Dispatch-time gate for the memory-record receipt-backfill mutator. The
 /// action carries the mode (`memory.backfill.apply` vs
 /// `memory.backfill.dry_run`), so a dry-run-only grant cannot satisfy the
@@ -870,6 +903,11 @@ fn validate_settlement_scope(
 
 fn validate_x402_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
     optional_non_empty_string_or_null(action, obj, "provider")?;
+    Ok(())
+}
+
+fn validate_secret_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_non_empty_string_or_null(action, obj, "name")?;
     Ok(())
 }
 
@@ -3369,6 +3407,86 @@ mod tests {
         assert!(validate_scope(
             "x402.outbound.pay",
             &serde_json::json!({ "version": 1, "provider": "xona" })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn secret_access_scope_allows_unscoped_grant_permits_any_secret() {
+        // An empty scope and a version-only scope are both unbounded: a blanket
+        // secret.access grant authorizes reading any named secret. A regression
+        // that treated the version-only scope as a deny-all would break every
+        // existing unscoped grant.
+        for scope in [serde_json::json!({}), serde_json::json!({ "version": 1 })] {
+            assert!(
+                secret_access_scope_allows("secret.access", &scope, "openai-api-key").unwrap(),
+                "unscoped grant must permit any secret: {scope}"
+            );
+            assert!(
+                secret_access_scope_allows("secret.access", &scope, "anything-else").unwrap(),
+                "unscoped grant must permit any secret: {scope}"
+            );
+        }
+    }
+
+    #[test]
+    fn secret_access_scope_allows_binds_grant_to_named_secret() {
+        // A name-bound scope is the least-privilege case: it authorizes the one
+        // named secret and refuses every other. This is the security property —
+        // an agent granted "openai-api-key" cannot read "stripe-secret-key".
+        let scope = serde_json::json!({ "version": 1, "name": "openai-api-key" });
+        assert!(secret_access_scope_allows("secret.access", &scope, "openai-api-key").unwrap());
+        assert!(
+            !secret_access_scope_allows("secret.access", &scope, "stripe-secret-key").unwrap(),
+            "a name-bound grant must refuse a secret outside its name"
+        );
+        // A null name is the documented unbounded marker, distinct from an
+        // out-of-scope string: it permits any secret, mirroring tool/null.
+        let null_scope = serde_json::json!({ "version": 1, "name": null });
+        assert!(
+            secret_access_scope_allows("secret.access", &null_scope, "openai-api-key").unwrap()
+        );
+        assert!(
+            secret_access_scope_allows("secret.access", &null_scope, "stripe-secret-key").unwrap()
+        );
+    }
+
+    #[test]
+    fn secret_access_scope_allows_rejects_action_mismatch() {
+        // The matcher binds only the secret.access action. A grant for any other
+        // action string must not satisfy a secret read, even with a matching
+        // name — a swap that dropped the action guard would let an unrelated
+        // grant authorize secret access.
+        let scope = serde_json::json!({ "version": 1, "name": "openai-api-key" });
+        assert!(!secret_access_scope_allows("secret.read", &scope, "openai-api-key").unwrap());
+        assert!(!secret_access_scope_allows("tool.call.echo", &scope, "openai-api-key").unwrap());
+    }
+
+    #[test]
+    fn secret_access_scope_allows_propagates_malformed_name_rejection() {
+        // name is validated as a non-empty string or null. A non-string or
+        // empty-string name is a malformed grant the matcher must surface as an
+        // Err (caller fails closed), not silently treat as unbounded.
+        let non_string = serde_json::json!({ "version": 1, "name": 42 });
+        assert!(
+            secret_access_scope_allows("secret.access", &non_string, "openai-api-key").is_err()
+        );
+        let empty = serde_json::json!({ "version": 1, "name": "" });
+        assert!(secret_access_scope_allows("secret.access", &empty, "openai-api-key").is_err());
+    }
+
+    #[test]
+    fn validate_secret_scope_routes_and_rejects_bad_name() {
+        // secret.* must route to validate_secret_scope: a non-string name is
+        // rejected at grant time, and a valid name string is accepted.
+        assert!(validate_scope(
+            "secret.access",
+            &serde_json::json!({ "version": 1, "name": 42 })
+        )
+        .is_err());
+        assert!(validate_scope(
+            "secret.access",
+            &serde_json::json!({ "version": 1, "name": "openai-api-key" })
         )
         .is_ok());
     }

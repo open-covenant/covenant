@@ -539,6 +539,13 @@ pub enum Request {
         #[serde(default)]
         arguments: serde_json::Value,
     },
+    /// Fetch a named secret from the daemon's secret broker. Gated by the
+    /// `secret.access` capability, whose scope may bind the grant to one
+    /// `name`. Returns [`Response::Secret`] on success; the value is never
+    /// written to the audit chain or daemon logs.
+    GetSecret {
+        name: String,
+    },
     /// Recent audit events scoped to the calling peer's pubkey.
     ///
     /// `since_ms` narrows the result to entries with `timestamp_ms >=
@@ -914,6 +921,13 @@ pub enum Response {
     ToolResult {
         content: Vec<Content>,
         is_error: bool,
+    },
+    /// The named secret released by the broker for an authorized
+    /// [`Request::GetSecret`]. `value` is the live secret material — callers
+    /// must treat it as sensitive; the daemon never audits or logs it.
+    Secret {
+        name: String,
+        value: String,
     },
     AuditEvents {
         events: Vec<AuditEvent>,

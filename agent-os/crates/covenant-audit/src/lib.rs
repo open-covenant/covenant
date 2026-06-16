@@ -176,6 +176,24 @@ pub enum AuditKind {
         action: String,
         reason: String,
     },
+    /// Logged when the daemon's secret broker releases a named secret to a
+    /// peer that cleared the `secret.access` capability and scope gate. Records
+    /// the requesting agent and the secret *name* for the accountability trail
+    /// — never the secret value, which is returned to the caller but never
+    /// audited or logged.
+    SecretAccessGranted {
+        agent_id: String,
+        secret_name: String,
+    },
+    /// Logged when the secret broker refuses a named secret — the peer lacked
+    /// the `secret.access` capability, held a scope that does not admit the
+    /// name, presented a malformed scope, or asked for a secret the broker
+    /// does not hold. `reason` is the same short message the caller saw.
+    SecretAccessDenied {
+        agent_id: String,
+        secret_name: String,
+        reason: String,
+    },
     IntentIgnored {
         intent_id: Uuid,
         intent_text: String,

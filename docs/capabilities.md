@@ -2,7 +2,7 @@
 
 Capability tokens bind an agent subject, an action string, an optional JSON scope, an issuer, and an optional expiry into one signed object. The signature covers `scope`, so scope fields are tamper-evident.
 
-Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` and `capabilities.purge` `before_ms` cutoffs, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, the `settlement.backfill.*` predicate for receipt backfill, and the `x402.outbound.pay` destination-class predicate for outbound paid-call egress at dispatch.
+Current enforcement boundary: the daemon validates non-empty scopes for known action namespaces before signing a grant, then enforces action presence, expiry, signature validity, subject matching, revocation, the `tool.call.*` `arguments.allow` predicate, the `audit.purge` and `capabilities.purge` `before_ms` cutoffs, stable memory predicates for `memory.read`, `memory.read.<tier>`, `memory.write`, `memory.purge`, `memory.repair.*`, `memory.compact.*`, and `memory.backfill.*`, stable A2A predicates for send, receive-admission, respond, and repair flows, peer predicates for delegated list/revoke flows plus purge retention, chain predicates for receipt reads, receipt batch reads, and receipt flushing, the `settlement.backfill.*` predicate for receipt backfill, the `x402.outbound.pay` destination-class predicate for outbound paid-call egress, and the `secret.access` named-secret predicate for daemon-mediated secret reads at dispatch.
 
 ## Scope Envelope
 
@@ -218,6 +218,24 @@ Rules:
 - Capabilities are additive, so several destinations are expressed as several grants — the same shape as per-tool `tool.call.<name>` grants.
 - The `PayX402` dispatch enforces this scope at dispatch, after the action check and before the dispatch-config check: a call to a provider outside the granted class is refused with a `CapabilityScopeRejected` audit event, so a denied egress is recorded for incident review even on a daemon with no funding-key sidecar wired. Hyre's paid calls egress through `tool.call.hyre.*` and are already bound by that tool scope.
 
+### `secret.*`
+
+Use to bound an agent's daemon-mediated secret access to a named secret.
+
+```json
+{
+  "version": 1,
+  "name": "openai-api-key"
+}
+```
+
+Rules:
+
+- `secret.access` authorizes the holder to fetch a named secret from the daemon's secret broker (`GetSecret`) at call time instead of receiving it in the agent's process environment, where a compromised agent could read it. The requested `name` is caller-supplied, so an unscoped grant authorizes reading *any* secret the broker holds.
+- `name` binds the grant to one secret: a scoped grant only authorizes a read whose name matches. An empty scope, or one that omits `name` (or sets it to `null`), keeps the unbounded blanket behavior. The field must be a non-empty string or `null`.
+- Capabilities are additive, so several secrets are expressed as several grants — the same shape as per-tool `tool.call.<name>` grants.
+- The `GetSecret` dispatch enforces this scope after the action check and before the not-configured check: a read of a name outside the grant is refused with a `SecretAccessDenied` audit event, and a released secret records a `SecretAccessGranted` event — both name the secret, never its value, so secret use is accountable for incident review even on a daemon with no secret source wired. The broker serves nothing until an operator wires a secret source; sourcing real credentials from an external store is operator configuration, not part of the enforcement mechanism.
+
 ## Enforcement Path
 
 1. Keep accepting `{}` for existing broad grants.
@@ -226,7 +244,7 @@ Rules:
 4. Interpret the stable `audit.purge` and `capabilities.purge` `before_ms` cutoffs at dispatch.
 5. Interpret stable memory read, write, purge, repair, and compaction predicates at dispatch.
 6. Interpret stable A2A peer, task, lease, and duplicate-risk predicates at dispatch.
-7. Interpret stable peer-registry list/revoke/purge predicates, chain receipt-read, batch-read, and flush predicates, the settlement receipt-backfill predicate, and the `x402.outbound.pay` destination-class predicate at dispatch.
+7. Interpret stable peer-registry list/revoke/purge predicates, chain receipt-read, batch-read, and flush predicates, the settlement receipt-backfill predicate, the `x402.outbound.pay` destination-class predicate, and the `secret.access` named-secret predicate at dispatch.
 8. Fail closed for malformed versioned scopes after a migration window.
 9. Keep action-only checks as the fallback only for unscoped operator grants.
 

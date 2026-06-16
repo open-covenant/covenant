@@ -586,6 +586,21 @@ pub enum AuditKind {
         duration_ms: u64,
         outcome: ToolCallOutcome,
     },
+    /// A direct tool call (`CallTool` / `/tools/call`) was refused at the
+    /// boundary because its arguments violated the tool's published
+    /// `input_schema` — a missing `required` field or a field whose JSON type
+    /// contradicts the schema. Recorded *instead of*
+    /// [`AuditKind::ToolCallCompleted`]: the tool body never ran, so the refused
+    /// malformed call is still on the chain. `tool` is the tool name;
+    /// `arguments_hash_hex` is [`hash_hex`] of the rejected JSON arguments — the
+    /// same redaction barrier the completion row uses, so malformed input never
+    /// enters the chain; `reason` is the structural validation failure, which
+    /// names the offending field and JSON types but never echoes the value.
+    ToolCallSchemaRejected {
+        tool: String,
+        arguments_hash_hex: String,
+        reason: String,
+    },
 }
 
 #[async_trait]

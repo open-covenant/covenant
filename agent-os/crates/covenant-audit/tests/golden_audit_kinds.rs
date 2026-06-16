@@ -98,6 +98,7 @@ const EXPECTED_KINDS: &[&str] = &[
     "settlement_receipt_backfill_applied",
     "memory_record_backfill_applied",
     "tool_call_completed",
+    "tool_call_schema_rejected",
 ];
 
 /// The serde discriminator for one audit kind. A wildcard-free `match`: adding
@@ -144,6 +145,7 @@ fn audit_kind_slug(kind: &AuditKind) -> &'static str {
         AuditKind::SettlementReceiptBackfillApplied { .. } => "settlement_receipt_backfill_applied",
         AuditKind::MemoryRecordBackfillApplied { .. } => "memory_record_backfill_applied",
         AuditKind::ToolCallCompleted { .. } => "tool_call_completed",
+        AuditKind::ToolCallSchemaRejected { .. } => "tool_call_schema_rejected",
     }
 }
 
@@ -491,6 +493,14 @@ fn golden_audit_kind_records() -> Vec<AuditEvent> {
                 arguments_hash_hex: hash_hex(b"{\"text\":\"hi\"}"),
                 duration_ms: 5,
                 outcome: ToolCallOutcome::Ok,
+            },
+        ),
+        event(
+            38,
+            AuditKind::ToolCallSchemaRejected {
+                tool: "echo".into(),
+                arguments_hash_hex: hash_hex(b"{\"text\":42}"),
+                reason: "field `text` expects type `string`, got number".into(),
             },
         ),
     ]

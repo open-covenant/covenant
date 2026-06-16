@@ -141,6 +141,13 @@ impl ToolRegistry {
         self.inner.values().map(|t| t.spec()).collect()
     }
 
+    /// The spec for one registered tool, or `None` if no tool is registered
+    /// under `name`. Lets a caller resolve a single tool's `input_schema`
+    /// without cloning every spec via [`Self::list_specs`].
+    pub fn spec(&self, name: &str) -> Option<ToolSpec> {
+        self.inner.get(name).map(|t| t.spec())
+    }
+
     pub fn names(&self) -> Vec<String> {
         self.inner.keys().cloned().collect()
     }
@@ -151,6 +158,116 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
         tool.call(arguments).await
+    }
+}
+
+impl ToolSpec {
+    /// A lightweight, back-compatible structural check of `arguments` against
+    /// this tool's published `input_schema`. It is deliberately *not* a complete
+    /// JSON Schema validator: it enforces only the two violation classes that
+    /// unambiguously mark a malformed call — a missing `required` field, and a
+    /// present field whose JSON type contradicts a single declared `type`.
+    /// Permissive or empty schemas, union (`type: [..]`) declarations,
+    /// `additionalProperties`, and unknown keywords are all accepted, so a
+    /// well-formed caller that passed before schema enforcement existed is never
+    /// newly rejected. Returns the first clear violation as a human-readable
+    /// reason that names the offending field and JSON types but never echoes the
+    /// argument value.
+    pub fn validate_arguments(&self, arguments: &Value) -> Result<(), String> {
+        validate_against_schema(&self.input_schema, arguments)
+    }
+}
+
+fn validate_against_schema(schema: &Value, arguments: &Value) -> Result<(), String> {
+    let Some(schema) = schema.as_object() else {
+        return Ok(());
+    };
+
+    // Required-field and property-type semantics apply to object schemas. A
+    // non-object top-level type keeps this lightweight check out entirely.
+    if let Some(declared) = schema.get("type").and_then(Value::as_str) {
+        if declared != "object" {
+            return Ok(());
+        }
+    }
+
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|fields| fields.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let properties = schema.get("properties").and_then(Value::as_object);
+
+    // Empty schema (no required fields, no typed properties): nothing to
+    // enforce. This is the permissive "any object" the default tool spec emits,
+    // so such tools keep accepting whatever they accepted before.
+    if required.is_empty() && properties.map_or(true, serde_json::Map::is_empty) {
+        return Ok(());
+    }
+
+    let Some(args) = arguments.as_object() else {
+        return Err(format!(
+            "expected a JSON object of arguments, got {}",
+            json_type_name(arguments)
+        ));
+    };
+
+    for field in &required {
+        if !args.contains_key(*field) {
+            return Err(format!("missing required field `{field}`"));
+        }
+    }
+
+    if let Some(properties) = properties {
+        for (key, value) in args {
+            let Some(expected) = properties
+                .get(key)
+                .and_then(Value::as_object)
+                .and_then(|prop| prop.get("type"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if !json_value_matches_type(value, expected) {
+                return Err(format!(
+                    "field `{key}` expects type `{expected}`, got {}",
+                    json_type_name(value)
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Whether `value`'s JSON type satisfies a single declared JSON Schema `type`.
+/// Unknown type keywords return `true` (never reject what we don't understand).
+/// `integer` admits a float with no fractional part (e.g. `5.0`), matching JSON
+/// Schema and avoiding a false rejection of clients that serialize ints as
+/// floats.
+fn json_value_matches_type(value: &Value, expected: &str) -> bool {
+    match expected {
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => {
+            value.is_i64() || value.is_u64() || value.as_f64().is_some_and(|f| f.fract() == 0.0)
+        }
+        "boolean" => value.is_boolean(),
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "null" => value.is_null(),
+        _ => true,
     }
 }
 
@@ -465,6 +582,130 @@ mod tests {
         let reg = ToolRegistry::from_tools(vec![Arc::new(EchoTool), Arc::new(native::ClockTool)]);
         let names: Vec<String> = reg.list_specs().into_iter().map(|s| s.name).collect();
         assert_eq!(names, vec!["clock".to_string(), "echo".to_string()]);
+    }
+
+    #[test]
+    fn registry_spec_resolves_known_tool_and_none_for_unknown() {
+        let reg = registry_with_echo();
+        let spec = reg.spec("echo").expect("echo is registered");
+        assert_eq!(spec.name, "echo");
+        assert_eq!(spec.input_schema, EchoTool.input_schema());
+        assert!(
+            reg.spec("does-not-exist").is_none(),
+            "spec() must return None for an unregistered name so callers can skip schema validation cleanly",
+        );
+    }
+
+    #[test]
+    fn validate_arguments_accepts_well_formed_call() {
+        let spec = EchoTool.spec();
+        assert!(spec
+            .validate_arguments(&serde_json::json!({ "text": "hi" }))
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_arguments_rejects_missing_required_field() {
+        let spec = EchoTool.spec();
+        let err = spec
+            .validate_arguments(&serde_json::json!({}))
+            .expect_err("echo requires `text`");
+        assert!(err.contains("missing required field `text`"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_arguments_rejects_type_mismatch_without_echoing_value() {
+        let spec = EchoTool.spec();
+        let err = spec
+            .validate_arguments(&serde_json::json!({ "text": 42 }))
+            .expect_err("text must be a string");
+        assert!(err.contains("field `text`"), "got: {err}");
+        assert!(err.contains("string"), "names the expected type: {err}");
+        assert!(err.contains("number"), "names the actual type: {err}");
+        // The reason names types and the field, never the offending value, so it
+        // is safe to record in the tamper-evident chain.
+        assert!(!err.contains("42"), "reason must not echo the value: {err}");
+    }
+
+    #[test]
+    fn validate_arguments_default_empty_schema_is_a_noop() {
+        // ClockTool inherits the default {type:object, properties:{}} schema.
+        // Back-compat: a no-arg tool must keep accepting whatever it accepted
+        // before enforcement existed — including stray arguments — because the
+        // schema declares no required fields and no typed properties.
+        let spec = native::ClockTool.spec();
+        assert!(spec.validate_arguments(&Value::Null).is_ok());
+        assert!(spec
+            .validate_arguments(&serde_json::json!({ "stray": 1 }))
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_arguments_does_not_enforce_additional_properties() {
+        // Echo declares additionalProperties:false, but the lightweight check
+        // deliberately ignores it: a caller that historically sent extra fields
+        // alongside a valid `text` must not be newly rejected.
+        let spec = EchoTool.spec();
+        assert!(spec
+            .validate_arguments(&serde_json::json!({ "text": "hi", "extra": true }))
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_arguments_skips_non_object_and_union_type_schemas() {
+        // A schema whose top-level type is not "object" carries no required/
+        // property semantics we check, and a union `type: [..]` on a property is
+        // accepted rather than guessed at — both stay permissive.
+        let array_schema = ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({ "type": "array" }),
+        };
+        assert!(array_schema
+            .validate_arguments(&serde_json::json!([1, 2, 3]))
+            .is_ok());
+
+        let union_schema = ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "x": { "type": ["string", "number"] } },
+                "required": ["x"],
+            }),
+        };
+        assert!(union_schema
+            .validate_arguments(&serde_json::json!({ "x": true }))
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_arguments_integer_accepts_whole_float_rejects_string() {
+        let spec = ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "n": { "type": "integer" } },
+            }),
+        };
+        assert!(spec.validate_arguments(&serde_json::json!({ "n": 5 })).is_ok());
+        assert!(
+            spec.validate_arguments(&serde_json::json!({ "n": 5.0 })).is_ok(),
+            "a float with no fractional part satisfies `integer`, so clients that serialize ints as floats are not rejected",
+        );
+        assert!(spec
+            .validate_arguments(&serde_json::json!({ "n": "5" }))
+            .is_err());
+    }
+
+    #[test]
+    fn validate_arguments_rejects_non_object_when_fields_required() {
+        let spec = EchoTool.spec();
+        let err = spec
+            .validate_arguments(&serde_json::json!("just a string"))
+            .expect_err("a schema with required fields needs an object of arguments");
+        assert!(err.contains("expected a JSON object"), "got: {err}");
     }
 
     #[test]

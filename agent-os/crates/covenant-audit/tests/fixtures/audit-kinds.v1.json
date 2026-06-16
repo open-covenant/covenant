@@ -185,6 +185,11 @@
       "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000025\",\"timestamp_ms\":1700000000037,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"tool_call_completed\",\"tool\":\"echo\",\"arguments_hash_hex\":\"e7b995efa755c5ff3b84d2188b58cb4ae916a59470eb3761df8a814f11763500\",\"duration_ms\":5,\"outcome\":\"ok\"}}",
       "event_hash_hex": "2785d25c7f9c87c96925e641415e979ccbb2c428e6bbf0c6a86d7a7dc334c41f",
       "name": "tool_call_completed"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000026\",\"timestamp_ms\":1700000000038,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"tool_call_schema_rejected\",\"tool\":\"echo\",\"arguments_hash_hex\":\"88b7796a494dfe5b0079146d90ab58147af45054cca78fc399631d404426532c\",\"reason\":\"field `text` expects type `string`, got number\"}}",
+      "event_hash_hex": "2b31b6601b15ce7a5fa1195bd2edad0e51c54d7ec753e8270441112db3ffb5a6",
+      "name": "tool_call_schema_rejected"
     }
   ]
 }

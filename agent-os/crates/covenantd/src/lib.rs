@@ -4110,6 +4110,33 @@ impl Server {
             return self.metaplex_tool_call(name, arguments).await;
         }
 
+        // Validate arguments against the tool's published input schema before
+        // invoking it. Back-compatible: only object schemas that declare
+        // required fields or typed properties are enforced, and only clear
+        // required-field or type violations are refused (see
+        // ToolSpec::validate_arguments). A refusal records ToolCallSchemaRejected
+        // instead of ToolCallCompleted and never runs the tool body, so the
+        // refused malformed call is on the chain. Unknown tools resolve to None
+        // and fall through to the call below, which reports them as not found.
+        if let Some(spec) = self.tools.spec(&name) {
+            if let Err(reason) = spec.validate_arguments(&arguments) {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::ToolCallSchemaRejected {
+                        tool: name.clone(),
+                        arguments_hash_hex: hash_hex(arguments.to_string().as_bytes()),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("tool {name} rejected by input schema: {reason}"),
+                };
+            }
+        }
+
         // Record the invocation on both the success and execution-error paths,
         // so the *executed* action is auditable and not only the capability and
         // scope denials above. The arguments are hashed (never persisted raw),
@@ -47362,6 +47389,60 @@ required = {caps:?}
             })
             .expect("a ToolCallCompleted row is recorded when the tool raises");
         assert_eq!(outcome, ToolCallOutcome::Failed);
+    }
+
+    #[tokio::test]
+    async fn call_tool_schema_rejection_records_audit_and_skips_execution() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        // echo's published schema requires a string `text`; a number violates it.
+        let arguments = serde_json::json!({ "text": 42 });
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: arguments.clone(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("rejected by input schema"),
+                "expected a schema-rejection error, got: {message}"
+            ),
+            other => panic!("expected a schema-rejection error, got {other:?}"),
+        }
+
+        let events = s.audit.recent(50).await.unwrap();
+        let (hash, reason) = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ToolCallSchemaRejected {
+                    tool,
+                    arguments_hash_hex,
+                    reason,
+                } if tool == "echo" => Some((arguments_hash_hex.clone(), reason.clone())),
+                _ => None,
+            })
+            .expect("a ToolCallSchemaRejected row is recorded for the refused call");
+        // Same redaction barrier as the completion row: the digest of the
+        // arguments, never the raw value; the reason names the field and types.
+        assert_eq!(hash, hash_hex(arguments.to_string().as_bytes()));
+        assert!(reason.contains("field `text`"), "got: {reason}");
+        assert!(!reason.contains("42"), "reason must not echo the value: {reason}");
+
+        // The tool body never ran: a refused call must not also leave a
+        // completion row, or the chain would imply the malformed call executed.
+        assert!(
+            !events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::ToolCallCompleted { tool, .. } if tool == "echo"
+            )),
+            "a schema-rejected call must not also record a completion row",
+        );
     }
 
     /// Full Hyre path: capability gate → executor → 402-then-pay loop

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-16T07:21:59.157Z",
+  "updatedAt": "2026-06-16T07:42:02.884Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9284,
+    "events": 9287,
     "tasks": 1100,
     "integrated": 1101
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1094,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "secret-remove-env-exposure",
+    "state": "in_progress",
+    "since": "2026-06-16T07:26:45.728Z"
+  },
   "recent": [
     {
       "at": "2026-06-16T07:17:27.494Z",

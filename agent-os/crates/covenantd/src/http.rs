@@ -168,6 +168,8 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/x402/pay", post(pay_x402_route))
         .route("/spend/authorize", post(authorize_spend_route))
         .route("/spend/settle", post(settle_spend_route))
+        .route("/escrow/prove", post(prove_completion_route))
+        .route("/escrow/release", post(record_escrow_release_route))
         .route(
             "/settlement/receipts/backfill",
             post(settlement_backfill_receipts),
@@ -1397,6 +1399,76 @@ async fn settle_spend_route(
                     asset: b.asset,
                     amount: b.amount,
                     credits: b.credits,
+                    tx_sig: b.tx_sig,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// HTTP body shape for `POST /escrow/prove`. Mirrors the
+/// [`Request::ProveCompletion`] fields. `worker_pubkey` is the bs58 key of the
+/// agent the escrow should pay; `result_hash_hex` is the delivered result's
+/// hash.
+#[derive(Deserialize)]
+struct ProveCompletionBody {
+    task_id: uuid::Uuid,
+    worker_pubkey: String,
+    provider: String,
+    result_hash_hex: String,
+    validation_passed: bool,
+}
+
+async fn prove_completion_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<ProveCompletionBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::ProveCompletion {
+                    task_id: b.task_id,
+                    worker_pubkey: b.worker_pubkey,
+                    provider: b.provider,
+                    result_hash_hex: b.result_hash_hex,
+                    validation_passed: b.validation_passed,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// HTTP body shape for `POST /escrow/release`. Mirrors the
+/// [`Request::RecordEscrowRelease`] fields. `proof_id` is the id from the
+/// matching `/escrow/prove` response; `amount` is a decimal string.
+#[derive(Deserialize)]
+struct RecordEscrowReleaseBody {
+    proof_id: uuid::Uuid,
+    provider: String,
+    network: String,
+    asset: String,
+    amount: String,
+    #[serde(default)]
+    tx_sig: Option<String>,
+}
+
+async fn record_escrow_release_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<RecordEscrowReleaseBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::RecordEscrowRelease {
+                    proof_id: b.proof_id,
+                    provider: b.provider,
+                    network: b.network,
+                    asset: b.asset,
+                    amount: b.amount,
                     tx_sig: b.tx_sig,
                 },
                 &peer,

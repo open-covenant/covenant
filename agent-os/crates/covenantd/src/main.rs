@@ -328,6 +328,14 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match escrow_config_from_env() {
+        Some(cfg) => {
+            info!("escrow surface enabled");
+            server.with_escrow(cfg)
+        }
+        None => server,
+    };
+
     let server = match hyre_config_from_env() {
         Some(cfg) => {
             // Prefer the live manifest so a restart picks up Hyre's
@@ -755,6 +763,22 @@ fn spend_authz_config_from_env() -> Option<covenantd::spend_authz::SpendAuthzCon
         return None;
     }
     Some(covenantd::spend_authz::SpendAuthzConfig { enabled: true })
+}
+
+/// Resolve the escrow surface config from env. When enabled the daemon will
+/// answer `POST /escrow/prove` (issue a signed completion proof an external
+/// escrow releases against) and `POST /escrow/release` (record the payout back
+/// into the audit chain). Covenant holds no funds. Off by default.
+///
+/// - `COVENANT_ESCROW_ENABLED` truthy (`1`, `true`, `yes`)
+fn escrow_config_from_env() -> Option<covenantd::escrow::EscrowConfig> {
+    let enabled = std::env::var("COVENANT_ESCROW_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    Some(covenantd::escrow::EscrowConfig { enabled: true })
 }
 
 /// Build the Hyre provider config from env, or None when the operator

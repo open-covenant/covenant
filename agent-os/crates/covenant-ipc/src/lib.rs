@@ -488,6 +488,37 @@ pub enum Request {
         #[serde(default)]
         tx_sig: Option<String>,
     },
+    /// Ask the daemon to issue a signed completion proof for a task an
+    /// external escrow is funding (e.g. Orbserv). Requires capability
+    /// `escrow.completion.prove`; the daemon binds the reported facts to the
+    /// audit chain root, signs the envelope with its identity, records it, and
+    /// returns [`Response::CompletionProven`]. `worker_pubkey` is the bs58 key
+    /// of the agent the escrow should pay; `result_hash_hex` is the hash of
+    /// the delivered result; `validation_passed` is whether the work
+    /// validated. No funds move on this path — it produces the release signal.
+    ProveCompletion {
+        task_id: Uuid,
+        worker_pubkey: String,
+        provider: String,
+        result_hash_hex: String,
+        validation_passed: bool,
+    },
+    /// Report from an external escrow that it released funds against a
+    /// completion proof. Requires capability `escrow.release.record`; the
+    /// daemon records a settlement receipt and a
+    /// [`Response::EscrowReleased`] returning the receipt id, joined to the
+    /// proof by `proof_id`. `amount` is the atomic amount released; `tx_sig`
+    /// is the on-chain signature when the escrow has it. Covenant custodied
+    /// nothing; this records the payout in the audit chain.
+    RecordEscrowRelease {
+        proof_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        #[serde(default)]
+        tx_sig: Option<String>,
+    },
     /// Operator-driven repair of legacy settlement-receipt rows in the
     /// JSONL store. `dry_run` reports the would-change row count without
     /// writing; an apply rewrites the store atomically after a rollback
@@ -1045,6 +1076,23 @@ pub enum Response {
     SpendSettled {
         receipt_id: Uuid,
         decision_id: Uuid,
+    },
+    /// Result of [`Request::ProveCompletion`]. `proof_json` is the exact
+    /// canonical message the daemon signed: an external verifier checks
+    /// `ed25519_verify(signer_pubkey_b58, proof_json, signature_b58)` and then
+    /// trusts the parsed fields, releasing escrow to the proof's
+    /// `worker_pubkey` when its `validation_passed` is true.
+    CompletionProven {
+        proof_json: String,
+        signature_b58: String,
+        signer_pubkey_b58: String,
+    },
+    /// Result of [`Request::RecordEscrowRelease`]. `receipt_id` joins the
+    /// settlement receipt and the `escrow_released` audit row; `proof_id`
+    /// echoes the completion proof this release acted on.
+    EscrowReleased {
+        receipt_id: Uuid,
+        proof_id: Uuid,
     },
     /// Snapshot of the SAP bridge config as the daemon resolved it at
     /// boot. `enabled = false` means the bridge is off (default) and
@@ -11576,6 +11624,100 @@ mod tests {
             obj.get("decision_id"),
             Some(&serde_json::json!(decision_id))
         );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn request_prove_completion_serde_pins_wire_shape() {
+        let task_id = Uuid::from_u128(0xdead_beef_0000_0010u128);
+        let event = Request::ProveCompletion {
+            task_id,
+            worker_pubkey: "11111111111111111111111111111111".into(),
+            provider: "orbserv".into(),
+            result_hash_hex: "abc123".into(),
+            validation_passed: true,
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("prove_completion"))
+        );
+        assert_eq!(obj.get("task_id"), Some(&serde_json::json!(task_id)));
+        assert_eq!(obj.get("validation_passed"), Some(&serde_json::json!(true)));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "ProveCompletion must round-trip verbatim");
+    }
+
+    #[test]
+    fn request_record_escrow_release_serde_pins_wire_shape() {
+        let proof_id = Uuid::from_u128(0xdead_beef_0000_0011u128);
+        let event = Request::RecordEscrowRelease {
+            proof_id,
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            tx_sig: Some("0xabc123".into()),
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire.as_object().expect("serializes as object");
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("record_escrow_release"))
+        );
+        assert_eq!(obj.get("proof_id"), Some(&serde_json::json!(proof_id)));
+        let back: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, event, "RecordEscrowRelease must round-trip verbatim");
+
+        // tx_sig is optional via #[serde(default)].
+        let no_sig = serde_json::json!({
+            "kind": "record_escrow_release",
+            "proof_id": proof_id,
+            "provider": "orbserv",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "80000",
+        });
+        let decoded: Request = serde_json::from_value(no_sig).expect("tx_sig is optional");
+        assert!(matches!(
+            decoded,
+            Request::RecordEscrowRelease { tx_sig: None, .. }
+        ));
+    }
+
+    #[test]
+    fn response_completion_proven_serde_pins_wire_shape() {
+        let resp = Response::CompletionProven {
+            proof_json: "{\"proof_id\":\"x\"}".into(),
+            signature_b58: "sig".into(),
+            signer_pubkey_b58: "pk".into(),
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("completion_proven"))
+        );
+        assert_eq!(obj.get("signature_b58"), Some(&serde_json::json!("sig")));
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn response_escrow_released_serde_pins_wire_shape() {
+        let receipt_id = Uuid::from_u128(0xdead_beef_0000_0012u128);
+        let proof_id = Uuid::from_u128(0xdead_beef_0000_0011u128);
+        let resp = Response::EscrowReleased {
+            receipt_id,
+            proof_id,
+        };
+        let wire = serde_json::to_value(&resp).unwrap();
+        let obj = wire.as_object().expect("object");
+        assert_eq!(obj.get("kind"), Some(&serde_json::json!("escrow_released")));
+        assert_eq!(obj.get("receipt_id"), Some(&serde_json::json!(receipt_id)));
+        assert_eq!(obj.get("proof_id"), Some(&serde_json::json!(proof_id)));
         let back: Response = serde_json::from_value(wire).unwrap();
         assert_eq!(back, resp);
     }

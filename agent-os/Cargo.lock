@@ -1214,6 +1214,7 @@ dependencies = [
 name = "covenant-identity"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "covenant-types",
  "ed25519-dalek 2.2.0",
  "rand 0.9.4",

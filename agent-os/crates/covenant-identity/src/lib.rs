@@ -30,6 +30,8 @@ pub enum IdentityError {
     Symlink { path: PathBuf },
     #[error("ed25519: {0}")]
     Crypto(#[from] ed25519_dalek::SignatureError),
+    #[error("bad encoding: {0}")]
+    BadEncoding(String),
 }
 
 pub struct LocalIdentity {
@@ -179,6 +181,28 @@ pub fn verify_with_pubkey(
     let vk = verifying_key_from_bytes(pubkey)?;
     vk.verify(message, signature)?;
     Ok(())
+}
+
+/// Verify a bs58-encoded signature over `message` against a bs58-encoded
+/// 32-byte pubkey — the read side as an external party (e.g. a marketplace
+/// escrow checking a completion proof) sees it, with both key and signature
+/// arriving as strings on the wire.
+pub fn verify_b58(
+    pubkey_b58: &str,
+    message: &[u8],
+    signature_b58: &str,
+) -> Result<(), IdentityError> {
+    let pubkey: [u8; 32] = bs58::decode(pubkey_b58)
+        .into_vec()
+        .map_err(|e| IdentityError::BadEncoding(format!("pubkey: {e}")))?
+        .try_into()
+        .map_err(|_| IdentityError::BadEncoding("pubkey is not 32 bytes".into()))?;
+    let sig_bytes: [u8; 64] = bs58::decode(signature_b58)
+        .into_vec()
+        .map_err(|e| IdentityError::BadEncoding(format!("signature: {e}")))?
+        .try_into()
+        .map_err(|_| IdentityError::BadEncoding("signature is not 64 bytes".into()))?;
+    verify_with_pubkey(pubkey, message, &Signature::from_bytes(&sig_bytes))
 }
 
 #[cfg(test)]

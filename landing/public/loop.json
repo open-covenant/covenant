@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-16T15:44:33.308Z",
+  "updatedAt": "2026-06-16T16:04:37.244Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9367,
+    "events": 9369,
     "tasks": 1109,
     "integrated": 1110
   },
@@ -187,7 +187,7 @@
     "integrated": 1103,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "tool-exec-direct-call-audit",
-    "state": "in_progress",
-    "since": "2026-06-16T15:19:51.500Z"
+    "state": "cross_review",
+    "since": "2026-06-16T15:45:41.559Z"
   },
   "recent": [
     {

@@ -19,6 +19,7 @@ members = [
     "crates/covenant-peer-auth",
     "crates/covenant-budget",
     "crates/covenant-x402",
+    "crates/covenant-x402-facilitator",
     "crates/covenant-hyre",
     "crates/covenant-zauth",
     "crates/covenant-metaplex",

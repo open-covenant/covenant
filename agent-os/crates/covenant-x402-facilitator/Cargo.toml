@@ -1,0 +1,33 @@
+[package]
+name = "covenant-x402-facilitator"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "x402 facilitator that verifies ER-settled (consume_credits) payments and gates a paid HTTP endpoint. Counterpart to covenant-x402's EphemeralSigner."
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+bs58 = { workspace = true }
+base64 = "0.22"
+
+[dev-dependencies]
+wiremock = "0.6"
+# For the live_loop example: drive the real x402 Client + EphemeralSigner against
+# this facilitator end to end.
+covenant-x402 = { path = "../covenant-x402", features = ["solana"] }
+solana-sdk = "4"
+
+[[example]]
+name = "live_loop"
+path = "examples/live_loop.rs"

@@ -1545,6 +1545,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-x402-facilitator"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bs58",
+ "covenant-x402",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "solana-sdk 4.0.1",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-zauth"
 version = "0.0.0"
 dependencies = [

@@ -39,6 +39,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/a2a-idempotency", label: "A2A idempotency policy" },
       { href: "/audit", label: "Audit log" },
       { href: "/audit-integrity", label: "Audit integrity" },
+      { href: "/conformance", label: "Conformance" },
       { href: "/settlement", label: "Settlement" },
     ],
   },

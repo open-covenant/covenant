@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-16T11:42:49.908Z",
+  "updatedAt": "2026-06-16T12:02:53.652Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9328,
+    "events": 9331,
     "tasks": 1105,
     "integrated": 1106
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1099,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "sdk-author-surface",
+    "state": "in_progress",
+    "since": "2026-06-16T11:48:02.565Z"
+  },
   "recent": [
     {
       "at": "2026-06-16T11:38:32.203Z",

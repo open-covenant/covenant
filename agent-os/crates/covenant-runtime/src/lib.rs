@@ -31,6 +31,7 @@ use covenant_types::{AgentEvent, Intent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, RwLock};
@@ -622,6 +623,39 @@ impl SubprocessRunner {
     }
 }
 
+/// The environment a trusted-local agent subprocess is given.
+///
+/// The daemon's own environment carries operator secrets — an
+/// `ANTHROPIC_API_KEY` an agent reads directly, the `HERMES_API_KEY` the
+/// daemon loads for the gateway, anything the operator exported. Letting the
+/// child inherit that environment wholesale hands every agent those secrets
+/// for free and routes around the capability-gated, audited secret broker.
+/// So the child starts from a cleared environment and receives only what an
+/// agent legitimately needs that is not a secret: `PATH` (so the `python3`
+/// and `node` interpreters resolve; a rust-bin entry runs by absolute path),
+/// `HOME` (interpreter and config lookup), and Covenant's own `COVENANT_*`
+/// configuration namespace. The capability-gated, audited broker (`GetSecret`)
+/// is the sanctioned channel for an agent that needs a secret.
+///
+/// This is least-privilege, not a sandbox boundary: trusted-local agents run
+/// as the operator's user and can still read host secrets by other means (see
+/// `docs/runtime-sandbox-security.md`). `GvisorRunner` withholds the host
+/// environment entirely through its OCI `process.env`.
+fn agent_subprocess_env() -> Vec<(OsString, OsString)> {
+    filter_agent_env(std::env::vars_os())
+}
+
+fn filter_agent_env(vars: impl Iterator<Item = (OsString, OsString)>) -> Vec<(OsString, OsString)> {
+    vars.filter(|(key, _)| is_inheritable_agent_env_key(key))
+        .collect()
+}
+
+fn is_inheritable_agent_env_key(key: &OsStr) -> bool {
+    key == OsStr::new("PATH")
+        || key == OsStr::new("HOME")
+        || key.to_str().is_some_and(|k| k.starts_with("COVENANT_"))
+}
+
 #[async_trait]
 impl Runner for SubprocessRunner {
     async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError> {
@@ -654,6 +688,8 @@ impl Runner for SubprocessRunner {
             }
         };
         cmd.current_dir(&card.package_dir)
+            .env_clear()
+            .envs(agent_subprocess_env())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -2080,6 +2116,75 @@ backend = "linux-gvisor"
         let namespaces = config["linux"]["namespaces"].as_array().unwrap();
         assert!(namespaces.iter().any(|ns| ns["type"] == "network"));
         assert!(!config.to_string().contains("HOME="));
+    }
+
+    #[test]
+    fn agent_subprocess_env_withholds_operator_secrets_but_keeps_path_home_and_covenant_config() {
+        use std::collections::BTreeMap;
+
+        let daemon_env = [
+            ("PATH", "/usr/local/bin:/usr/bin"),
+            ("HOME", "/home/agent"),
+            ("COVENANT_HOME", "/var/lib/covenant"),
+            ("COVENANT_DEMO_DAILY_REQUESTS", "500"),
+            ("ANTHROPIC_API_KEY", "sk-ant-must-not-leak"),
+            ("ANTHROPIC_MODEL", "claude-must-not-leak"),
+            ("HERMES_API_KEY", "hk-must-not-leak"),
+            ("AWS_SECRET_ACCESS_KEY", "aws-must-not-leak"),
+            ("OPENAI_API_KEY", "sk-openai-must-not-leak"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+
+        let kept: BTreeMap<String, String> = filter_agent_env(daemon_env)
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+
+        // Mechanically-required vars and Covenant's own config namespace pass
+        // through so agents still resolve interpreters, find $COVENANT_HOME,
+        // and read their COVENANT_* settings.
+        assert_eq!(
+            kept.get("PATH").map(String::as_str),
+            Some("/usr/local/bin:/usr/bin")
+        );
+        assert_eq!(kept.get("HOME").map(String::as_str), Some("/home/agent"));
+        assert_eq!(
+            kept.get("COVENANT_HOME").map(String::as_str),
+            Some("/var/lib/covenant")
+        );
+        assert_eq!(
+            kept.get("COVENANT_DEMO_DAILY_REQUESTS").map(String::as_str),
+            Some("500")
+        );
+
+        // Every operator secret in the daemon's environment is withheld — an
+        // agent that needs one goes through the capability-gated, audited
+        // broker, it does not inherit it for free. A future change that
+        // re-broadens the allowlist (or restores a blanket inherit) trips this.
+        for secret_key in [
+            "ANTHROPIC_API_KEY",
+            "HERMES_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "OPENAI_API_KEY",
+        ] {
+            assert!(
+                !kept.contains_key(secret_key),
+                "operator secret {secret_key} must not reach the agent subprocess: {kept:?}"
+            );
+        }
+        // The allowlist is deny-by-default, not a secret-name denylist: a
+        // non-secret but non-COVENANT_* var (a third-party model setting) is
+        // dropped too, so a differently-named secret can never slip through.
+        assert!(
+            !kept.contains_key("ANTHROPIC_MODEL"),
+            "non-allowlisted env must be dropped regardless of whether it looks like a secret: {kept:?}"
+        );
     }
 
     #[test]

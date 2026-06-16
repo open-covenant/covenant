@@ -15,6 +15,7 @@ Implemented:
 - The public live-test inventory includes an ignored Linux gVisor dispatch test gated on `runsc` and an explicit rootfs.
 - A repeatable Linux runner guide documents the host, `runsc`, rootfs, and CI adoption requirements for that live path.
 - Sandbox stderr redacts configured host-local paths before surfacing failure text.
+- The trusted-local subprocess runner starts agents from a cleared environment and passes only `PATH`, `HOME`, and Covenant's own `COVENANT_*` configuration instead of inheriting the daemon's full environment. Operator secrets exported into the daemon's environment are not handed to agents; the capability-gated, audited broker (`GetSecret`) is the sanctioned channel for an agent that needs one.
 
 Not implemented:
 
@@ -31,11 +32,12 @@ Trusted-local protects:
 - Covenant-mediated state mutations through daemon-side capability checks.
 - Runtime budget enforcement via projection-tick preempt on projected overshoot, with a wall-clock kill at `cpu_ms_per_task` as the final backstop.
 - Agent protocol attribution because the daemon chooses which manifest produced a result.
+- Ambient operator secrets in the daemon's environment: the runner clears the child environment and passes only `PATH`, `HOME`, and `COVENANT_*` configuration, so an exported `ANTHROPIC_API_KEY` or `HERMES_API_KEY` is withheld and the broker (`GetSecret`) is the sanctioned channel for an agent that needs one. This is least-privilege, not a sandbox.
 
 Trusted-local does not protect:
 
 - Host filesystem reads available to the operator user.
-- Host environment variables inherited by a child process.
+- Same-user environment introspection: the runner withholds the daemon's environment from agents, but a hostile agent running as the operator's user can still read another process's environment through `/proc`. The scrub removes the ambient hand-off, not same-user introspection.
 - Network access beyond whatever the host OS allows.
 - Memory, CPU, syscall, or device abuse within the runtime budget window.
 - Malicious code executed as the same user outside the daemon protocol.

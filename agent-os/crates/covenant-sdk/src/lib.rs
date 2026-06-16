@@ -85,10 +85,23 @@ pub enum SdkError {
     #[error("daemon rejected authentication: {0}")]
     Authentication(String),
 
-    /// The daemon answered with [`Response::Error`] — e.g. a denied capability.
-    /// The connection remains usable for further requests.
+    /// The daemon answered with [`Response::Error`] and the SDK did not
+    /// recognize the message as a policy denial. Recognized denials surface as
+    /// [`SdkError::Denied`] instead. The connection remains usable.
     #[error("daemon returned an error: {0}")]
     Daemon(String),
+
+    /// The daemon refused the request on policy grounds — a missing capability
+    /// or a scope that does not cover the call. Classified best-effort from the
+    /// daemon's denial message, which is always preserved in `message`; when the
+    /// message named the required capability, `capability` carries it ready to
+    /// pass to [`Client::grant_capability`]. The connection remains usable.
+    #[error("{message}")]
+    Denied {
+        message: String,
+        capability: Option<String>,
+        kind: DenialKind,
+    },
 
     /// The daemon answered a request with a response variant the SDK does not
     /// expect for that verb.
@@ -98,6 +111,15 @@ pub enum SdkError {
     /// A frame-level transport failure (I/O, malformed JSON, oversized frame).
     #[error(transparent)]
     Wire(#[from] IpcError),
+}
+
+/// Why the daemon denied a request, as classified from its denial message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenialKind {
+    /// The caller holds no capability for the action; grant the named one.
+    MissingCapability,
+    /// The caller holds a capability but its scope does not cover the request.
+    OutOfScope,
 }
 
 /// Resolve the daemon home from the environment: `$COVENANT_HOME` if set, else
@@ -173,7 +195,7 @@ impl Client {
     pub async fn ping(&mut self) -> Result<(), SdkError> {
         match self.roundtrip(&Request::Ping).await? {
             Response::Pong => Ok(()),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("ping", &other)),
         }
     }
@@ -182,7 +204,7 @@ impl Client {
     pub async fn protocol_info(&mut self) -> Result<ProtocolInfo, SdkError> {
         match self.roundtrip(&Request::ProtocolInfo).await? {
             Response::ProtocolInfo { info } => Ok(info),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("protocol_info", &other)),
         }
     }
@@ -210,7 +232,7 @@ impl Client {
                 sources,
                 settlement,
             }),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("submit_intent", &other)),
         }
     }
@@ -219,7 +241,7 @@ impl Client {
     pub async fn list_tools(&mut self) -> Result<Vec<ToolSpec>, SdkError> {
         match self.roundtrip(&Request::ListTools).await? {
             Response::ToolList { tools } => Ok(tools),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("list_tools", &other)),
         }
     }
@@ -238,7 +260,7 @@ impl Client {
         };
         match self.roundtrip(&request).await? {
             Response::ToolResult { content, is_error } => Ok(ToolOutcome { content, is_error }),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("call_tool", &other)),
         }
     }
@@ -257,7 +279,7 @@ impl Client {
         };
         match self.roundtrip(&request).await? {
             Response::Memories { records } => Ok(records),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("recent_memory", &other)),
         }
     }
@@ -279,7 +301,7 @@ impl Client {
         };
         match self.roundtrip(&request).await? {
             Response::Memories { records } => Ok(records),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("search_memory", &other)),
         }
     }
@@ -294,7 +316,7 @@ impl Client {
             .await?
         {
             Response::Capabilities { capabilities } => Ok(capabilities),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("recent_capabilities", &other)),
         }
     }
@@ -322,7 +344,7 @@ impl Client {
                 subject_display,
                 action,
             }),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("grant_capability", &other)),
         }
     }
@@ -333,7 +355,7 @@ impl Client {
     pub async fn try_recv_a2a_task(&mut self) -> Result<Option<A2ATask>, SdkError> {
         match self.roundtrip(&Request::TryRecvA2ATask).await? {
             Response::A2ATaskOpt { task } => Ok(task),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("try_recv_a2a_task", &other)),
         }
     }
@@ -344,7 +366,7 @@ impl Client {
     pub async fn post_a2a_result(&mut self, result: A2ATaskResult) -> Result<Uuid, SdkError> {
         match self.roundtrip(&Request::PostA2AResult { result }).await? {
             Response::A2AResultPosted { task_id } => Ok(task_id),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("post_a2a_result", &other)),
         }
     }
@@ -354,7 +376,7 @@ impl Client {
     pub async fn try_recv_a2a_result(&mut self) -> Result<Option<A2ATaskResult>, SdkError> {
         match self.roundtrip(&Request::TryRecvA2AResult).await? {
             Response::A2AResultOpt { result } => Ok(result),
-            Response::Error { message } => Err(SdkError::Daemon(message)),
+            Response::Error { message } => Err(denial(message)),
             other => Err(unexpected("try_recv_a2a_result", &other)),
         }
     }
@@ -435,6 +457,42 @@ fn response_kind(response: &Response) -> String {
         .ok()
         .and_then(|value| value.get("kind")?.as_str().map(str::to_string))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Classify a `Response::Error` message into a typed [`SdkError`]. Policy
+/// denials become [`SdkError::Denied`] with the required capability extracted
+/// when the daemon named it; anything else stays an opaque [`SdkError::Daemon`].
+/// The full message is preserved either way, so an unrecognized wording loses no
+/// information — it just is not classified.
+fn denial(message: String) -> SdkError {
+    if let Some(capability) = parse_required_capability(&message) {
+        return SdkError::Denied {
+            message,
+            capability: Some(capability),
+            kind: DenialKind::MissingCapability,
+        };
+    }
+    if message.contains("capability scope") {
+        return SdkError::Denied {
+            message,
+            capability: None,
+            kind: DenialKind::OutOfScope,
+        };
+    }
+    SdkError::Daemon(message)
+}
+
+/// Pull the required capability out of the daemon's `requires capability
+/// "<action>"` denial fragment — the action is also the argument to
+/// `covenant capabilities grant`. Capability actions are dotted identifiers, so
+/// the value never contains the closing quote we split on.
+fn parse_required_capability(message: &str) -> Option<String> {
+    let action = message
+        .split_once("requires capability \"")?
+        .1
+        .split_once('"')?
+        .0;
+    (!action.is_empty()).then(|| action.to_string())
 }
 
 #[cfg(test)]
@@ -907,6 +965,81 @@ mod tests {
         let info = client.protocol_info().await.unwrap();
         assert_eq!(info.protocol, "covenant.ipc");
         assert_eq!(info.max_supported, 2);
+    }
+
+    #[tokio::test]
+    async fn call_tool_denial_names_the_missing_capability() {
+        // The exact shape covenantd emits when a tool call lacks its grant.
+        let message = "tool search requires capability \"tool.search\". \
+                       Grant it with `covenant capabilities grant tool.search`.";
+        let harness = Harness::start(move |req| match req {
+            Request::Authenticate { .. } => ok_auth(),
+            Request::CallTool { .. } => err_resp(message),
+            Request::Ping => json!({ "kind": "pong" }),
+            _ => err_resp("nope"),
+        });
+        let mut client = harness.client().await;
+        let err = client.call_tool("search", json!({})).await.unwrap_err();
+        match err {
+            SdkError::Denied {
+                capability,
+                kind,
+                message,
+            } => {
+                assert_eq!(capability.as_deref(), Some("tool.search"));
+                assert_eq!(kind, DenialKind::MissingCapability);
+                assert!(message.contains("covenant capabilities grant tool.search"));
+            }
+            other => panic!("expected Denied, got {other:?}"),
+        }
+        // A policy denial leaves the connection usable, like any daemon error.
+        client.ping().await.unwrap();
+    }
+
+    #[test]
+    fn denial_extracts_missing_capability() {
+        let err = denial(
+            "a2a repair requeue requires capability \"a2a.repair.requeue\". \
+             Grant it with `covenant capabilities grant a2a.repair.requeue`."
+                .to_string(),
+        );
+        match err {
+            SdkError::Denied {
+                capability, kind, ..
+            } => {
+                assert_eq!(capability.as_deref(), Some("a2a.repair.requeue"));
+                assert_eq!(kind, DenialKind::MissingCapability);
+            }
+            other => panic!("expected Denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn denial_flags_out_of_scope_without_a_capability() {
+        let err = denial("tool search rejected by capability scope: host not allowed".to_string());
+        match err {
+            SdkError::Denied {
+                capability, kind, ..
+            } => {
+                assert!(capability.is_none());
+                assert_eq!(kind, DenialKind::OutOfScope);
+            }
+            other => panic!("expected Denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn denial_keeps_unrecognized_errors_opaque() {
+        let err = denial("intent dispatch failed: upstream timeout".to_string());
+        assert!(
+            matches!(err, SdkError::Daemon(m) if m == "intent dispatch failed: upstream timeout")
+        );
+    }
+
+    #[test]
+    fn parse_required_capability_ignores_messages_without_the_marker() {
+        assert!(parse_required_capability("plain error").is_none());
+        assert!(parse_required_capability("requires capability \"\"").is_none());
     }
 
     #[test]

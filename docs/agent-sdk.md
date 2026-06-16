@@ -79,9 +79,40 @@ Methods return `SdkError`, which distinguishes:
 
 - transport failures (`Connect`, `Token`, `Wire`),
 - a rejected token (`Authentication`),
-- a daemon-level rejection such as a denied capability (`Daemon`) — the
-  connection stays usable for the next request,
+- a **policy denial** (`Denied`) — a missing capability or an out-of-scope
+  grant; the connection stays usable,
+- any other daemon-level rejection (`Daemon`) — also leaves the connection
+  usable,
 - a response variant the SDK does not expect for a verb (`Unexpected`).
+
+### Acting on a denial
+
+`SdkError::Denied` carries the daemon's full `message`, a `kind`
+(`MissingCapability` or `OutOfScope`), and — when the daemon named it — the
+`capability` to request. That value is exactly the argument to
+`grant_capability`, so an author can debug against policy without reading daemon
+internals and close the loop in code:
+
+```rust
+use covenant_sdk::{DenialKind, SdkError};
+
+match client.call_tool("search", args).await {
+    Ok(result) => { /* use result */ }
+    Err(SdkError::Denied {
+        capability: Some(action),
+        kind: DenialKind::MissingCapability,
+        ..
+    }) => {
+        client.grant_capability(action, None, None).await?;
+        // ...then retry the call
+    }
+    Err(other) => return Err(other),
+}
+```
+
+Classification is best-effort over the daemon's denial wording: an unrecognized
+message stays `Daemon` with its text intact, so nothing is lost — only
+unclassified.
 
 ## Not yet exposed
 

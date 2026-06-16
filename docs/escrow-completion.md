@@ -128,11 +128,43 @@ and the payout that acted on it read back as a linked pair. Read with
 `covenant audit recent` or `GET /audit/recent`; verify chain integrity with
 `GET /audit/verify`.
 
+## `GET /reputation/:worker_pubkey`
+
+Requires capability `reputation.read`. A worker's standing, computed entirely
+from the escrow rows above — not self-reported. `worker_pubkey` is the bs58 key
+the completion proofs name (URL-safe, so it rides the path).
+
+```json
+{
+  "kind": "reputation",
+  "worker_pubkey": "7Np41oeYqPefeNQEHSv1UDhYrehxin3NStpvxbiyN",
+  "proofs_total": 3,
+  "validations_passed": 2,
+  "validations_failed": 1,
+  "releases": 2,
+  "completion_rate_bps": 6666,
+  "computed_audit_root_hex": "…"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `proofs_total` | `escrow_completion_proven` rows naming this worker. |
+| `validations_passed` / `validations_failed` | of those, the validation outcome. |
+| `releases` | `escrow_released` rows whose proof was one of this worker's. |
+| `completion_rate_bps` | `validations_passed / proofs_total`, in basis points. |
+| `computed_audit_root_hex` | the chain root the score was read over. |
+
+The score is reproducible: recompute over the same audit chain and the numbers
+match, so neither the worker nor the operator can inflate it. This is
+Covenant's half. A marketplace combines it with the escrow's earnings ledger
+for the full picture.
+
 ## Not yet
 
 The proof binds the facts the authenticated, capability-gated caller reports;
 the daemon does not yet re-derive `result_hash_hex` from its own
 `IntentDispatched`/run record. Binding the proof to that internal record is a
 planned tightening — the same enforcement-vs-record boundary
-`spend-authorization.md` notes for settlement. Reputation derived from these
-rows (completion rate, validation pass/fail, disputes) is the next slice.
+`spend-authorization.md` notes for settlement. Disputes are not yet a primitive
+(no dispute row to count), so they are out of the reputation cut for now.

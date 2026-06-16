@@ -12,6 +12,7 @@ pub mod escrow;
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
+pub mod reputation;
 pub mod spend_authz;
 pub mod sse;
 pub mod stream_dispatch;
@@ -2443,6 +2444,9 @@ impl Server {
             } => {
                 self.record_escrow_release(proof_id, provider, network, asset, amount, tx_sig, peer)
                     .await
+            }
+            Request::GetReputation { worker_pubkey } => {
+                self.get_reputation(worker_pubkey, peer).await
             }
             Request::BackfillSettlementReceipts {
                 dry_run,
@@ -6244,6 +6248,52 @@ impl Server {
             },
             Err(e) => Response::Error {
                 message: format!("escrow release recording failed: {e}"),
+            },
+        }
+    }
+
+    async fn get_reputation(&self, worker_pubkey: String, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities(
+                "reputation:read".into(),
+                vec!["reputation.read".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "reading reputation requires capability \
+                          \"reputation.read\". Grant it with \
+                          `covenant capabilities grant reputation.read`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.escrow.clone() else {
+            return Response::Error {
+                message: "the escrow surface is not configured on this daemon. \
+                          Wire it via Server::with_escrow and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "the escrow surface is disabled in this daemon's config.".into(),
+            };
+        }
+
+        match reputation::compute_reputation(self.audit.as_ref(), &worker_pubkey).await {
+            Ok(rep) => Response::Reputation {
+                worker_pubkey: rep.worker_pubkey,
+                proofs_total: rep.proofs_total,
+                validations_passed: rep.validations_passed,
+                validations_failed: rep.validations_failed,
+                releases: rep.releases,
+                completion_rate_bps: rep.completion_rate_bps,
+                computed_audit_root_hex: rep.computed_audit_root_hex,
+            },
+            Err(e) => Response::Error {
+                message: format!("reputation read failed: {e}"),
             },
         }
     }

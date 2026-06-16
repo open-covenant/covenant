@@ -57,6 +57,13 @@ pub struct PaymentExtra {
     /// partial-signs as the funder only.
     #[serde(rename = "feePayer", default, skip_serializing_if = "Option::is_none")]
     pub fee_payer: Option<String>,
+    /// Per-request nonce for ER-settled (`exact-er`) payments. The
+    /// `EphemeralSigner` binds the on-chain consume to this request via
+    /// `receipt_hash = sha256(nonce)`; the facilitator checks the match and
+    /// rejects replays. Absent for SPL flows, so the on-wire shape there is
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
 }
 
 /// A daemon-issued authorization to call paid endpoints.
@@ -151,6 +158,7 @@ mod tests {
         // the Rust `fee_payer`, and survive a round-trip unchanged.
         let original = requirement(Some(PaymentExtra {
             fee_payer: Some("2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4".into()),
+            nonce: None,
         }));
         let json = serde_json::to_value(&original).expect("encode");
         assert_eq!(

@@ -446,6 +446,7 @@ mod tests {
             scheme: "exact".into(),
             extra: Some(PaymentExtra {
                 fee_payer: Some(PAYAI_FEE_PAYER.into()),
+                nonce: None,
             }),
         };
         let err = signer.build_payment(&req).await.expect_err("unknown mint");
@@ -471,12 +472,14 @@ mod tests {
             scheme: "exact".into(),
             extra: Some(PaymentExtra {
                 fee_payer: Some(PAYAI_FEE_PAYER.into()),
+                nonce: None,
             }),
         };
 
         let mut req = valid();
         req.extra = Some(PaymentExtra {
             fee_payer: Some("not-a-pubkey".into()),
+            nonce: None,
         });
         assert!(matches!(
             signer.build_payment(&req).await.expect_err("bad feePayer"),
@@ -596,6 +599,7 @@ mod tests {
             scheme: "exact".into(),
             extra: Some(PaymentExtra {
                 fee_payer: Some(PAYAI_FEE_PAYER.into()),
+                nonce: None,
             }),
         };
         // account_exists is the first RPC; its Ok(false) returns before

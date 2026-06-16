@@ -43,6 +43,11 @@ pub use types::{Capability, PaymentExtra, PaymentRequirements};
 pub mod payai;
 
 #[cfg(feature = "solana")]
+pub mod ephemeral;
+
+#[cfg(feature = "solana")]
+pub use ephemeral::EphemeralSigner;
+#[cfg(feature = "solana")]
 pub use payai::PayaiSolanaSigner;
 #[cfg(feature = "solana")]
 pub use solana::SolanaSigner;

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T14:03:59.018Z",
+  "updatedAt": "2026-06-16T14:24:02.898Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9340,
-    "tasks": 1106,
-    "integrated": 1107
+    "events": 9355,
+    "tasks": 1108,
+    "integrated": 1109
   },
   "throughput": {
-    "last24h": 14,
-    "last7d": 148,
-    "velocity": 21.1
+    "last24h": 16,
+    "last7d": 150,
+    "velocity": 21.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 8
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-16",
-      "total": 1107
+      "total": 1109
     }
   ],
   "states": {
-    "integrated": 1100,
-    "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "integrated": 1102,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sdk-worked-examples",
-    "state": "in_progress",
-    "since": "2026-06-16T13:47:07.143Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-16T14:23:16.876Z",
+      "task": "sdk-error-ergonomics",
+      "note": "Integrated as d3ab49c5, pushed to origin/loop/main-track (52bf60f1..d3ab49c5). SdkError::Denied{message,capability,kind:DenialKind} classifi"
+    },
+    {
+      "at": "2026-06-16T14:11:47.584Z",
+      "task": "sdk-worked-examples",
+      "note": "Integrated as 52bf60f1, pushed to origin/loop/main-track (1ed231b1..52bf60f1). Added a2a worker surface (try_recv_a2a_task/post_a2a_result/t"
+    },
     {
       "at": "2026-06-16T13:38:00.179Z",
       "task": "sdk-author-surface",
@@ -310,16 +315,6 @@
       "at": "2026-06-15T09:50:33.484Z",
       "task": "provenance-privileged-action-inventory",
       "note": "Integrated as 89d47995, pushed to origin/loop/main-track (7b35c0fb..89d47995). Tracked diff: README.md (metrics 2818->2819), agent-os/crates"
-    },
-    {
-      "at": "2026-06-15T07:14:32.440Z",
-      "task": "ipc-docs-intents-resume-ok-status-type-level-pin",
-      "note": "Integrated as 5e35cf5f on loop/main-track (pushed, origin 0/0). Last non-canonical type-level pin bullet in docs/ipc-and-http-gateway.md now"
-    },
-    {
-      "at": "2026-06-15T06:24:44.892Z",
-      "task": "ipc-docs-intent-result-status-type-level-pin",
-      "note": "Integrated as 3aa743b4 on loop/main-track. Docs status bullet canonicalized; dedicated validator added + registered in validate.sh; status t"
     }
   ]
 }

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-16T10:02:30.988Z",
+  "updatedAt": "2026-06-16T10:22:34.776Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9302,
+    "events": 9305,
     "tasks": 1102,
     "integrated": 1103
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1096,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "conformance-capability-grammar",
+    "state": "in_progress",
+    "since": "2026-06-16T10:04:14.812Z"
+  },
   "recent": [
     {
       "at": "2026-06-16T09:54:36.187Z",

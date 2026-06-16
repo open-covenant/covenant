@@ -14649,17 +14649,20 @@ impl Server {
         }
     }
 
-    /// True if the peer holds a live `secret.access` capability whose scope
-    /// admits `name`. Mirrors [`Self::x402_pay_scope_allows`]: an unscoped
-    /// grant admits any secret, a `name`-bound grant admits only its secret,
-    /// and grants are additive (any matching capability suffices). A malformed
-    /// scope surfaces as `Err` so the caller fails closed.
-    async fn secret_access_scope_allows(
+    /// The base58 signature of the live `secret.access` capability whose scope
+    /// admits `name`, or `Ok(None)` if the peer holds no such grant. Like
+    /// [`Self::x402_pay_scope_allows`] an unscoped grant admits any secret, a
+    /// `name`-bound grant admits only its secret, and grants are additive — the
+    /// first matching capability authorizes the read. A malformed scope
+    /// surfaces as `Err` so the caller fails closed. The returned signature is
+    /// the join key the broker records on the release so the audit row names
+    /// the exact grant that authorized it.
+    async fn secret_access_grant_signature(
         &self,
         action: &str,
         name: &str,
         peer: &AgentId,
-    ) -> Result<bool, String> {
+    ) -> Result<Option<String>, String> {
         let now = epoch_ms();
         let trust_root = self.identity.agent_id().pubkey;
         let user_caps = self
@@ -14677,7 +14680,7 @@ impl Server {
                 &cap.capability.scope,
                 name,
             ) {
-                Ok(true) => return Ok(true),
+                Ok(true) => return Ok(Some(bs58::encode(cap.signature).into_string())),
                 Ok(false) => {}
                 Err(e) => {
                     invalid_scope.get_or_insert_with(|| e.to_string());
@@ -14687,7 +14690,7 @@ impl Server {
         if let Some(reason) = invalid_scope {
             return Err(reason);
         }
-        Ok(false)
+        Ok(None)
     }
 
     /// Release a named secret to a peer that holds the `secret.access`
@@ -14709,15 +14712,16 @@ impl Server {
 
         // The capability check above admits the holder of any secret.access
         // grant; this scope gate binds the grant to its named secret so a
-        // name-scoped grant cannot read an unlisted secret. It runs before the
-        // not-configured guard so a denial is auditable even on a daemon with
-        // no secret backend wired.
-        match self
-            .secret_access_scope_allows("secret.access", &name, peer)
+        // name-scoped grant cannot read an unlisted secret, and returns the
+        // signature of the grant that admitted it so the release names its
+        // authority on the chain. It runs before the not-configured guard so a
+        // denial is auditable even on a daemon with no secret backend wired.
+        let grant_signature = match self
+            .secret_access_grant_signature("secret.access", &name, peer)
             .await
         {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(Some(signature_b58)) => signature_b58,
+            Ok(None) => {
                 let reason = format!("secret {name:?} is outside this grant's scope");
                 self.record_secret_access_denied(peer, &name, &reason).await;
                 return Response::Error {
@@ -14732,7 +14736,7 @@ impl Server {
                     ),
                 };
             }
-        }
+        };
 
         let Some(source) = self.secret_source.clone() else {
             return Response::Error {
@@ -14744,7 +14748,8 @@ impl Server {
 
         match source.get(&name).await {
             Ok(Some(value)) => {
-                self.record_secret_access_granted(peer, &name).await;
+                self.record_secret_access_granted(peer, &name, &grant_signature)
+                    .await;
                 Response::Secret { name, value }
             }
             Ok(None) => {
@@ -14764,7 +14769,12 @@ impl Server {
         }
     }
 
-    async fn record_secret_access_granted(&self, peer: &AgentId, secret_name: &str) {
+    async fn record_secret_access_granted(
+        &self,
+        peer: &AgentId,
+        secret_name: &str,
+        signature_b58: &str,
+    ) {
         let event = AuditEvent {
             id: Uuid::new_v4(),
             timestamp_ms: epoch_ms(),
@@ -14772,6 +14782,7 @@ impl Server {
             kind: AuditKind::SecretAccessGranted {
                 agent_id: peer.display.clone(),
                 secret_name: secret_name.to_string(),
+                signature_b58: signature_b58.to_string(),
             },
         };
         self.record_peer_event(peer, event).await;
@@ -58001,12 +58012,19 @@ budget_credits_per_hour = {credits}
         secrets.insert("openai-api-key".to_string(), "sk-live-value".to_string());
         let s = server_with_audit(audit.clone())
             .with_secret_source(Arc::new(secret::MapSecretSource::new(secrets)));
-        grant_scoped_action(
-            &s,
-            "secret.access",
-            serde_json::json!({ "version": 1, "name": "openai-api-key" }),
-        )
-        .await;
+        let Response::CapabilityGranted {
+            signature_b58: grant_signature,
+            ..
+        } = s
+            .op_respond(Request::GrantCapability {
+                action: "secret.access".into(),
+                scope: Some(serde_json::json!({ "version": 1, "name": "openai-api-key" })),
+                expires_at: None,
+            })
+            .await
+        else {
+            panic!("granting name-scoped secret.access must succeed");
+        };
 
         // A secret outside the granted name is refused by the scope gate, not
         // by the broker backend further down the path.
@@ -58037,7 +58055,9 @@ budget_credits_per_hour = {credits}
 
         // Positive control: the granted secret clears the gate, the broker
         // returns the live value, and the access is recorded as
-        // SecretAccessGranted by name — proving the gate is not a blanket deny.
+        // SecretAccessGranted naming the secret and the grant that authorized
+        // it — proving the gate is not a blanket deny and the release is joined
+        // to its authority on the chain.
         match s
             .op_respond(Request::GetSecret {
                 name: "openai-api-key".into(),
@@ -58057,10 +58077,11 @@ budget_credits_per_hour = {credits}
         assert!(
             events.iter().any(|e| matches!(
                 &e.kind,
-                AuditKind::SecretAccessGranted { secret_name, .. }
-                    if secret_name == "openai-api-key"
+                AuditKind::SecretAccessGranted { secret_name, signature_b58, .. }
+                    if secret_name == "openai-api-key" && signature_b58 == &grant_signature
             )),
-            "a granted secret read must emit SecretAccessGranted by name: {events:?}"
+            "a granted secret read must emit SecretAccessGranted naming the secret and the \
+             signature of the grant that authorized it: {events:?}"
         );
         // The value must never enter the audit chain — accountability records
         // who read which secret, not the material itself.

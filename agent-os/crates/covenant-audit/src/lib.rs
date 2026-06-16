@@ -178,12 +178,15 @@ pub enum AuditKind {
     },
     /// Logged when the daemon's secret broker releases a named secret to a
     /// peer that cleared the `secret.access` capability and scope gate. Records
-    /// the requesting agent and the secret *name* for the accountability trail
-    /// — never the secret value, which is returned to the caller but never
-    /// audited or logged.
+    /// the requesting agent, the secret *name*, and `signature_b58` — the
+    /// base58 signature of the exact capability whose scope admitted the read,
+    /// the same join key `CapabilityGranted` carries — so a release names the
+    /// grant that authorized it. Never the secret value, which is returned to
+    /// the caller but never audited or logged.
     SecretAccessGranted {
         agent_id: String,
         secret_name: String,
+        signature_b58: String,
     },
     /// Logged when the secret broker refuses a named secret — the peer lacked
     /// the `secret.access` capability, held a scope that does not admit the

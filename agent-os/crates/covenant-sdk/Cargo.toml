@@ -1,0 +1,21 @@
+[package]
+name = "covenant-sdk"
+version = "0.1.0"
+description = "Ergonomic async client for building agents against a running covenantd daemon. Wraps connect, authenticate, and typed request/response round-trips over the Covenant IPC protocol so authors never hand-roll a wire frame."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+covenant-ipc = { path = "../covenant-ipc" }
+covenant-types = { path = "../covenant-types" }
+covenant-mcp = { path = "../covenant-mcp" }
+covenant-permissions = { path = "../covenant-permissions" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

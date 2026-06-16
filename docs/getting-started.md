@@ -98,6 +98,7 @@ Visit http://localhost:3001.
 ## Where to look next
 
 - [`docs/demo.md`](./demo.md): one task end-to-end with every audit artifact called out
+- [`docs/agent-sdk.md`](./agent-sdk.md): build an agent in Rust with the `covenant-sdk` client
 - [`README.md`](../README.md): project overview
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md): contribution guide
 - [`SECURITY.md`](../SECURITY.md): responsible disclosure

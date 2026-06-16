@@ -4,6 +4,7 @@ members = [
     "crates/covenant-types",
     "crates/covenant-manifest",
     "crates/covenant-ipc",
+    "crates/covenant-sdk",
     "crates/covenant-router",
     "crates/covenant-runtime",
     "crates/covenant-memory",

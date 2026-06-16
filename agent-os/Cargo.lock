@@ -1390,6 +1390,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-sdk"
+version = "0.1.0"
+dependencies = [
+ "covenant-ipc",
+ "covenant-mcp",
+ "covenant-permissions",
+ "covenant-types",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "covenant-settlement"
 version = "0.1.0"
 dependencies = [

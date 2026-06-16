@@ -50,10 +50,28 @@ For an explicit home or token, use `Client::connect_with_token_file(home)` or
 | Intents | `submit_intent` |
 | Tools | `list_tools`, `call_tool` |
 | Memory (read) | `recent_memory`, `search_memory` |
+| A2A (worker) | `try_recv_a2a_task`, `post_a2a_result`, `try_recv_a2a_result` |
 | Capabilities | `recent_capabilities`, `grant_capability` |
 
 Every method is a single request/response round-trip on one authenticated
 connection, which stays open for reuse across calls.
+
+## Examples
+
+Runnable client agents live in
+[`agent-os/crates/covenant-sdk/examples`](../agent-os/crates/covenant-sdk/examples).
+Start `covenantd` first so the socket and operator token exist, then:
+
+| Example | Demonstrates | Run |
+|---|---|---|
+| `tool_agent` | discover the router's tools and call one | `cargo run -p covenant-sdk --example tool_agent` |
+| `memory_agent` | semantic search and recent-memory reads | `cargo run -p covenant-sdk --example memory_agent` |
+| `a2a_worker` | drain delegated a2a tasks and post results | `cargo run -p covenant-sdk --example a2a_worker` |
+
+Each is a self-contained starting point: copy one, replace the placeholder
+work, and you have an agent. The `a2a_worker` example treats incoming
+`intent_text` as opaque data and reports task failures back as error results
+rather than crashing its loop.
 
 ## Errors
 
@@ -70,6 +88,11 @@ Methods return `SdkError`, which distinguishes:
 - **Memory writes.** Memory is read-only over IPC today. The daemon writes
   memory as a side effect of intent execution; there is no client-facing
   memory-write verb to wrap.
+- **Sending a2a tasks.** The worker side — receive a task, post a result, poll
+  for a result — is wrapped. *Sending* a task is not: the daemon binds
+  `task.sender` to the authenticated peer and requires an `a2a.send` capability
+  scoped to the recipient, and the handshake returns only a display name, so the
+  client cannot populate `sender` with its own public key.
 - **Streaming responses.** The v2 streaming opt-in (see the
   [protocol v2 migration notes](./protocol-migrations/v2.md)) is not part of this
   surface; the SDK uses terminal v1 frames.

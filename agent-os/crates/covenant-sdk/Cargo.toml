@@ -11,6 +11,7 @@ repository.workspace = true
 covenant-ipc = { path = "../covenant-ipc" }
 covenant-types = { path = "../covenant-types" }
 covenant-mcp = { path = "../covenant-mcp" }
+covenant-a2a = { path = "../covenant-a2a" }
 covenant-permissions = { path = "../covenant-permissions" }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

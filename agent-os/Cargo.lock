@@ -1393,6 +1393,7 @@ dependencies = [
 name = "covenant-sdk"
 version = "0.1.0"
 dependencies = [
+ "covenant-a2a",
  "covenant-ipc",
  "covenant-mcp",
  "covenant-permissions",

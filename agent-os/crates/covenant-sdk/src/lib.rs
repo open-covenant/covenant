@@ -30,6 +30,16 @@
 //! Memory is **read-only** over IPC today ([`Client::recent_memory`],
 //! [`Client::search_memory`]). The daemon writes memory as a side effect of
 //! intent execution; there is no client-facing memory-write verb to wrap.
+//!
+//! The a2a surface is **worker-side**: an agent can receive a delegated task
+//! ([`Client::try_recv_a2a_task`]), post its result
+//! ([`Client::post_a2a_result`]), and a delegator can poll for a result
+//! ([`Client::try_recv_a2a_result`]). *Sending* a task is not wrapped: the
+//! daemon binds `task.sender` to the authenticated peer and requires an
+//! `a2a.send` capability scoped to the recipient, and the authentication
+//! handshake returns only a display name, so the client does not learn its own
+//! public key to populate `sender`.
+//!
 //! Streaming responses (ADR 0010 v2) and operator-only verbs (purge, repair,
 //! peer registry, settlement backfill) are intentionally outside this
 //! author-facing surface.
@@ -40,6 +50,7 @@ use covenant_ipc::{read_frame, write_frame, Request, Response};
 use serde_json::Value;
 use tokio::net::UnixStream;
 
+pub use covenant_a2a::{A2ATask, A2ATaskResult, A2ATaskStatus};
 pub use covenant_ipc::{IpcError, ProtocolInfo};
 pub use covenant_mcp::{Content, ToolSpec};
 pub use covenant_permissions::SignedCapability;
@@ -313,6 +324,38 @@ impl Client {
             }),
             Response::Error { message } => Err(SdkError::Daemon(message)),
             other => Err(unexpected("grant_capability", &other)),
+        }
+    }
+
+    /// Receive the next a2a task delegated to the caller, or `None` when the
+    /// mailbox is empty. The daemon leases the task to this connection's
+    /// identity; process it and report back with [`Client::post_a2a_result`].
+    pub async fn try_recv_a2a_task(&mut self) -> Result<Option<A2ATask>, SdkError> {
+        match self.roundtrip(&Request::TryRecvA2ATask).await? {
+            Response::A2ATaskOpt { task } => Ok(task),
+            Response::Error { message } => Err(SdkError::Daemon(message)),
+            other => Err(unexpected("try_recv_a2a_task", &other)),
+        }
+    }
+
+    /// Post the result of a leased a2a task back to its sender. `result.task_id`
+    /// must match the leased task; the daemon rejects a result for a task this
+    /// connection does not hold. Returns the acknowledged task id.
+    pub async fn post_a2a_result(&mut self, result: A2ATaskResult) -> Result<Uuid, SdkError> {
+        match self.roundtrip(&Request::PostA2AResult { result }).await? {
+            Response::A2AResultPosted { task_id } => Ok(task_id),
+            Response::Error { message } => Err(SdkError::Daemon(message)),
+            other => Err(unexpected("post_a2a_result", &other)),
+        }
+    }
+
+    /// Receive the next a2a result addressed to the caller, or `None` when none
+    /// is pending — the delegator half of [`Client::post_a2a_result`].
+    pub async fn try_recv_a2a_result(&mut self) -> Result<Option<A2ATaskResult>, SdkError> {
+        match self.roundtrip(&Request::TryRecvA2AResult).await? {
+            Response::A2AResultOpt { result } => Ok(result),
+            Response::Error { message } => Err(SdkError::Daemon(message)),
+            other => Err(unexpected("try_recv_a2a_result", &other)),
         }
     }
 
@@ -708,6 +751,90 @@ mod tests {
         let caps = client.recent_capabilities(20).await.unwrap();
         assert_eq!(caps.len(), 1);
         assert_eq!(caps[0].capability.action, "memory.read");
+    }
+
+    #[tokio::test]
+    async fn try_recv_a2a_task_parses_task_and_sends_poll() {
+        let harness = Harness::start(|req| match req {
+            Request::Authenticate { .. } => ok_auth(),
+            Request::TryRecvA2ATask => json!({
+                "kind": "a2_a_task_opt",
+                "task": {
+                    "id": "00000000-0000-0000-0000-0000000000a1",
+                    "sender": { "display": "boss@local", "pubkey": ZERO_PUBKEY_B58 },
+                    "recipient": { "display": "agent@local", "pubkey": ZERO_PUBKEY_B58 },
+                    "intent_text": "summarize the audit log",
+                },
+            }),
+            _ => err_resp("nope"),
+        });
+        let mut client = harness.client().await;
+        let task = client
+            .try_recv_a2a_task()
+            .await
+            .unwrap()
+            .expect("a leased task");
+        assert_eq!(task.intent_text, "summarize the audit log");
+        assert_eq!(task.sender.display, "boss@local");
+        assert_eq!(harness.received()[1]["kind"], "try_recv_a2_a_task");
+    }
+
+    #[tokio::test]
+    async fn try_recv_a2a_task_returns_none_when_mailbox_empty() {
+        let harness = Harness::start(|req| match req {
+            Request::Authenticate { .. } => ok_auth(),
+            Request::TryRecvA2ATask => json!({ "kind": "a2_a_task_opt", "task": null }),
+            _ => err_resp("nope"),
+        });
+        let mut client = harness.client().await;
+        assert!(client.try_recv_a2a_task().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn post_a2a_result_sends_result_and_returns_task_id() {
+        let harness = Harness::start(|req| match req {
+            Request::Authenticate { .. } => ok_auth(),
+            Request::PostA2AResult { .. } => json!({
+                "kind": "a2_a_result_posted",
+                "task_id": "00000000-0000-0000-0000-0000000000a1",
+            }),
+            _ => err_resp("nope"),
+        });
+        let mut client = harness.client().await;
+        let task_id: Uuid = "00000000-0000-0000-0000-0000000000a1".parse().unwrap();
+        let acked = client
+            .post_a2a_result(A2ATaskResult::ok(task_id, vec![Content::text("done")]))
+            .await
+            .unwrap();
+        assert_eq!(acked, task_id);
+        let received = harness.received();
+        assert_eq!(received[1]["kind"], "post_a2_a_result");
+        assert_eq!(received[1]["result"]["task_id"], task_id.to_string());
+        assert_eq!(received[1]["result"]["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn try_recv_a2a_result_parses_result() {
+        let harness = Harness::start(|req| match req {
+            Request::Authenticate { .. } => ok_auth(),
+            Request::TryRecvA2AResult => json!({
+                "kind": "a2_a_result_opt",
+                "result": {
+                    "task_id": "00000000-0000-0000-0000-0000000000a1",
+                    "status": "ok",
+                    "content": [{ "type": "text", "text": "done" }],
+                },
+            }),
+            _ => err_resp("nope"),
+        });
+        let mut client = harness.client().await;
+        let result = client
+            .try_recv_a2a_result()
+            .await
+            .unwrap()
+            .expect("a pending result");
+        assert_eq!(result.status, A2ATaskStatus::Ok);
+        assert_eq!(harness.received()[1]["kind"], "try_recv_a2_a_result");
     }
 
     #[tokio::test]

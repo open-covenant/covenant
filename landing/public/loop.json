@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T07:01:54.812Z",
+  "updatedAt": "2026-06-16T07:21:59.157Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9280,
-    "tasks": 1099,
-    "integrated": 1100
+    "events": 9284,
+    "tasks": 1100,
+    "integrated": 1101
   },
   "throughput": {
     "last24h": 12,
-    "last7d": 141,
-    "velocity": 20.1
+    "last7d": 142,
+    "velocity": 20.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-16",
-      "total": 1100
+      "total": 1101
     }
   ],
   "states": {
-    "integrated": 1093,
-    "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "integrated": 1094,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "secret-scope-and-audit",
-    "state": "cross_review",
-    "since": "2026-06-16T06:28:19.191Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-16T07:17:27.494Z",
+      "task": "secret-scope-and-audit",
+      "note": "Committed 046e46c9 on loop/main-track. SecretAccessGranted now carries signature_b58 joining each released secret to the grant that authoriz"
+    },
     {
       "at": "2026-06-16T06:02:42.715Z",
       "task": "secret-broker-daemon-mediated",
@@ -315,11 +315,6 @@
       "at": "2026-06-13T10:56:26.789Z",
       "task": "memory-compaction-detach-only-stale-not-live-parent-pin",
       "note": "Pinned stale-only detach detection. Committing as test(covenant-memory)."
-    },
-    {
-      "at": "2026-06-13T10:51:28.925Z",
-      "task": "memory-compaction-apply-no-op-changed-flag-pin",
-      "note": "Pinned Apply-mode no-op changed flag. Committing as test(covenant-memory)."
     }
   ]
 }

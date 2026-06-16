@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T11:02:42.418Z",
+  "updatedAt": "2026-06-16T11:22:46.150Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9313,
-    "tasks": 1103,
-    "integrated": 1104
+    "events": 9322,
+    "tasks": 1104,
+    "integrated": 1105
   },
   "throughput": {
-    "last24h": 13,
-    "last7d": 145,
-    "velocity": 20.7
+    "last24h": 14,
+    "last7d": 146,
+    "velocity": 20.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-16",
-      "total": 1104
+      "total": 1105
     }
   ],
   "states": {
-    "integrated": 1097,
+    "integrated": 1098,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "conformance-audit-record-vectors",
+    "task": "conformance-runner-and-docs",
     "state": "in_progress",
-    "since": "2026-06-16T10:57:41.853Z"
+    "since": "2026-06-16T11:21:11.257Z"
   },
   "recent": [
+    {
+      "at": "2026-06-16T11:15:52.801Z",
+      "task": "conformance-audit-record-vectors",
+      "note": "Integrated as ab3f3f0c, pushed to origin/loop/main-track. Full AuditKind wire schema (36 variants) frozen as golden vectors with compile-tim"
+    },
     {
       "at": "2026-06-16T10:42:35.518Z",
       "task": "conformance-capability-grammar",
@@ -315,11 +320,6 @@
       "at": "2026-06-13T11:50:56.506Z",
       "task": "manifest-from-path-non-utf8-routes-to-io-invaliddata-kind-pi",
       "note": "Committed 56829666 on loop/main-track. Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-13T11:43:26.302Z",
-      "task": "a2a-auto-retry-scheduler-scan-audit-skipped-by-reason-bucket",
-      "note": "Committed ef4ca020 on loop/main-track. Pushing to origin/loop/main-track."
     }
   ]
 }

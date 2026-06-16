@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T14:44:06.651Z",
+  "updatedAt": "2026-06-16T15:04:10.589Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9358,
+    "events": 9363,
     "tasks": 1108,
-    "integrated": 1109
+    "integrated": 1110
   },
   "throughput": {
-    "last24h": 16,
-    "last7d": 150,
-    "velocity": 21.4
+    "last24h": 17,
+    "last7d": 151,
+    "velocity": 21.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 10
+      "count": 11
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-16",
-      "total": 1109
+      "total": 1110
     }
   ],
   "states": {
-    "integrated": 1102,
+    "integrated": 1103,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sdk-quickstart-docs",
-    "state": "in_progress",
-    "since": "2026-06-16T14:26:34.604Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-16T14:49:59.453Z",
+      "task": "sdk-quickstart-docs",
+      "note": "Integrated as 2 commits pushed to origin/loop/main-track (d3ab49c5..1374284c): fix(sdk) 2a127707 corrects the denial parser to read the daem"
+    },
     {
       "at": "2026-06-16T14:23:16.876Z",
       "task": "sdk-error-ergonomics",
@@ -315,11 +315,6 @@
       "at": "2026-06-15T09:53:21.587Z",
       "task": "provenance-privileged-action-inventory",
       "note": "probe"
-    },
-    {
-      "at": "2026-06-15T09:50:33.484Z",
-      "task": "provenance-privileged-action-inventory",
-      "note": "Integrated as 89d47995, pushed to origin/loop/main-track (7b35c0fb..89d47995). Tracked diff: README.md (metrics 2818->2819), agent-os/crates"
     }
   ]
 }

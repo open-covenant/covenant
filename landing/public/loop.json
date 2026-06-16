@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T09:42:27.164Z",
+  "updatedAt": "2026-06-16T10:02:30.988Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9298,
-    "tasks": 1101,
-    "integrated": 1102
+    "events": 9302,
+    "tasks": 1102,
+    "integrated": 1103
   },
   "throughput": {
-    "last24h": 13,
-    "last7d": 143,
-    "velocity": 20.4
+    "last24h": 12,
+    "last7d": 144,
+    "velocity": 20.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-16",
-      "total": 1102
+      "total": 1103
     }
   ],
   "states": {
-    "integrated": 1095,
-    "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "integrated": 1096,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "conformance-ipc-golden-vectors",
-    "state": "cross_review",
-    "since": "2026-06-16T09:31:34.724Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-16T09:54:36.187Z",
+      "task": "conformance-ipc-golden-vectors",
+      "note": "committed 7aae13be on loop/main-track. IPC wire shapes frozen as 100 byte-exact golden vectors (50 req + 50 resp) with drift runner, exhaust"
+    },
     {
       "at": "2026-06-16T08:11:57.243Z",
       "task": "secret-remove-env-exposure",
@@ -315,11 +315,6 @@
       "at": "2026-06-13T11:34:00.536Z",
       "task": "a2a-auto-retry-scan-capability-scope-mismatch-skip-pin",
       "note": "Committed 212924a3 on loop/main-track. test(covenantd) scan scope-mismatch skip pin + README metrics 2815. Pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-13T11:12:56.759Z",
-      "task": "a2a-auto-retry-scan-max-requeues-cap-limit-reached-pin",
-      "note": "Committed 1b2ec9b1 on loop/main-track. test(covenantd) cap pin + README metrics 2814. Pushing to origin/loop/main-track."
     }
   ]
 }

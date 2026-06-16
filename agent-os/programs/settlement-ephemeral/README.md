@@ -105,6 +105,34 @@ The client uses the program IDL (run `anchor build` once to emit it — the
 `#[delegate]`/`#[commit]` macros add their accounts to the IDL) and the MagicBlock
 JS SDK for the delegation PDAs + `GetCommitmentSignature`. See `spike/run-spike.mjs`.
 
-> Status: program + artifact verified AND the live ER reconciliation ran on devnet
-> (2026-06-16) — exact reconciliation, 75.5 ms/op, ~0.0003 SOL fixed session cost.
-> Numbers above are from a real run, not the spec.
+## x402-over-ER demo (Phase 2) — RUN AND VERIFIED on devnet (2026-06-16)
+
+`spike/x402-demo.mjs` is the flagship: a paid HTTP endpoint where each call is
+settled by a gasless `consume_credits` in the ER instead of an on-chain SPL
+transfer. It runs a real HTTP 402 boundary plus a verifying facilitator, end to end
+against the live devnet ER.
+
+- facilitator returns **402 + {amount, nonce}** until a valid `x-payment` header is
+  presented, then **200 + content**.
+- the agent settles on 402 by running `consume_credits(amount, sha256(nonce))` in the
+  ER; the `receipt_hash` binds the payment to that specific request.
+- the facilitator verifies the signature **on the ER**: right program, right credit
+  account, `amount >= price`, `receipt_hash == sha256(nonce)`, and signature-unused
+  (anti-replay). No SPL transfer, no per-call L1 fee.
+
+Session model: delegate once → serve K gasless paid calls → undelegate → reconcile.
+Verified run (K=5): `402 → ER pay → 200` at **~71 ms/call steady-state**, ER balance
+moved by exactly K, **exact L1 reconciliation** after undelegate. This is
+agent-to-agent pay-per-call at a price mainnet can't touch, demonstrated live.
+
+Run: `K=5 PRICE=1 node x402-demo.mjs`.
+
+Production path (not yet built): the same settlement as a `Signer` impl
+(`EphemeralSigner`) inside the `covenant-x402` crate — its `build_payment()` would
+run the ER consume and return the signature envelope, so the daemon's
+`pay_and_record()` path works unmodified. A facilitator that accepts ER-settled
+proofs is the counterpart.
+
+> Status: program + artifact verified; the live ER reconciliation ran (exact, 75.5
+> ms/op, ~0.0003 SOL/session); and the x402-over-ER pay-per-call demo ran end to end
+> (exact reconciliation, ~71 ms/call, gasless). All numbers are from real devnet runs.

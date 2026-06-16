@@ -45,7 +45,9 @@ Every non-empty scope for a known action namespace must be a JSON object with a 
 }
 ```
 
-It must be a positive integer; grant requests reject `0`, negative, fractional, and non-numeric values. Because the signature covers `scope`, a budget is tamper-evident — a holder cannot raise it without a fresh daemon-signed grant. An absent `max_uses` means unlimited, which is the behavior of every grant issued before budgets existed. Grant-time validation of the field is enforced today; dispatch-time consumption of the budget is part of the metered-capabilities work and is not yet enforced.
+It must be a positive integer; grant requests reject `0`, negative, fractional, and non-numeric values. Because the signature covers `scope`, a budget is tamper-evident — a holder cannot raise it without a fresh daemon-signed grant. An absent `max_uses` means unlimited, which is the behavior of every grant issued before budgets existed.
+
+The budget is enforced at capability-check time. Each authorized use consumes one unit, the count is durable across daemon restart, and the check-and-consume is atomic per signature so two concurrent checks cannot both spend the final unit. Once the count reaches `max_uses` the action is refused and the daemon records a [`CapabilityBudgetExhausted`](./audit-integrity.md) audit event naming the spent grant's signature — distinct from a never-granted action, which records a failed capability check instead. `max_uses` is a lifetime budget: a spent grant stays spent, so the use count is never purged. Revoking and re-granting issues a fresh signature with a fresh budget.
 
 ## Namespaces
 

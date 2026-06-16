@@ -601,6 +601,19 @@ pub enum AuditKind {
         arguments_hash_hex: String,
         reason: String,
     },
+    /// A capability matched the required action and verified, but its signed
+    /// `max_uses` usage budget was already fully spent, so the action was
+    /// refused. Distinct from a [`AuditKind::CapabilityCheck`] with the action
+    /// in `missing_actions`: there the peer held no grant, here the peer held a
+    /// valid grant whose budget is exhausted. `signature_b58` is the same join
+    /// key [`AuditKind::CapabilityGranted`] carries, so the spent grant is
+    /// identifiable; `used` equals `max_uses` at the point of refusal.
+    CapabilityBudgetExhausted {
+        signature_b58: String,
+        action: String,
+        max_uses: u64,
+        used: u64,
+    },
 }
 
 #[async_trait]

@@ -4881,6 +4881,9 @@ impl Server {
         let mut required: Vec<String> = Vec::with_capacity(alternatives_per_required.len());
         let mut missing: Vec<String> = Vec::new();
         let mut authorized_by: Vec<CapabilityAuthorization> = Vec::new();
+        // (action, signature, max_uses) for each matched capability that carries
+        // a usage budget, consumed after a passed authorization.
+        let mut budgeted: Vec<(String, [u8; 64], u64)> = Vec::new();
         for group in &alternatives_per_required {
             let matched = group.iter().find_map(|a| {
                 valid_caps
@@ -4891,6 +4894,14 @@ impl Server {
             });
             match matched {
                 Some((form, cap)) => {
+                    if let Some(max_uses) = cap
+                        .capability
+                        .scope
+                        .get("max_uses")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        budgeted.push((form.clone(), cap.signature, max_uses));
+                    }
                     required.push(form.clone());
                     authorized_by.push(CapabilityAuthorization {
                         action: form,
@@ -4905,7 +4916,7 @@ impl Server {
                 }
             }
         }
-        let passed = missing.is_empty();
+        let auth_passed = missing.is_empty();
         let event = AuditEvent {
             id: Uuid::new_v4(),
             timestamp_ms: now,
@@ -4914,11 +4925,65 @@ impl Server {
                 agent_id: scope_id,
                 required_actions: required.clone(),
                 missing_actions: missing.clone(),
-                passed,
+                passed: auth_passed,
                 authorized_by,
             },
         };
         self.record_peer_event(peer, event).await;
+
+        // Usage-budget enforcement is a second gate after authorization. A
+        // matched capability still authorizes the action — that is what the
+        // CapabilityCheck row above records — but a spent `max_uses` budget
+        // refuses this invocation. The refusal is a distinct
+        // CapabilityBudgetExhausted event, not a missing_actions entry, so a
+        // spent grant is never mistaken for one that was never granted.
+        let mut passed = auth_passed;
+        if auth_passed && !budgeted.is_empty() {
+            let requests: Vec<covenant_permissions::BudgetConsumeRequest> = budgeted
+                .iter()
+                .map(
+                    |(_, signature, max_uses)| covenant_permissions::BudgetConsumeRequest {
+                        signature: *signature,
+                        max_uses: *max_uses,
+                    },
+                )
+                .collect();
+            match self.capabilities.consume_uses(&requests).await {
+                Ok(covenant_permissions::BudgetConsumeOutcome::Consumed) => {}
+                Ok(covenant_permissions::BudgetConsumeOutcome::Exhausted(spent)) => {
+                    passed = false;
+                    for budget in spent {
+                        let action = budgeted
+                            .iter()
+                            .find(|(_, signature, _)| *signature == budget.signature)
+                            .map(|(action, _, _)| action.clone())
+                            .unwrap_or_default();
+                        missing.push(action.clone());
+                        let event = AuditEvent {
+                            id: Uuid::new_v4(),
+                            timestamp_ms: now,
+                            issuer: peer.clone(),
+                            kind: AuditKind::CapabilityBudgetExhausted {
+                                signature_b58: bs58::encode(budget.signature).into_string(),
+                                action,
+                                max_uses: budget.max_uses,
+                                used: budget.used,
+                            },
+                        };
+                        self.record_peer_event(peer, event).await;
+                    }
+                }
+                Err(error) => {
+                    // Fail closed: a budget-store fault must never authorize an
+                    // unmetered use of a budgeted grant.
+                    warn!(
+                        ?error,
+                        "capability usage-budget store unavailable; denying budgeted action"
+                    );
+                    passed = false;
+                }
+            }
+        }
         CapabilityCheckOutcome {
             passed,
             required,
@@ -47737,6 +47802,85 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn call_tool_max_uses_budget_denies_after_limit_and_audits_exhaustion() {
+        // A grant with `max_uses` authorizes that many invocations, then
+        // refuses. The refusal is a distinct CapabilityBudgetExhausted audit
+        // row — not a missing-capability denial — so a spent grant stays
+        // visible in the record instead of looking like one never granted.
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: Some(serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 1 })),
+            expires_at: None,
+        })
+        .await;
+
+        match s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+        {
+            Response::ToolResult { is_error, .. } => {
+                assert!(!is_error, "the first call is within budget and must run")
+            }
+            other => panic!("expected a tool result within budget, got {other:?}"),
+        }
+
+        match s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+        {
+            Response::Error { .. } => {}
+            other => panic!("a spent budget must refuse the call, got {other:?}"),
+        }
+
+        let events = s.audit.recent(50).await.unwrap();
+        let exhausted = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::CapabilityBudgetExhausted {
+                    action,
+                    max_uses,
+                    used,
+                    signature_b58,
+                } => Some((action.clone(), *max_uses, *used, signature_b58.clone())),
+                _ => None,
+            })
+            .expect("a CapabilityBudgetExhausted event must record the spent grant");
+        assert_eq!(exhausted.0, "tool.call.echo");
+        assert_eq!(exhausted.1, 1, "max_uses");
+        assert_eq!(exhausted.2, 1, "used must equal max_uses at refusal");
+        assert!(
+            !exhausted.3.is_empty(),
+            "the spent grant's signature must be recorded as the join key"
+        );
+
+        // The second check still matched the grant (authorization layer), so
+        // its CapabilityCheck row is passed with no missing action — the spent
+        // grant is not mislabeled as never-granted.
+        let latest_check = events.iter().rev().find_map(|e| match &e.kind {
+            AuditKind::CapabilityCheck {
+                agent_id,
+                passed,
+                missing_actions,
+                ..
+            } if agent_id == "tool:echo" => Some((*passed, missing_actions.clone())),
+            _ => None,
+        });
+        let (passed, missing) = latest_check.expect("capability check row present");
+        assert!(passed, "authorization matches even when the budget is spent");
+        assert!(
+            missing.is_empty(),
+            "a spent grant must not appear in missing_actions"
+        );
     }
 
     #[tokio::test]

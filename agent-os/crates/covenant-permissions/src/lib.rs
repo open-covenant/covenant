@@ -1242,6 +1242,32 @@ pub fn verify_with_clock_and_trust_root(
     verify_with_clock(signed, now_ms)
 }
 
+/// One capability's usage budget to check and consume. `signature` keys the
+/// capability; `max_uses` is the positive budget read from its signed scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetConsumeRequest {
+    pub signature: [u8; 64],
+    pub max_uses: u64,
+}
+
+/// A capability whose usage budget is already fully spent. `used` equals
+/// `max_uses` at the point of refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExhaustedBudget {
+    pub signature: [u8; 64],
+    pub max_uses: u64,
+    pub used: u64,
+}
+
+/// Outcome of an atomic, all-or-nothing usage-budget consume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BudgetConsumeOutcome {
+    /// Every requested signature had budget remaining; one use was recorded for each.
+    Consumed,
+    /// At least one signature was already at `max_uses`; no budget was recorded.
+    Exhausted(Vec<ExhaustedBudget>),
+}
+
 #[async_trait]
 pub trait CapabilityStore: Send + Sync {
     async fn record(&self, signed: SignedCapability) -> Result<(), PermissionError>;
@@ -1262,6 +1288,17 @@ pub trait CapabilityStore: Send + Sync {
     /// `granted ⊝ revoked` so a grant whose revocation has been purged is
     /// **not** resurrected. Live (non-revoked) grants are never touched.
     async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PermissionError>;
+    /// Atomically check and consume one unit of usage budget for each distinct
+    /// requested signature. All-or-nothing: if any signature is already at its
+    /// `max_uses`, no budget is consumed and every exhausted signature is
+    /// returned. The count is durable and the whole check-and-consume is
+    /// serialized per store, so two concurrent callers can never both consume
+    /// the final unit. Pass only capabilities that declare a budget; an empty
+    /// request consumes nothing and returns `Consumed`.
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError>;
 }
 
 /// Revocation record. The daemon writes one of these per `revoke()` call;
@@ -1276,9 +1313,21 @@ pub struct Revocation {
     pub revoked_at: u64,
 }
 
+/// One authorized use of a budgeted capability. The daemon appends one per
+/// authorized use and a capability's used count is the number of these whose
+/// signature matches. Never purged: a `max_uses` budget is a lifetime cap, so
+/// dropping use records would silently refill it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct UseRecord {
+    #[serde(with = "sig_b58")]
+    signature: [u8; 64],
+    at_ms: u64,
+}
+
 pub struct JsonlCapabilityStore {
     granted_path: PathBuf,
     revoked_path: PathBuf,
+    uses_path: PathBuf,
     lock: Arc<Mutex<()>>,
 }
 
@@ -1303,9 +1352,19 @@ impl JsonlCapabilityStore {
             .append(true)
             .open(&revoked_path)
             .await?;
+        let uses_path = granted_path
+            .parent()
+            .map(|p| p.join("uses.jsonl"))
+            .unwrap_or_else(|| PathBuf::from("uses.jsonl"));
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&uses_path)
+            .await?;
         Ok(Self {
             granted_path,
             revoked_path,
+            uses_path,
             lock: Arc::new(Mutex::new(())),
         })
     }
@@ -1481,6 +1540,59 @@ impl CapabilityStore for JsonlCapabilityStore {
         Self::rewrite_atomically(&self.revoked_path, &kept_revocations).await?;
         Ok(purged)
     }
+
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError> {
+        if requests.is_empty() {
+            return Ok(BudgetConsumeOutcome::Consumed);
+        }
+        // The read-count-check-append runs under the same lock as record /
+        // revoke / purge, so the budget cannot be raced: two concurrent checks
+        // for the last unit serialize, and the loser sees the count the winner
+        // appended.
+        let _g = self.lock.lock().await;
+        let mut counts: std::collections::HashMap<[u8; 64], u64> =
+            std::collections::HashMap::new();
+        for use_record in Self::read_jsonl::<UseRecord>(&self.uses_path).await? {
+            *counts.entry(use_record.signature).or_insert(0) += 1;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut to_consume: Vec<[u8; 64]> = Vec::new();
+        let mut exhausted: Vec<ExhaustedBudget> = Vec::new();
+        for req in requests {
+            if !seen.insert(req.signature) {
+                continue;
+            }
+            let used = counts.get(&req.signature).copied().unwrap_or(0);
+            if used >= req.max_uses {
+                exhausted.push(ExhaustedBudget {
+                    signature: req.signature,
+                    max_uses: req.max_uses,
+                    used,
+                });
+            } else {
+                to_consume.push(req.signature);
+            }
+        }
+        if !exhausted.is_empty() {
+            return Ok(BudgetConsumeOutcome::Exhausted(exhausted));
+        }
+        let at_ms = Self::epoch_ms();
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.uses_path)
+            .await?;
+        for signature in to_consume {
+            let line = serde_json::to_string(&UseRecord { signature, at_ms })?;
+            f.write_all(line.as_bytes()).await?;
+            f.write_all(b"\n").await?;
+        }
+        f.flush().await?;
+        Ok(BudgetConsumeOutcome::Consumed)
+    }
 }
 
 impl JsonlCapabilityStore {
@@ -1511,6 +1623,7 @@ impl JsonlCapabilityStore {
 pub struct InMemoryCapabilityStore {
     granted: Mutex<Vec<SignedCapability>>,
     revoked: Mutex<std::collections::HashMap<[u8; 64], u64>>,
+    uses: Mutex<std::collections::HashMap<[u8; 64], u64>>,
 }
 
 impl InMemoryCapabilityStore {
@@ -1587,6 +1700,41 @@ impl CapabilityStore for InMemoryCapabilityStore {
         let mut granted = self.granted.lock().await;
         granted.retain(|c| !drop_set.contains(&c.signature));
         Ok(purged)
+    }
+
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError> {
+        if requests.is_empty() {
+            return Ok(BudgetConsumeOutcome::Consumed);
+        }
+        let mut uses = self.uses.lock().await;
+        let mut seen = std::collections::HashSet::new();
+        let mut to_consume: Vec<[u8; 64]> = Vec::new();
+        let mut exhausted: Vec<ExhaustedBudget> = Vec::new();
+        for req in requests {
+            if !seen.insert(req.signature) {
+                continue;
+            }
+            let used = uses.get(&req.signature).copied().unwrap_or(0);
+            if used >= req.max_uses {
+                exhausted.push(ExhaustedBudget {
+                    signature: req.signature,
+                    max_uses: req.max_uses,
+                    used,
+                });
+            } else {
+                to_consume.push(req.signature);
+            }
+        }
+        if !exhausted.is_empty() {
+            return Ok(BudgetConsumeOutcome::Exhausted(exhausted));
+        }
+        for signature in to_consume {
+            *uses.entry(signature).or_insert(0) += 1;
+        }
+        Ok(BudgetConsumeOutcome::Consumed)
     }
 }
 
@@ -4354,6 +4502,145 @@ mod tests {
         let recent = s2.recent(10).await.unwrap();
         assert_eq!(recent.len(), 1);
         assert!(verify(&recent[0]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn in_memory_consume_uses_allows_up_to_max_then_exhausts() {
+        let store = InMemoryCapabilityStore::new();
+        let reqs = [BudgetConsumeRequest {
+            signature: [3u8; 64],
+            max_uses: 2,
+        }];
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: [3u8; 64],
+                max_uses: 2,
+                used: 2,
+            }]),
+            "the use after the budget is spent must refuse and report used == max_uses",
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_consume_uses_is_all_or_nothing_across_signatures() {
+        let store = InMemoryCapabilityStore::new();
+        let spent = [4u8; 64];
+        let fresh = [5u8; 64];
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: spent,
+                max_uses: 1,
+            }])
+            .await
+            .unwrap();
+
+        // Batch mixes the already-spent signature with a fresh one. The whole
+        // batch must refuse, and the fresh signature must NOT be consumed.
+        let outcome = store
+            .consume_uses(&[
+                BudgetConsumeRequest {
+                    signature: spent,
+                    max_uses: 1,
+                },
+                BudgetConsumeRequest {
+                    signature: fresh,
+                    max_uses: 1,
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: spent,
+                max_uses: 1,
+                used: 1,
+            }])
+        );
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: fresh,
+                    max_uses: 1,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "the fresh signature must still have its full budget — the failed batch consumed nothing",
+        );
+    }
+
+    #[tokio::test]
+    async fn consume_uses_empty_request_consumes_nothing() {
+        let store = InMemoryCapabilityStore::new();
+        assert_eq!(
+            store.consume_uses(&[]).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let reqs = [BudgetConsumeRequest {
+            signature: [9u8; 64],
+            max_uses: 1,
+        }];
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        assert_eq!(
+            s.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        drop(s);
+
+        // A fresh store over the same directory must see the spent budget: the
+        // count lives in uses.jsonl, not in memory, so a daemon restart cannot
+        // refill it.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        assert_eq!(
+            s2.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: [9u8; 64],
+                max_uses: 1,
+                used: 1,
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_serializes_concurrent_last_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let store = JsonlCapabilityStore::open(path).await.unwrap();
+        let reqs = [BudgetConsumeRequest {
+            signature: [11u8; 64],
+            max_uses: 1,
+        }];
+
+        // Two checks race for the single remaining unit. Exactly one may win.
+        let (r1, r2) = tokio::join!(store.consume_uses(&reqs), store.consume_uses(&reqs));
+        let outcomes = [r1.unwrap(), r2.unwrap()];
+        let consumed = outcomes
+            .iter()
+            .filter(|o| matches!(o, BudgetConsumeOutcome::Consumed))
+            .count();
+        let exhausted = outcomes
+            .iter()
+            .filter(|o| matches!(o, BudgetConsumeOutcome::Exhausted(_)))
+            .count();
+        assert_eq!(consumed, 1, "exactly one concurrent check may consume the last unit");
+        assert_eq!(exhausted, 1, "the loser must be refused, not also pass");
     }
 
     #[tokio::test]

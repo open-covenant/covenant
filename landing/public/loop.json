@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-16T14:24:02.898Z",
+  "updatedAt": "2026-06-16T14:44:06.651Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9355,
+    "events": 9358,
     "tasks": 1108,
     "integrated": 1109
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1102,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "sdk-quickstart-docs",
+    "state": "in_progress",
+    "since": "2026-06-16T14:26:34.604Z"
+  },
   "recent": [
     {
       "at": "2026-06-16T14:23:16.876Z",

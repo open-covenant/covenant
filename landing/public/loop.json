@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-16T10:22:34.776Z",
+  "updatedAt": "2026-06-16T10:42:38.792Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9305,
+    "events": 9309,
     "tasks": 1102,
-    "integrated": 1103
+    "integrated": 1104
   },
   "throughput": {
-    "last24h": 12,
-    "last7d": 144,
-    "velocity": 20.6
+    "last24h": 13,
+    "last7d": 145,
+    "velocity": 20.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-16",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-16",
-      "total": 1103
+      "total": 1104
     }
   ],
   "states": {
-    "integrated": 1096,
+    "integrated": 1097,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "conformance-capability-grammar",
-    "state": "in_progress",
-    "since": "2026-06-16T10:04:14.812Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-16T10:42:35.518Z",
+      "task": "conformance-capability-grammar",
+      "note": "committed b89f4e41 on loop/main-track. Capability grammar frozen as 12 golden Capability vectors (1 per ScopeNamespace) + drift runner + con"
+    },
     {
       "at": "2026-06-16T09:54:36.187Z",
       "task": "conformance-ipc-golden-vectors",
@@ -315,11 +315,6 @@
       "at": "2026-06-13T11:43:26.302Z",
       "task": "a2a-auto-retry-scheduler-scan-audit-skipped-by-reason-bucket",
       "note": "Committed ef4ca020 on loop/main-track. Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-13T11:34:00.536Z",
-      "task": "a2a-auto-retry-scan-capability-scope-mismatch-skip-pin",
-      "note": "Committed 212924a3 on loop/main-track. test(covenantd) scan scope-mismatch skip pin + README metrics 2815. Pushing to origin/loop/main-track"
     }
   ]
 }

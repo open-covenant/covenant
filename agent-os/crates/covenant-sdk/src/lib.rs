@@ -25,6 +25,36 @@
 //! response demultiplexing stay encapsulated; authors see typed methods and
 //! domain types only.
 //!
+//! ## Capability-scoped quickstart
+//!
+//! An agent starts with no authority. Call a tool, and if the daemon denies it
+//! for a missing capability, request the grant it named and retry — the secure
+//! default, never a blanket grant up front:
+//!
+//! ```no_run
+//! # async fn run() -> Result<(), covenant_sdk::SdkError> {
+//! use covenant_sdk::{Client, DenialKind, SdkError};
+//!
+//! let mut client = Client::connect_default().await?;
+//! let args = serde_json::json!({ "text": "hi" });
+//!
+//! let result = match client.call_tool("echo", args.clone()).await {
+//!     Ok(result) => result,
+//!     Err(SdkError::Denied {
+//!         capability: Some(action),
+//!         kind: DenialKind::MissingCapability,
+//!         ..
+//!     }) => {
+//!         client.grant_capability(action, None, None).await?;
+//!         client.call_tool("echo", args).await?
+//!     }
+//!     Err(other) => return Err(other),
+//! };
+//! # let _ = result;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Not exposed here
 //!
 //! Memory is **read-only** over IPC today ([`Client::recent_memory`],
@@ -482,17 +512,27 @@ fn denial(message: String) -> SdkError {
     SdkError::Daemon(message)
 }
 
-/// Pull the required capability out of the daemon's `requires capability
-/// "<action>"` denial fragment — the action is also the argument to
-/// `covenant capabilities grant`. Capability actions are dotted identifiers, so
-/// the value never contains the closing quote we split on.
+/// Pull the required capability out of a denial message. The daemon embeds the
+/// fix as `` `covenant capabilities grant <action>` `` — the clean action and
+/// exactly the argument to [`Client::grant_capability`] — so that is the
+/// reliable anchor. The bare `requires capability` fragment is not: a tool
+/// denial renders its missing-list there as `["tool.call.echo"]`, brackets and
+/// all. Capability actions are dotted identifiers, so they never contain the
+/// backtick, quote, or space we stop at. The quoted form is a fallback for the
+/// few denials that omit the grant hint.
 fn parse_required_capability(message: &str) -> Option<String> {
-    let action = message
+    if let Some((_, rest)) = message.split_once("covenant capabilities grant ") {
+        let action = rest.split(['`', '"', ' ', '\n']).next().unwrap_or_default();
+        if !action.is_empty() {
+            return Some(action.to_string());
+        }
+    }
+    let quoted = message
         .split_once("requires capability \"")?
         .1
         .split_once('"')?
         .0;
-    (!action.is_empty()).then(|| action.to_string())
+    (!quoted.is_empty()).then(|| quoted.to_string())
 }
 
 #[cfg(test)]
@@ -969,9 +1009,11 @@ mod tests {
 
     #[tokio::test]
     async fn call_tool_denial_names_the_missing_capability() {
-        // The exact shape covenantd emits when a tool call lacks its grant.
-        let message = "tool search requires capability \"tool.search\". \
-                       Grant it with `covenant capabilities grant tool.search`.";
+        // covenantd's real tool denial: the missing-capability list is a Debug
+        // of a Vec (brackets and all), so the actionable action comes from the
+        // grant hint, not the `requires capability` fragment.
+        let message = "tool search requires capability [\"tool.call.search\"]. \
+                       Grant it with `covenant capabilities grant tool.call.search`.";
         let harness = Harness::start(move |req| match req {
             Request::Authenticate { .. } => ok_auth(),
             Request::CallTool { .. } => err_resp(message),
@@ -986,9 +1028,9 @@ mod tests {
                 kind,
                 message,
             } => {
-                assert_eq!(capability.as_deref(), Some("tool.search"));
+                assert_eq!(capability.as_deref(), Some("tool.call.search"));
                 assert_eq!(kind, DenialKind::MissingCapability);
-                assert!(message.contains("covenant capabilities grant tool.search"));
+                assert!(message.contains("covenant capabilities grant tool.call.search"));
             }
             other => panic!("expected Denied, got {other:?}"),
         }
@@ -997,17 +1039,34 @@ mod tests {
     }
 
     #[test]
-    fn denial_extracts_missing_capability() {
+    fn denial_extracts_capability_from_the_grant_hint() {
+        // covenantd's real memory-read denial names a tier-specific alternative
+        // before the grant hint; the hint is what feeds grant_capability.
         let err = denial(
-            "a2a repair requeue requires capability \"a2a.repair.requeue\". \
-             Grant it with `covenant capabilities grant a2a.repair.requeue`."
+            "memory read requires capability \"memory.read\" or a tier-specific \
+             memory.read.<tier> capability. \
+             Grant it with `covenant capabilities grant memory.read`."
                 .to_string(),
         );
         match err {
             SdkError::Denied {
                 capability, kind, ..
             } => {
-                assert_eq!(capability.as_deref(), Some("a2a.repair.requeue"));
+                assert_eq!(capability.as_deref(), Some("memory.read"));
+                assert_eq!(kind, DenialKind::MissingCapability);
+            }
+            other => panic!("expected Denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn denial_falls_back_to_the_quoted_capability_without_a_hint() {
+        let err = denial("audit purge requires capability \"audit.purge\".".to_string());
+        match err {
+            SdkError::Denied {
+                capability, kind, ..
+            } => {
+                assert_eq!(capability.as_deref(), Some("audit.purge"));
                 assert_eq!(kind, DenialKind::MissingCapability);
             }
             other => panic!("expected Denied, got {other:?}"),

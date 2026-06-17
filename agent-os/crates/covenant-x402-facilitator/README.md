@@ -58,3 +58,24 @@ cargo test -p covenantd --lib pay_x402_settles_through_the_er_signer_live -- --i
 
 Verified green on devnet: the daemon spawned the sidecar, the ER consume settled, the
 facilitator returned 200, and a receipt was recorded.
+
+## Deployed (Render)
+
+Live devnet instance: **https://covenant-x402-er-facilitator.onrender.com** (Render
+web service `covenant-x402-er-facilitator`, Frankfurt, built from
+`deploy/Dockerfile.facilitator` and declared in the root `render.yaml` blueprint).
+`/health` returns 200; `/paid` returns the x402 challenge. Verify a real payment
+against the deployed URL with `spike/remote-check.mjs` (delegate the credit account
+first):
+
+```bash
+node er-session.mjs delegate
+URL=https://covenant-x402-er-facilitator.onrender.com/paid node remote-check.mjs
+node er-session.mjs undelegate
+```
+
+Verified live against the deployed service: `GET /paid → 402 → consume_credits in
+the ER → 200` with the settling signature returned. The service tracks
+`feat/magicblock-er` until #93 merges; repoint it to `main` after (the blueprint
+matches it by name). Devnet config; mainnet is gated on MagicBlock's validator
+answer.

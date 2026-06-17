@@ -725,10 +725,30 @@ fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
             signer_env.push((key.to_string(), v));
         }
     }
+    // Optional ER signer sidecar for ephemeral-rollup-settled providers. When the
+    // binary is set, calls on a solana-er:* network route to it with the ER funding
+    // key, settlement program, and ER RPC from these vars.
+    let er_signer_binary = std::env::var("COVENANT_X402_ER_SIGNER_BINARY")
+        .ok()
+        .map(std::path::PathBuf::from);
+    let mut er_signer_env = Vec::new();
+    if er_signer_binary.is_some() {
+        for key in [
+            "COVENANT_X402_ER_KEYPAIR",
+            "COVENANT_X402_ER_PROGRAM",
+            "COVENANT_X402_ER_RPC",
+        ] {
+            if let Ok(v) = std::env::var(key) {
+                er_signer_env.push((key.to_string(), v));
+            }
+        }
+    }
     Some(covenantd::x402::X402Config {
         enabled: true,
         signer_binary,
         signer_env,
+        er_signer_binary,
+        er_signer_env,
     })
 }
 

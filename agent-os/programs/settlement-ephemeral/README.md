@@ -134,9 +134,17 @@ the daemon's `pay_and_record()` path works unmodified. Gated by the crate's `sol
 feature, no on-chain ER SDK dep. Unit + wiremock tested, and live-verified against
 devnet-eu via `cargo run -p covenant-x402 --features solana --example ephemeral_live`
 (delegate with `spike/er-session.mjs delegate` first): it metered 3 credits in the
-ER, balance dropped by exactly 3, reconciled to L1 on undelegate. Remaining
-counterpart: a facilitator service that accepts ER-settled proofs (the
-`spike/x402-demo.mjs` facilitator is the reference).
+ER, balance dropped by exactly 3, reconciled to L1 on undelegate.
+
+The verifier counterpart is the `covenant-x402-facilitator` crate, and the full
+loop is wired into the daemon:
+- **Sidecar:** `covenant-x402-er-signer` (in `covenant-x402`, `solana` feature) is
+  the binary the daemon spawns — stdin `PaymentRequirements` → `consume_credits` in
+  the ER via `EphemeralSigner` → stdout `x-payment` header.
+- **Daemon selection:** `X402Config::signer_for(network)` routes `solana-er:*`
+  networks to the ER sidecar (env `COVENANT_X402_ER_SIGNER_BINARY` +
+  `COVENANT_X402_ER_{KEYPAIR,PROGRAM,RPC}`), everything else to the default SPL
+  signer. The funding key stays in the sidecar's address space, never the daemon's.
 
 > Status: program + artifact verified; the live ER reconciliation ran (exact, 75.5
 > ms/op, ~0.0003 SOL/session); and the x402-over-ER pay-per-call demo ran end to end

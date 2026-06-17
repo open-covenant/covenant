@@ -185,6 +185,7 @@ mod tests {
             enabled: true,
             signer_binary: "/nonexistent-signer".into(),
             signer_env: vec![],
+            ..Default::default()
         }
     }
 

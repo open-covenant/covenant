@@ -53,6 +53,11 @@ name = "xona-demo"
 path = "src/bin/xona-demo.rs"
 required-features = ["solana"]
 
+[[bin]]
+name = "covenant-x402-er-signer"
+path = "src/bin/er-signer.rs"
+required-features = ["solana"]
+
 [[example]]
 name = "ephemeral_live"
 path = "examples/ephemeral_live.rs"

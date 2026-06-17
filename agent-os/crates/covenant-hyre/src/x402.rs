@@ -185,6 +185,7 @@ fn to_requirements(accept: &Accept, caip2_network: &str) -> Result<PaymentRequir
         scheme: accept.scheme.clone(),
         extra: Some(covenant_x402::PaymentExtra {
             fee_payer: Some(fee_payer.to_string()),
+            nonce: None,
         }),
     })
 }

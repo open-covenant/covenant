@@ -49,6 +49,39 @@ pub struct X402Config {
     pub enabled: bool,
     pub signer_binary: PathBuf,
     pub signer_env: Vec<(String, String)>,
+    /// Optional ER signer sidecar for ephemeral-rollup-settled providers (CAIP-2
+    /// network `solana-er:*`). When set, calls on an ER network route here instead
+    /// of `signer_binary` — the sidecar runs `consume_credits` in the ER and returns
+    /// the signature envelope. Its funding key + program + ER RPC live in
+    /// `er_signer_env`, never in the daemon.
+    pub er_signer_binary: Option<PathBuf>,
+    pub er_signer_env: Vec<(String, String)>,
+}
+
+impl X402Config {
+    /// The signer binary + env to use for a payment `network`: the ER sidecar for
+    /// `solana-er:*` when configured, otherwise the default SPL signer.
+    fn signer_parts_for(&self, network: &str) -> (&PathBuf, &[(String, String)]) {
+        if network.starts_with("solana-er:") {
+            if let Some(bin) = self.er_signer_binary.as_ref() {
+                return (bin, &self.er_signer_env);
+            }
+        }
+        (&self.signer_binary, &self.signer_env)
+    }
+
+    /// Builds the subprocess signer for a payment `network`. ER networks route to
+    /// the ER sidecar when one is configured; everything else uses the default
+    /// signer. Only the binary path and env cross into the spawned process — the
+    /// funding key stays in the sidecar's address space.
+    pub fn signer_for(&self, network: &str) -> SubprocessSigner {
+        let (bin, env) = self.signer_parts_for(network);
+        let mut signer = SubprocessSigner::new(bin);
+        for (k, v) in env {
+            signer = signer.env(k.clone(), v.clone());
+        }
+        signer
+    }
 }
 
 /// A [`Signer`] that delegates to the standalone `covenant-x402-signer`
@@ -515,6 +548,30 @@ mod tests {
     use covenant_audit::InMemoryAuditLog;
     use covenant_budget::InMemoryLedger;
     use covenant_settlement::InMemorySettlement;
+
+    #[test]
+    fn signer_selection_routes_er_networks_to_the_er_sidecar() {
+        let cfg = X402Config {
+            enabled: true,
+            signer_binary: "/spl-signer".into(),
+            signer_env: vec![],
+            er_signer_binary: Some("/er-signer".into()),
+            er_signer_env: vec![("COVENANT_X402_ER_PROGRAM".into(), "cov9".into())],
+        };
+        // ER network -> ER sidecar + its env.
+        let (bin, env) = cfg.signer_parts_for("solana-er:devnet");
+        assert_eq!(bin, &PathBuf::from("/er-signer"));
+        assert_eq!(env.len(), 1);
+        // Non-ER network -> default SPL signer.
+        assert_eq!(cfg.signer_parts_for("solana:mainnet").0, &PathBuf::from("/spl-signer"));
+
+        // With no ER signer configured, an ER network falls back to the default.
+        let cfg = X402Config {
+            er_signer_binary: None,
+            ..cfg
+        };
+        assert_eq!(cfg.signer_parts_for("solana-er:devnet").0, &PathBuf::from("/spl-signer"));
+    }
 
     fn agent(tag: u8) -> AgentId {
         AgentId::new("payer@local", [tag; 32])

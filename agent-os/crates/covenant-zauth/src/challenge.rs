@@ -154,6 +154,7 @@ pub fn to_payment_requirements(accept: &Accept) -> PaymentRequirements {
             .and_then(|e| e.fee_payer.clone())
             .map(|fee_payer| PaymentExtra {
                 fee_payer: Some(fee_payer),
+                nonce: None,
             }),
     }
 }

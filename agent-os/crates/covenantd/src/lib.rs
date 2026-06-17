@@ -6053,10 +6053,9 @@ impl Server {
             }
         };
 
-        let mut signer = x402::SubprocessSigner::new(&config.signer_binary);
-        for (k, v) in &config.signer_env {
-            signer = signer.env(k.clone(), v.clone());
-        }
+        // ER-settled providers (network solana-er:*) route to the ER signer
+        // sidecar when configured; everything else uses the default SPL signer.
+        let signer = config.signer_for(&network);
 
         let capability = covenant_x402::Capability {
             provider: provider.clone(),
@@ -47522,6 +47521,7 @@ required = {caps:?}
             enabled: true,
             signer_binary: signer,
             signer_env: vec![],
+            ..Default::default()
         })
         .with_hyre(hyre::HyreState::new(catalog, cfg));
 
@@ -58068,6 +58068,7 @@ budget_credits_per_hour = {credits}
                 enabled: true,
                 signer_binary: std::path::PathBuf::from("/bin/true"),
                 signer_env: vec![],
+                ..Default::default()
             });
         let resp = s.op_respond(pay_x402_req()).await;
         match resp {
@@ -58125,6 +58126,7 @@ budget_credits_per_hour = {credits}
             enabled: true,
             signer_binary: std::path::PathBuf::from("/bin/true"),
             signer_env: vec![],
+            ..Default::default()
         });
         grant_scoped_action(
             &s,

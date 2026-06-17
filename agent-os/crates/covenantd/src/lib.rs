@@ -58115,6 +58115,100 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// Live end-to-end: a PayX402 op on a `solana-er:*` network drives the full
+    /// daemon path -- op_respond -> pay_x402 -> X402Config::signer_for routes to the
+    /// ER signer sidecar -> the sidecar runs consume_credits in the ER -> the
+    /// facilitator verifies the on-chain proof -> 200, and a settlement receipt is
+    /// recorded. Needs the ER signer + facilitator binaries, a delegated credit
+    /// account for ER_KEYPAIR's owner, and the devnet ER. Run with:
+    ///   ER_SIGNER_BIN=... FACILITATOR_BIN=... ER_KEYPAIR=... \
+    ///   cargo test -p covenantd --lib pay_x402_settles_through_the_er_signer_live -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "live: needs ER signer + facilitator binaries, a delegated credit account, and the devnet ER"]
+    async fn pay_x402_settles_through_the_er_signer_live() {
+        use std::process::{Command, Stdio};
+        let er_signer = std::env::var("ER_SIGNER_BIN").expect("ER_SIGNER_BIN");
+        let facilitator = std::env::var("FACILITATOR_BIN").expect("FACILITATOR_BIN");
+        let keypair = std::env::var("ER_KEYPAIR").expect("ER_KEYPAIR");
+        let program = std::env::var("ER_PROGRAM")
+            .unwrap_or_else(|_| "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into());
+        let rpc =
+            std::env::var("ER_RPC").unwrap_or_else(|_| "https://devnet-eu.magicblock.app".into());
+        let port = std::env::var("FACILITATOR_PORT").unwrap_or_else(|_| "8499".into());
+        let endpoint = format!("http://127.0.0.1:{port}/paid");
+
+        let mut fac = Command::new(&facilitator)
+            .env("PRICE", "1")
+            .env("PORT", &port)
+            .env("PROGRAM", &program)
+            .env("ER", &rpc)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn facilitator");
+        let mut ready = false;
+        for _ in 0..50 {
+            if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        assert!(ready, "facilitator did not start listening on {port}");
+
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit.clone(), budget.clone()).with_x402_dispatch(
+            x402::X402Config {
+                enabled: true,
+                signer_binary: std::path::PathBuf::from("/bin/true"),
+                signer_env: vec![],
+                er_signer_binary: Some(er_signer.into()),
+                er_signer_env: vec![
+                    ("COVENANT_X402_ER_KEYPAIR".into(), keypair),
+                    ("COVENANT_X402_ER_PROGRAM".into(), program),
+                    ("COVENANT_X402_ER_RPC".into(), rpc),
+                ],
+            },
+        );
+        let payer = s.identity.agent_id();
+        budget.set_capacity(&payer, 1_000_000).await.unwrap();
+        grant_action(&s, "x402.outbound.pay").await;
+
+        let resp = s
+            .op_respond(Request::PayX402 {
+                provider: "covenant-er".into(),
+                endpoint: endpoint.clone(),
+                method: "GET".into(),
+                body: None,
+                network: "solana-er:devnet".into(),
+                asset: "credits".into(),
+                per_call_cap: "100".into(),
+                credits: 1,
+            })
+            .await;
+
+        let _ = fac.kill();
+
+        match resp {
+            Response::X402Paid {
+                status,
+                body,
+                receipt_id,
+            } => {
+                assert_eq!(status, 200, "expected 200 from facilitator; body: {body}");
+                assert!(body.contains("quote"), "facilitator content missing: {body}");
+                assert_ne!(receipt_id, Uuid::nil(), "a receipt id must be assigned");
+            }
+            other => panic!("expected X402Paid, got: {other:?}"),
+        }
+        let receipts = s.settlement.recent(10).await.expect("settlement recent");
+        assert!(
+            !receipts.is_empty(),
+            "the paid call must record a settlement receipt"
+        );
+    }
+
     #[tokio::test]
     async fn pay_x402_enforces_destination_scope_and_audits_denied_provider() {
         // A provider-scoped x402.outbound.pay grant is least-privilege egress:

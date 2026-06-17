@@ -40,3 +40,21 @@ cargo run -p covenant-x402-facilitator --example live_loop
 
 Verified run: `GET /paid → 402 → ER consume → 200`, credit balance dropped by exactly
 the price, reconciled to L1 on undelegate.
+
+## Full daemon path (live, reproducible)
+
+The end-to-end daemon integration is covered by an `#[ignore]`d test in `covenantd`,
+`pay_x402_settles_through_the_er_signer_live`: it drives a real `PayX402` op through
+`op_respond` → `X402Config::signer_for` → the ER signer sidecar → a `consume_credits`
+in the ER → this facilitator → `200`, and asserts a settlement receipt was recorded.
+Run it (delegate the credit account first via `er-session.mjs delegate`):
+
+```bash
+ER_SIGNER_BIN=target/debug/covenant-x402-er-signer \
+FACILITATOR_BIN=target/debug/covenant-x402-facilitator \
+ER_KEYPAIR="$HOME/.config/solana/id.json" \
+cargo test -p covenantd --lib pay_x402_settles_through_the_er_signer_live -- --ignored --nocapture
+```
+
+Verified green on devnet: the daemon spawned the sidecar, the ER consume settled, the
+facilitator returned 200, and a receipt was recorded.

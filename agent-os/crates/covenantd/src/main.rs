@@ -320,6 +320,16 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = {
+        let providers = er_providers_from_env();
+        if providers.is_empty() {
+            server
+        } else {
+            info!(count = providers.len(), "ER x402 providers registered");
+            server.with_er_providers(providers)
+        }
+    };
+
     let server = match hyre_config_from_env() {
         Some(cfg) => {
             // Prefer the live manifest so a restart picks up Hyre's
@@ -750,6 +760,25 @@ fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
         er_signer_binary,
         er_signer_env,
     })
+}
+
+/// Registered ER-settled x402 providers from `COVENANT_X402_ER_PROVIDERS`, a JSON
+/// array of `{slug, endpoint, per_call_cap, [method, network, asset, credits,
+/// description]}`. Each becomes an `er.<slug>` tool. Unset or empty means none.
+fn er_providers_from_env() -> Vec<covenantd::er_provider::ErProvider> {
+    let Ok(raw) = std::env::var("COVENANT_X402_ER_PROVIDERS") else {
+        return Vec::new();
+    };
+    match serde_json::from_str::<Vec<covenantd::er_provider::ErProvider>>(&raw) {
+        Ok(providers) => providers,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "COVENANT_X402_ER_PROVIDERS did not parse as a provider array; no ER providers registered"
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Build the Hyre provider config from env, or None when the operator

@@ -145,6 +145,19 @@ loop is wired into the daemon:
   networks to the ER sidecar (env `COVENANT_X402_ER_SIGNER_BINARY` +
   `COVENANT_X402_ER_{KEYPAIR,PROGRAM,RPC}`), everything else to the default SPL
   signer. The funding key stays in the sidecar's address space, never the daemon's.
+- **Provider registration:** an operator registers ER-settled providers via
+  `COVENANT_X402_ER_PROVIDERS`, a JSON array of
+  `{slug, endpoint, per_call_cap, [method, network, asset, credits, description]}`
+  (only slug/endpoint/per_call_cap required; defaults to a GET on `solana-er:devnet`
+  in `credits`). Each registered provider is advertised to agents as an `er.<slug>`
+  tool. An agent calls it with `CallTool { name: "er.<slug>" }` — gated by the
+  `tool.call.er.<slug>` capability — which routes through the same x402 pay path and
+  records a settlement receipt. Example:
+  `COVENANT_X402_ER_PROVIDERS='[{"slug":"quote","endpoint":"https://host/paid","per_call_cap":1}]'`.
+
+Both daemon paths are live-verified on devnet (`#[ignore]` tests in `covenantd`):
+`pay_x402_settles_through_the_er_signer_live` (the raw op) and
+`er_provider_tool_settles_in_the_er_live` (an agent calling a registered `er.*` tool).
 
 > Status: program + artifact verified; the live ER reconciliation ran (exact, 75.5
 > ms/op, ~0.0003 SOL/session); and the x402-over-ER pay-per-call demo ran end to end

@@ -9,6 +9,7 @@
 #![deny(unsafe_code)]
 
 pub mod http;
+pub mod er_provider;
 pub mod hyre;
 pub mod metaplex;
 pub mod secret;
@@ -1212,6 +1213,10 @@ pub struct Server {
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
     hyre: Option<Arc<hyre::HyreState>>,
+    /// Locally-registered ER-settled x402 providers, advertised as `er.<slug>`
+    /// tools. `None`/empty means none registered. Calls route through the x402 pay
+    /// path with the ER signer sidecar selected by the `solana-er:*` network.
+    er_providers: Option<Arc<Vec<er_provider::ErProvider>>>,
     /// Opt-in Metaplex profile: config + a DAS read client. None when
     /// the operator has not enabled Metaplex; in that state no
     /// `metaplex.*` tool is advertised or callable.
@@ -1268,6 +1273,7 @@ impl Server {
             x402_dispatch: None,
             secret_source: None,
             hyre: None,
+            er_providers: None,
             metaplex: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
@@ -1358,6 +1364,15 @@ impl Server {
     /// "not configured" error.
     pub fn with_hyre(mut self, state: hyre::HyreState) -> Self {
         self.hyre = Some(Arc::new(state));
+        self
+    }
+
+    /// Register ER-settled x402 providers. Each is advertised as an `er.<slug>`
+    /// tool and routes through the x402 pay path with the ER signer sidecar.
+    /// Requires the x402 dispatch + ER signer to be wired via
+    /// [`Self::with_x402_dispatch`].
+    pub fn with_er_providers(mut self, providers: Vec<er_provider::ErProvider>) -> Self {
+        self.er_providers = Some(Arc::new(providers));
         self
     }
 
@@ -4041,6 +4056,9 @@ impl Server {
         if let Some(state) = &self.metaplex {
             tools.extend(covenant_metaplex::metaplex_specs(&state.config));
         }
+        if let Some(providers) = &self.er_providers {
+            tools.extend(er_provider::er_specs(providers));
+        }
         Response::ToolList { tools }
     }
 
@@ -4105,6 +4123,9 @@ impl Server {
         }
         if name.starts_with("hyre.") {
             return self.hyre_tool_call(name, arguments, peer).await;
+        }
+        if name.starts_with("er.") {
+            return self.er_tool_call(name, arguments, peer).await;
         }
         if name.starts_with("metaplex.") {
             return self.metaplex_tool_call(name, arguments).await;
@@ -4222,6 +4243,106 @@ impl Server {
             Err(e) => Response::Error {
                 message: format!("tool: {e}"),
             },
+        }
+    }
+
+    /// Execute a registered ER-settled provider tool (`er.<slug>`). The
+    /// `tool.call.<name>` capability and scope are already enforced by
+    /// [`Self::call_tool`]. Routes through the same `pay_and_record` path as every
+    /// outbound x402 payment; the provider's `solana-er:*` network selects the ER
+    /// signer sidecar, so the call settles by metering credits in the rollup.
+    async fn er_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
+        let Some(providers) = self.er_providers.clone() else {
+            return Response::Error {
+                message: "no ER providers are registered on this daemon.".into(),
+            };
+        };
+        let Some(provider) = er_provider::find(&providers, &name) else {
+            return Response::Error {
+                message: format!("unknown ER provider tool: {name}"),
+            };
+        };
+        let Some(config) = self.x402_dispatch.clone() else {
+            return Response::Error {
+                message: "ER providers require the x402 funding-key sidecar. \
+                          Wire it via Server::with_x402_dispatch and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "x402 dispatch is disabled in this daemon's config.".into(),
+            };
+        }
+        let http_method = match provider.method.parse::<reqwest::Method>() {
+            Ok(m) => m,
+            Err(_) => {
+                return Response::Error {
+                    message: format!(
+                        "ER provider {} has an invalid HTTP method: {:?}",
+                        provider.slug, provider.method
+                    ),
+                }
+            }
+        };
+
+        let body = arguments.get("body").cloned();
+        let signer = config.signer_for(&provider.network);
+        let capability = covenant_x402::Capability {
+            provider: provider.slug.clone(),
+            network: provider.network.clone(),
+            asset: provider.asset.clone(),
+            per_call_cap: provider.per_call_cap,
+        };
+        let call = x402::PaidCall {
+            provider: &provider.slug,
+            endpoint: &provider.endpoint,
+            method: http_method,
+            capability,
+            body: body.as_ref(),
+            amount: provider.per_call_cap.to_string(),
+            network: provider.network.clone(),
+            asset: provider.asset.clone(),
+            credits: provider.credits,
+        };
+        let issuer = self.identity.agent_id();
+        let ctx = x402::SettlementContext {
+            settlement: self.settlement.as_ref(),
+            audit: self.audit.as_ref(),
+            budget: self.budget.as_ref(),
+            issuer: &issuer,
+        };
+        let client = covenant_x402::Client::new(covenant_x402::http_client());
+        let outcome =
+            match x402::pay_and_record(&ctx, &config, &client, &signer, peer, &call).await {
+                Ok(o) => o,
+                Err(e) => {
+                    return Response::Error {
+                        message: format!("ER provider call failed: {e}"),
+                    }
+                }
+            };
+        let status = outcome.response.status().as_u16();
+        let body_text = match x402::read_response_body(outcome.response).await {
+            Ok(t) => t,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("read upstream body: {e}"),
+                }
+            }
+        };
+        let content = match serde_json::from_str::<serde_json::Value>(&body_text) {
+            Ok(v) => vec![covenant_mcp::Content::json(v)],
+            Err(_) => vec![covenant_mcp::Content::text(body_text)],
+        };
+        Response::ToolResult {
+            content,
+            is_error: !(200..300).contains(&status),
         }
     }
 
@@ -58206,6 +58327,109 @@ budget_credits_per_hour = {credits}
         assert!(
             !receipts.is_empty(),
             "the paid call must record a settlement receipt"
+        );
+    }
+
+    /// Live: an agent calls a *registered* ER provider as a tool. The provider is
+    /// registered once via `with_er_providers`, shows up in the tool list as
+    /// `er.quote`, and a `CallTool` drives call_tool -> er_tool_call -> the ER
+    /// signer sidecar -> consume_credits in the ER -> the facilitator -> 200, with a
+    /// settlement receipt recorded. Same external prerequisites as
+    /// pay_x402_settles_through_the_er_signer_live.
+    #[tokio::test]
+    #[ignore = "live: needs ER signer + facilitator binaries, a delegated credit account, and the devnet ER"]
+    async fn er_provider_tool_settles_in_the_er_live() {
+        use std::process::{Command, Stdio};
+        let er_signer = std::env::var("ER_SIGNER_BIN").expect("ER_SIGNER_BIN");
+        let facilitator = std::env::var("FACILITATOR_BIN").expect("FACILITATOR_BIN");
+        let keypair = std::env::var("ER_KEYPAIR").expect("ER_KEYPAIR");
+        let program = std::env::var("ER_PROGRAM")
+            .unwrap_or_else(|_| "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y".into());
+        let rpc =
+            std::env::var("ER_RPC").unwrap_or_else(|_| "https://devnet-eu.magicblock.app".into());
+        let port = std::env::var("FACILITATOR_PORT").unwrap_or_else(|_| "8497".into());
+        let endpoint = format!("http://127.0.0.1:{port}/paid");
+
+        let mut fac = Command::new(&facilitator)
+            .env("PRICE", "1")
+            .env("PORT", &port)
+            .env("PROGRAM", &program)
+            .env("ER", &rpc)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn facilitator");
+        let mut ready = false;
+        for _ in 0..50 {
+            if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        assert!(ready, "facilitator did not start listening on {port}");
+
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit.clone(), budget.clone())
+            .with_x402_dispatch(x402::X402Config {
+                enabled: true,
+                signer_binary: std::path::PathBuf::from("/bin/true"),
+                signer_env: vec![],
+                er_signer_binary: Some(er_signer.into()),
+                er_signer_env: vec![
+                    ("COVENANT_X402_ER_KEYPAIR".into(), keypair),
+                    ("COVENANT_X402_ER_PROGRAM".into(), program),
+                    ("COVENANT_X402_ER_RPC".into(), rpc),
+                ],
+            })
+            .with_er_providers(vec![er_provider::ErProvider {
+                slug: "quote".into(),
+                endpoint: endpoint.clone(),
+                method: "GET".into(),
+                network: "solana-er:devnet".into(),
+                asset: "credits".into(),
+                per_call_cap: 100,
+                credits: 1,
+                description: "A market quote.".into(),
+            }]);
+
+        let payer = s.identity.agent_id();
+        budget.set_capacity(&payer, 1_000_000).await.unwrap();
+        grant_action(&s, "tool.call.er.quote").await;
+
+        // Registration is discoverable: the provider shows up in the tool list.
+        match s.op_respond(Request::ListTools).await {
+            Response::ToolList { tools } => assert!(
+                tools.iter().any(|t| t.name == "er.quote"),
+                "registered ER provider must be advertised as er.quote"
+            ),
+            other => panic!("expected ToolList, got: {other:?}"),
+        }
+
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "er.quote".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+
+        let _ = fac.kill();
+
+        match resp {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "tool call should succeed; content: {content:?}");
+                assert!(
+                    format!("{content:?}").contains("quote"),
+                    "facilitator content missing: {content:?}"
+                );
+            }
+            other => panic!("expected ToolResult, got: {other:?}"),
+        }
+        let receipts = s.settlement.recent(10).await.expect("settlement recent");
+        assert!(
+            !receipts.is_empty(),
+            "the paid tool call must record a settlement receipt"
         );
     }
 

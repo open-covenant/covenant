@@ -431,6 +431,85 @@ pub enum AuditKind {
         amount: String,
         receipt_id: Uuid,
     },
+    /// The daemon decided a pre-spend authorization request from an
+    /// external agent wallet (e.g. OrbWallet asking before it signs).
+    /// Covenant is the spending policy here: the row records the verdict
+    /// and, on a deny, why — so the audit chain holds a verifiable record
+    /// of every spend that was permitted *and* every one that was
+    /// refused, independent of whether the wallet later settles. `amount`
+    /// is the atomic on-chain amount the wallet asked to spend; `credits`
+    /// is the USD-pegged budget the spend would consume; `network` and
+    /// `asset` identify the settlement rail; `destination` is the pay-to
+    /// address when the wallet supplied one. `approved` is the verdict and
+    /// `reason` is `Some` only when `approved` is `false`. `decision_id`
+    /// is the daemon-minted id returned to the wallet so a later
+    /// settlement receipt can join back to the authorization that allowed
+    /// it. No funds move on this row; it is a decision, not a settlement.
+    SpendAuthorizationDecided {
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        destination: Option<String>,
+        approved: bool,
+        reason: Option<String>,
+        decision_id: Uuid,
+    },
+    /// An external agent wallet reported that a previously authorized spend
+    /// settled on-chain, and the daemon recorded the matching receipt and
+    /// budget debit. `decision_id` joins this row to the
+    /// [`AuditKind::SpendAuthorizationDecided`] approval that allowed the
+    /// spend; `receipt_id` joins it to the settlement receipt and the budget
+    /// debit. `amount` is the atomic amount actually settled; `tx_sig` is
+    /// the on-chain signature or hash when the wallet supplied one. This row
+    /// records a payment the wallet made with its own keys; Covenant moved
+    /// no funds.
+    SpendSettled {
+        decision_id: Uuid,
+        receipt_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        tx_sig: Option<String>,
+    },
+    /// The daemon issued a signed completion proof for a task an external
+    /// escrow is funding (e.g. Orbserv's OrbMarket). This is the release
+    /// signal: the escrow verifies `signature_b58` over the proof against
+    /// the daemon pubkey and releases to `worker_pubkey`. The row is self-
+    /// verifiable — it carries the signature and the `audit_root_hex` the
+    /// proof bound — so the chain holds an attributable record of every
+    /// release signal Covenant produced. `result_hash_hex` is the hash of
+    /// the delivered result; `validation_passed` is whether the work
+    /// validated. Covenant custodies no funds; this proves, it does not pay.
+    EscrowCompletionProven {
+        proof_id: Uuid,
+        task_id: Uuid,
+        worker_pubkey: String,
+        provider: String,
+        result_hash_hex: String,
+        validation_passed: bool,
+        audit_root_hex: String,
+        signature_b58: String,
+    },
+    /// An external escrow reported it released funds against a completion
+    /// proof and executed the transfer. `proof_id` joins this row to the
+    /// [`AuditKind::EscrowCompletionProven`] signal that authorized the
+    /// release; `receipt_id` joins it to the settlement receipt. `amount` is
+    /// the atomic amount released; `tx_sig` is the on-chain signature when the
+    /// escrow supplied one. Covenant moved no funds and debited no budget;
+    /// this records the payout the escrow made with its own custody.
+    EscrowReleased {
+        proof_id: Uuid,
+        receipt_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        tx_sig: Option<String>,
+    },
     /// Logged when the operator runs the settlement receipt backfill. A
     /// dry run records `row_count` from the plan with `dry_run = true`
     /// and no `rollback_path`; an apply records the rewritten
@@ -492,6 +571,39 @@ pub enum AuditKind {
 pub trait AuditLog: Send + Sync {
     async fn record(&self, event: AuditEvent) -> Result<(), AuditError>;
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, AuditError>;
+    /// Receipt id of an already-recorded `SpendSettled` row for
+    /// `decision_id`, if one exists. Lets settlement be idempotent: a wallet
+    /// that retries a settlement (its success response was lost, or it
+    /// retries one that failed after the debit landed) joins back to the
+    /// original receipt instead of double-debiting and writing a duplicate
+    /// row. Scans the log — the same whole-file cost `record` already pays —
+    /// and is only on the infrequent settle path.
+    async fn settled_receipt_for(&self, decision_id: Uuid) -> Result<Option<Uuid>, AuditError> {
+        let events = self.recent(usize::MAX).await?;
+        Ok(events.iter().rev().find_map(|e| match &e.kind {
+            AuditKind::SpendSettled {
+                decision_id: d,
+                receipt_id,
+                ..
+            } if *d == decision_id => Some(*receipt_id),
+            _ => None,
+        }))
+    }
+    /// Receipt id of an already-recorded `EscrowReleased` row for `proof_id`,
+    /// if one exists. Same idempotency role as [`Self::settled_receipt_for`]
+    /// for the escrow path: an escrow that retries a release report joins the
+    /// original receipt instead of writing a duplicate row.
+    async fn released_receipt_for(&self, proof_id: Uuid) -> Result<Option<Uuid>, AuditError> {
+        let events = self.recent(usize::MAX).await?;
+        Ok(events.iter().rev().find_map(|e| match &e.kind {
+            AuditKind::EscrowReleased {
+                proof_id: p,
+                receipt_id,
+                ..
+            } if *p == proof_id => Some(*receipt_id),
+            _ => None,
+        }))
+    }
     /// Drop every event with `timestamp_ms < before_ms`. Returns the
     /// count deleted. Operator-driven retention: with no purge call the
     /// log grows unbounded for the lifetime of the daemon. Mirrors the

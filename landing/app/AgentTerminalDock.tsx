@@ -44,7 +44,7 @@ export function AgentTerminalDock() {
           onClick={() => setOpen((v) => !v)}
           aria-label={open ? "Hide agent log" : "Show agent log"}
           aria-expanded={open}
-          className="pointer-events-auto absolute left-0 top-1/2 flex -translate-x-full -translate-y-1/2 items-center gap-1.5 rounded-l-md border border-r-0 border-neutral-800/70 bg-[#050505]/90 px-2 py-4 text-neutral-400 backdrop-blur-md transition-colors hover:text-neutral-100 xl:hidden"
+          className="pointer-events-auto absolute left-0 top-36 flex -translate-x-full -translate-y-1/2 items-center gap-1.5 rounded-l-md border border-r-0 border-neutral-800/70 bg-[#050505]/90 px-2 py-4 text-neutral-400 backdrop-blur-md transition-colors hover:text-neutral-100 sm:top-80 xl:hidden"
         >
           {open ? (
             <X className="h-4 w-4" />

@@ -18,6 +18,7 @@ body {
   color: var(--color-fg);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 /* All h1s render uppercase site-wide (text content is unchanged, so screen

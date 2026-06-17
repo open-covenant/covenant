@@ -166,6 +166,11 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/chain/receipt-batches", get(chain_receipt_batches))
         .route("/sap/stats", get(sap_stats))
         .route("/x402/pay", post(pay_x402_route))
+        .route("/spend/authorize", post(authorize_spend_route))
+        .route("/spend/settle", post(settle_spend_route))
+        .route("/escrow/prove", post(prove_completion_route))
+        .route("/escrow/release", post(record_escrow_release_route))
+        .route("/reputation/:worker_pubkey", get(reputation_route))
         .route(
             "/settlement/receipts/backfill",
             post(settlement_backfill_receipts),
@@ -1322,6 +1327,167 @@ async fn pay_x402_route(
                 },
                 &peer,
             )
+            .await,
+    ))
+}
+
+/// HTTP body shape for `POST /spend/authorize`. Mirrors the
+/// [`Request::AuthorizeSpend`] fields except for the `kind` discriminator.
+/// `amount` and `per_call_cap` are decimal strings so atomic u128 amounts
+/// above JSON's 53-bit integer ceiling survive the wire.
+#[derive(Deserialize)]
+struct AuthorizeSpendBody {
+    provider: String,
+    network: String,
+    asset: String,
+    amount: String,
+    per_call_cap: String,
+    credits: u64,
+    #[serde(default)]
+    destination: Option<String>,
+}
+
+async fn authorize_spend_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<AuthorizeSpendBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::AuthorizeSpend {
+                    provider: b.provider,
+                    network: b.network,
+                    asset: b.asset,
+                    amount: b.amount,
+                    per_call_cap: b.per_call_cap,
+                    credits: b.credits,
+                    destination: b.destination,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// HTTP body shape for `POST /spend/settle`. Mirrors the
+/// [`Request::SettleSpend`] fields. `decision_id` is the id from the
+/// matching `/spend/authorize` response; `amount` is a decimal string.
+#[derive(Deserialize)]
+struct SettleSpendBody {
+    decision_id: uuid::Uuid,
+    provider: String,
+    network: String,
+    asset: String,
+    amount: String,
+    credits: u64,
+    #[serde(default)]
+    tx_sig: Option<String>,
+}
+
+async fn settle_spend_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<SettleSpendBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::SettleSpend {
+                    decision_id: b.decision_id,
+                    provider: b.provider,
+                    network: b.network,
+                    asset: b.asset,
+                    amount: b.amount,
+                    credits: b.credits,
+                    tx_sig: b.tx_sig,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// HTTP body shape for `POST /escrow/prove`. Mirrors the
+/// [`Request::ProveCompletion`] fields. `worker_pubkey` is the bs58 key of the
+/// agent the escrow should pay; `result_hash_hex` is the delivered result's
+/// hash.
+#[derive(Deserialize)]
+struct ProveCompletionBody {
+    task_id: uuid::Uuid,
+    worker_pubkey: String,
+    provider: String,
+    result_hash_hex: String,
+    validation_passed: bool,
+}
+
+async fn prove_completion_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<ProveCompletionBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::ProveCompletion {
+                    task_id: b.task_id,
+                    worker_pubkey: b.worker_pubkey,
+                    provider: b.provider,
+                    result_hash_hex: b.result_hash_hex,
+                    validation_passed: b.validation_passed,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// HTTP body shape for `POST /escrow/release`. Mirrors the
+/// [`Request::RecordEscrowRelease`] fields. `proof_id` is the id from the
+/// matching `/escrow/prove` response; `amount` is a decimal string.
+#[derive(Deserialize)]
+struct RecordEscrowReleaseBody {
+    proof_id: uuid::Uuid,
+    provider: String,
+    network: String,
+    asset: String,
+    amount: String,
+    #[serde(default)]
+    tx_sig: Option<String>,
+}
+
+async fn record_escrow_release_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<RecordEscrowReleaseBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::RecordEscrowRelease {
+                    proof_id: b.proof_id,
+                    provider: b.provider,
+                    network: b.network,
+                    asset: b.asset,
+                    amount: b.amount,
+                    tx_sig: b.tx_sig,
+                },
+                &peer,
+            )
+            .await,
+    ))
+}
+
+/// `GET /reputation/:worker_pubkey` — a worker's audit-derived standing.
+/// `worker_pubkey` is bs58, which is URL-safe so it rides the path directly.
+async fn reputation_route(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Path(worker_pubkey): Path<String>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(Request::GetReputation { worker_pubkey }, &peer)
             .await,
     ))
 }

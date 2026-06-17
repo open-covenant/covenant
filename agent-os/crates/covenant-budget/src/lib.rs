@@ -295,7 +295,8 @@ fn refill(bucket: &mut Bucket, now: u64) {
         return;
     }
     let elapsed = (now - bucket.last_refill_ms) as u128;
-    let add_u128 = elapsed * (bucket.capacity as u128) / MS_PER_HOUR;
+    let scaled = elapsed * (bucket.capacity as u128);
+    let add_u128 = scaled / MS_PER_HOUR;
     if add_u128 == 0 {
         // Sub-token elapsed: leave `last_refill_ms` so the fractional
         // milliseconds roll into the next call.
@@ -306,7 +307,13 @@ fn refill(bucket: &mut Bucket, now: u64) {
         .tokens_remaining
         .saturating_add(add)
         .min(bucket.capacity);
-    let consumed_ms = (add as u128) * MS_PER_HOUR / (bucket.capacity as u128);
+    // Advance the clock by the elapsed time minus the unspent sub-token
+    // remainder, so only that fraction rolls into the next call. Deriving the
+    // consumed time from `add * MS_PER_HOUR / capacity` instead truncates away
+    // up to one millisecond per call when capacity > MS_PER_HOUR, leaving that
+    // time re-creditable and refilling the bucket faster than its rate.
+    let leftover_ms = (scaled % MS_PER_HOUR) / (bucket.capacity as u128);
+    let consumed_ms = elapsed - leftover_ms;
     bucket.last_refill_ms = bucket.last_refill_ms.saturating_add(consumed_ms as u64);
     if bucket.tokens_remaining == bucket.capacity {
         // Bucket is full; drop unconsumed accumulator so an idle agent
@@ -2159,6 +2166,33 @@ mod tests {
     }
 
     #[test]
+    fn refill_high_rate_advances_clock_and_does_not_re_credit() {
+        // capacity just above MS_PER_HOUR (3_600_001/hr). One ms earns one
+        // token. The old `consumed_ms = add * MS_PER_HOUR / capacity`
+        // truncated to floor(3_600_000 / 3_600_001) = 0, leaving the clock at
+        // 0 so the very same millisecond re-credited on the next call. The
+        // remainder accounting must move the clock to 1 and stop the double
+        // credit.
+        let mut b = Bucket {
+            display: "x@y".into(),
+            capacity: 3_600_001,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        refill(&mut b, 1);
+        assert_eq!(b.tokens_remaining, 1);
+        assert_eq!(
+            b.last_refill_ms, 1,
+            "clock must advance the full elapsed ms; the sub-token remainder \
+             here is below 1ms and rounds to zero leftover"
+        );
+        // Same instant again: the now <= last_refill_ms guard fires, so no
+        // second token is minted for the window already paid for.
+        refill(&mut b, 1);
+        assert_eq!(b.tokens_remaining, 1);
+    }
+
+    #[test]
     fn refill_eta_zero_when_already_have_enough() {
         let b = Bucket {
             display: "x@y".into(),
@@ -3472,5 +3506,128 @@ mod tests {
         // Saturating add prevents a panic on u64::MAX inputs; the
         // saturated value > any finite remaining → flag.
         assert!(project_overshoot(u64::MAX, 1000, 5, 100, policy));
+    }
+}
+
+// Bit-precise proofs over the full input domain. The unit tests above pin
+// named cases; these prove the same invariants hold for *every* admissible
+// (capacity, tokens, clock, now) the type system allows — the guarantee a
+// finite example set cannot give. Run with `cargo kani -p covenant-budget`.
+#[cfg(kani)]
+mod proofs {
+    use super::{project_overshoot, refill, refill_eta_ms, Bucket, BudgetProjectionPolicy};
+
+    // A bucket whose stored invariant (tokens_remaining <= capacity) holds.
+    // Every refill caller maintains this, so harnesses assume it on entry.
+    fn arb_bucket() -> Bucket {
+        let capacity: u64 = kani::any();
+        let tokens_remaining: u64 = kani::any();
+        kani::assume(tokens_remaining <= capacity);
+        Bucket {
+            display: String::new(),
+            capacity,
+            tokens_remaining,
+            last_refill_ms: kani::any(),
+        }
+    }
+
+    // refill is panic-free for all inputs: the `now - last_refill_ms`
+    // subtraction never underflows, the u128 multiply never overflows, and
+    // the saturating clock advance never wraps — the unsigned-underflow
+    // hazard the time-rewind guard exists to prevent.
+    #[kani::proof]
+    fn refill_never_panics() {
+        let mut b = arb_bucket();
+        refill(&mut b, kani::any());
+    }
+
+    // Postcondition: tokens never exceed capacity, so an idle agent can
+    // never bank refills past its ceiling.
+    #[kani::proof]
+    fn refill_keeps_tokens_within_capacity() {
+        let mut b = arb_bucket();
+        refill(&mut b, kani::any());
+        assert!(b.tokens_remaining <= b.capacity);
+    }
+
+    // The clock never moves backward: a refill carries last_refill_ms
+    // forward or leaves it unchanged, over the full u64 domain. The tighter
+    // bound (it lands at exactly `now` minus the unspent sub-token
+    // remainder, so a paid window is never re-credited) holds by refill's
+    // remainder accounting and is covered by the unit tests; stating it in a
+    // harness would need nested 128-bit division the solver can't close.
+    #[kani::proof]
+    fn refill_clock_never_rewinds() {
+        let mut b = arb_bucket();
+        let before = b.last_refill_ms;
+        refill(&mut b, kani::any());
+        assert!(b.last_refill_ms >= before);
+    }
+
+    // The dual to never_rewinds — that the clock never runs *past* `now`,
+    // so consumed-time accounting can't grant tokens for time that hasn't
+    // elapsed — is left to the unit tests (`refill_full_bucket_resets_
+    // clock_to_now`, `refill_partial_elapsed_accumulates_in_clock`). It is
+    // not a Kani harness on purpose: proving it requires reasoning through
+    // the nested division `add = elapsed*cap/H` then `consumed = add*H/cap`,
+    // and symbolic 128-bit division bit-blasts to a SAT instance no solver
+    // closes in bounded time. Value-range assumptions don't shrink the
+    // divider circuit, only the model's bit width would — which the
+    // function's u128 math fixes.
+
+    // refill_eta_ms never returns an instant before `now` and never
+    // overflows, for any shortfall or rate. This is the no-past-schedule
+    // floor (and absence of wrap in the div_ceil / saturating_add), not a
+    // check that the computed wait is the correct length.
+    #[kani::proof]
+    fn refill_eta_never_schedules_in_the_past() {
+        let b = arb_bucket();
+        let now: u64 = kani::any();
+        let eta = refill_eta_ms(&b, kani::any(), now);
+        assert!(eta >= now);
+    }
+
+    // project_overshoot matches its decision spec for every input, not just
+    // "doesn't panic" (the body has no panic-capable op, so that would prove
+    // nothing): NoExtrapolation flags exactly when already over budget; below
+    // either Linear threshold it never flags; at/above thresholds it flags iff
+    // the conservative doubled-rate projection exceeds remaining (the early
+    // `current_debit > remaining` arm is subsumed, since saturating-doubling a
+    // value already past `remaining` is also past it).
+    #[kani::proof]
+    fn project_overshoot_matches_spec() {
+        let current_debit: u64 = kani::any();
+        let window: u64 = kani::any();
+        let samples: u32 = kani::any();
+        let remaining: u64 = kani::any();
+
+        assert_eq!(
+            project_overshoot(
+                current_debit,
+                window,
+                samples,
+                remaining,
+                BudgetProjectionPolicy::NoExtrapolation,
+            ),
+            current_debit > remaining
+        );
+
+        let min_window: u64 = kani::any();
+        let min_samples: u32 = kani::any();
+        let got = project_overshoot(
+            current_debit,
+            window,
+            samples,
+            remaining,
+            BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms: min_window,
+                min_debit_samples: min_samples,
+            },
+        );
+        if window < min_window || samples < min_samples {
+            assert!(!got);
+        } else {
+            assert_eq!(got, current_debit.saturating_add(current_debit) > remaining);
+        }
     }
 }

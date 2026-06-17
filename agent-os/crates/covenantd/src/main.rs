@@ -320,6 +320,22 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match spend_authz_config_from_env() {
+        Some(cfg) => {
+            info!("spend authorization surface enabled");
+            server.with_spend_authz(cfg)
+        }
+        None => server,
+    };
+
+    let server = match escrow_config_from_env() {
+        Some(cfg) => {
+            info!("escrow surface enabled");
+            server.with_escrow(cfg)
+        }
+        None => server,
+    };
+
     let server = match hyre_config_from_env() {
         Some(cfg) => {
             // Prefer the live manifest so a restart picks up Hyre's
@@ -730,6 +746,39 @@ fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
         signer_binary,
         signer_env,
     })
+}
+
+/// Enable the spend-authorization surface when the operator opts in.
+/// This path holds no keys and moves no funds — it only lets the daemon
+/// answer `POST /spend/authorize` (approve or deny a wallet spend against
+/// the caller's capability, per-call cap, and budget, recording every
+/// verdict in the audit chain). Off by default.
+///
+/// - `COVENANT_SPEND_AUTHZ_ENABLED` truthy (`1`, `true`, `yes`)
+fn spend_authz_config_from_env() -> Option<covenantd::spend_authz::SpendAuthzConfig> {
+    let enabled = std::env::var("COVENANT_SPEND_AUTHZ_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    Some(covenantd::spend_authz::SpendAuthzConfig { enabled: true })
+}
+
+/// Resolve the escrow surface config from env. When enabled the daemon will
+/// answer `POST /escrow/prove` (issue a signed completion proof an external
+/// escrow releases against) and `POST /escrow/release` (record the payout back
+/// into the audit chain). Covenant holds no funds. Off by default.
+///
+/// - `COVENANT_ESCROW_ENABLED` truthy (`1`, `true`, `yes`)
+fn escrow_config_from_env() -> Option<covenantd::escrow::EscrowConfig> {
+    let enabled = std::env::var("COVENANT_ESCROW_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    Some(covenantd::escrow::EscrowConfig { enabled: true })
 }
 
 /// Build the Hyre provider config from env, or None when the operator

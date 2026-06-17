@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 covenant-types = { path = "../covenant-types" }
+bs58 = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
 thiserror = { workspace = true }

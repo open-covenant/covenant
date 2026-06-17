@@ -8,9 +8,12 @@
 
 #![deny(unsafe_code)]
 
+pub mod escrow;
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
+pub mod reputation;
+pub mod spend_authz;
 pub mod sse;
 pub mod stream_dispatch;
 pub mod stream_tracker;
@@ -1200,6 +1203,14 @@ pub struct Server {
     /// `Request::PayX402` returns a "not configured" error and no
     /// USDC is ever spent.
     x402_dispatch: Option<Arc<x402::X402Config>>,
+    /// Opt-in spend-authorization surface. None when no operator has
+    /// enabled it; in that state every `Request::AuthorizeSpend` returns a
+    /// "not configured" error and no spend is ever authorized.
+    spend_authz: Option<Arc<spend_authz::SpendAuthzConfig>>,
+    /// Opt-in escrow surface. When `None` the daemon never issued a
+    /// completion proof; `Request::ProveCompletion` returns a "not
+    /// configured" error and no release signal is ever produced.
+    escrow: Option<Arc<escrow::EscrowConfig>>,
     /// Opt-in Hyre provider profile: the materialised catalog + config.
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
@@ -1258,6 +1269,8 @@ impl Server {
             subprocess_tracker: Arc::new(covenant_runtime::SubprocessTracker::new()),
             home: None,
             x402_dispatch: None,
+            spend_authz: None,
+            escrow: None,
             hyre: None,
             metaplex: None,
             sap_bridge: None,
@@ -1332,6 +1345,27 @@ impl Server {
     /// after [`Server::new`] when the operator has opted in via env.
     pub fn with_x402_dispatch(mut self, config: x402::X402Config) -> Self {
         self.x402_dispatch = Some(Arc::new(config));
+        self
+    }
+
+    /// Enable the spend-authorization surface. Once wired, an authenticated
+    /// peer holding `wallet.spend.authorize` can ask the daemon to approve
+    /// or deny a wallet spend before it signs; every verdict is recorded in
+    /// the audit chain. No funds move on this path. Opt-in and off by
+    /// default, mirroring [`Self::with_x402_dispatch`].
+    pub fn with_spend_authz(mut self, config: spend_authz::SpendAuthzConfig) -> Self {
+        self.spend_authz = Some(Arc::new(config));
+        self
+    }
+
+    /// Enable the escrow surface. Once wired, an authenticated peer holding
+    /// `escrow.completion.prove` can ask the daemon to issue a signed
+    /// completion proof an external escrow releases against, and a peer
+    /// holding `escrow.release.record` can report the release back into the
+    /// audit chain. Covenant holds no funds. Opt-in and off by default,
+    /// mirroring [`Self::with_spend_authz`].
+    pub fn with_escrow(mut self, config: escrow::EscrowConfig) -> Self {
+        self.escrow = Some(Arc::new(config));
         self
     }
 
@@ -2345,6 +2379,79 @@ impl Server {
                     peer,
                 )
                 .await
+            }
+            Request::AuthorizeSpend {
+                provider,
+                network,
+                asset,
+                amount,
+                per_call_cap,
+                credits,
+                destination,
+            } => {
+                self.authorize_spend(
+                    provider,
+                    network,
+                    asset,
+                    amount,
+                    per_call_cap,
+                    credits,
+                    destination,
+                    peer,
+                )
+                .await
+            }
+            Request::SettleSpend {
+                decision_id,
+                provider,
+                network,
+                asset,
+                amount,
+                credits,
+                tx_sig,
+            } => {
+                self.settle_spend(
+                    decision_id,
+                    provider,
+                    network,
+                    asset,
+                    amount,
+                    credits,
+                    tx_sig,
+                    peer,
+                )
+                .await
+            }
+            Request::ProveCompletion {
+                task_id,
+                worker_pubkey,
+                provider,
+                result_hash_hex,
+                validation_passed,
+            } => {
+                self.prove_completion(
+                    task_id,
+                    worker_pubkey,
+                    provider,
+                    result_hash_hex,
+                    validation_passed,
+                    peer,
+                )
+                .await
+            }
+            Request::RecordEscrowRelease {
+                proof_id,
+                provider,
+                network,
+                asset,
+                amount,
+                tx_sig,
+            } => {
+                self.record_escrow_release(proof_id, provider, network, asset, amount, tx_sig, peer)
+                    .await
+            }
+            Request::GetReputation { worker_pubkey } => {
+                self.get_reputation(worker_pubkey, peer).await
             }
             Request::BackfillSettlementReceipts {
                 dry_run,
@@ -5849,6 +5956,350 @@ impl Server {
             receipt_id,
             status,
             body: body_text,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn authorize_spend(
+        &self,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        per_call_cap: String,
+        credits: u64,
+        destination: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "spend:authorize".into(),
+                vec!["wallet.spend.authorize".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "spend authorization requires capability \
+                          \"wallet.spend.authorize\". Grant it with \
+                          `covenant capabilities grant wallet.spend.authorize`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.spend_authz.clone() else {
+            return Response::Error {
+                message: "spend authorization is not configured on this daemon. \
+                          Wire it via Server::with_spend_authz and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "spend authorization is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let per_call_cap_u: u128 = match per_call_cap.parse() {
+            Ok(n) => n,
+            Err(_) => {
+                return Response::Error {
+                    message: format!(
+                        "invalid per_call_cap (must be decimal u128): {per_call_cap:?}"
+                    ),
+                }
+            }
+        };
+
+        let scope = spend_authz::SpendScope {
+            provider,
+            network: network.clone(),
+            asset: asset.clone(),
+            per_call_cap: per_call_cap_u,
+        };
+        let req = spend_authz::SpendRequest {
+            network,
+            asset,
+            amount,
+            credits,
+            destination,
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = spend_authz::AuthzContext {
+            audit: self.audit.as_ref(),
+            budget: self.budget.as_ref(),
+            issuer: &issuer,
+        };
+
+        match spend_authz::authorize_spend(&context, config.as_ref(), peer, &scope, &req).await {
+            Ok(decision) => {
+                let (approved, decision_id, reason) = match decision {
+                    spend_authz::SpendDecision::Approve { decision_id } => {
+                        (true, decision_id, None)
+                    }
+                    spend_authz::SpendDecision::Deny {
+                        decision_id,
+                        reason,
+                    } => (false, decision_id, Some(reason)),
+                };
+                Response::SpendAuthorized {
+                    approved,
+                    decision_id,
+                    reason,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("spend authorization failed: {e}"),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn settle_spend(
+        &self,
+        decision_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        credits: u64,
+        tx_sig: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "spend:settle".into(),
+                vec!["wallet.spend.settle".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "spend settlement requires capability \
+                          \"wallet.spend.settle\". Grant it with \
+                          `covenant capabilities grant wallet.spend.settle`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.spend_authz.clone() else {
+            return Response::Error {
+                message: "spend authorization is not configured on this daemon. \
+                          Wire it via Server::with_spend_authz and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "spend authorization is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let facts = spend_authz::SettleFacts {
+            decision_id,
+            provider,
+            network,
+            asset,
+            amount,
+            credits,
+            tx_sig,
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = spend_authz::SettleContext {
+            settlement: self.settlement.as_ref(),
+            audit: self.audit.as_ref(),
+            budget: self.budget.as_ref(),
+            issuer: &issuer,
+        };
+
+        match spend_authz::record_spend_settlement(&context, config.as_ref(), peer, &facts).await {
+            Ok(receipt_id) => Response::SpendSettled {
+                receipt_id,
+                decision_id,
+            },
+            Err(e) => Response::Error {
+                message: format!("spend settlement failed: {e}"),
+            },
+        }
+    }
+
+    async fn prove_completion(
+        &self,
+        task_id: Uuid,
+        worker_pubkey: String,
+        provider: String,
+        result_hash_hex: String,
+        validation_passed: bool,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "escrow:prove".into(),
+                vec!["escrow.completion.prove".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "escrow completion proofs require capability \
+                          \"escrow.completion.prove\". Grant it with \
+                          `covenant capabilities grant escrow.completion.prove`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.escrow.clone() else {
+            return Response::Error {
+                message: "the escrow surface is not configured on this daemon. \
+                          Wire it via Server::with_escrow and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "the escrow surface is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let facts = escrow::CompletionFacts {
+            task_id,
+            worker_pubkey,
+            provider,
+            result_hash_hex,
+            validation_passed,
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = escrow::ProveContext {
+            identity: self.identity.as_ref(),
+            audit: self.audit.as_ref(),
+            issuer: &issuer,
+        };
+
+        match escrow::prove_completion(&context, config.as_ref(), &facts).await {
+            Ok(signed) => Response::CompletionProven {
+                proof_json: signed.proof_json,
+                signature_b58: signed.signature_b58,
+                signer_pubkey_b58: signed.signer_pubkey_b58,
+            },
+            Err(e) => Response::Error {
+                message: format!("escrow completion proof failed: {e}"),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn record_escrow_release(
+        &self,
+        proof_id: Uuid,
+        provider: String,
+        network: String,
+        asset: String,
+        amount: String,
+        tx_sig: Option<String>,
+        peer: &AgentId,
+    ) -> Response {
+        let check = self
+            .check_capabilities(
+                "escrow:release".into(),
+                vec!["escrow.release.record".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "recording an escrow release requires capability \
+                          \"escrow.release.record\". Grant it with \
+                          `covenant capabilities grant escrow.release.record`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.escrow.clone() else {
+            return Response::Error {
+                message: "the escrow surface is not configured on this daemon. \
+                          Wire it via Server::with_escrow and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "the escrow surface is disabled in this daemon's config.".into(),
+            };
+        }
+
+        let facts = escrow::ReleaseFacts {
+            proof_id,
+            provider,
+            network,
+            asset,
+            amount,
+            tx_sig,
+        };
+
+        let issuer = self.identity.agent_id();
+        let context = escrow::ReleaseContext {
+            settlement: self.settlement.as_ref(),
+            audit: self.audit.as_ref(),
+            issuer: &issuer,
+        };
+
+        match escrow::record_escrow_release(&context, config.as_ref(), peer, &facts).await {
+            Ok(receipt_id) => Response::EscrowReleased {
+                receipt_id,
+                proof_id,
+            },
+            Err(e) => Response::Error {
+                message: format!("escrow release recording failed: {e}"),
+            },
+        }
+    }
+
+    async fn get_reputation(&self, worker_pubkey: String, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities(
+                "reputation:read".into(),
+                vec!["reputation.read".into()],
+                peer,
+            )
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "reading reputation requires capability \
+                          \"reputation.read\". Grant it with \
+                          `covenant capabilities grant reputation.read`."
+                    .into(),
+            };
+        }
+
+        let Some(config) = self.escrow.clone() else {
+            return Response::Error {
+                message: "the escrow surface is not configured on this daemon. \
+                          Wire it via Server::with_escrow and restart."
+                    .into(),
+            };
+        };
+        if !config.enabled {
+            return Response::Error {
+                message: "the escrow surface is disabled in this daemon's config.".into(),
+            };
+        }
+
+        match reputation::compute_reputation(self.audit.as_ref(), &worker_pubkey).await {
+            Ok(rep) => Response::Reputation {
+                worker_pubkey: rep.worker_pubkey,
+                proofs_total: rep.proofs_total,
+                validations_passed: rep.validations_passed,
+                validations_failed: rep.validations_failed,
+                releases: rep.releases,
+                completion_rate_bps: rep.completion_rate_bps,
+                computed_audit_root_hex: rep.computed_audit_root_hex,
+            },
+            Err(e) => Response::Error {
+                message: format!("reputation read failed: {e}"),
+            },
         }
     }
 
@@ -55997,6 +56448,193 @@ budget_credits_per_hour = {credits}
             ),
             other => panic!("expected Error, got: {other:?}"),
         }
+    }
+
+    fn authorize_spend_req() -> Request {
+        Request::AuthorizeSpend {
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            per_call_cap: "100000".into(),
+            credits: 8,
+            destination: Some("0xPayee".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_rejects_when_capability_missing() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        let resp = s.op_respond(authorize_spend_req()).await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("wallet.spend.authorize"),
+                "error must name the missing capability so the operator can grant it: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_rejects_when_not_configured() {
+        // Capability granted, but the surface was never wired — the daemon
+        // must refuse rather than authorizing against an absent policy.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "wallet.spend.authorize").await;
+        let resp = s.op_respond(authorize_spend_req()).await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured' so the operator knows to call with_spend_authz: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_rejects_when_disabled() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_spend_authz(spend_authz::SpendAuthzConfig::default());
+        grant_action(&s, "wallet.spend.authorize").await;
+        let resp = s.op_respond(authorize_spend_req()).await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("disabled"),
+                "error must clearly say 'disabled' so the operator knows to flip the flag: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_approves_within_policy_and_audits() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit.clone(), budget.clone())
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_action(&s, "wallet.spend.authorize").await;
+        budget
+            .set_capacity(&s.identity.agent_id(), 1000)
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(authorize_spend_req()).await;
+        match resp {
+            Response::SpendAuthorized {
+                approved, reason, ..
+            } => {
+                assert!(approved, "should approve within cap and budget");
+                assert!(reason.is_none());
+            }
+            other => panic!("expected SpendAuthorized, got: {other:?}"),
+        }
+        // The verdict is recorded; authorization debits nothing.
+        assert!(!audit.recent(8).await.unwrap().is_empty());
+        assert_eq!(
+            budget
+                .tokens_remaining(&s.identity.agent_id())
+                .await
+                .unwrap(),
+            1000
+        );
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_denies_over_cap_as_spend_authorized() {
+        // A policy deny is a verdict, not a transport error: it comes back
+        // as SpendAuthorized { approved: false } with a reason, so the
+        // wallet can surface why without parsing an error string.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit, budget.clone())
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_action(&s, "wallet.spend.authorize").await;
+        budget
+            .set_capacity(&s.identity.agent_id(), 1000)
+            .await
+            .unwrap();
+
+        let mut req = authorize_spend_req();
+        if let Request::AuthorizeSpend { amount, .. } = &mut req {
+            *amount = "100001".into(); // per_call_cap is 100000
+        }
+        match s.op_respond(req).await {
+            Response::SpendAuthorized {
+                approved, reason, ..
+            } => {
+                assert!(!approved);
+                assert!(reason.unwrap().contains("per-call cap"));
+            }
+            other => panic!("expected SpendAuthorized, got: {other:?}"),
+        }
+    }
+
+    fn settle_spend_req() -> Request {
+        Request::SettleSpend {
+            decision_id: uuid::Uuid::from_u128(0x0abc),
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            credits: 8,
+            tx_sig: Some("0xsig".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn settle_spend_rejects_when_capability_missing() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        match s.op_respond(settle_spend_req()).await {
+            Response::Error { message } => assert!(
+                message.contains("wallet.spend.settle"),
+                "error must name the missing capability: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settle_spend_rejects_when_not_configured() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "wallet.spend.settle").await;
+        match s.op_respond(settle_spend_req()).await {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settle_spend_records_receipt_and_audits() {
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit.clone(), budget)
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_action(&s, "wallet.spend.settle").await;
+
+        let expected_decision = uuid::Uuid::from_u128(0x0abc);
+        match s.op_respond(settle_spend_req()).await {
+            Response::SpendSettled {
+                receipt_id,
+                decision_id,
+            } => {
+                assert!(!receipt_id.is_nil());
+                assert_eq!(decision_id, expected_decision);
+            }
+            other => panic!("expected SpendSettled, got: {other:?}"),
+        }
+        // A spend_settled row landed in the audit chain joined by the receipt.
+        let events = audit.recent(16).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.kind, covenant_audit::AuditKind::SpendSettled { .. })),
+            "spend_settled audit row must be recorded"
+        );
     }
 
     #[tokio::test]

@@ -295,7 +295,8 @@ fn refill(bucket: &mut Bucket, now: u64) {
         return;
     }
     let elapsed = (now - bucket.last_refill_ms) as u128;
-    let add_u128 = elapsed * (bucket.capacity as u128) / MS_PER_HOUR;
+    let scaled = elapsed * (bucket.capacity as u128);
+    let add_u128 = scaled / MS_PER_HOUR;
     if add_u128 == 0 {
         // Sub-token elapsed: leave `last_refill_ms` so the fractional
         // milliseconds roll into the next call.
@@ -306,7 +307,13 @@ fn refill(bucket: &mut Bucket, now: u64) {
         .tokens_remaining
         .saturating_add(add)
         .min(bucket.capacity);
-    let consumed_ms = (add as u128) * MS_PER_HOUR / (bucket.capacity as u128);
+    // Advance the clock by the elapsed time minus the unspent sub-token
+    // remainder, so only that fraction rolls into the next call. Deriving the
+    // consumed time from `add * MS_PER_HOUR / capacity` instead truncates away
+    // up to one millisecond per call when capacity > MS_PER_HOUR, leaving that
+    // time re-creditable and refilling the bucket faster than its rate.
+    let leftover_ms = (scaled % MS_PER_HOUR) / (bucket.capacity as u128);
+    let consumed_ms = elapsed - leftover_ms;
     bucket.last_refill_ms = bucket.last_refill_ms.saturating_add(consumed_ms as u64);
     if bucket.tokens_remaining == bucket.capacity {
         // Bucket is full; drop unconsumed accumulator so an idle agent
@@ -2159,6 +2166,33 @@ mod tests {
     }
 
     #[test]
+    fn refill_high_rate_advances_clock_and_does_not_re_credit() {
+        // capacity just above MS_PER_HOUR (3_600_001/hr). One ms earns one
+        // token. The old `consumed_ms = add * MS_PER_HOUR / capacity`
+        // truncated to floor(3_600_000 / 3_600_001) = 0, leaving the clock at
+        // 0 so the very same millisecond re-credited on the next call. The
+        // remainder accounting must move the clock to 1 and stop the double
+        // credit.
+        let mut b = Bucket {
+            display: "x@y".into(),
+            capacity: 3_600_001,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        refill(&mut b, 1);
+        assert_eq!(b.tokens_remaining, 1);
+        assert_eq!(
+            b.last_refill_ms, 1,
+            "clock must advance the full elapsed ms; the sub-token remainder \
+             here is below 1ms and rounds to zero leftover"
+        );
+        // Same instant again: the now <= last_refill_ms guard fires, so no
+        // second token is minted for the window already paid for.
+        refill(&mut b, 1);
+        assert_eq!(b.tokens_remaining, 1);
+    }
+
+    #[test]
     fn refill_eta_zero_when_already_have_enough() {
         let b = Bucket {
             display: "x@y".into(),
@@ -3517,12 +3551,11 @@ mod proofs {
     }
 
     // The clock never moves backward: a refill carries last_refill_ms
-    // forward or leaves it unchanged, over the full u64 domain. This is
-    // monotonic non-decrease, deliberately weaker than "an already-paid
-    // window is never re-credited" — when capacity > MS_PER_HOUR the
-    // consumed-time division can round to zero, leaving the clock equal
-    // while tokens are credited, so the stronger property does not hold and
-    // is not claimed here.
+    // forward or leaves it unchanged, over the full u64 domain. The tighter
+    // bound (it lands at exactly `now` minus the unspent sub-token
+    // remainder, so a paid window is never re-credited) holds by refill's
+    // remainder accounting and is covered by the unit tests; stating it in a
+    // harness would need nested 128-bit division the solver can't close.
     #[kani::proof]
     fn refill_clock_never_rewinds() {
         let mut b = arb_bucket();

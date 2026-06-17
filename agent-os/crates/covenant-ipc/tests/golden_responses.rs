@@ -82,6 +82,7 @@ const EXPECTED_RESPONSE_KINDS: &[&str] = &[
     "sap_published_audit_root",
     "sap_published_attestation",
     "provenance_actions",
+    "capability_usage",
     "error",
 ];
 
@@ -303,6 +304,19 @@ fn golden_response_vectors() -> Vec<Response> {
             }],
             scanned: 7,
         },
+        Response::CapabilityUsage {
+            grants: vec![covenant_ipc::CapabilityUsageEntry {
+                signature_b58: "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr".into(),
+                action: "tool.call.echo".into(),
+                expires_at: Some(1_700_000_000_000),
+                revoked: false,
+                budget: Some(covenant_ipc::CapabilityUsageBudget {
+                    max_uses: 5,
+                    used: 2,
+                    remaining: 3,
+                }),
+            }],
+        },
         Response::Error {
             message: "capability check failed".into(),
         },
@@ -375,6 +389,7 @@ fn assert_response_variant_coverage(res: &Response) {
         | Response::SapPublishedAuditRoot { .. }
         | Response::SapPublishedAttestation { .. }
         | Response::ProvenanceActions { .. }
+        | Response::CapabilityUsage { .. }
         | Response::Error { .. } => {}
     }
 }

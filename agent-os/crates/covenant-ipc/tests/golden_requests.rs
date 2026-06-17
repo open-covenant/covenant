@@ -82,6 +82,7 @@ const EXPECTED_REQUEST_KINDS: &[&str] = &[
     "sap_publish_audit_root",
     "sap_publish_attestation",
     "query_provenance",
+    "capability_usage",
 ];
 
 /// One fully-populated representative per `Request` variant. Optional and
@@ -275,6 +276,7 @@ fn golden_request_vectors() -> Vec<Request> {
             outcome: Some("granted".into()),
             limit: 5,
         },
+        Request::CapabilityUsage,
     ]
 }
 
@@ -388,6 +390,7 @@ fn assert_request_variant_coverage(req: &Request) {
         | Request::SapPublishAgent { .. }
         | Request::SapPublishAuditRoot { .. }
         | Request::SapPublishAttestation { .. }
-        | Request::QueryProvenance { .. } => {}
+        | Request::QueryProvenance { .. }
+        | Request::CapabilityUsage => {}
     }
 }

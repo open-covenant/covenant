@@ -1,0 +1,16 @@
+{
+  "kind": "capability_usage",
+  "grants": [
+    {
+      "signature_b58": "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr",
+      "action": "tool.call.echo",
+      "expires_at": 1700000000000,
+      "revoked": false,
+      "budget": {
+        "max_uses": 5,
+        "used": 2,
+        "remaining": 3
+      }
+    }
+  ]
+}

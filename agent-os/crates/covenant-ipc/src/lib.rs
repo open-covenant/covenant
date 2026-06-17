@@ -802,6 +802,12 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
+    /// Operator-only read of capability state: every grant in the ledger with
+    /// its action, expiry, revocation status, and — for grants that declared a
+    /// `max_uses` budget — how many uses are spent and how many remain.
+    /// Read-only; records no use. IPC-only, gated on the operator identity like
+    /// [`Request::QueryProvenance`].
+    CapabilityUsage,
 }
 
 fn default_recent_limit() -> usize {
@@ -1076,9 +1082,41 @@ pub enum Response {
         actions: Vec<PrivilegedAction>,
         scanned: u64,
     },
+    /// Result of a [`Request::CapabilityUsage`] query. One
+    /// [`CapabilityUsageEntry`] per grant in the ledger — live and
+    /// revoked-but-not-yet-purged — joined to its durable use count by
+    /// signature.
+    CapabilityUsage {
+        grants: Vec<CapabilityUsageEntry>,
+    },
     Error {
         message: String,
     },
+}
+
+/// One grant's row in a [`Response::CapabilityUsage`] reply. `signature_b58`
+/// is the base58 ed25519 signature that uniquely identifies the grant — the
+/// join key, so several grants for one `action` stay distinct. `expires_at` is
+/// epoch-ms (`None` is perpetual). `budget` is present only for grants that
+/// declared a `max_uses` usage budget.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityUsageEntry {
+    pub signature_b58: String,
+    pub action: String,
+    pub expires_at: Option<u64>,
+    pub revoked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<CapabilityUsageBudget>,
+}
+
+/// Usage-budget state for a budgeted grant. `used` is the durable count the
+/// enforcement path has recorded against `max_uses`; `remaining` is
+/// `max_uses - used` saturated at zero.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityUsageBudget {
+    pub max_uses: u64,
+    pub used: u64,
+    pub remaining: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -3303,6 +3341,60 @@ mod tests {
              capabilities-listing behaviour diverges from the \
              documented contract without a single error surface",
         );
+    }
+
+    #[test]
+    fn request_capability_usage_is_a_bare_kind_tagged_unit_variant() {
+        let wire = serde_json::to_value(Request::CapabilityUsage).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({ "kind": "capability_usage" }),
+            "Request::CapabilityUsage is parameterless — its wire form must be \
+             exactly the kind tag, so a stale operator client can issue the \
+             query with no body",
+        );
+        let decoded: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded, Request::CapabilityUsage);
+    }
+
+    #[test]
+    fn capability_usage_entry_omits_budget_when_absent_and_round_trips_both_shapes() {
+        // A budgeted grant carries the budget sub-object; an unbudgeted grant
+        // omits the field entirely (skip_serializing_if) rather than emitting
+        // null, so the wire row stays clean for the common unbudgeted case.
+        let budgeted = CapabilityUsageEntry {
+            signature_b58: "sig-budgeted".into(),
+            action: "tool.call.echo".into(),
+            expires_at: Some(1_700_000_000_000),
+            revoked: false,
+            budget: Some(CapabilityUsageBudget {
+                max_uses: 5,
+                used: 2,
+                remaining: 3,
+            }),
+        };
+        let unbudgeted = CapabilityUsageEntry {
+            signature_b58: "sig-perpetual".into(),
+            action: "memory.read".into(),
+            expires_at: None,
+            revoked: true,
+            budget: None,
+        };
+
+        let budgeted_wire = serde_json::to_value(&budgeted).unwrap();
+        assert_eq!(budgeted_wire["budget"]["remaining"], 3);
+        let unbudgeted_wire = serde_json::to_value(&unbudgeted).unwrap();
+        assert!(
+            unbudgeted_wire.get("budget").is_none(),
+            "an unbudgeted grant must omit the budget field, not emit null: {unbudgeted_wire}",
+        );
+        assert_eq!(unbudgeted_wire["expires_at"], serde_json::Value::Null);
+
+        for entry in [budgeted, unbudgeted] {
+            let decoded: CapabilityUsageEntry =
+                serde_json::from_value(serde_json::to_value(&entry).unwrap()).unwrap();
+            assert_eq!(decoded, entry, "CapabilityUsageEntry must round-trip");
+        }
     }
 
     #[test]

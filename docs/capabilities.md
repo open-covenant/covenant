@@ -310,3 +310,28 @@ Retention maintenance has the same machine-readable convention:
 ```
 
 `before_ms` is the effective cutoff, including values derived from `--older-than-ms`.
+
+### Operator capability-usage query
+
+`covenant capabilities recent` reports the signed grant ledger but not how much of a `max_uses` budget a grant has spent — a holder learns its remaining budget only by being refused. The daemon exposes an operator-only read query over capability state for that visibility. It is an IPC `Request` of kind `capability_usage` (no CLI verb yet) and returns:
+
+```json
+{
+  "kind": "capability_usage",
+  "grants": [
+    {
+      "signature_b58": "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr",
+      "action": "tool.call.echo",
+      "expires_at": 1700000000000,
+      "revoked": false,
+      "budget": { "max_uses": 5, "used": 2, "remaining": 3 }
+    }
+  ]
+}
+```
+
+One entry per grant in the ledger, including revoked-but-not-yet-purged grants (flagged `revoked: true`). `budget` is present only for grants that declared a `max_uses` budget; an unbudgeted grant omits the field. `used` is the durable count the enforcement path has recorded — it is read from the same `uses.jsonl` ledger `consume_uses` maintains, without recording a use, so it survives daemon restart and never advertises a refilled budget. `remaining` is `max_uses - used`.
+
+The query joins grants to their use counts and revocations by `signature_b58`, the base58 ed25519 grant signature, not by `action`. Several grants for the same action therefore stay distinct, each reporting its own budget.
+
+The query requires the operator identity. A peer that merely holds a grant is refused, so delegated-authority state — which capabilities exist and how much budget remains — never leaks to a non-operator. The boundary is observability only: it reports on-disk capability state and changes nothing.

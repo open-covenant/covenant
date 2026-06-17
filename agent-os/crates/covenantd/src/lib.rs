@@ -2372,6 +2372,7 @@ impl Server {
                     .await
             }
             Request::RecentCapabilities { limit } => self.recent_capabilities(limit, peer).await,
+            Request::CapabilityUsage => self.capability_usage(peer).await,
             Request::GrantCapability {
                 action,
                 scope,
@@ -14769,6 +14770,55 @@ impl Server {
         }
     }
 
+    /// Operator-only read of capability state: every grant in the ledger — live
+    /// and revoked-but-not-yet-purged — with its action, expiry, revocation
+    /// status, and, for grants that declared a `max_uses` budget, used/remaining
+    /// against that budget. The join to the durable use ledger is keyed on the
+    /// ed25519 signature, so several grants for one action stay distinct. Gated
+    /// on the operator identity like [`Self::query_provenance`]: delegated
+    /// authority state must not leak to a peer that merely holds a grant.
+    /// Read-only — observing usage records no use. `max_uses` is read from the
+    /// signed scope exactly as the enforcement path reads it, so the reported
+    /// budget is the one the daemon would honor.
+    async fn capability_usage(&self, peer: &AgentId) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "capability usage query requires the operator identity".into(),
+            };
+        }
+        match self.capabilities.usage_snapshot().await {
+            Ok(snapshot) => {
+                let grants = snapshot
+                    .into_iter()
+                    .map(|usage| {
+                        let signed = &usage.capability;
+                        let budget = signed
+                            .capability
+                            .scope
+                            .get("max_uses")
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|max_uses| covenant_ipc::CapabilityUsageBudget {
+                                max_uses,
+                                used: usage.used,
+                                remaining: max_uses.saturating_sub(usage.used),
+                            });
+                        covenant_ipc::CapabilityUsageEntry {
+                            signature_b58: bs58::encode(signed.signature).into_string(),
+                            action: signed.capability.action.clone(),
+                            expires_at: signed.capability.expires_at,
+                            revoked: usage.revoked,
+                            budget,
+                        }
+                    })
+                    .collect();
+                Response::CapabilityUsage { grants }
+            }
+            Err(e) => Response::Error {
+                message: format!("permissions: {e}"),
+            },
+        }
+    }
+
     /// The base58 signature of the live `secret.access` capability whose scope
     /// admits `name`, or `Ok(None)` if the peer holds no such grant. Like
     /// [`Self::x402_pay_scope_allows`] an unscoped grant admits any secret, a
@@ -15639,6 +15689,7 @@ required = {caps:?}
             | Request::ReceiptBatches { .. }
             | Request::SearchMemory { .. }
             | Request::RecentCapabilities { .. }
+            | Request::CapabilityUsage
             | Request::Verify { .. }
             | Request::IgnoreCheck { .. }
             | Request::ListTools
@@ -15755,6 +15806,7 @@ required = {caps:?}
                 ReadQuery,
             ),
             (Request::RecentCapabilities { limit: 0 }, ReadQuery),
+            (Request::CapabilityUsage, ReadQuery),
             (Request::Verify { window: 0 }, ReadQuery),
             (
                 Request::IgnoreCheck {
@@ -15986,7 +16038,7 @@ required = {caps:?}
         );
         assert_eq!(
             inventory.len(),
-            49,
+            50,
             "every IPC Request variant must appear in the audit inventory exactly once; a new \
          variant must be added here and classified in audit_exposure",
         );
@@ -52773,6 +52825,174 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn capability_usage_requires_operator_identity() {
+        let s = server_with(vec![], "");
+        // Seed a grant so there is delegated-authority state that must not leak.
+        let me = s.identity.agent_id();
+        let cap = covenant_types::Capability {
+            subject: AgentId::new("bob@local", [8u8; 32]),
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({ "version": 1, "max_uses": 2 }),
+            granted_by: me,
+            expires_at: None,
+        };
+        s.capabilities
+            .record(sign_capability(cap, s.identity.signing_key()))
+            .await
+            .unwrap();
+
+        // A non-operator peer is refused outright — not filtered to an empty
+        // list — so it cannot learn which grants exist or how much budget
+        // remains.
+        let alien = AgentId::new("eve@local", [7u8; 32]);
+        match s.respond(Request::CapabilityUsage, &alien).await {
+            Response::Error { message } => assert!(
+                message.contains("operator identity"),
+                "unexpected error message: {message}"
+            ),
+            other => panic!("a non-operator peer must be refused, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn capability_usage_operator_sees_budget_expiry_and_no_budget() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // A budgeted, expiring grant.
+        let budgeted = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("bob@local", [8u8; 32]),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1, "max_uses": 3 }),
+                granted_by: me.clone(),
+                expires_at: Some(1_700_000_000_000),
+            },
+            s.identity.signing_key(),
+        );
+        let budgeted_sig = budgeted.signature;
+        s.capabilities.record(budgeted).await.unwrap();
+
+        // An unbudgeted, perpetual grant.
+        s.capabilities
+            .record(sign_capability(
+                covenant_types::Capability {
+                    subject: AgentId::new("carol@local", [9u8; 32]),
+                    action: "memory.read".into(),
+                    scope: serde_json::json!({}),
+                    granted_by: me,
+                    expires_at: None,
+                },
+                s.identity.signing_key(),
+            ))
+            .await
+            .unwrap();
+
+        // Spend one unit of the budget through the durable ledger.
+        s.capabilities
+            .consume_uses(&[covenant_permissions::BudgetConsumeRequest {
+                signature: budgeted_sig,
+                max_uses: 3,
+            }])
+            .await
+            .unwrap();
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert_eq!(grants.len(), 2);
+
+        let budgeted_b58 = bs58::encode(budgeted_sig).into_string();
+        let b = grants
+            .iter()
+            .find(|g| g.signature_b58 == budgeted_b58)
+            .expect("budgeted grant present");
+        assert_eq!(b.action, "tool.call.echo");
+        assert_eq!(b.expires_at, Some(1_700_000_000_000));
+        assert!(!b.revoked);
+        assert_eq!(
+            b.budget,
+            Some(covenant_ipc::CapabilityUsageBudget {
+                max_uses: 3,
+                used: 1,
+                remaining: 2,
+            }),
+            "one of three uses spent leaves two remaining",
+        );
+
+        let u = grants
+            .iter()
+            .find(|g| g.action == "memory.read")
+            .expect("unbudgeted grant present");
+        assert_eq!(u.budget, None, "an unbudgeted grant reports no budget");
+        assert_eq!(u.expires_at, None);
+    }
+
+    #[tokio::test]
+    async fn capability_usage_attributes_budget_to_the_right_signature() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Two grants for the SAME action to two subjects: same action, distinct
+        // signatures. A join keyed on the action would smear their budgets.
+        let a = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("alice@local", [1u8; 32]),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1, "max_uses": 9 }),
+                granted_by: me.clone(),
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let b = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("bob@local", [2u8; 32]),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1, "max_uses": 9 }),
+                granted_by: me,
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        assert_ne!(sig_a, sig_b);
+        s.capabilities.record(a).await.unwrap();
+        s.capabilities.record(b).await.unwrap();
+
+        for _ in 0..2 {
+            s.capabilities
+                .consume_uses(&[covenant_permissions::BudgetConsumeRequest {
+                    signature: sig_a,
+                    max_uses: 9,
+                }])
+                .await
+                .unwrap();
+        }
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let used_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .budget
+                .expect("budgeted grant")
+                .used
+        };
+        assert_eq!(used_of(sig_a), 2, "A's two uses attribute to A's signature");
+        assert_eq!(
+            used_of(sig_b),
+            0,
+            "B shares A's action but its budget is untouched — the join is by signature",
+        );
     }
 
     #[tokio::test]

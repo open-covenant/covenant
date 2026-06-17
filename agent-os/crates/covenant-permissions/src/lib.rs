@@ -1268,6 +1268,19 @@ pub enum BudgetConsumeOutcome {
     Exhausted(Vec<ExhaustedBudget>),
 }
 
+/// One grant's introspection state: the signed grant, whether it is revoked,
+/// and how many durable uses it has recorded. `used` is the same per-signature
+/// count [`CapabilityStore::consume_uses`] maintains, read without recording a
+/// use, so an operator observes the exact budget the enforcement path would
+/// honor. Keyed implicitly by the ed25519 signature `capability` carries, so
+/// several grants for one action stay distinct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapabilityUsage {
+    pub capability: SignedCapability,
+    pub revoked: bool,
+    pub used: u64,
+}
+
 #[async_trait]
 pub trait CapabilityStore: Send + Sync {
     async fn record(&self, signed: SignedCapability) -> Result<(), PermissionError>;
@@ -1299,6 +1312,15 @@ pub trait CapabilityStore: Send + Sync {
         &self,
         requests: &[BudgetConsumeRequest],
     ) -> Result<BudgetConsumeOutcome, PermissionError>;
+    /// Read-only snapshot of every grant in the ledger paired with its
+    /// revocation status and durable use count. Reads the same per-signature
+    /// counts `consume_uses` maintains without recording a use, and joins
+    /// grants to counts and revocations by the ed25519 signature so several
+    /// grants for the same action stay distinct. The snapshot is taken under
+    /// the same lock as `record`/`revoke`/`consume_uses`, so a grant, its
+    /// revocation, and its use count are read consistently with respect to a
+    /// concurrent grant/revoke/consume.
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError>;
 }
 
 /// Revocation record. The daemon writes one of these per `revoke()` call;
@@ -1593,6 +1615,31 @@ impl CapabilityStore for JsonlCapabilityStore {
         f.flush().await?;
         Ok(BudgetConsumeOutcome::Consumed)
     }
+
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError> {
+        let _g = self.lock.lock().await;
+        let revoked: std::collections::HashSet<[u8; 64]> = self
+            .read_all_revocations()
+            .await?
+            .into_iter()
+            .map(|r| r.signature)
+            .collect();
+        let mut counts: std::collections::HashMap<[u8; 64], u64> =
+            std::collections::HashMap::new();
+        for use_record in Self::read_jsonl::<UseRecord>(&self.uses_path).await? {
+            *counts.entry(use_record.signature).or_insert(0) += 1;
+        }
+        Ok(self
+            .read_all_grants()
+            .await?
+            .into_iter()
+            .map(|capability| CapabilityUsage {
+                used: counts.get(&capability.signature).copied().unwrap_or(0),
+                revoked: revoked.contains(&capability.signature),
+                capability,
+            })
+            .collect())
+    }
 }
 
 impl JsonlCapabilityStore {
@@ -1735,6 +1782,20 @@ impl CapabilityStore for InMemoryCapabilityStore {
             *uses.entry(signature).or_insert(0) += 1;
         }
         Ok(BudgetConsumeOutcome::Consumed)
+    }
+
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError> {
+        let revoked = self.revoked.lock().await;
+        let granted = self.granted.lock().await;
+        let uses = self.uses.lock().await;
+        Ok(granted
+            .iter()
+            .map(|capability| CapabilityUsage {
+                used: uses.get(&capability.signature).copied().unwrap_or(0),
+                revoked: revoked.contains_key(&capability.signature),
+                capability: capability.clone(),
+            })
+            .collect())
     }
 }
 
@@ -4641,6 +4702,168 @@ mod tests {
             .count();
         assert_eq!(consumed, 1, "exactly one concurrent check may consume the last unit");
         assert_eq!(exhausted, 1, "the loser must be refused, not also pass");
+    }
+
+    #[tokio::test]
+    async fn in_memory_usage_snapshot_reports_durable_count_without_recording() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let store = InMemoryCapabilityStore::new();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        store.record(signed).await.unwrap();
+
+        let snap = store.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert_eq!(snap[0].used, 0, "a grant with no recorded use reports used == 0");
+        assert!(!snap[0].revoked);
+
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap();
+
+        // Reading the snapshot is observation, not consumption: repeated reads
+        // never bump the count.
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 1);
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 1);
+
+        // The used count the snapshot reports is the exact budget the
+        // enforcement path honors: one unit remains, so one more consume passes
+        // and the next is refused. Had the snapshot recorded a use, this consume
+        // would already be exhausted.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+        );
+        assert!(matches!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Exhausted(_),
+        ));
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 2);
+    }
+
+    #[tokio::test]
+    async fn jsonl_usage_snapshot_reads_durable_ledger_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        s.record(signed).await.unwrap();
+        s.consume_uses(&[BudgetConsumeRequest {
+            signature: sig,
+            max_uses: 3,
+        }])
+        .await
+        .unwrap();
+        drop(s);
+
+        // A fresh store over the same directory recomputes the count from
+        // uses.jsonl — the same on-disk ledger consume_uses folds — so the
+        // snapshot cannot advertise a budget a restart would have refilled.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        let snap = s2.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert_eq!(snap[0].used, 1);
+        assert!(!snap[0].revoked);
+    }
+
+    #[tokio::test]
+    async fn jsonl_usage_snapshot_keys_use_count_by_signature_not_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let issuer = LocalIdentity::generate("authority@local");
+        let alice = LocalIdentity::generate("alice@local").agent_id();
+        let bob = LocalIdentity::generate("bob@local").agent_id();
+        let store = JsonlCapabilityStore::open(path).await.unwrap();
+
+        // Two grants for the SAME action but distinct subjects, so distinct
+        // signatures. A join keyed on the action would smear their budgets
+        // together; keyed on the signature they stay separate.
+        let a = sign(
+            cap(alice, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let b = sign(
+            cap(bob, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        assert_ne!(sig_a, sig_b);
+        store.record(a).await.unwrap();
+        store.record(b).await.unwrap();
+
+        for _ in 0..2 {
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig_a,
+                    max_uses: 9,
+                }])
+                .await
+                .unwrap();
+        }
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: sig_b,
+                max_uses: 9,
+            }])
+            .await
+            .unwrap();
+
+        let snap = store.usage_snapshot().await.unwrap();
+        let used_of =
+            |sig: [u8; 64]| snap.iter().find(|u| u.capability.signature == sig).unwrap().used;
+        assert_eq!(used_of(sig_a), 2);
+        assert_eq!(used_of(sig_b), 1);
+    }
+
+    #[tokio::test]
+    async fn usage_snapshot_includes_revoked_grants_flagged() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let store = InMemoryCapabilityStore::new();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        store.record(signed).await.unwrap();
+        assert!(store.revoke(sig).await.unwrap());
+
+        // A revoked grant still appears, flagged, so the operator sees the full
+        // delegated-authority history — the live set (recent/list_for_subject)
+        // drops it.
+        let snap = store.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert!(snap[0].revoked);
     }
 
     #[tokio::test]

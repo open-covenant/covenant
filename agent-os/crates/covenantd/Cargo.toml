@@ -33,6 +33,7 @@ covenant-settlement = { path = "../covenant-settlement" }
 # feature in a separate change.
 covenant-x402 = { path = "../covenant-x402" }
 covenant-hyre = { path = "../covenant-hyre" }
+covenant-syra = { path = "../covenant-syra" }
 covenant-metaplex = { path = "../covenant-metaplex" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

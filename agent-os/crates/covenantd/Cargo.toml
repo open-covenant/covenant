@@ -46,6 +46,7 @@ covenant-acedata = { path = "../covenant-acedata" }
 covenant-robinhood = { path = "../covenant-robinhood" }
 covenant-circuit = { path = "../covenant-circuit", optional = true }
 covenant-krexa = { path = "../covenant-krexa" }
+covenant-clawville = { path = "../covenant-clawville" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
@@ -67,6 +68,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 covenant-audit = { path = "../covenant-audit" }
 covenant-hyre = { path = "../covenant-hyre" }
+covenant-clawville = { path = "../covenant-clawville" }
 covenant-identity = { path = "../covenant-identity" }
 covenant-llm = { path = "../covenant-llm" }
 covenant-manifest = { path = "../covenant-manifest" }

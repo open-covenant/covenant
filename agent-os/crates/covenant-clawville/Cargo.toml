@@ -1,0 +1,21 @@
+[package]
+name = "covenant-clawville"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "ClawVille profile for Covenant — AI↔AI bounty verification: capability-scoped grants, hash-chained action-log evidence, and signed pass/fail verdicts that gate PayAI escrow release. Covenant never touches funds."
+
+[dependencies]
+covenant-mcp = { path = "../covenant-mcp" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_jcs = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

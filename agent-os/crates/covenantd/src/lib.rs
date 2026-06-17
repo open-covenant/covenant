@@ -1395,6 +1395,10 @@ pub struct Server {
     /// trivial map insert/read never held across `.await`.
     spend_grant_calls: Arc<std::sync::Mutex<std::collections::HashMap<u128, SpendGrantBinding>>>,
     robinhood: Option<Arc<robinhood::RobinhoodState>>,
+    /// Opt-in ClawVille profile: bounty-verification config. Disabled by
+    /// default; when off, no `clawville.*` tool is advertised or callable.
+    /// Pure compute (no key, no network), so it carries config only.
+    clawville: covenant_clawville::ClawvilleConfig,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1456,6 +1460,7 @@ impl Server {
             acedata: None,
             spend_grant: None,
             robinhood: None,
+            clawville: covenant_clawville::ClawvilleConfig::default(),
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
             spend_grant_calls: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -1649,6 +1654,15 @@ impl Server {
     /// receipt attestor and the configured policy.
     pub fn with_robinhood(mut self, state: robinhood::RobinhoodState) -> Self {
         self.robinhood = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable the ClawVille profile. Advertises the `clawville.bounty.*`
+    /// bounty-verification tools (open / scope / verify / release). Pure
+    /// compute: no key, no network, no spend. Covenant decides whether the
+    /// work was done; PayAI moves the money.
+    pub fn with_clawville(mut self, config: covenant_clawville::ClawvilleConfig) -> Self {
+        self.clawville = config;
         self
     }
 
@@ -4668,6 +4682,7 @@ impl Server {
         if let Some(state) = &self.sns {
             tools.extend(covenant_sns::sns_specs(&state.config));
         }
+        tools.extend(covenant_clawville::clawville_specs(&self.clawville));
         Response::ToolList { tools }
     }
 
@@ -4738,6 +4753,9 @@ impl Server {
         }
         if name.starts_with("sns.") {
             return self.sns_tool_call(name, arguments).await;
+        }
+        if name.starts_with("clawville.") {
+            return self.clawville_tool_call(name, arguments).await;
         }
         if name.starts_with("acedata.") {
             return self.acedata_tool_call(name, arguments, peer).await;
@@ -5226,6 +5244,31 @@ impl Server {
             },
             Err(message) => Response::Error {
                 message: format!("tool: {message}"),
+            },
+        }
+    }
+
+    /// Execute a ClawVille bounty-verification tool. The `tool.call.<name>`
+    /// capability and scope are already enforced by [`Self::call_tool`].
+    /// Pure compute, no key and no network: it pins criteria, scopes a worker
+    /// grant, verifies a submission against its action-log evidence, and emits
+    /// a PayAI release decision. Covenant never moves funds.
+    async fn clawville_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
+        let Some(tool) = covenant_clawville::clawville_tool(&self.clawville, &name) else {
+            return Response::Error {
+                message: format!(
+                    "unknown or disabled clawville tool: {name} \
+                     (enable with COVENANT_CLAWVILLE_ENABLED=1)"
+                ),
+            };
+        };
+        match tool.call(arguments).await {
+            Ok(r) => Response::ToolResult {
+                content: r.content,
+                is_error: r.is_error,
+            },
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
             },
         }
     }

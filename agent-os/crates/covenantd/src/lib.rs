@@ -13,6 +13,7 @@ pub mod http;
 pub mod hyre;
 pub mod metaplex;
 pub mod reputation;
+pub mod wurk;
 pub mod spend_authz;
 pub mod sse;
 pub mod stream_dispatch;
@@ -1219,6 +1220,10 @@ pub struct Server {
     /// the operator has not enabled Metaplex; in that state no
     /// `metaplex.*` tool is advertised or callable.
     metaplex: Option<Arc<metaplex::MetaplexState>>,
+    /// Opt-in WURK agent-to-human profile (config only). None when the
+    /// operator has not enabled WURK; in that state no `wurk.*` tool is
+    /// advertised or callable.
+    wurk: Option<Arc<wurk::WurkState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1273,6 +1278,7 @@ impl Server {
             escrow: None,
             hyre: None,
             metaplex: None,
+            wurk: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1387,6 +1393,13 @@ impl Server {
     /// sidecar, which holds the minting key out of the daemon.
     pub fn with_metaplex(mut self, state: metaplex::MetaplexState) -> Self {
         self.metaplex = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable the WURK agent-to-human profile (config only). When unset,
+    /// no `wurk.*` tool is advertised or callable.
+    pub fn with_wurk(mut self, state: wurk::WurkState) -> Self {
+        self.wurk = Some(Arc::new(state));
         self
     }
 
@@ -4034,6 +4047,9 @@ impl Server {
         if let Some(state) = &self.metaplex {
             tools.extend(covenant_metaplex::metaplex_specs(&state.config));
         }
+        if let Some(state) = &self.wurk {
+            tools.extend(covenant_wurk::wurk_specs(&state.config));
+        }
         Response::ToolList { tools }
     }
 
@@ -4101,6 +4117,9 @@ impl Server {
         }
         if name.starts_with("metaplex.") {
             return self.metaplex_tool_call(name, arguments).await;
+        }
+        if name.starts_with("wurk.") {
+            return self.wurk_tool_call(name, arguments, peer).await;
         }
 
         match self.tools.call(&name, arguments).await {
@@ -4187,6 +4206,53 @@ impl Server {
                     "unknown or disabled metaplex tool: {name} (reads need \
                      COVENANT_METAPLEX_DAS_URL; writes need the signer sidecar + RPC)"
                 ),
+            };
+        };
+        match tool.call(arguments).await {
+            Ok(r) => Response::ToolResult {
+                content: r.content,
+                is_error: r.is_error,
+            },
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Execute a WURK tool on the caller's behalf. `wurk.hire_humans`
+    /// runs the paid x402 v2 loop with the caller as payer;
+    /// `wurk.job_status` and `wurk.choose_winners` are free reads. The
+    /// funding key stays in the `covenant-x402-signer` sidecar.
+    async fn wurk_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
+        let Some(state) = self.wurk.clone() else {
+            return Response::Error {
+                message: "wurk provider is not enabled on this daemon.".into(),
+            };
+        };
+        let Some(x402) = self.x402_dispatch.clone() else {
+            return Response::Error {
+                message: "wurk requires the x402 funding-key sidecar. \
+                          Wire it via Server::with_x402_dispatch and restart."
+                    .into(),
+            };
+        };
+        let executor = Arc::new(wurk::DaemonWurkExecutor::new(
+            self.settlement.clone(),
+            self.audit.clone(),
+            self.budget.clone(),
+            x402,
+            self.identity.agent_id(),
+            peer.clone(),
+            state.config.base_url.clone(),
+        ));
+        let Some(tool) = covenant_wurk::wurk_tool(&state.config, &name, executor) else {
+            return Response::Error {
+                message: format!("unknown wurk tool: {name}"),
             };
         };
         match tool.call(arguments).await {

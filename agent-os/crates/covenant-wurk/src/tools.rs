@@ -288,6 +288,20 @@ pub fn wurk_tools(config: &WurkConfig, executor: Arc<dyn WurkExecutor>) -> Vec<A
     ]
 }
 
+/// Build just the named tool, or `None` if no tool maps to it. Lets the
+/// daemon bind a payer-scoped executor per call by name.
+pub fn wurk_tool(
+    config: &WurkConfig,
+    name: &str,
+    executor: Arc<dyn WurkExecutor>,
+) -> Option<Arc<dyn Tool>> {
+    let mut cfg = config.clone();
+    cfg.enabled = true;
+    wurk_tools(&cfg, executor)
+        .into_iter()
+        .find(|t| t.name() == name)
+}
+
 /// Tool specs for discovery without binding a payer.
 pub fn wurk_specs(config: &WurkConfig) -> Vec<ToolSpec> {
     let mut cfg = config.clone();

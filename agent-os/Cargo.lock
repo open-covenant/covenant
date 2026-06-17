@@ -1583,6 +1583,7 @@ dependencies = [
  "covenant-sap-bridge",
  "covenant-settlement",
  "covenant-types",
+ "covenant-wurk",
  "covenant-x402",
  "dotenvy",
  "futures",

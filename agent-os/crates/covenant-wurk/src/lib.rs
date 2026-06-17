@@ -19,7 +19,7 @@ pub mod view;
 pub mod x402;
 
 pub use config::WurkConfig;
-pub use tools::{wurk_specs, wurk_tools, PaidRequest, PaidResponse, WurkExecutor};
+pub use tools::{wurk_specs, wurk_tool, wurk_tools, PaidRequest, PaidResponse, WurkExecutor};
 pub use view::{parse_view, JobView, Submission};
 pub use x402::{execute_paid, parse_challenge, PaidHttp};
 

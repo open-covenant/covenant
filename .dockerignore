@@ -1,0 +1,7 @@
+# Keep Docker build contexts lean (Render builds from a clean git checkout; this
+# matters for local `docker build` against a working tree with build artifacts).
+**/target/
+**/node_modules/
+.git/
+landing/.next/
+**/*.log

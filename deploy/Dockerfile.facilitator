@@ -1,0 +1,29 @@
+## Multi-stage Dockerfile for the x402 ER facilitator on Render.
+## Build context: repository root (so agent-os/ is visible).
+## Verifies ER-settled (consume_credits) payments and gates the /paid endpoint.
+
+FROM rust:1.90-slim-bookworm AS builder
+ENV CARGO_TERM_COLOR=always
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY agent-os/ ./agent-os/
+WORKDIR /src/agent-os
+RUN cargo build --release -p covenant-x402-facilitator --bin covenant-x402-facilitator
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --shell /bin/bash covenant
+COPY --from=builder /src/agent-os/target/release/covenant-x402-facilitator /usr/local/bin/covenant-x402-facilitator
+
+# Devnet defaults; override PROGRAM / ER / PRICE in render.yaml or the dashboard.
+# PORT is injected by the platform and read by the binary.
+ENV PROGRAM=cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y
+ENV ER=https://devnet-eu.magicblock.app
+ENV PRICE=1
+USER covenant
+EXPOSE 8402
+ENTRYPOINT ["/usr/local/bin/covenant-x402-facilitator"]

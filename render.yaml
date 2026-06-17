@@ -223,6 +223,33 @@ services:
       - key: RENDER_API_KEY
         sync: false  # team-scoped Render API key
 
+  # x402 ER facilitator: verifies ER-settled (consume_credits) payments and gates
+  # the /paid endpoint. Public web service so agents/clients can reach it. Devnet
+  # config; the ER signer key + delegated credit account live with the caller, not
+  # here, so this service holds no secret. Binds Render's $PORT.
+  - type: web
+    name: covenant-x402-er-facilitator
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    autoDeploy: true
+    rootDir: .
+    dockerfilePath: ./deploy/Dockerfile.facilitator
+    dockerContext: .
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - agent-os/crates/covenant-x402-facilitator/**
+        - agent-os/crates/covenant-x402/**
+        - deploy/Dockerfile.facilitator
+    envVars:
+      - key: PROGRAM
+        value: cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y
+      - key: ER
+        value: https://devnet-eu.magicblock.app
+      - key: PRICE
+        value: "1"
+
 envVarGroups:
   - name: covenant-sandbox-shared
     envVars:

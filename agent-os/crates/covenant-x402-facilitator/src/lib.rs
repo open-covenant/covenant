@@ -232,7 +232,15 @@ impl PaidEndpoint {
 }
 
 pub fn router(state: Arc<PaidEndpoint>) -> Router {
-    Router::new().route("/paid", get(handler)).with_state(state)
+    Router::new()
+        .route("/health", get(health))
+        .route("/paid", get(handler))
+        .with_state(state)
+}
+
+/// Liveness probe for the deploy platform (Render health check). Always 200.
+async fn health() -> Response {
+    (StatusCode::OK, "ok").into_response()
 }
 
 fn nonce_from_envelope(x_payment_b64: &str) -> Option<String> {

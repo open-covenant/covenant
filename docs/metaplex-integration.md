@@ -10,9 +10,10 @@ Live on mainnet:
 | What | Address |
 |---|---|
 | Covenant Agents collection (MPL Core) | `Duqs6dq1wXPcRqJVUCgSZxrkLRdg3oBfZ3ViER1kt6gC` |
-| Production agent identity asset | `9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH` |
+| Production agent identity asset (subject) | `9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH` |
 | Its 014 Registry record (PDA) | `D3ezfMUeBuXQjdDkKmiY9mHeQxARxsEgrbjRgtPWA14g` |
-| Covenant attestation authority | `96GsGo69kVfPZffudCexfnsSi5EuhAyd278MuJPwzGdu` |
+| Covenant attestation authority (validator) | `DKxXrxxCzAwLSXRUWzUouiW46GNf4PR2mjjhAbtCAkcK` |
+| Audit-root attestation (ERC-8004 v2) | `7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH` |
 
 Verify either of the first two at
 [opencovenant.org/agents](https://opencovenant.org/agents), or on the
@@ -99,7 +100,7 @@ so any wallet/explorer decodes it without Covenant-specific code:
     "asset": "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH",
     "registration": "D3ezfMUeBuXQjdDkKmiY9mHeQxARxsEgrbjRgtPWA14g"
   },
-  "validator": "96GsGo69kVfPZffudCexfnsSi5EuhAyd278MuJPwzGdu",
+  "validator": "DKxXrxxCzAwLSXRUWzUouiW46GNf4PR2mjjhAbtCAkcK",
   "hashAlg": "sha256-merkle",
   "responseHash": "7c375d0e0a749966541c7543b87b76f61fd4b64d41ff12473d68f3ff45caef26",
   "tag": "audit",
@@ -140,8 +141,10 @@ Notes for consumers:
 1. **Authority** — fetch the asset (DAS `getAsset` or raw account) and check
    the AppData plugin's authority address against the Covenant attestation
    authority.
-2. **Collection** — check the asset's collection grouping against the
-   Covenant Agents collection.
+2. **Collection** (identity assets) — the agent identity is grouped under the
+   Covenant Agents collection; check the grouping. Audit-root attestations are
+   standalone assets, so they are trusted by the authority check above plus the
+   reproduced root below, not by collection membership.
 3. **Reproduce the root** — fetch the published audit log
    ([`/audit/events.jsonl`](https://opencovenant.org/audit/events.jsonl)) and
    its hash-chain sidecar

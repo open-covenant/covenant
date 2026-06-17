@@ -14822,6 +14822,8 @@ impl Server {
                         covenant_ipc::CapabilityUsageEntry {
                             signature_b58: bs58::encode(signed.signature).into_string(),
                             action: signed.capability.action.clone(),
+                            subject_display: signed.capability.subject.display.clone(),
+                            subject_pubkey_b58: signed.capability.subject.pubkey_base58(),
                             expires_at: signed.capability.expires_at,
                             revoked: usage.revoked,
                             effective,
@@ -53010,6 +53012,67 @@ required = {caps:?}
             used_of(sig_b),
             0,
             "B shares A's action but its budget is untouched — the join is by signature",
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_usage_attributes_subject_to_the_right_signature() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Two grants for the SAME action to two distinct subjects: each entry must
+        // report its own holder. A join keyed on the action — or sourcing the
+        // grantor instead of the subject — would mis-attribute them.
+        let alice = AgentId::new("alice@local", [1u8; 32]);
+        let bob = AgentId::new("bob@local", [2u8; 32]);
+        let a = sign_capability(
+            covenant_types::Capability {
+                subject: alice.clone(),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1 }),
+                granted_by: me.clone(),
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let b = sign_capability(
+            covenant_types::Capability {
+                subject: bob.clone(),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1 }),
+                granted_by: me,
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        s.capabilities.record(a).await.unwrap();
+        s.capabilities.record(b).await.unwrap();
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let entry_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .clone()
+        };
+        let ea = entry_of(sig_a);
+        assert_eq!(ea.subject_display, "alice@local");
+        assert_eq!(ea.subject_pubkey_b58, alice.pubkey_base58());
+        let eb = entry_of(sig_b);
+        assert_eq!(eb.subject_display, "bob@local");
+        assert_eq!(eb.subject_pubkey_b58, bob.pubkey_base58());
+        // The subjects don't transpose, and neither is the grantor: both were
+        // granted_by the daemon identity, which must never appear as the holder.
+        assert_ne!(ea.subject_pubkey_b58, eb.subject_pubkey_b58);
+        assert_ne!(
+            ea.subject_pubkey_b58,
+            s.identity.agent_id().pubkey_base58(),
+            "subject is the holder, not the grantor",
         );
     }
 

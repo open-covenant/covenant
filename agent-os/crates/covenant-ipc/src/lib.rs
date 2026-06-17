@@ -1096,14 +1096,19 @@ pub enum Response {
 
 /// One grant's row in a [`Response::CapabilityUsage`] reply. `signature_b58`
 /// is the base58 ed25519 signature that uniquely identifies the grant — the
-/// join key, so several grants for one `action` stay distinct. `expires_at` is
-/// epoch-ms (`None` is perpetual). `effective` is the daemon's own verdict on
-/// whether the grant would authorize an action right now. `budget` is present
-/// only for grants that declared a `max_uses` usage budget.
+/// join key, so several grants for one `action` stay distinct. `subject_display`
+/// and `subject_pubkey_b58` name the agent the authority is delegated to (the
+/// holder), the pubkey being the stable identity and the display the human
+/// label. `expires_at` is epoch-ms (`None` is perpetual). `effective` is the
+/// daemon's own verdict on whether the grant would authorize an action right
+/// now. `budget` is present only for grants that declared a `max_uses` usage
+/// budget.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CapabilityUsageEntry {
     pub signature_b58: String,
     pub action: String,
+    pub subject_display: String,
+    pub subject_pubkey_b58: String,
     pub expires_at: Option<u64>,
     pub revoked: bool,
     pub effective: CapabilityEffectiveStatus,
@@ -3391,6 +3396,8 @@ mod tests {
         let budgeted = CapabilityUsageEntry {
             signature_b58: "sig-budgeted".into(),
             action: "tool.call.echo".into(),
+            subject_display: "agent@host".into(),
+            subject_pubkey_b58: "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM".into(),
             expires_at: Some(1_700_000_000_000),
             revoked: false,
             effective: CapabilityEffectiveStatus::Live,
@@ -3403,6 +3410,8 @@ mod tests {
         let unbudgeted = CapabilityUsageEntry {
             signature_b58: "sig-perpetual".into(),
             action: "memory.read".into(),
+            subject_display: "reader@host".into(),
+            subject_pubkey_b58: "7mFqWd3rNpK8sVtY2hLxAe6BcZ4uJg9oQiXnRbDvCfMa".into(),
             expires_at: None,
             revoked: true,
             effective: CapabilityEffectiveStatus::Revoked,
@@ -3414,6 +3423,14 @@ mod tests {
         assert_eq!(
             budgeted_wire["effective"], "live",
             "effective serializes as a snake_case string: {budgeted_wire}",
+        );
+        assert_eq!(
+            budgeted_wire["subject_display"], "agent@host",
+            "the grant subject's display surfaces on the row: {budgeted_wire}",
+        );
+        assert_eq!(
+            budgeted_wire["subject_pubkey_b58"], "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM",
+            "the grant subject's base58 pubkey surfaces on the row: {budgeted_wire}",
         );
         let unbudgeted_wire = serde_json::to_value(&unbudgeted).unwrap();
         assert!(

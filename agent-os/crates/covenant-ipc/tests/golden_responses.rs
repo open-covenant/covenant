@@ -308,6 +308,8 @@ fn golden_response_vectors() -> Vec<Response> {
             grants: vec![covenant_ipc::CapabilityUsageEntry {
                 signature_b58: "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr".into(),
                 action: "tool.call.echo".into(),
+                subject_display: "agent@host".into(),
+                subject_pubkey_b58: "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM".into(),
                 expires_at: Some(1_700_000_000_000),
                 revoked: false,
                 effective: covenant_ipc::CapabilityEffectiveStatus::Live,

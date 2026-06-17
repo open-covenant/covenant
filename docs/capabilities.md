@@ -335,3 +335,5 @@ One entry per grant in the ledger, including revoked-but-not-yet-purged grants (
 The query joins grants to their use counts and revocations by `signature_b58`, the base58 ed25519 grant signature, not by `action`. Several grants for the same action therefore stay distinct, each reporting its own budget.
 
 The query requires the operator identity. A peer that merely holds a grant is refused, so delegated-authority state — which capabilities exist and how much budget remains — never leaks to a non-operator. The boundary is observability only: it reports on-disk capability state and changes nothing.
+
+An opt-in live test (`live_capability_usage_introspection.rs`) exercises the query through the real daemon: it grants a `max_uses` budget, spends part of it through real tool calls, asserts the reported `used`/`remaining`, and restarts the daemon against the same state to confirm the count is read from the durable ledger rather than a counter that resets on restart.

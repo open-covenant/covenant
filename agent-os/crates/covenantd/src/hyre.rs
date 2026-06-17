@@ -99,7 +99,16 @@ impl PaidExecutor for DaemonHyreExecutor {
             signer = signer.env(k.clone(), v.clone());
         }
 
-        let http = reqwest::Client::new();
+        // Bound the paid HTTP path: a hung Hyre endpoint or a stalled
+        // facilitator retry must not block the caller's tool call (and its
+        // held budget pre-check) forever. connect_timeout fails a dead host
+        // fast; the 60s ceiling matches the challenge's maxTimeoutSeconds so
+        // a real-but-slow facilitator settle round-trip still completes.
+        let http = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         let out = covenant_hyre::execute_paid(&http, &signer, &req)
             .await
             .map_err(|e| e.to_string())?;

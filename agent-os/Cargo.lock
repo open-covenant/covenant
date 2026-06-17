@@ -1503,6 +1503,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-wurk"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "covenant-mcp",
+ "covenant-x402",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-x402"
 version = "0.0.0"
 dependencies = [

@@ -93,7 +93,7 @@ The IPC request is `VerifyAuditIntegrity`. All surfaces return an `AuditIntegrit
 
 The daemon restricts integrity verification to the operator identity because the report exposes global audit metadata. A non-operator peer receives an error.
 
-A corrupted chain is reported, not hidden. `verify_integrity` re-reads the event log and the sidecar on every call, so an edit, a truncated or emptied sidecar, or a sidecar that diverges from the event log flips `valid` to `false` and names the break in `failures`. `live_cli_audit_verify_tamper.rs` exercises this end-to-end: it establishes a healthy `valid: true` baseline, empties the on-disk anchor sidecar of a running daemon, and confirms the next `covenant audit verify` reports `valid: false` with a non-empty `failures` list and zero anchors against the unchanged event count.
+A corrupted chain is reported, not hidden. `verify_integrity` re-reads the event log and the sidecar on every call, so an edit, a truncated or emptied sidecar, or a sidecar that diverges from the event log flips `valid` to `false` and names the break in `failures`. The verdict is identical across surfaces because every surface calls the same `verify_integrity`. `live_cli_audit_verify_tamper.rs` exercises this end-to-end over the CLI/socket path, and `live_http_audit_verify_tamper.rs` over `GET /audit/verify`: each establishes a healthy `valid: true` baseline, empties the on-disk anchor sidecar of a running daemon, and confirms the next verify reports `valid: false` with a non-empty `failures` list and zero anchors against the unchanged event count.
 
 ## Privileged Action Coverage
 

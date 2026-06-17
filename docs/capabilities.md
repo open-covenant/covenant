@@ -324,6 +324,7 @@ Retention maintenance has the same machine-readable convention:
       "action": "tool.call.echo",
       "expires_at": 1700000000000,
       "revoked": false,
+      "effective": "live",
       "budget": { "max_uses": 5, "used": 2, "remaining": 3 }
     }
   ]
@@ -331,6 +332,8 @@ Retention maintenance has the same machine-readable convention:
 ```
 
 One entry per grant in the ledger, including revoked-but-not-yet-purged grants (flagged `revoked: true`). `budget` is present only for grants that declared a `max_uses` budget; an unbudgeted grant omits the field. `used` is the durable count the enforcement path has recorded — it is read from the same `uses.jsonl` ledger `consume_uses` maintains, without recording a use, so it survives daemon restart and never advertises a refilled budget. `remaining` is `max_uses - used`.
+
+`effective` is the daemon's own verdict on whether the grant would authorize an action right now — one of `live`, `expired`, `revoked`, or `exhausted` — computed with the daemon clock and the same predicates the enforcement path applies. It is reported so an operator reads the daemon's decision directly rather than re-deriving it from `expires_at`, `revoked`, and `budget`, where a different clock or precedence could disagree with enforcement. Its precedence matches enforcement order: a revoked grant is dropped from the live set before expiry is checked, and a grant's budget is consumed only after the expiry-aware signature check passes, so `revoked` dominates `expired`, which dominates `exhausted`. A grant past its `expires_at` reports `expired` (using `now > expires_at`, so the grant is still `live` at the exact expiry millisecond, matching the check path).
 
 The query joins grants to their use counts and revocations by `signature_b58`, the base58 ed25519 grant signature, not by `action`. Several grants for the same action therefore stay distinct, each reporting its own budget.
 

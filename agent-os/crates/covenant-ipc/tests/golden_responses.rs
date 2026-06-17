@@ -310,6 +310,7 @@ fn golden_response_vectors() -> Vec<Response> {
                 action: "tool.call.echo".into(),
                 expires_at: Some(1_700_000_000_000),
                 revoked: false,
+                effective: covenant_ipc::CapabilityEffectiveStatus::Live,
                 budget: Some(covenant_ipc::CapabilityUsageBudget {
                     max_uses: 5,
                     used: 2,

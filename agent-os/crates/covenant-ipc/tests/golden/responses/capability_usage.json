@@ -6,6 +6,7 @@
       "action": "tool.call.echo",
       "expires_at": 1700000000000,
       "revoked": false,
+      "effective": "live",
       "budget": {
         "max_uses": 5,
         "used": 2,

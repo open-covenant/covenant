@@ -1097,16 +1097,42 @@ pub enum Response {
 /// One grant's row in a [`Response::CapabilityUsage`] reply. `signature_b58`
 /// is the base58 ed25519 signature that uniquely identifies the grant — the
 /// join key, so several grants for one `action` stay distinct. `expires_at` is
-/// epoch-ms (`None` is perpetual). `budget` is present only for grants that
-/// declared a `max_uses` usage budget.
+/// epoch-ms (`None` is perpetual). `effective` is the daemon's own verdict on
+/// whether the grant would authorize an action right now. `budget` is present
+/// only for grants that declared a `max_uses` usage budget.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CapabilityUsageEntry {
     pub signature_b58: String,
     pub action: String,
     pub expires_at: Option<u64>,
     pub revoked: bool,
+    pub effective: CapabilityEffectiveStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<CapabilityUsageBudget>,
+}
+
+/// The daemon's verdict on whether a grant would authorize an action right now,
+/// derived with the daemon clock and the same predicates the enforcement path
+/// applies. Reported so an operator reads the daemon's own decision rather than
+/// re-deriving it from the raw `expires_at`/`revoked`/`budget` fields, where a
+/// different clock or precedence could disagree with enforcement. Precedence
+/// matches enforcement order: a revoked grant is dropped from the live set
+/// before expiry is checked, and a grant's budget is consumed only after the
+/// expiry-aware signature check passes, so `Revoked` dominates `Expired`, which
+/// dominates `Exhausted`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityEffectiveStatus {
+    /// Authorizes now: not revoked, not past `expires_at`, and any usage budget
+    /// has uses remaining.
+    Live,
+    /// Past its `expires_at` (and not revoked). The enforcement clock rejects it.
+    Expired,
+    /// Revoked. Authority is withdrawn regardless of expiry or remaining budget.
+    Revoked,
+    /// A `max_uses` budget that is fully spent (and the grant is neither revoked
+    /// nor expired). The next invocation is refused.
+    Exhausted,
 }
 
 /// Usage-budget state for a budgeted grant. `used` is the durable count the
@@ -3367,6 +3393,7 @@ mod tests {
             action: "tool.call.echo".into(),
             expires_at: Some(1_700_000_000_000),
             revoked: false,
+            effective: CapabilityEffectiveStatus::Live,
             budget: Some(CapabilityUsageBudget {
                 max_uses: 5,
                 used: 2,
@@ -3378,16 +3405,22 @@ mod tests {
             action: "memory.read".into(),
             expires_at: None,
             revoked: true,
+            effective: CapabilityEffectiveStatus::Revoked,
             budget: None,
         };
 
         let budgeted_wire = serde_json::to_value(&budgeted).unwrap();
         assert_eq!(budgeted_wire["budget"]["remaining"], 3);
+        assert_eq!(
+            budgeted_wire["effective"], "live",
+            "effective serializes as a snake_case string: {budgeted_wire}",
+        );
         let unbudgeted_wire = serde_json::to_value(&unbudgeted).unwrap();
         assert!(
             unbudgeted_wire.get("budget").is_none(),
             "an unbudgeted grant must omit the budget field, not emit null: {unbudgeted_wire}",
         );
+        assert_eq!(unbudgeted_wire["effective"], "revoked");
         assert_eq!(unbudgeted_wire["expires_at"], serde_json::Value::Null);
 
         for entry in [budgeted, unbudgeted] {

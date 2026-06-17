@@ -14788,6 +14788,7 @@ impl Server {
         }
         match self.capabilities.usage_snapshot().await {
             Ok(snapshot) => {
+                let now = epoch_ms();
                 let grants = snapshot
                     .into_iter()
                     .map(|usage| {
@@ -14802,11 +14803,28 @@ impl Server {
                                 used: usage.used,
                                 remaining: max_uses.saturating_sub(usage.used),
                             });
+                        // Daemon's own verdict, in enforcement order: a revoked
+                        // grant is dropped from the live set before expiry is
+                        // checked, and the usage budget is consumed only after
+                        // the expiry-aware signature check passes. So revoked
+                        // dominates expired, which dominates exhausted. Expiry
+                        // uses `now > exp` to match verify_with_clock, which
+                        // accepts the grant at the equal boundary.
+                        let effective = if usage.revoked {
+                            covenant_ipc::CapabilityEffectiveStatus::Revoked
+                        } else if signed.capability.expires_at.is_some_and(|exp| now > exp) {
+                            covenant_ipc::CapabilityEffectiveStatus::Expired
+                        } else if budget.is_some_and(|b| b.remaining == 0) {
+                            covenant_ipc::CapabilityEffectiveStatus::Exhausted
+                        } else {
+                            covenant_ipc::CapabilityEffectiveStatus::Live
+                        };
                         covenant_ipc::CapabilityUsageEntry {
                             signature_b58: bs58::encode(signed.signature).into_string(),
                             action: signed.capability.action.clone(),
                             expires_at: signed.capability.expires_at,
                             revoked: usage.revoked,
+                            effective,
                             budget,
                         }
                     })
@@ -52992,6 +53010,156 @@ required = {caps:?}
             used_of(sig_b),
             0,
             "B shares A's action but its budget is untouched — the join is by signature",
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_usage_effective_status_matches_enforcement() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Distinct subject pubkey per grant: canonical_message signs the subject
+        // pubkey (not its display), so grants must differ in a signed field to
+        // get distinct signatures and stay separate rows.
+        let grant = |seed: u8, scope: serde_json::Value, expires_at: Option<u64>| {
+            sign_capability(
+                covenant_types::Capability {
+                    subject: AgentId::new("sub@local", [seed; 32]),
+                    action: "tool.call.echo".into(),
+                    scope,
+                    granted_by: me.clone(),
+                    expires_at,
+                },
+                s.identity.signing_key(),
+            )
+        };
+
+        // LIVE: budgeted with budget remaining, unexpired, unrevoked.
+        let live = grant(1, serde_json::json!({ "version": 1, "max_uses": 3 }), None);
+        let live_sig = live.signature;
+        s.capabilities.record(live).await.unwrap();
+
+        // EXHAUSTED: spend the one unit through the same consume path enforcement
+        // uses, then confirm enforcement refuses the next consume.
+        let exhausted = grant(2, serde_json::json!({ "version": 1, "max_uses": 1 }), None);
+        let exhausted_sig = exhausted.signature;
+        s.capabilities.record(exhausted).await.unwrap();
+        assert_eq!(
+            s.capabilities
+                .consume_uses(&[covenant_permissions::BudgetConsumeRequest {
+                    signature: exhausted_sig,
+                    max_uses: 1,
+                }])
+                .await
+                .unwrap(),
+            covenant_permissions::BudgetConsumeOutcome::Consumed,
+        );
+        assert!(
+            matches!(
+                s.capabilities
+                    .consume_uses(&[covenant_permissions::BudgetConsumeRequest {
+                        signature: exhausted_sig,
+                        max_uses: 1,
+                    }])
+                    .await
+                    .unwrap(),
+                covenant_permissions::BudgetConsumeOutcome::Exhausted(_)
+            ),
+            "enforcement refuses the spent grant, so the query must report it Exhausted",
+        );
+
+        // REVOKED.
+        let revoked = grant(3, serde_json::json!({ "version": 1, "max_uses": 3 }), None);
+        let revoked_sig = revoked.signature;
+        s.capabilities.record(revoked).await.unwrap();
+        assert!(s.capabilities.revoke(revoked_sig).await.unwrap());
+
+        // EXPIRED: a past expires_at. Tie the query verdict to the actual
+        // enforcement predicate — verify_with_clock rejects it as Expired now.
+        let expired = grant(4, serde_json::json!({ "version": 1 }), Some(1_000));
+        let expired_sig = expired.signature;
+        assert!(
+            matches!(
+                covenant_permissions::verify_with_clock(&expired, epoch_ms()),
+                Err(covenant_permissions::PermissionError::Expired(_))
+            ),
+            "the enforcement clock must reject the past-expiry grant",
+        );
+        s.capabilities.record(expired).await.unwrap();
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let status_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .effective
+        };
+        assert_eq!(status_of(live_sig), covenant_ipc::CapabilityEffectiveStatus::Live);
+        assert_eq!(status_of(exhausted_sig), covenant_ipc::CapabilityEffectiveStatus::Exhausted);
+        assert_eq!(status_of(revoked_sig), covenant_ipc::CapabilityEffectiveStatus::Revoked);
+        assert_eq!(status_of(expired_sig), covenant_ipc::CapabilityEffectiveStatus::Expired);
+    }
+
+    #[tokio::test]
+    async fn capability_usage_effective_status_precedence_matches_enforcement_order() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Distinct subject pubkey per grant so the two grants get distinct
+        // signatures (canonical_message signs the pubkey, not the display).
+        let grant = |seed: u8, expires_at: Option<u64>| {
+            sign_capability(
+                covenant_types::Capability {
+                    subject: AgentId::new("sub@local", [seed; 32]),
+                    action: "tool.call.echo".into(),
+                    scope: serde_json::json!({ "version": 1, "max_uses": 1 }),
+                    granted_by: me.clone(),
+                    expires_at,
+                },
+                s.identity.signing_key(),
+            )
+        };
+        let spend = |sig: [u8; 64]| {
+            [covenant_permissions::BudgetConsumeRequest { signature: sig, max_uses: 1 }]
+        };
+
+        // Expired AND exhausted: enforcement rejects on expiry before the budget
+        // layer runs, so the dominant status is Expired, not Exhausted.
+        let exp_and_spent = grant(1, Some(1_000));
+        let exp_and_spent_sig = exp_and_spent.signature;
+        s.capabilities.record(exp_and_spent).await.unwrap();
+        s.capabilities.consume_uses(&spend(exp_and_spent_sig)).await.unwrap();
+
+        // Revoked AND expired AND exhausted: revocation withdraws authority
+        // outright ahead of every other check, so the status is Revoked.
+        let all_three = grant(2, Some(1_000));
+        let all_three_sig = all_three.signature;
+        s.capabilities.record(all_three).await.unwrap();
+        s.capabilities.consume_uses(&spend(all_three_sig)).await.unwrap();
+        assert!(s.capabilities.revoke(all_three_sig).await.unwrap());
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let status_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .effective
+        };
+        assert_eq!(
+            status_of(exp_and_spent_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Expired,
+            "expired dominates exhausted",
+        );
+        assert_eq!(
+            status_of(all_three_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Revoked,
+            "revoked dominates expired and exhausted",
         );
     }
 

@@ -46651,6 +46651,92 @@ required = {caps:?}
         }
     }
 
+    /// Live WURK daemon path: capability gate, routing, wurk_tool_call,
+    /// DaemonWurkExecutor.view, the real WURK API. Free (no payment), so
+    /// no signer or USDC is needed. The job secret comes from
+    /// WURK_VIEW_SECRET so nothing sensitive is committed. Ignored by
+    /// default because it hits the network; run with `--ignored`.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "live: hits the real WURK API; set WURK_VIEW_SECRET"]
+    async fn live_wurk_job_status_through_daemon() {
+        let Ok(secret) = std::env::var("WURK_VIEW_SECRET") else {
+            eprintln!("skip: set WURK_VIEW_SECRET to run the live WURK daemon view test");
+            return;
+        };
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let cfg = covenant_wurk::WurkConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_x402_dispatch(x402::X402Config {
+            enabled: true,
+            signer_binary: "/nonexistent-signer".into(),
+            signer_env: vec![],
+        })
+        .with_wurk(wurk::WurkState::new(cfg));
+
+        match s.op_respond(Request::ListTools).await {
+            Response::ToolList { tools } => {
+                let names: Vec<String> = tools.into_iter().map(|t| t.name).collect();
+                assert!(
+                    names.iter().any(|n| n == "wurk.job_status"),
+                    "wurk tools must be advertised: {names:?}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.wurk.job_status".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "wurk.job_status".into(),
+                arguments: serde_json::json!({ "secret": secret, "page": 1 }),
+            })
+            .await;
+
+        match resp {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                let data = content
+                    .iter()
+                    .find_map(|c| match c {
+                        covenant_mcp::Content::Json { value } => Some(value.clone()),
+                        _ => None,
+                    })
+                    .expect("json content");
+                assert_eq!(data["ok"], true, "live view ok");
+                assert!(data["submissions"].is_array(), "live submissions present");
+                eprintln!(
+                    "live wurk.job_status via daemon: {} submissions",
+                    data["submissions"].as_array().map(|a| a.len()).unwrap_or(0)
+                );
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
     /// Full Hyre path: capability gate → executor → 402-then-pay loop
     /// (against the live Hyre challenge shape) → budget debit +
     /// settlement receipt + audit event. The signer is a shell script

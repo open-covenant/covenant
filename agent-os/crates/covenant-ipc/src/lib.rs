@@ -1096,17 +1096,25 @@ pub enum Response {
 
 /// One grant's row in a [`Response::CapabilityUsage`] reply. `signature_b58`
 /// is the base58 ed25519 signature that uniquely identifies the grant — the
-/// join key, so several grants for one `action` stay distinct. `subject_display`
-/// and `subject_pubkey_b58` name the agent the authority is delegated to (the
-/// holder), the pubkey being the stable identity and the display the human
-/// label. `expires_at` is epoch-ms (`None` is perpetual). `effective` is the
-/// daemon's own verdict on whether the grant would authorize an action right
-/// now. `budget` is present only for grants that declared a `max_uses` usage
-/// budget.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// join key, so several grants for one `action` stay distinct. `scope` is the
+/// signed scope verbatim — the constraints that bound what the authority
+/// permits within its `action` (the tool a `tool.call` grant is pinned to, an
+/// `a2a.send` recipient, a `max_uses` budget) — so two grants for one action
+/// with different scopes stay distinguishable rather than collapsing onto the
+/// action verb. `subject_display` and `subject_pubkey_b58` name the agent the
+/// authority is delegated to (the holder), the pubkey being the stable identity
+/// and the display the human label. `expires_at` is epoch-ms (`None` is
+/// perpetual). `effective` is the daemon's own verdict on whether the grant
+/// would authorize an action right now. `budget` is present only for grants
+/// that declared a `max_uses` usage budget.
+///
+/// Carries a `serde_json::Value` scope, so — like [`Request`] and [`Response`]
+/// — it derives `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CapabilityUsageEntry {
     pub signature_b58: String,
     pub action: String,
+    pub scope: serde_json::Value,
     pub subject_display: String,
     pub subject_pubkey_b58: String,
     pub expires_at: Option<u64>,
@@ -3396,6 +3404,7 @@ mod tests {
         let budgeted = CapabilityUsageEntry {
             signature_b58: "sig-budgeted".into(),
             action: "tool.call.echo".into(),
+            scope: serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 5 }),
             subject_display: "agent@host".into(),
             subject_pubkey_b58: "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM".into(),
             expires_at: Some(1_700_000_000_000),
@@ -3410,6 +3419,7 @@ mod tests {
         let unbudgeted = CapabilityUsageEntry {
             signature_b58: "sig-perpetual".into(),
             action: "memory.read".into(),
+            scope: serde_json::Value::Null,
             subject_display: "reader@host".into(),
             subject_pubkey_b58: "7mFqWd3rNpK8sVtY2hLxAe6BcZ4uJg9oQiXnRbDvCfMa".into(),
             expires_at: None,
@@ -3420,6 +3430,10 @@ mod tests {
 
         let budgeted_wire = serde_json::to_value(&budgeted).unwrap();
         assert_eq!(budgeted_wire["budget"]["remaining"], 3);
+        assert_eq!(
+            budgeted_wire["scope"]["tool"], "echo",
+            "the signed scope surfaces verbatim on the row: {budgeted_wire}",
+        );
         assert_eq!(
             budgeted_wire["effective"], "live",
             "effective serializes as a snake_case string: {budgeted_wire}",
@@ -3439,6 +3453,13 @@ mod tests {
         );
         assert_eq!(unbudgeted_wire["effective"], "revoked");
         assert_eq!(unbudgeted_wire["expires_at"], serde_json::Value::Null);
+        // scope is always present and verbatim — an unscoped grant emits its
+        // signed null rather than omitting the field, so the wire shape is stable.
+        assert!(
+            unbudgeted_wire.get("scope").is_some(),
+            "scope is always present, even for an unscoped grant: {unbudgeted_wire}",
+        );
+        assert_eq!(unbudgeted_wire["scope"], serde_json::Value::Null);
 
         for entry in [budgeted, unbudgeted] {
             let decoded: CapabilityUsageEntry =

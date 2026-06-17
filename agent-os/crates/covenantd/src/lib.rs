@@ -14822,6 +14822,7 @@ impl Server {
                         covenant_ipc::CapabilityUsageEntry {
                             signature_b58: bs58::encode(signed.signature).into_string(),
                             action: signed.capability.action.clone(),
+                            scope: signed.capability.scope.clone(),
                             subject_display: signed.capability.subject.display.clone(),
                             subject_pubkey_b58: signed.capability.subject.pubkey_base58(),
                             expires_at: signed.capability.expires_at,
@@ -53074,6 +53075,70 @@ required = {caps:?}
             s.identity.agent_id().pubkey_base58(),
             "subject is the holder, not the grantor",
         );
+    }
+
+    #[tokio::test]
+    async fn capability_usage_attributes_scope_to_the_right_signature() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Two grants for the SAME action with distinct scopes: each entry must
+        // report its own signed scope verbatim. A join keyed on the action would
+        // transpose or collapse the scopes onto the shared action verb — exactly
+        // the case the action string alone cannot tell apart.
+        let scope_alpha = serde_json::json!({ "version": 1, "recipient": "peer-alpha@host" });
+        let scope_beta = serde_json::json!({ "version": 1, "recipient": "peer-beta@host" });
+        let a = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("alice@local", [1u8; 32]),
+                action: "a2a.send".into(),
+                scope: scope_alpha.clone(),
+                granted_by: me.clone(),
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let b = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("bob@local", [2u8; 32]),
+                action: "a2a.send".into(),
+                scope: scope_beta.clone(),
+                granted_by: me,
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        assert_ne!(sig_a, sig_b);
+        s.capabilities.record(a).await.unwrap();
+        s.capabilities.record(b).await.unwrap();
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let scope_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .scope
+                .clone()
+        };
+        assert_eq!(
+            scope_of(sig_a),
+            scope_alpha,
+            "A's entry reports A's signed scope verbatim",
+        );
+        assert_eq!(
+            scope_of(sig_b),
+            scope_beta,
+            "B's entry reports B's signed scope verbatim",
+        );
+        // The scopes don't transpose despite sharing one action — the join is by
+        // signature, so the recipient bound to each grant stays with it.
+        assert_eq!(scope_of(sig_a)["recipient"], "peer-alpha@host");
+        assert_ne!(scope_of(sig_a), scope_of(sig_b));
     }
 
     #[tokio::test]

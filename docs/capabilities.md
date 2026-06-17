@@ -322,6 +322,7 @@ Retention maintenance has the same machine-readable convention:
     {
       "signature_b58": "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr",
       "action": "tool.call.echo",
+      "scope": { "version": 1, "tool": "echo", "max_uses": 5 },
       "subject_display": "agent@host",
       "subject_pubkey_b58": "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM",
       "expires_at": 1700000000000,
@@ -335,11 +336,13 @@ Retention maintenance has the same machine-readable convention:
 
 One entry per grant in the ledger, including revoked-but-not-yet-purged grants (flagged `revoked: true`). `subject_display` and `subject_pubkey_b58` name the agent the authority is delegated to — the holder — sourced from the signed capability's subject, with the base58 pubkey as the stable identity and the display as the human label; this is the grantee, never the grantor that issued the grant. So the query answers which agent holds each grant, not only what it permits. `budget` is present only for grants that declared a `max_uses` budget; an unbudgeted grant omits the field. `used` is the durable count the enforcement path has recorded — it is read from the same `uses.jsonl` ledger `consume_uses` maintains, without recording a use, so it survives daemon restart and never advertises a refilled budget. `remaining` is `max_uses - used`.
 
+`scope` is the grant's signed scope verbatim — the constraints that bound what the authority permits within its `action`: the tool a `tool.call` grant is pinned to, the recipient an `a2a.send` grant may message, a path or host constraint, the `max_uses` budget. It is sourced from `signed.capability.scope`, the same object the signature covers and the daemon enforces, so the reported scope cannot diverge from the one in force. Without it, two grants for the same action with different scopes are indistinguishable — an operator sees the action verb but not the boundary that narrows it. Unlike `budget`, `scope` is always present and emitted exactly as signed, including for an unscoped grant (whatever the capability carries, for example `null` or `{}`), so the wire shape stays stable.
+
 `effective` is the daemon's own verdict on whether the grant would authorize an action right now — one of `live`, `expired`, `revoked`, or `exhausted` — computed with the daemon clock and the same predicates the enforcement path applies. It is reported so an operator reads the daemon's decision directly rather than re-deriving it from `expires_at`, `revoked`, and `budget`, where a different clock or precedence could disagree with enforcement. Its precedence matches enforcement order: a revoked grant is dropped from the live set before expiry is checked, and a grant's budget is consumed only after the expiry-aware signature check passes, so `revoked` dominates `expired`, which dominates `exhausted`. A grant past its `expires_at` reports `expired` (using `now > expires_at`, so the grant is still `live` at the exact expiry millisecond, matching the check path).
 
-The query joins grants to their use counts and revocations by `signature_b58`, the base58 ed25519 grant signature, not by `action`. Several grants for the same action therefore stay distinct, each reporting its own subject and budget.
+The query joins grants to their use counts and revocations by `signature_b58`, the base58 ed25519 grant signature, not by `action`. Several grants for the same action therefore stay distinct, each reporting its own subject, scope, and budget — the scope stays bound to its grant rather than transposing onto the shared action verb.
 
-The query requires the operator identity. A peer that merely holds a grant is refused, so delegated-authority state — which capabilities exist, which agent holds each, and how much budget remains — never leaks to a non-operator. The boundary is observability only: it reports on-disk capability state and changes nothing.
+The query requires the operator identity. A peer that merely holds a grant is refused, so delegated-authority state — which capabilities exist, which agent holds each, what scope bounds each, and how much budget remains — never leaks to a non-operator. The boundary is observability only: it reports on-disk capability state and changes nothing.
 
 An opt-in live test (`live_capability_usage_introspection.rs`) exercises the query through the real daemon: it grants a `max_uses` budget, spends part of it through real tool calls, asserts the reported `used`/`remaining`, and restarts the daemon against the same state to confirm the count is read from the durable ledger rather than a counter that resets on restart.
 

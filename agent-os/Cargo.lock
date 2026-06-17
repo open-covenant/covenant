@@ -1455,6 +1455,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-syra"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "covenant-mcp",
+ "covenant-x402",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-tools"
 version = "0.1.0"
 dependencies = [
@@ -1565,6 +1582,7 @@ dependencies = [
  "covenant-runtime",
  "covenant-sap-bridge",
  "covenant-settlement",
+ "covenant-syra",
  "covenant-types",
  "covenant-x402",
  "dotenvy",

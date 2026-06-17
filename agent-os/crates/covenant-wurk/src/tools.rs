@@ -98,13 +98,20 @@ impl Tool for HireHumansTool {
     async fn call(&self, arguments: Value) -> Result<ToolCallResult, ToolError> {
         let args = as_object(&arguments)?;
         let description = req_str(args, "description")?;
-        let winners = args.get("winners").and_then(Value::as_u64).unwrap_or(10).max(1);
+        let winners = args
+            .get("winners")
+            .and_then(Value::as_u64)
+            .unwrap_or(10)
+            .max(1);
         let per_user = args
             .get("per_user_usdc")
             .and_then(Value::as_f64)
             .unwrap_or(0.05)
             .max(0.01);
-        let advanced = args.get("advanced").and_then(Value::as_bool).unwrap_or(false)
+        let advanced = args
+            .get("advanced")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
             || args.contains_key("selection_type")
             || args.contains_key("selection_time_minutes")
             || args.contains_key("human_verified");
@@ -334,9 +341,9 @@ impl WurkExecutor for SpecOnly {
 fn as_object(arguments: &Value) -> Result<&Map<String, Value>, ToolError> {
     match arguments {
         Value::Object(m) => Ok(m),
-        Value::Null => {
-            Err(ToolError::InvalidArguments("arguments must be a JSON object".into()))
-        }
+        Value::Null => Err(ToolError::InvalidArguments(
+            "arguments must be a JSON object".into(),
+        )),
         _ => Err(ToolError::InvalidArguments(
             "arguments must be a JSON object".into(),
         )),
@@ -411,7 +418,10 @@ mod tests {
     }
 
     fn find<'a>(tools: &'a [Arc<dyn Tool>], name: &str) -> &'a Arc<dyn Tool> {
-        tools.iter().find(|t| t.name() == name).expect("tool present")
+        tools
+            .iter()
+            .find(|t| t.name() == name)
+            .expect("tool present")
     }
 
     #[test]
@@ -440,7 +450,9 @@ mod tests {
         let req = exec.last_create.lock().unwrap().clone().unwrap();
         assert_eq!(req.method, "GET");
         assert_eq!(req.slug, "agenttohuman");
-        assert!(req.url.starts_with("https://wurkapi.fun/solana/agenttohuman?"));
+        assert!(req
+            .url
+            .starts_with("https://wurkapi.fun/solana/agenttohuman?"));
         assert!(req.url.contains("description=judge%20this"));
         assert!(req.url.contains("winners=10"));
         assert!(req.url.contains("perUser=0.05"));

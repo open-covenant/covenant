@@ -84,10 +84,7 @@ mod tests {
         let first = &view.submissions[0];
         assert_eq!(first.id, "ba5db22d");
         assert!(first.content_text.contains("1: no"));
-        assert_eq!(
-            first.attachment_urls.as_deref().map(|a| a.len()),
-            Some(1)
-        );
+        assert_eq!(first.attachment_urls.as_deref().map(|a| a.len()), Some(1));
         assert!(!first.is_winner());
     }
 

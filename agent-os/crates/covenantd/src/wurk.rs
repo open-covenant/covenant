@@ -154,7 +154,12 @@ impl WurkExecutor for DaemonWurkExecutor {
             secret,
             page
         );
-        let resp = self.http.get(&url).send().await.map_err(|e| e.to_string())?;
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
@@ -230,7 +235,11 @@ mod tests {
 
     #[tokio::test]
     async fn create_refuses_when_x402_disabled() {
-        let e = exec(X402Config::default(), agent(1), Arc::new(InMemoryLedger::new()));
+        let e = exec(
+            X402Config::default(),
+            agent(1),
+            Arc::new(InMemoryLedger::new()),
+        );
         let err = e.create(req()).await.expect_err("disabled");
         assert!(err.contains("disabled"), "got: {err}");
     }

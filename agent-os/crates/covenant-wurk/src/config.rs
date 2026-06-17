@@ -86,7 +86,15 @@ mod tests {
     fn only_agent_to_human_paths_are_allowed() {
         assert!(is_allowed("agenttohuman"));
         assert!(is_allowed("agenttohumanadvanced"));
-        for blocked in ["xraid", "xlikes", "xfollowers", "dex", "cmcvote", "cgvote", "tgmembers"] {
+        for blocked in [
+            "xraid",
+            "xlikes",
+            "xfollowers",
+            "dex",
+            "cmcvote",
+            "cgvote",
+            "tgmembers",
+        ] {
             assert!(!is_allowed(blocked), "{blocked} must be blocked");
         }
     }

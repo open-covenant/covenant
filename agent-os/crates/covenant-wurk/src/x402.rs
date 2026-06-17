@@ -28,7 +28,8 @@ use crate::tools::PaidRequest;
 use crate::{Result, WurkError};
 
 const PAYMENT_HEADER: &str = "PAYMENT-SIGNATURE";
-const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+const B64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 
 /// One payment option from a WURK 402 challenge.
 #[derive(Debug, Clone, Deserialize)]
@@ -77,7 +78,8 @@ pub fn parse_challenge(body: &str) -> Result<Vec<Accept>> {
     accepts_value(body)?
         .into_iter()
         .map(|v| {
-            serde_json::from_value(v).map_err(|e| WurkError::Challenge(format!("decode accept: {e}")))
+            serde_json::from_value(v)
+                .map_err(|e| WurkError::Challenge(format!("decode accept: {e}")))
         })
         .collect()
 }
@@ -335,10 +337,7 @@ mod tests {
     struct FakeEnvelopeSigner;
     #[async_trait]
     impl Signer for FakeEnvelopeSigner {
-        async fn build_payment(
-            &self,
-            _r: &PaymentRequirements,
-        ) -> covenant_x402::Result<String> {
+        async fn build_payment(&self, _r: &PaymentRequirements) -> covenant_x402::Result<String> {
             let env = serde_json::json!({
                 "x402Version": 1, "scheme": "exact", "network": "solana",
                 "payload": { "transaction": "FAKETX==" }
@@ -427,8 +426,7 @@ mod tests {
             "maxTimeoutSeconds": 60, "extra": { "feePayer": "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4" }
         });
         let header = wrap_v2(&accepted, "TXDATA");
-        let decoded: Value =
-            serde_json::from_slice(&B64.decode(header).unwrap()).unwrap();
+        let decoded: Value = serde_json::from_slice(&B64.decode(header).unwrap()).unwrap();
         assert_eq!(decoded["x402Version"], 2);
         assert_eq!(decoded["payload"]["transaction"], "TXDATA");
         // The accepted block must be echoed verbatim for the server's
@@ -466,9 +464,13 @@ mod tests {
             .await;
 
         let url = format!("{}/solana/agenttohuman?description=ping", server.uri());
-        let out = execute_paid(&reqwest::Client::new(), &FakeEnvelopeSigner, &plan(&url, 1_000_000))
-            .await
-            .expect("paid");
+        let out = execute_paid(
+            &reqwest::Client::new(),
+            &FakeEnvelopeSigner,
+            &plan(&url, 1_000_000),
+        )
+        .await
+        .expect("paid");
         assert_eq!(out.status, 200);
         assert_eq!(out.paid_amount.as_deref(), Some("10000"));
         let body: Value = serde_json::from_str(&out.body).unwrap();
@@ -485,9 +487,13 @@ mod tests {
             .mount(&server)
             .await;
         let url = format!("{}/solana/agenttohuman?description=ping", server.uri());
-        let err = execute_paid(&reqwest::Client::new(), &FakeEnvelopeSigner, &plan(&url, 999_999))
-            .await
-            .expect_err("over cap");
+        let err = execute_paid(
+            &reqwest::Client::new(),
+            &FakeEnvelopeSigner,
+            &plan(&url, 999_999),
+        )
+        .await
+        .expect_err("over cap");
         assert!(matches!(err, WurkError::NotAllowed(_)), "got {err:?}");
     }
 
@@ -496,13 +502,19 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/solana/agenttohuman"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+            )
             .mount(&server)
             .await;
         let url = format!("{}/solana/agenttohuman?action=view&secret=x", server.uri());
-        let out = execute_paid(&reqwest::Client::new(), &FakeEnvelopeSigner, &plan(&url, 1_000_000))
-            .await
-            .expect("free");
+        let out = execute_paid(
+            &reqwest::Client::new(),
+            &FakeEnvelopeSigner,
+            &plan(&url, 1_000_000),
+        )
+        .await
+        .expect("free");
         assert_eq!(out.status, 200);
         assert!(out.paid_amount.is_none());
     }

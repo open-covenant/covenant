@@ -26,7 +26,10 @@ struct SubprocessSigner {
 
 #[async_trait]
 impl Signer for SubprocessSigner {
-    async fn build_payment(&self, requirements: &PaymentRequirements) -> covenant_x402::Result<String> {
+    async fn build_payment(
+        &self,
+        requirements: &PaymentRequirements,
+    ) -> covenant_x402::Result<String> {
         let json = serde_json::to_string(requirements)
             .map_err(|e| covenant_x402::X402Error::Sign(e.to_string()))?;
         let mut child = Command::new(&self.bin)
@@ -60,7 +63,9 @@ fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -71,7 +76,8 @@ fn encode(s: &str) -> String {
 async fn main() {
     let bin = std::env::var("WURK_SIGNER_BIN").expect("set WURK_SIGNER_BIN");
     let keypair = std::env::var("WURK_KEYPAIR").expect("set WURK_KEYPAIR");
-    let rpc = std::env::var("WURK_RPC").unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".into());
+    let rpc =
+        std::env::var("WURK_RPC").unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".into());
 
     let args: Vec<String> = std::env::args().collect();
     let description = args

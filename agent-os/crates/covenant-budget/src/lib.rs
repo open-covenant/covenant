@@ -2193,6 +2193,29 @@ mod tests {
     }
 
     #[test]
+    fn refill_high_rate_does_not_drift_over_many_ticks() {
+        // The over-crediting bug compounded: tick the clock forward 1ms at a
+        // time at a rate just above MS_PER_HOUR and the old accounting minted
+        // an extra token nearly every tick. With the remainder fix the bucket
+        // tracks the rate (~1 token/ms here) instead of racing ahead.
+        let mut b = Bucket {
+            display: "x@y".into(),
+            capacity: 3_600_001,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        for now in 1..=50 {
+            refill(&mut b, now);
+        }
+        assert_eq!(
+            b.tokens_remaining, 50,
+            "50ms at ~1 token/ms must credit ~50 tokens, not the inflated count \
+             the lost-time bug produced"
+        );
+        assert_eq!(b.last_refill_ms, 50);
+    }
+
+    #[test]
     fn refill_eta_zero_when_already_have_enough() {
         let b = Bucket {
             display: "x@y".into(),
@@ -3511,41 +3534,44 @@ mod tests {
 
 // Bit-precise proofs over the full input domain. The unit tests above pin
 // named cases; these prove the same invariants hold for *every* admissible
-// (capacity, tokens, clock, now) the type system allows — the guarantee a
+// (capacity, tokens, clock, now) the type system allows, the guarantee a
 // finite example set cannot give. Run with `cargo kani -p covenant-budget`.
 #[cfg(kani)]
 mod proofs {
     use super::{project_overshoot, refill, refill_eta_ms, Bucket, BudgetProjectionPolicy};
 
-    // A bucket whose stored invariant (tokens_remaining <= capacity) holds.
-    // Every refill caller maintains this, so harnesses assume it on entry.
+    // A fully unconstrained bucket. The safety proofs below hold over this
+    // whole domain; only the inductive tokens<=capacity postcondition needs the
+    // class invariant, and it assumes that locally, so the safety proofs stay
+    // defense-in-depth: refill is panic-free and the clock is monotonic even on
+    // a bucket some other path might have corrupted.
     fn arb_bucket() -> Bucket {
-        let capacity: u64 = kani::any();
-        let tokens_remaining: u64 = kani::any();
-        kani::assume(tokens_remaining <= capacity);
         Bucket {
             display: String::new(),
-            capacity,
-            tokens_remaining,
+            capacity: kani::any(),
+            tokens_remaining: kani::any(),
             last_refill_ms: kani::any(),
         }
     }
 
-    // refill is panic-free for all inputs: the `now - last_refill_ms`
-    // subtraction never underflows, the u128 multiply never overflows, and
-    // the saturating clock advance never wraps — the unsigned-underflow
-    // hazard the time-rewind guard exists to prevent.
+    // refill is panic-free for every bucket and clock: the `now -
+    // last_refill_ms` subtraction never underflows, the u128 multiply never
+    // overflows, and the saturating clock advance never wraps. This is the
+    // unsigned-underflow hazard the time-rewind guard exists to prevent.
     #[kani::proof]
     fn refill_never_panics() {
         let mut b = arb_bucket();
         refill(&mut b, kani::any());
     }
 
-    // Postcondition: tokens never exceed capacity, so an idle agent can
-    // never bank refills past its ceiling.
+    // Inductive postcondition: tokens<=capacity is maintained by set_capacity's
+    // clamp, try_debit's subtract, and bucket creation, so it holds on entry;
+    // this proves refill preserves it, so an idle agent can never bank refills
+    // past its ceiling.
     #[kani::proof]
     fn refill_keeps_tokens_within_capacity() {
         let mut b = arb_bucket();
+        kani::assume(b.tokens_remaining <= b.capacity);
         refill(&mut b, kani::any());
         assert!(b.tokens_remaining <= b.capacity);
     }
@@ -3564,16 +3590,15 @@ mod proofs {
         assert!(b.last_refill_ms >= before);
     }
 
-    // The dual to never_rewinds — that the clock never runs *past* `now`,
-    // so consumed-time accounting can't grant tokens for time that hasn't
-    // elapsed — is left to the unit tests (`refill_full_bucket_resets_
-    // clock_to_now`, `refill_partial_elapsed_accumulates_in_clock`). It is
-    // not a Kani harness on purpose: proving it requires reasoning through
-    // the nested division `add = elapsed*cap/H` then `consumed = add*H/cap`,
-    // and symbolic 128-bit division bit-blasts to a SAT instance no solver
-    // closes in bounded time. Value-range assumptions don't shrink the
-    // divider circuit, only the model's bit width would — which the
-    // function's u128 math fixes.
+    // The dual to never_rewinds (that the clock never runs *past* `now`, so
+    // consumed-time accounting can't grant tokens for time that hasn't elapsed)
+    // is left to the unit tests `refill_full_bucket_resets_clock_to_now` and
+    // `refill_partial_elapsed_accumulates_in_clock`. It is not a Kani harness on
+    // purpose: proving it means reasoning through the nested division
+    // `add = elapsed*cap/H` then `consumed = add*H/cap`, and symbolic 128-bit
+    // division bit-blasts to a SAT instance no solver closes in bounded time.
+    // Value-range assumptions don't shrink the divider circuit; only the model's
+    // bit width would, which the function's u128 math fixes.
 
     // refill_eta_ms never returns an instant before `now` and never
     // overflows, for any shortfall or rate. This is the no-past-schedule
@@ -3587,13 +3612,18 @@ mod proofs {
         assert!(eta >= now);
     }
 
-    // project_overshoot matches its decision spec for every input, not just
-    // "doesn't panic" (the body has no panic-capable op, so that would prove
-    // nothing): NoExtrapolation flags exactly when already over budget; below
-    // either Linear threshold it never flags; at/above thresholds it flags iff
-    // the conservative doubled-rate projection exceeds remaining (the early
-    // `current_debit > remaining` arm is subsumed, since saturating-doubling a
-    // value already past `remaining` is also past it).
+    // project_overshoot's decision spec, proven for every input (the body has
+    // no panic-capable op, so "doesn't panic" alone would prove nothing).
+    // NoExtrapolation flags exactly when already over budget. Below either
+    // Linear threshold it never flags. Above the thresholds the policy projects
+    // the accrued debit forward by the documented "spends as much again"
+    // doubling and flags if the projection exceeds remaining. The harness pins
+    // both halves: the band an under-budget debit still gets flagged in once
+    // its doubled projection is over (the case NoExtrapolation misses, which is
+    // the policy's entire reason to exist) and the exact decision (so a
+    // degenerate 1x, where Linear collapses to NoExtrapolation, or any other
+    // multiplier, fails). The saturating form is the faithful spec: a
+    // subtraction rewrite diverges from the impl at the cd > u64::MAX/2 edge.
     #[kani::proof]
     fn project_overshoot_matches_spec() {
         let current_debit: u64 = kani::any();
@@ -3601,6 +3631,7 @@ mod proofs {
         let samples: u32 = kani::any();
         let remaining: u64 = kani::any();
 
+        // NoExtrapolation is exactly the already-over-budget check.
         assert_eq!(
             project_overshoot(
                 current_debit,
@@ -3614,20 +3645,26 @@ mod proofs {
 
         let min_window: u64 = kani::any();
         let min_samples: u32 = kani::any();
-        let got = project_overshoot(
-            current_debit,
-            window,
-            samples,
-            remaining,
-            BudgetProjectionPolicy::LinearExtrapolation {
-                min_observation_window_ms: min_window,
-                min_debit_samples: min_samples,
-            },
-        );
+        let linear = BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: min_window,
+            min_debit_samples: min_samples,
+        };
+        let got = project_overshoot(current_debit, window, samples, remaining, linear);
+
         if window < min_window || samples < min_samples {
+            // Below either gate: never flags, whatever the debit.
             assert!(!got);
         } else {
-            assert_eq!(got, current_debit.saturating_add(current_debit) > remaining);
+            let projected = current_debit.saturating_add(current_debit);
+            // The extrapolation band: under budget now, but the doubled
+            // projection blows it. NoExtrapolation would not flag here; Linear
+            // must. This is what makes the policy more than a rename.
+            if current_debit <= remaining && projected > remaining {
+                assert!(got);
+            }
+            // The full decision is that projection check, which pins the 2x
+            // model exactly (a 1x or any other multiplier fails this).
+            assert_eq!(got, projected > remaining);
         }
     }
 }

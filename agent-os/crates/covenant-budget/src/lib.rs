@@ -3474,3 +3474,127 @@ mod tests {
         assert!(project_overshoot(u64::MAX, 1000, 5, 100, policy));
     }
 }
+
+// Bit-precise proofs over the full input domain. The unit tests above pin
+// named cases; these prove the same invariants hold for *every* admissible
+// (capacity, tokens, clock, now) the type system allows — the guarantee a
+// finite example set cannot give. Run with `cargo kani -p covenant-budget`.
+#[cfg(kani)]
+mod proofs {
+    use super::{project_overshoot, refill, refill_eta_ms, Bucket, BudgetProjectionPolicy};
+
+    // A bucket whose stored invariant (tokens_remaining <= capacity) holds.
+    // Every refill caller maintains this, so harnesses assume it on entry.
+    fn arb_bucket() -> Bucket {
+        let capacity: u64 = kani::any();
+        let tokens_remaining: u64 = kani::any();
+        kani::assume(tokens_remaining <= capacity);
+        Bucket {
+            display: String::new(),
+            capacity,
+            tokens_remaining,
+            last_refill_ms: kani::any(),
+        }
+    }
+
+    // refill is panic-free for all inputs: the `now - last_refill_ms`
+    // subtraction never underflows, the u128 multiply never overflows, and
+    // the saturating clock advance never wraps — the unsigned-underflow
+    // hazard the time-rewind guard exists to prevent.
+    #[kani::proof]
+    fn refill_never_panics() {
+        let mut b = arb_bucket();
+        refill(&mut b, kani::any());
+    }
+
+    // Postcondition: tokens never exceed capacity, so an idle agent can
+    // never bank refills past its ceiling.
+    #[kani::proof]
+    fn refill_keeps_tokens_within_capacity() {
+        let mut b = arb_bucket();
+        refill(&mut b, kani::any());
+        assert!(b.tokens_remaining <= b.capacity);
+    }
+
+    // The clock never moves backward: a refill carries last_refill_ms
+    // forward or leaves it unchanged, over the full u64 domain. This is
+    // monotonic non-decrease, deliberately weaker than "an already-paid
+    // window is never re-credited" — when capacity > MS_PER_HOUR the
+    // consumed-time division can round to zero, leaving the clock equal
+    // while tokens are credited, so the stronger property does not hold and
+    // is not claimed here.
+    #[kani::proof]
+    fn refill_clock_never_rewinds() {
+        let mut b = arb_bucket();
+        let before = b.last_refill_ms;
+        refill(&mut b, kani::any());
+        assert!(b.last_refill_ms >= before);
+    }
+
+    // The dual to never_rewinds — that the clock never runs *past* `now`,
+    // so consumed-time accounting can't grant tokens for time that hasn't
+    // elapsed — is left to the unit tests (`refill_full_bucket_resets_
+    // clock_to_now`, `refill_partial_elapsed_accumulates_in_clock`). It is
+    // not a Kani harness on purpose: proving it requires reasoning through
+    // the nested division `add = elapsed*cap/H` then `consumed = add*H/cap`,
+    // and symbolic 128-bit division bit-blasts to a SAT instance no solver
+    // closes in bounded time. Value-range assumptions don't shrink the
+    // divider circuit, only the model's bit width would — which the
+    // function's u128 math fixes.
+
+    // refill_eta_ms never returns an instant before `now` and never
+    // overflows, for any shortfall or rate. This is the no-past-schedule
+    // floor (and absence of wrap in the div_ceil / saturating_add), not a
+    // check that the computed wait is the correct length.
+    #[kani::proof]
+    fn refill_eta_never_schedules_in_the_past() {
+        let b = arb_bucket();
+        let now: u64 = kani::any();
+        let eta = refill_eta_ms(&b, kani::any(), now);
+        assert!(eta >= now);
+    }
+
+    // project_overshoot matches its decision spec for every input, not just
+    // "doesn't panic" (the body has no panic-capable op, so that would prove
+    // nothing): NoExtrapolation flags exactly when already over budget; below
+    // either Linear threshold it never flags; at/above thresholds it flags iff
+    // the conservative doubled-rate projection exceeds remaining (the early
+    // `current_debit > remaining` arm is subsumed, since saturating-doubling a
+    // value already past `remaining` is also past it).
+    #[kani::proof]
+    fn project_overshoot_matches_spec() {
+        let current_debit: u64 = kani::any();
+        let window: u64 = kani::any();
+        let samples: u32 = kani::any();
+        let remaining: u64 = kani::any();
+
+        assert_eq!(
+            project_overshoot(
+                current_debit,
+                window,
+                samples,
+                remaining,
+                BudgetProjectionPolicy::NoExtrapolation,
+            ),
+            current_debit > remaining
+        );
+
+        let min_window: u64 = kani::any();
+        let min_samples: u32 = kani::any();
+        let got = project_overshoot(
+            current_debit,
+            window,
+            samples,
+            remaining,
+            BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms: min_window,
+                min_debit_samples: min_samples,
+            },
+        );
+        if window < min_window || samples < min_samples {
+            assert!(!got);
+        } else {
+            assert_eq!(got, current_debit.saturating_add(current_debit) > remaining);
+        }
+    }
+}

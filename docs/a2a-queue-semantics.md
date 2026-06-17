@@ -97,7 +97,7 @@ Repair requests require:
 
 `force_error` clears the in-flight lease and posts an error result for the original sender to drain. It is the explicit way to stop waiting on a stale lease without pretending the task succeeded.
 
-Both repair actions replay from the JSONL mailbox log after daemon restart.
+Both repair actions replay from the JSONL mailbox log after daemon restart, including a requeued task's accumulated `attempt` counter, so the retry budget an operator sees through `covenant a2a status` is not silently reset by a restart.
 
 CLI usage:
 

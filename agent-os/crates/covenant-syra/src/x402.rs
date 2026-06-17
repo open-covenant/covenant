@@ -138,6 +138,11 @@ fn to_requirements(accept: &Accept, caip2_network: &str) -> Result<PaymentRequir
             crate::config::PAY_TO
         )));
     }
+    // feePayer is the facilitator's gas sponsor, not the funds
+    // destination, and Syra rotates it. Require it present (the signer
+    // needs a sponsor to build the v0 message) but don't pin its value: a
+    // wrong feePayer can't redirect funds (those go to the pinned payTo)
+    // and simply fails to settle.
     let fee_payer = accept
         .extra
         .as_ref()
@@ -147,12 +152,6 @@ fn to_requirements(accept: &Accept, caip2_network: &str) -> Result<PaymentRequir
                 "challenge missing extra.feePayer — Syra sponsors the fee, it is required".into(),
             )
         })?;
-    if fee_payer != crate::config::FEE_PAYER {
-        return Err(SyraError::NotAllowed(format!(
-            "challenge feePayer {fee_payer} does not match pinned sponsor {}",
-            crate::config::FEE_PAYER
-        )));
-    }
     let amount = accept
         .atomic_amount()
         .ok_or_else(|| SyraError::Challenge("accept missing amount".into()))?
@@ -314,7 +313,7 @@ mod tests {
             "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             "payTo": "53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t",
             "maxTimeoutSeconds": 60,
-            "extra": { "feePayer": "AepWpq3GQwL8CeKMtZyKtKPa7W91Coygh3ropAJapVdU" }
+            "extra": { "feePayer": "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4" }
         }]
     }"#;
 
@@ -358,9 +357,9 @@ mod tests {
             .expect("solana accept");
         assert_eq!(sol.atomic_amount(), Some("100000"));
         assert_eq!(sol.pay_to, crate::config::PAY_TO);
-        assert_eq!(
-            sol.extra.as_ref().unwrap().fee_payer.as_deref(),
-            Some(crate::config::FEE_PAYER)
+        assert!(
+            sol.extra.as_ref().unwrap().fee_payer.is_some(),
+            "challenge must carry a sponsor feePayer"
         );
     }
 
@@ -379,10 +378,11 @@ mod tests {
     }
 
     #[test]
-    fn to_requirements_pins_payee_and_sponsor() {
+    fn to_requirements_pins_payee_requires_but_does_not_pin_sponsor() {
         let base = parse_challenge(LIVE_SYRA_402).expect("parse")[0].clone();
-        to_requirements(&base, NETWORK).expect("pinned live option normalises");
+        to_requirements(&base, NETWORK).expect("live option normalises");
 
+        // payTo is the funds destination — pinned hard.
         let mut wrong_payee = base.clone();
         wrong_payee.pay_to = "So11111111111111111111111111111111111111112".into();
         assert!(matches!(
@@ -390,13 +390,22 @@ mod tests {
             Err(SyraError::NotAllowed(m)) if m.contains("does not match pinned Syra payee")
         ));
 
-        let mut wrong_fee_payer = base.clone();
-        wrong_fee_payer.extra = Some(Extra {
-            fee_payer: Some("11111111111111111111111111111111".into()),
+        // A different feePayer is ACCEPTED — Syra rotates facilitators and
+        // the sponsor never receives our funds (those go to the pinned
+        // payTo). This is the case that broke when feePayer was hard-pinned.
+        let mut rotated_fee_payer = base.clone();
+        rotated_fee_payer.extra = Some(Extra {
+            fee_payer: Some("AepWpq3GQwL8CeKMtZyKtKPa7W91Coygh3ropAJapVdU".into()),
         });
+        to_requirements(&rotated_fee_payer, NETWORK)
+            .expect("a rotated sponsor feePayer must still be accepted");
+
+        // But a missing feePayer is rejected — the signer needs a sponsor.
+        let mut no_fee_payer = base.clone();
+        no_fee_payer.extra = None;
         assert!(matches!(
-            to_requirements(&wrong_fee_payer, NETWORK),
-            Err(SyraError::NotAllowed(m)) if m.contains("does not match pinned sponsor")
+            to_requirements(&no_fee_payer, NETWORK),
+            Err(SyraError::NotAllowed(m)) if m.contains("missing extra.feePayer")
         ));
     }
 
@@ -413,7 +422,7 @@ mod tests {
         let accepted = serde_json::json!({
             "scheme": "exact", "network": NETWORK, "amount": "100000",
             "asset": ASSET, "payTo": crate::config::PAY_TO,
-            "maxTimeoutSeconds": 60, "extra": { "feePayer": crate::config::FEE_PAYER }
+            "maxTimeoutSeconds": 60, "extra": { "feePayer": crate::config::OBSERVED_FEE_PAYER }
         });
         let header = wrap_v2(&accepted, "TXDATA");
         let decoded: Value = serde_json::from_slice(&B64.decode(header).unwrap()).unwrap();
@@ -432,7 +441,7 @@ mod tests {
             "accepts": [{
                 "scheme": "exact", "network": NETWORK, "amount": "100000",
                 "asset": ASSET, "payTo": crate::config::PAY_TO, "maxTimeoutSeconds": 60,
-                "extra": { "feePayer": crate::config::FEE_PAYER }
+                "extra": { "feePayer": crate::config::OBSERVED_FEE_PAYER }
             }]
         })
         .to_string();

@@ -10,11 +10,16 @@ use serde::{Deserialize, Serialize};
 pub const SOLANA_NETWORK: &str = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 /// USDC mint payments are denominated in.
 pub const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-/// Syra's Solana payee, from the live 402.
+/// Syra's Solana payee — where our USDC goes. Pinned hard in
+/// [`crate::x402::to_requirements`]: this is the funds destination, so a
+/// tampered 402 must never redirect it.
 pub const PAY_TO: &str = "53JhuF8bgxvUQ59nDG6kWs4awUQYCS3wswQmUsV5uC7t";
-/// Syra's sponsor pubkey, co-signs as `feePayer` so the agent needs only
-/// USDC (no SOL for gas).
-pub const FEE_PAYER: &str = "AepWpq3GQwL8CeKMtZyKtKPa7W91Coygh3ropAJapVdU";
+/// Last observed sponsor (co-signs as `feePayer` so the agent needs only
+/// USDC, no SOL for gas). NOT pinned: Syra rotates facilitators (seen
+/// move AepWpq3… → 2wKupLR9…/PayAI). The feePayer never receives our
+/// funds and a wrong one just fails to settle, so we require it present
+/// but accept whatever the challenge carries. Kept for reference/tests.
+pub const OBSERVED_FEE_PAYER: &str = "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4";
 /// API host.
 pub const BASE_URL: &str = "https://api.syraa.fun";
 

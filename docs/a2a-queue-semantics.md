@@ -49,7 +49,7 @@ The CLI parses `--state` case-sensitively against the wire enum (`queued`, `in_f
 
 The `--json` form emits one `a2a_status` object containing `limit`, `min_lease_age_ms`, `deadline_within_ms`, `state_filter`, `tasks`, and `results`. The stale-lease filter applies only to `in_flight` task entries. Queued tasks and pending results remain visible so the operator does not mistake filtered output for a healthy empty queue. The filter never requeues, expires, cancels, or force-errors work.
 
-Lease age survives restart. The daemon replays each lease's original `leased_at_ms` from the durable mailbox log, so after a restart `--min-lease-age-ms` still measures a lease's age from when it was first leased — not from when the daemon came back up. A lease that was already stale stays stale across a restart instead of appearing freshly leased, and a far-future threshold continues to exclude it.
+Filters survive restart. The daemon replays each lease's original `leased_at_ms` and each task's `deadline_ms` from the durable mailbox log, so the status filters keep discriminating against the reloaded queue. After a restart `--min-lease-age-ms` still measures a lease's age from when it was first leased — not from when the daemon came back up — so a lease that was already stale stays stale instead of appearing freshly leased, and a far-future threshold continues to exclude it. Likewise `--deadline-within-ms` keeps only the replayed tasks whose `deadline_ms` is within the window and still drops tasks that carry no `deadline_ms`.
 
 ## Result Contract
 

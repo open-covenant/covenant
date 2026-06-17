@@ -93,6 +93,8 @@ The IPC request is `VerifyAuditIntegrity`. All surfaces return an `AuditIntegrit
 
 The daemon restricts integrity verification to the operator identity because the report exposes global audit metadata. A non-operator peer receives an error.
 
+A corrupted chain is reported, not hidden. `verify_integrity` re-reads the event log and the sidecar on every call, so an edit, a truncated or emptied sidecar, or a sidecar that diverges from the event log flips `valid` to `false` and names the break in `failures`. `live_cli_audit_verify_tamper.rs` exercises this end-to-end: it establishes a healthy `valid: true` baseline, empties the on-disk anchor sidecar of a running daemon, and confirms the next `covenant audit verify` reports `valid: false` with a non-empty `failures` list and zero anchors against the unchanged event count.
+
 ## Privileged Action Coverage
 
 The hash chain proves that the recorded audit log has not been tampered with. A separate question is *coverage*: does every privileged daemon action actually record something on that log? Covenant pins this with a drift-guarded inventory test (`privileged_action_audit_inventory_pins_exposure_and_tracks_unaudited_gaps` in `covenantd`) that classifies every IPC request by its success-path audit exposure. The classifier is an exhaustive match over the request type, so a new request variant fails to compile until it is classified — coverage cannot silently shrink as handlers are added.

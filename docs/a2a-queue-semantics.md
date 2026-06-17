@@ -51,6 +51,8 @@ The `--json` form emits one `a2a_status` object containing `limit`, `min_lease_a
 
 Filters survive restart. The daemon replays each lease's original `leased_at_ms` and each task's `deadline_ms` from the durable mailbox log, so the status filters keep discriminating against the reloaded queue. After a restart `--min-lease-age-ms` still measures a lease's age from when it was first leased — not from when the daemon came back up — so a lease that was already stale stays stale instead of appearing freshly leased, and a far-future threshold continues to exclude it. Likewise `--deadline-within-ms` keeps only the replayed tasks whose `deadline_ms` is within the window and still drops tasks that carry no `deadline_ms`.
 
+The filters are identical across surfaces because every surface forwards the same `min_lease_age_ms`, `deadline_within_ms`, and `state_filter` arguments to one `A2AQueue` request. The `GET /a2a/queue?min_lease_age_ms=…` boundary is live-covered by `live_http_a2a_queue_min_lease_age.rs`: against a live daemon it leases one task and leaves a second queued, then confirms a small threshold keeps the aged lease while a far-future threshold drops it, and that the queued task — exempt from the lease-age filter because it is not `in_flight` — stays visible under both.
+
 ## Result Contract
 
 Posting a result for a known task clears the task's in-flight lease and queues the result for the original sender. Result reads remain sender-scoped through the mailbox sender map, compared by pubkey rather than display string.

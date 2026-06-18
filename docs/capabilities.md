@@ -134,6 +134,8 @@ Rules:
 
 Live HTTP coverage pins the task-handoff boundary in both directions. On enqueue, `POST /a2a/tasks` without `a2a.send.<recipient>` is rejected with an `error` envelope naming `a2a.send` and nothing is queued; once granted, the post returns an `a2_a_task_queued` envelope whose `task_id` is the client-supplied id the daemon preserves — it allocates no fresh id — and that id names the task a consumer then leases. On dequeue, `GET /a2a/tasks/next` is authenticated-only and leases the next queued task to the caller: a self-addressed task posted with a distinctive `intent_text`, `task_kind`, and `deadline_ms` leases back through the `a2_a_task_opt` envelope and deserializes field-for-field equal to the posted task — the optional `task_kind` and `deadline_ms` survive the HTTP JSON boundary at their exact posted values, not just the id — and the next read drains to a null task, so a single send is leased exactly once.
 
+Live IPC coverage pins the receiver-side idempotency replay boundary. When a task carries an idempotency key with `duplicate_safety = Idempotent`, the daemon dedups by the result cache rather than at enqueue: once such a task has been leased and its result posted, re-sending a task with a fresh id but the same sender, recipient, `task_kind`-or-`intent_text`, and key returns the cached result re-stamped with the replay id and enqueues no second task — the next task read drains to null. The dedup is key-specific: a re-send under a distinct idempotency key misses the cache and enqueues normally. Replay is therefore result-cache-based, not enqueue-time, so a re-send before the first task completes still enqueues a second task.
+
 ### `audit.*`
 
 Use for audit reads, verification, and retention.

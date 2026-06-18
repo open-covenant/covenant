@@ -49,7 +49,7 @@ const MILESTONES: Milestone[] = [
       "Signed permission lifecycle with grant, scope check, expiry, and revocation",
       "Verifiable workflow records and commit-scoped provenance for every privileged action",
       "Public sandbox at sandbox.opencovenant.org",
-      "Settlement program deployed on Solana mainnet: $CVNT-to-credits, staking and slashing, and on-chain receipt anchoring",
+      "Settlement program deployed on Solana mainnet as a scaffold: $CVNT-to-credits, staking, slashing, and on-chain receipt anchoring are implemented on-chain; the economic lifecycle is not yet production",
       "Apache 2.0 core",
     ],
   },

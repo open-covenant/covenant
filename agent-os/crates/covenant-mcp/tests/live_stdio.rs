@@ -160,7 +160,16 @@ async fn live_stdio_mcp_surfaces_transport_closed_when_server_exits() {
         BootstrapError::Transport(e) => e,
         other => panic!("unexpected bootstrap error: {other:?}"),
     };
-    assert!(matches!(transport, McpClientError::Closed));
+    // The server exits right after the initialize response, so bootstrap's
+    // follow-up writes (notifications/initialized, tools/list) race the child's
+    // exit: either the reader observes EOF first and drains the pending request
+    // as Closed, or a follow-up write lands on an already-closed stdin and fails
+    // with a broken pipe. Both are valid "server is gone" transport failures.
+    assert!(
+        matches!(transport, McpClientError::Closed)
+            || matches!(&transport, McpClientError::Io(e) if e.kind() == std::io::ErrorKind::BrokenPipe),
+        "server exit must surface as a transport failure (Closed or broken pipe); got {transport:?}",
+    );
 }
 
 #[tokio::test]

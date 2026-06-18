@@ -43,6 +43,13 @@ export const DOCS_NAV: DocsSection[] = [
     ],
   },
   {
+    title: "Integrations",
+    items: [
+      { href: "/x402", label: "x402 payments" },
+      { href: "/zauth", label: "zauth provider hub" },
+    ],
+  },
+  {
     title: "Operations",
     items: [
       { href: "/security", label: "Security model" },

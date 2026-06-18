@@ -56637,6 +56637,145 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    fn prove_completion_req(worker_pubkey: &str) -> Request {
+        Request::ProveCompletion {
+            task_id: uuid::Uuid::from_u128(0x7a5c),
+            worker_pubkey: worker_pubkey.into(),
+            provider: "orbserv".into(),
+            result_hash_hex: "abc123".into(),
+            validation_passed: true,
+        }
+    }
+
+    fn escrow_release_req(proof_id: uuid::Uuid) -> Request {
+        Request::RecordEscrowRelease {
+            proof_id,
+            provider: "orbserv".into(),
+            network: "eip155:8453".into(),
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            amount: "80000".into(),
+            tx_sig: Some("0xsig".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_prove_rejects_when_capability_missing() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: true });
+        let worker = bs58::encode([7u8; 32]).into_string();
+        match s.op_respond(prove_completion_req(&worker)).await {
+            Response::Error { message } => assert!(
+                message.contains("escrow.completion.prove"),
+                "error must name the missing capability: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_prove_rejects_when_not_configured() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "escrow.completion.prove").await;
+        let worker = bs58::encode([7u8; 32]).into_string();
+        match s.op_respond(prove_completion_req(&worker)).await {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_loop_prove_verify_release_reputation_end_to_end() {
+        // The exact path Orbserv's escrow drives over the gateway: prove,
+        // verify the signed proof as the escrow would, release against it, then
+        // read the reputation the loop produced.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s =
+            server_with_audit(audit.clone()).with_escrow(escrow::EscrowConfig { enabled: true });
+        grant_action(&s, "escrow.completion.prove").await;
+        grant_action(&s, "escrow.release.record").await;
+        grant_action(&s, "reputation.read").await;
+
+        let worker = bs58::encode([7u8; 32]).into_string();
+
+        // 1. Prove completion -> a signed proof.
+        let (proof_json, signature_b58, signer_pubkey_b58) =
+            match s.op_respond(prove_completion_req(&worker)).await {
+                Response::CompletionProven {
+                    proof_json,
+                    signature_b58,
+                    signer_pubkey_b58,
+                } => (proof_json, signature_b58, signer_pubkey_b58),
+                other => panic!("expected CompletionProven, got: {other:?}"),
+            };
+
+        // 2. Verify the signature over the exact proof_json, as the escrow does.
+        covenant_identity::verify_b58(&signer_pubkey_b58, proof_json.as_bytes(), &signature_b58)
+            .expect("escrow must be able to verify the proof signature");
+        let proof: escrow::CompletionProof = serde_json::from_str(&proof_json).unwrap();
+        assert_eq!(proof.worker_pubkey, worker);
+        assert!(proof.validation_passed);
+
+        // 3. Release against the proof; a retry returns the same receipt.
+        let first = match s.op_respond(escrow_release_req(proof.proof_id)).await {
+            Response::EscrowReleased {
+                receipt_id,
+                proof_id,
+            } => {
+                assert_eq!(proof_id, proof.proof_id);
+                receipt_id
+            }
+            other => panic!("expected EscrowReleased, got: {other:?}"),
+        };
+        match s.op_respond(escrow_release_req(proof.proof_id)).await {
+            Response::EscrowReleased { receipt_id, .. } => {
+                assert_eq!(receipt_id, first, "release must be idempotent on proof_id")
+            }
+            other => panic!("expected EscrowReleased, got: {other:?}"),
+        }
+
+        // 4. Reputation reflects the loop: one proof, one pass, one release.
+        match s
+            .op_respond(Request::GetReputation {
+                worker_pubkey: worker.clone(),
+            })
+            .await
+        {
+            Response::Reputation {
+                proofs_total,
+                validations_passed,
+                validations_failed,
+                releases,
+                completion_rate_bps,
+                ..
+            } => {
+                assert_eq!(proofs_total, 1);
+                assert_eq!(validations_passed, 1);
+                assert_eq!(validations_failed, 0);
+                assert_eq!(releases, 1);
+                assert_eq!(completion_rate_bps, 10_000);
+            }
+            other => panic!("expected Reputation, got: {other:?}"),
+        }
+
+        // Both escrow rows are in the audit chain.
+        let kinds: Vec<_> = audit
+            .recent(32)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert!(kinds
+            .iter()
+            .any(|k| matches!(k, covenant_audit::AuditKind::EscrowCompletionProven { .. })));
+        assert!(kinds
+            .iter()
+            .any(|k| matches!(k, covenant_audit::AuditKind::EscrowReleased { .. })));
+    }
+
     #[tokio::test]
     async fn write_frame_error_writes_generic_message_for_frame_too_large() {
         // Client-distinguishability guard: handle() used to close the

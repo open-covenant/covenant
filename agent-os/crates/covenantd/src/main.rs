@@ -371,6 +371,14 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match wurk_config_from_env() {
+        Some(cfg) => {
+            info!(base_url = %cfg.base_url, "wurk provider enabled");
+            server.with_wurk(covenantd::wurk::WurkState::new(cfg))
+        }
+        None => server,
+    };
+
     let server = {
         let cfg = covenant_metaplex::MetaplexConfig::from_env();
         if !cfg.enabled {
@@ -832,6 +840,37 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
         match bps.trim().parse() {
             Ok(n) => cfg.markup_bps = n,
             Err(_) => tracing::warn!(value = %bps, "ignoring non-numeric COVENANT_HYRE_MARKUP_BPS"),
+        }
+    }
+    Some(cfg)
+}
+
+/// Build the WURK profile from env. Returns `None` unless
+/// `COVENANT_WURK_ENABLED` is truthy.
+///
+/// - `COVENANT_WURK_ENABLED` — `1`/`true`/`yes` to enable
+/// - `COVENANT_WURK_BASE_URL` — API host (optional)
+/// - `COVENANT_WURK_PER_CALL_CAP` — atomic-USDC per-call ceiling (optional)
+fn wurk_config_from_env() -> Option<covenant_wurk::WurkConfig> {
+    let enabled = std::env::var("COVENANT_WURK_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let mut cfg = covenant_wurk::WurkConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_WURK_BASE_URL") {
+        cfg.base_url = url;
+    }
+    if let Ok(cap) = std::env::var("COVENANT_WURK_PER_CALL_CAP") {
+        match cap.trim().parse() {
+            Ok(n) => cfg.per_call_cap = n,
+            Err(_) => {
+                tracing::warn!(value = %cap, "ignoring non-numeric COVENANT_WURK_PER_CALL_CAP")
+            }
         }
     }
     Some(cfg)

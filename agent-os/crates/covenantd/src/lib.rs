@@ -13,6 +13,7 @@ pub mod http;
 pub mod hyre;
 pub mod metaplex;
 pub mod reputation;
+pub mod wurk;
 pub mod spend_authz;
 pub mod sse;
 pub mod stream_dispatch;
@@ -1219,6 +1220,10 @@ pub struct Server {
     /// the operator has not enabled Metaplex; in that state no
     /// `metaplex.*` tool is advertised or callable.
     metaplex: Option<Arc<metaplex::MetaplexState>>,
+    /// Opt-in WURK agent-to-human profile (config only). None when the
+    /// operator has not enabled WURK; in that state no `wurk.*` tool is
+    /// advertised or callable.
+    wurk: Option<Arc<wurk::WurkState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1273,6 +1278,7 @@ impl Server {
             escrow: None,
             hyre: None,
             metaplex: None,
+            wurk: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1387,6 +1393,13 @@ impl Server {
     /// sidecar, which holds the minting key out of the daemon.
     pub fn with_metaplex(mut self, state: metaplex::MetaplexState) -> Self {
         self.metaplex = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable the WURK agent-to-human profile (config only). When unset,
+    /// no `wurk.*` tool is advertised or callable.
+    pub fn with_wurk(mut self, state: wurk::WurkState) -> Self {
+        self.wurk = Some(Arc::new(state));
         self
     }
 
@@ -4039,6 +4052,9 @@ impl Server {
         if let Some(state) = &self.metaplex {
             tools.extend(covenant_metaplex::metaplex_specs(&state.config));
         }
+        if let Some(state) = &self.wurk {
+            tools.extend(covenant_wurk::wurk_specs(&state.config));
+        }
         Response::ToolList { tools }
     }
 
@@ -4106,6 +4122,9 @@ impl Server {
         }
         if name.starts_with("metaplex.") {
             return self.metaplex_tool_call(name, arguments).await;
+        }
+        if name.starts_with("wurk.") {
+            return self.wurk_tool_call(name, arguments, peer).await;
         }
 
         match self.tools.call(&name, arguments).await {
@@ -4192,6 +4211,53 @@ impl Server {
                     "unknown or disabled metaplex tool: {name} (reads need \
                      COVENANT_METAPLEX_DAS_URL; writes need the signer sidecar + RPC)"
                 ),
+            };
+        };
+        match tool.call(arguments).await {
+            Ok(r) => Response::ToolResult {
+                content: r.content,
+                is_error: r.is_error,
+            },
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Execute a WURK tool on the caller's behalf. `wurk.hire_humans`
+    /// runs the paid x402 v2 loop with the caller as payer;
+    /// `wurk.job_status` and `wurk.choose_winners` are free reads. The
+    /// funding key stays in the `covenant-x402-signer` sidecar.
+    async fn wurk_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
+        let Some(state) = self.wurk.clone() else {
+            return Response::Error {
+                message: "wurk provider is not enabled on this daemon.".into(),
+            };
+        };
+        let Some(x402) = self.x402_dispatch.clone() else {
+            return Response::Error {
+                message: "wurk requires the x402 funding-key sidecar. \
+                          Wire it via Server::with_x402_dispatch and restart."
+                    .into(),
+            };
+        };
+        let executor = Arc::new(wurk::DaemonWurkExecutor::new(
+            self.settlement.clone(),
+            self.audit.clone(),
+            self.budget.clone(),
+            x402,
+            self.identity.agent_id(),
+            peer.clone(),
+            state.config.base_url.clone(),
+        ));
+        let Some(tool) = covenant_wurk::wurk_tool(&state.config, &name, executor) else {
+            return Response::Error {
+                message: format!("unknown wurk tool: {name}"),
             };
         };
         match tool.call(arguments).await {
@@ -46587,6 +46653,92 @@ required = {caps:?}
                 assert_eq!(txt, "hi");
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Live WURK daemon path: capability gate, routing, wurk_tool_call,
+    /// DaemonWurkExecutor.view, the real WURK API. Free (no payment), so
+    /// no signer or USDC is needed. The job secret comes from
+    /// WURK_VIEW_SECRET so nothing sensitive is committed. Ignored by
+    /// default because it hits the network; run with `--ignored`.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "live: hits the real WURK API; set WURK_VIEW_SECRET"]
+    async fn live_wurk_job_status_through_daemon() {
+        let Ok(secret) = std::env::var("WURK_VIEW_SECRET") else {
+            eprintln!("skip: set WURK_VIEW_SECRET to run the live WURK daemon view test");
+            return;
+        };
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let cfg = covenant_wurk::WurkConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity.clone(),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_x402_dispatch(x402::X402Config {
+            enabled: true,
+            signer_binary: "/nonexistent-signer".into(),
+            signer_env: vec![],
+        })
+        .with_wurk(wurk::WurkState::new(cfg));
+
+        match s.op_respond(Request::ListTools).await {
+            Response::ToolList { tools } => {
+                let names: Vec<String> = tools.into_iter().map(|t| t.name).collect();
+                assert!(
+                    names.iter().any(|n| n == "wurk.job_status"),
+                    "wurk tools must be advertised: {names:?}"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.wurk.job_status".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "wurk.job_status".into(),
+                arguments: serde_json::json!({ "secret": secret, "page": 1 }),
+            })
+            .await;
+
+        match resp {
+            Response::ToolResult { content, is_error } => {
+                assert!(!is_error, "expected success, got {content:?}");
+                let data = content
+                    .iter()
+                    .find_map(|c| match c {
+                        covenant_mcp::Content::Json { value } => Some(value.clone()),
+                        _ => None,
+                    })
+                    .expect("json content");
+                assert_eq!(data["ok"], true, "live view ok");
+                assert!(data["submissions"].is_array(), "live submissions present");
+                eprintln!(
+                    "live wurk.job_status via daemon: {} submissions",
+                    data["submissions"].as_array().map(|a| a.len()).unwrap_or(0)
+                );
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
         }
     }
 

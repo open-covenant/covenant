@@ -172,6 +172,8 @@ Rules:
 - The operator identity remains the root authority for capability-registry control. A scoped `capabilities.purge` grant is delegated retention authority for a non-operator peer.
 - Grant-time validation does not yet bind the `capabilities.*` namespace, so a non-empty scope is preserved as signed metadata at grant time and only `before_ms` is interpreted at dispatch. Treat the cutoff as an enforced dispatch bound, not a grant-time-validated envelope.
 
+Live coverage pins revocation as real ledger state, not just an acknowledgement, over both daemon boundaries. A capability revoked through `RevokeCapability` (IPC) or `POST /capabilities/revoke` (HTTP) is absent from a subsequent recent-capability read, while an unrelated grant issued alongside it remains listed — so a daemon that acknowledged the revoke but left the grant active, or wiped the whole ledger, fails the read-back rather than passing on the `removed: true` envelope alone.
+
 ### `peers.*` and `identity.*`
 
 Use for peer registry and local identity operations.

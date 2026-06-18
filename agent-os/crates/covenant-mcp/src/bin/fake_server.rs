@@ -31,6 +31,7 @@ fn main() {
     let stderr_noise = args.iter().any(|arg| arg == "--stderr-noise");
     let split_response = args.iter().any(|arg| arg == "--split-response");
     let multi_tool = args.iter().any(|arg| arg == "--multi-tool");
+    let oversized_response = args.iter().any(|arg| arg == "--oversized-response");
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -148,6 +149,19 @@ fn main() {
                         "content": [{ "type": "text", "text": "forced tool failure" }],
                         "isError": true
                     }),
+                    "flood" if oversized_response => {
+                        // Emit a single stdout line larger than the transport's
+                        // 16 MiB MAX_LINE_BYTES read cap, with no trailing
+                        // newline, so read_capped_line trips InvalidData and the
+                        // client closes the transport instead of buffering an
+                        // unbounded line. We then loop back to read stdin and
+                        // stay alive, so the close is attributable to the cap
+                        // rather than process exit.
+                        let blob = "x".repeat(17 * 1024 * 1024);
+                        let _ = out.write_all(blob.as_bytes());
+                        let _ = out.flush();
+                        continue;
+                    }
                     _ => {
                         let err = json!({
                             "jsonrpc": "2.0",

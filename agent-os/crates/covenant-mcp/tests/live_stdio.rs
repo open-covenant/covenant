@@ -218,3 +218,52 @@ async fn live_stdio_mcp_surfaces_rpc_error_for_unknown_tool_then_stays_usable() 
         other => panic!("unexpected content after recovery: {other:?}"),
     }
 }
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_closes_transport_on_oversized_response_line() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args = vec!["--oversized-response".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+    let raw = client_dyn.clone();
+
+    // Sanity: the transport is healthy before the flood — a normal tools/call
+    // round-trips (the fake server answers `ping` without a prior handshake).
+    // This proves the Closed below is caused by the oversized line, not a
+    // transport that was already dead.
+    let ok = raw
+        .request(
+            "tools/call",
+            serde_json::json!({ "name": "ping", "arguments": { "text": "pre-flood" } }),
+        )
+        .await
+        .expect("a normal tool call must succeed before the flood");
+    assert_eq!(ok["content"][0]["text"], "pong: pre-flood");
+
+    // The server answers a `flood` tools/call with a single stdout line larger
+    // than the transport's 16 MiB MAX_LINE_BYTES cap and no newline.
+    // read_capped_line returns InvalidData, the reader loop breaks, and —
+    // because the child is still alive (not exited) — pending requests drain
+    // with the clean-close message, mapping to McpClientError::Closed. A
+    // regression dropping the take(max + 1) bound would instead buffer the
+    // unbounded line: read_until would block on the missing newline and this
+    // call would time out. Asserting Closed (and NOT Timeout / ServerCrashed /
+    // Rpc) is what makes the per-line cap's bite real.
+    let err = raw
+        .request(
+            "tools/call",
+            serde_json::json!({ "name": "flood", "arguments": {} }),
+        )
+        .await
+        .expect_err("an over-cap response line must close the transport, not return Ok");
+    assert!(
+        matches!(err, McpClientError::Closed),
+        "an over-cap response line must surface as McpClientError::Closed (the \
+         per-line cap fires and closes the transport while the child is still \
+         alive); a Timeout here means the cap did not fire and the reader \
+         buffered an unbounded line; got {err:?}",
+    );
+}

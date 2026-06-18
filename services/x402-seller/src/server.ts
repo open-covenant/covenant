@@ -21,7 +21,7 @@
  *   ZAUTH_API_KEY           zauth provider key (telemetry; optional)
  *   PRICE_ATOMIC            price in atomic USDC (1000 = $0.001)
  */
-import express, { type Request, type Response } from "express";
+import express, { type Request, type Response, type NextFunction } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
 import { HTTPFacilitatorClient, type RoutesConfig } from "@x402/core/server";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
@@ -41,6 +41,10 @@ const PRICE_ATOMIC = process.env.PRICE_ATOMIC ?? "1000"; // 1000 = $0.001 (USDC 
 const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" as const;
 const USDC_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const RESOURCE_PATH = "/x402/agent/:pubkey";
+// Default Render host, retired from the public hub in favour of the custom
+// domain (see the host gate below).
+const RETIRED_HOST = "covenant-x402-seller.onrender.com";
+const CANONICAL_URL = process.env.PUBLIC_URL ?? "https://x402-seller.opencovenant.org";
 
 const app = express();
 // Render terminates TLS and forwards over http; trust the proxy so
@@ -63,6 +67,19 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
     instructions:
       "Covenant x402 seller. GET /x402/agent/<solana-pubkey> returns a 402 x402-v2 challenge; pay USDC on Solana and retry to receive a Covenant agent attestation.",
   });
+});
+
+// Retire the default onrender host from the zauth provider hub: the custom
+// domain is the only advertised endpoint. The paid resource returns 410 Gone
+// for the onrender host so zauth's health check fails and drops the duplicate
+// listing; /health and the canonical host stay live, so Render's own probe is
+// unaffected.
+app.use(RESOURCE_PATH, (req: Request, res: Response, next: NextFunction) => {
+  if (req.hostname === RETIRED_HOST) {
+    res.status(410).json({ error: "gone", canonical: CANONICAL_URL });
+    return;
+  }
+  next();
 });
 
 // zauth provider telemetry — observes traffic, never blocks payments.

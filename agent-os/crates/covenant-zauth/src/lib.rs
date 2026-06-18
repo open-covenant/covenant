@@ -67,8 +67,11 @@ pub type Result<T> = std::result::Result<T, ZauthError>;
 /// `POST https://api.zauth.inc/x402/reposcan`.
 pub mod treasury {
     /// Solana treasury. Receives RepoScan USDC and self-sponsors gas
-    /// as the v0 message fee payer.
-    pub const SOLANA: &str = "ZAU64eKWAgiGNux8BzvgRn8RvWqFhdMVrpJytF7V1qm";
+    /// as the v0 message fee payer. Verified on-chain 2026-06-18 (17 SOL
+    /// + 218 USDC, live RepoScan payee). NOTE: the June-3 probe
+    /// transcribed this with an uppercase `B` (`…Nux8Bzvg…`), an empty
+    /// address; the real treasury has a lowercase `b` (`…Nux8bzvg…`).
+    pub const SOLANA: &str = "ZAU64eKWAgiGNux8bzvgRn8RvWqFhdMVrpJytF7V1qm";
     /// Base USDC treasury. Caller funds gas; no sponsored fee payer
     /// declared on the Base accept option.
     pub const BASE: &str = "0x2f5134f7cb98AF03099FA682555Ca1dD70D7D688";

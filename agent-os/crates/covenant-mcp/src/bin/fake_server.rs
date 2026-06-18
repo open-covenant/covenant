@@ -32,6 +32,7 @@ fn main() {
     let split_response = args.iter().any(|arg| arg == "--split-response");
     let multi_tool = args.iter().any(|arg| arg == "--multi-tool");
     let oversized_response = args.iter().any(|arg| arg == "--oversized-response");
+    let missing_result_error = args.iter().any(|arg| arg == "--missing-result-error");
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -160,6 +161,17 @@ fn main() {
                         let blob = "x".repeat(17 * 1024 * 1024);
                         let _ = out.write_all(blob.as_bytes());
                         let _ = out.flush();
+                        continue;
+                    }
+                    "void" if missing_result_error => {
+                        // A protocol-violating response carrying the matching id
+                        // but neither `result` nor `error`. deliver_response's
+                        // (None, None) arm synthesizes a -32603 error client-side
+                        // rather than hanging the request or treating it as a
+                        // success. The id is required so the response routes to
+                        // the pending request instead of being dropped.
+                        let bare = json!({ "jsonrpc": "2.0", "id": response_id });
+                        let _ = write_response(&mut out, &bare, split_response);
                         continue;
                     }
                     _ => {

@@ -132,6 +132,8 @@ Rules:
 - `duplicate_risk` narrows `a2a.repair.requeue` posture and should be either `idempotent` or `operator-accepted`; the daemon also accepts the wire spelling `operator_accepted`.
 - Each verb is a distinct action and is matched exactly, so a grant for one verb authorizes no other: `a2a.repair.requeue` and `a2a.repair.force_error` are separate deny-by-default grants, and holding `requeue` never authorizes the destructive `force_error` arm.
 
+Live HTTP coverage pins the dequeue body boundary: `POST /a2a/tasks` is gated by `a2a.send.<recipient>`, but `GET /a2a/tasks/next` is authenticated-only and leases the next queued task to the caller. A self-addressed task posted with a distinctive `intent_text`, `task_kind`, and `deadline_ms` leases back through the `a2_a_task_opt` envelope and deserializes field-for-field equal to the posted task — the optional `task_kind` and `deadline_ms` survive the HTTP JSON boundary at their exact posted values, not just the id — and the next read drains to a null task, so a single send is leased exactly once.
+
 ### `audit.*`
 
 Use for audit reads, verification, and retention.

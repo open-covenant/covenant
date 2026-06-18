@@ -81,6 +81,8 @@ Rules:
 
 Live HTTP coverage pins this boundary for `tool.call.echo`: a scoped grant rejects a mismatched argument object before dispatch and permits only the exact allowed object.
 
+External MCP tools are gated identically. The daemon loads tools from the `[[mcp.server]]` blocks of `secrets.toml`, spawns each server as a subprocess, and exposes its tools under `mcp_<prefix>_<tool>` names; those names flow through the same `tool.call.<name>` gate and land the same `ToolCallCompleted` audit record as native tools. Live coverage drives a tool from the in-repo fake MCP server through the daemon's dispatch.
+
 ### `memory.*`
 
 Use for memory reads, writes, repair, compaction, purge, and receipt backfill.

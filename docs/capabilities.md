@@ -110,6 +110,8 @@ Rules:
 - `memory.backfill.apply` and `memory.backfill.dry_run` are distinct grants for the memory-record receipt-correlation backfill; the backfill mode is part of the action and a scope may pin `apply` to bind a grant to a single mode. `before_ms` bounds the backfill to records at or before a millisecond cutoff (inclusive); `null` or an absent value is unbounded. Grants for `memory.backfill.*` reject `tiers` and `record_id` at validation time because the dispatch predicate does not bind by tier or record.
 - The `memory backfill-receipt-correlation` command (IPC `BackfillMemoryRecords`, HTTP `POST /memory/records/backfill`) enforces this scope at dispatch: an apply requires `memory.backfill.apply`, a dry run requires `memory.backfill.dry_run`, and the operator identity is required. The backfill correlates every legacy row with no recency filter, so the dispatch probes the scope with an unbounded cutoff — a recency-bounded grant (`before_ms` set) does not authorize a full repair. Correlations are recomputed server-side from the operator's own memory and receipt rows; clients cannot supply correlations directly.
 
+Live HTTP coverage pins the recent-memory read filter on non-empty data. With working-tier records seeded over the gateway, the buffered `GET /memory/recent` (`Accept: application/json`) returns every row at the requested `tier` and owned by the calling peer, carries the seeded record content, excludes the records under a different `tier`, and bounds the listing to the `limit` query value — so a daemon that ignored the tier or limit parameter, or dropped the owner scope, fails the read rather than passing on the empty-page wire shape.
+
 ### `a2a.*`
 
 Use for agent-to-agent send, receive, respond, repair, and compaction actions.

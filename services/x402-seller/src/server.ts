@@ -43,6 +43,9 @@ const USDC_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const RESOURCE_PATH = "/x402/agent/:pubkey";
 
 const app = express();
+// Render terminates TLS and forwards over http; trust the proxy so
+// req.protocol reflects the real https scheme (used in discovery URLs).
+app.set("trust proxy", true);
 app.use(express.json());
 
 // Free liveness check, off the paywall.

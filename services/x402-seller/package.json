@@ -1,0 +1,30 @@
+{
+  "name": "covenant-x402-seller",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Public Covenant x402 v2 seller endpoint: agents pay per call in USDC on Solana for a Covenant agent reputation/attestation lookup. Settles via a facilitator; emits zauth provider telemetry.",
+  "scripts": {
+    "build": "rm -rf dist *.tsbuildinfo && tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@x402/core": "2.15.0",
+    "@x402/express": "2.15.0",
+    "@x402/paywall": "2.15.0",
+    "@x402/svm": "2.15.0",
+    "@zauthx402/sdk": "^0.1.14",
+    "@solana/kit": "^6.10.0",
+    "bs58": "^6.0.0",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

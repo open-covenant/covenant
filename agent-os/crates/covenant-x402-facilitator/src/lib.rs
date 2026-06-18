@@ -250,9 +250,30 @@ impl PaidEndpoint {
 
 pub fn router(state: Arc<PaidEndpoint>) -> Router {
     Router::new()
+        .route("/", get(index))
         .route("/health", get(health))
         .route("/paid", get(handler))
         .with_state(state)
+}
+
+/// Root descriptor so hitting the bare domain shows what this is, not a 404.
+async fn index(State(state): State<Arc<PaidEndpoint>>) -> Response {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "service": "covenant-x402-er-facilitator",
+            "description": "Verifies ER-settled (consume_credits) x402 payments and gates /paid.",
+            "endpoints": {
+                "GET /paid": "402 + an x402 challenge; pay with an x-payment header",
+                "GET /health": "liveness probe"
+            },
+            "program": state.verifier.program_id(),
+            "network": "solana-er:devnet",
+            "scheme": "exact-er",
+            "priceCredits": state.price.to_string()
+        })),
+    )
+        .into_response()
 }
 
 /// Liveness probe for the deploy platform (Render health check). Always 200.

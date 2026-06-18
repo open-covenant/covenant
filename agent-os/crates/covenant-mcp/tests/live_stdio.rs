@@ -162,3 +162,59 @@ async fn live_stdio_mcp_surfaces_transport_closed_when_server_exits() {
     };
     assert!(matches!(transport, McpClientError::Closed));
 }
+
+#[tokio::test]
+#[ignore = "live: spawns a real subprocess; opt-in via --ignored live_"]
+async fn live_stdio_mcp_surfaces_rpc_error_for_unknown_tool_then_stays_usable() {
+    let exe = env!("CARGO_BIN_EXE_covenant-mcp-fake-server").to_string();
+    let args = vec!["--string-ids".to_string()];
+    let client = StdioMcpClient::spawn(&exe, &args)
+        .await
+        .expect("spawn fake mcp server");
+    let client_dyn: Arc<dyn McpClient> = client;
+
+    // Keep a handle to issue a raw tools/call for a name the server never
+    // advertised; bootstrap takes ownership of one clone to run the handshake.
+    let raw = client_dyn.clone();
+    let tools = bootstrap_remote_tools(client_dyn)
+        .await
+        .expect("bootstrap remote tools over real stdio");
+
+    // A tools/call for an unknown tool comes back as a JSON-RPC error response
+    // (fake_server.rs emits code -32602), which the real stdio reader must map
+    // to McpClientError::Rpc — not Ok, and not a transport-level fault.
+    let err = raw
+        .request(
+            "tools/call",
+            serde_json::json!({ "name": "does-not-exist", "arguments": {} }),
+        )
+        .await
+        .expect_err("an unknown tool must surface as a JSON-RPC error, not Ok");
+    match err {
+        McpClientError::Rpc { code, message } => {
+            assert_eq!(
+                code, -32602,
+                "the Rpc error must preserve the server's JSON-RPC code verbatim \
+                 (fake_server.rs emits -32602 for an unknown tool); got {code}",
+            );
+            assert!(
+                message.contains("unknown tool"),
+                "the Rpc error must carry the server's diagnostic message; got {message:?}",
+            );
+        }
+        other => panic!("expected McpClientError::Rpc for an unknown tool, got {other:?}"),
+    }
+
+    // The error was scoped to the one request: the reader stayed in sync, so a
+    // subsequent call to a real tool on the same client still succeeds. A
+    // regression that desynchronized framing after an error would fail here.
+    let after = tools[0]
+        .call(serde_json::json!({ "text": "after-error" }))
+        .await
+        .expect("transport must stay usable after an rpc error on a prior request");
+    assert!(!after.is_error);
+    match &after.content[0] {
+        Content::Text { text } => assert_eq!(text, "pong: after-error"),
+        other => panic!("unexpected content after recovery: {other:?}"),
+    }
+}

@@ -16,7 +16,8 @@
 
 #![deny(unsafe_code)]
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -211,13 +212,29 @@ impl ErPaymentVerifier {
 }
 
 /// A paid endpoint gated by ER-settled payments.
+/// How long an issued challenge nonce stays valid. A payment must present its
+/// `x-payment` within this window or the nonce is evicted (fail-closed).
+const NONCE_TTL: Duration = Duration::from_secs(300);
+/// Backstop bound on outstanding nonces so a flood of unpaid challenges cannot
+/// grow memory without limit. With TTL eviction the steady state is far below this.
+const MAX_OUTSTANDING_NONCES: usize = 50_000;
+
+/// Drop nonces older than [`NONCE_TTL`]. Called under the lock on every request so
+/// the issued set stays bounded by (issuance rate x TTL), and expired challenges
+/// can never be redeemed.
+fn evict_expired(issued: &mut HashMap<String, Instant>) {
+    let now = Instant::now();
+    issued.retain(|_, &mut t| now.duration_since(t) < NONCE_TTL);
+}
+
 pub struct PaidEndpoint {
     pub verifier: ErPaymentVerifier,
     pub price: u64,
     pub content: serde_json::Value,
-    /// Single-use nonces we have issued and not yet consumed. Note: production
-    /// should evict stale entries on a TTL; here unpaid nonces accumulate.
-    issued: Mutex<HashSet<String>>,
+    /// Single-use nonces we have issued and not yet consumed, with their issue
+    /// time. TTL-evicted (see [`evict_expired`]) and bounded by
+    /// [`MAX_OUTSTANDING_NONCES`], so unpaid challenges don't accumulate.
+    issued: Mutex<HashMap<String, Instant>>,
 }
 
 impl PaidEndpoint {
@@ -226,7 +243,7 @@ impl PaidEndpoint {
             verifier,
             price,
             content,
-            issued: Mutex::new(HashSet::new()),
+            issued: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -262,7 +279,18 @@ fn pay402(why: &str) -> Response {
 async fn handler(State(state): State<Arc<PaidEndpoint>>, headers: HeaderMap) -> Response {
     let Some(hdr) = headers.get("x-payment") else {
         let nonce = random_nonce();
-        state.issued.lock().unwrap().insert(nonce.clone());
+        {
+            let mut issued = state.issued.lock().unwrap();
+            evict_expired(&mut issued);
+            if issued.len() >= MAX_OUTSTANDING_NONCES {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({ "error": "too many outstanding challenges; retry shortly" })),
+                )
+                    .into_response();
+            }
+            issued.insert(nonce.clone(), Instant::now());
+        }
         // An x402 challenge body: an array of acceptable payment options. The
         // shape matches covenant-x402's `PaymentRequirements` so its `Client`
         // parses it directly; the per-request nonce rides in `extra.nonce`, which
@@ -288,10 +316,15 @@ async fn handler(State(state): State<Arc<PaidEndpoint>>, headers: HeaderMap) -> 
     let Some(nonce) = nonce_from_envelope(hdr) else {
         return pay402("bad x-payment envelope");
     };
-    // Consume the nonce atomically: an unknown or already-used nonce is rejected,
-    // which is the primary replay guard (each challenge is single-use).
-    if !state.issued.lock().unwrap().remove(&nonce) {
-        return pay402("unknown or already-used nonce");
+    // Consume the nonce atomically: unknown, already-used, or expired nonces are
+    // rejected. Single-use consumption is the primary replay guard; the TTL eviction
+    // means an expired challenge is already gone here and fails closed.
+    {
+        let mut issued = state.issued.lock().unwrap();
+        evict_expired(&mut issued);
+        if issued.remove(&nonce).is_none() {
+            return pay402("unknown, already-used, or expired nonce");
+        }
     }
     match state.verifier.verify(hdr, &nonce, state.price).await {
         Ok(v) => (
@@ -315,6 +348,19 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const PROGRAM: &str = "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y";
+
+    #[test]
+    fn evict_expired_drops_old_nonces_keeps_fresh() {
+        let mut issued: HashMap<String, Instant> = HashMap::new();
+        let stale = Instant::now()
+            .checked_sub(NONCE_TTL + Duration::from_secs(60))
+            .expect("instant sub");
+        issued.insert("stale".into(), stale);
+        issued.insert("fresh".into(), Instant::now());
+        evict_expired(&mut issued);
+        assert!(!issued.contains_key("stale"), "expired nonce must be evicted");
+        assert!(issued.contains_key("fresh"), "fresh nonce must survive");
+    }
 
     fn envelope(signature: &str, nonce: &str) -> String {
         BASE64.encode(

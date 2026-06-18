@@ -371,6 +371,14 @@ async fn main() -> Result<()> {
         None => server,
     };
 
+    let server = match syra_config_from_env() {
+        Some(cfg) => {
+            info!(base_url = %cfg.base_url, "syra provider enabled");
+            server.with_syra(covenantd::syra::SyraState::new(cfg))
+        }
+        None => server,
+    };
+
     let server = {
         let cfg = covenant_metaplex::MetaplexConfig::from_env();
         if !cfg.enabled {
@@ -832,6 +840,37 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
         match bps.trim().parse() {
             Ok(n) => cfg.markup_bps = n,
             Err(_) => tracing::warn!(value = %bps, "ignoring non-numeric COVENANT_HYRE_MARKUP_BPS"),
+        }
+    }
+    Some(cfg)
+}
+
+/// Build the Syra profile from env. Returns `None` unless
+/// `COVENANT_SYRA_ENABLED` is truthy.
+///
+/// - `COVENANT_SYRA_ENABLED` — `1`/`true`/`yes` to enable
+/// - `COVENANT_SYRA_BASE_URL` — API host (optional)
+/// - `COVENANT_SYRA_PER_CALL_CAP` — atomic-USDC per-call ceiling (optional)
+fn syra_config_from_env() -> Option<covenant_syra::SyraConfig> {
+    let enabled = std::env::var("COVENANT_SYRA_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let mut cfg = covenant_syra::SyraConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_SYRA_BASE_URL") {
+        cfg.base_url = url;
+    }
+    if let Ok(cap) = std::env::var("COVENANT_SYRA_PER_CALL_CAP") {
+        match cap.trim().parse() {
+            Ok(n) => cfg.per_call_cap = n,
+            Err(_) => {
+                tracing::warn!(value = %cap, "ignoring non-numeric COVENANT_SYRA_PER_CALL_CAP")
+            }
         }
     }
     Some(cfg)

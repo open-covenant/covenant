@@ -2238,9 +2238,8 @@ mod imp {
     #[cfg(target_arch = "wasm32")]
     #[inline(always)]
     fn all_digits8(x: u64) -> bool {
-        const LO: u64 = 0x0101010101010101;
-        (((x & (LO * 0xf0)) ^ (LO * 0x30))
-            | (((x & (LO * 0x0f)).wrapping_add(LO * 0x06)) & (LO * 0x10)))
+        ((x.wrapping_add(0x4646_4646_4646_4646) | x.wrapping_sub(0x3030_3030_3030_3030))
+            & 0x8080_8080_8080_8080)
             == 0
     }
 

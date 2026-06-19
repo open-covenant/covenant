@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-19T14:22:35.579Z",
+  "updatedAt": "2026-06-19T14:42:39.247Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9926,
+    "events": 9931,
     "tasks": 1172,
-    "integrated": 1173
+    "integrated": 1174
   },
   "throughput": {
     "last24h": 22,
-    "last7d": 147,
-    "velocity": 21
+    "last7d": 148,
+    "velocity": 21.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-19",
-      "count": 21
+      "count": 22
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-19",
-      "total": 1173
+      "total": 1174
     }
   ],
   "states": {
-    "integrated": 1166,
+    "integrated": 1167,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "capability-usage-budget-multi-use",
-    "state": "in_progress",
-    "since": "2026-06-19T13:34:08.613Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-19T14:24:49.577Z",
+      "task": "capability-usage-budget-multi-use",
+      "note": "integrated as 731140e2, pushed to origin/loop/main-track. test(covenantd): live-cover max_uses=3 budget honors granted value per call."
+    },
     {
       "at": "2026-06-19T13:27:06.759Z",
       "task": "a2a-repair-cross-peer-visibility",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T04:33:45.468Z",
       "task": "http-a2a-send-delegated-denial",
       "note": "Committed 313649d5 on loop/main-track. live_http_a2a_send_delegated_denial.rs (3 phases: anti-spoof rejection, a2a.send capability denial, n"
-    },
-    {
-      "at": "2026-06-19T04:00:10.101Z",
-      "task": "http-chain-flush-delegated-denial",
-      "note": "Integrated as 5c9563f4 (test-only: tests/live_http_chain_flush_delegated_denial.rs + README metrics 2963->2964 / 425->426). live-coverage.js"
     }
   ]
 }

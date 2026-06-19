@@ -41,6 +41,12 @@ const round = (n) => Math.round(n * 1000) / 1000;
 const MODEL_UNAVAIL = /issue with the selected model|may not exist or you may not have access/i;
 let claudeModelResolved = null;
 
+// Grok key fallback: when the primary xAI key is out of credits / over its
+// spending limit, fall through to XAI_API_KEY_FALLBACK. Detected on the error
+// body, then the working key is cached for the run.
+const XAI_CREDITS_EXHAUSTED = /used all available credits|spending limit|insufficient|quota|billing|credits/i;
+let xaiKeyResolved = null;
+
 function dotenv(name) {
   if (process.env[name]) return process.env[name];
   try {
@@ -53,6 +59,7 @@ function dotenv(name) {
   }
 }
 const xaiKey = dotenv("XAI_API_KEY");
+const xaiKeyFallback = dotenv("XAI_API_KEY_FALLBACK");
 const openaiKey = dotenv("OPENAI_API_KEY");
 
 function sh(cmd, args, opts = {}) {
@@ -225,17 +232,32 @@ ${block}
       model: grokModel,
       mode: "block",
       build: blockBuild,
-      // Multi-turn chat: feedback goes back as user turns.
+      // Multi-turn chat: feedback goes back as user turns. Tries the primary
+      // xAI key, then the fallback key if the primary is out of credits.
       call: (messages, attempt) => {
-        if (!xaiKey) throw new Error("XAI_API_KEY not set");
+        const keys = (xaiKeyResolved ? [xaiKeyResolved] : [xaiKey, xaiKeyFallback]).filter(Boolean);
+        if (!keys.length) throw new Error("no XAI key available (XAI_API_KEY / XAI_API_KEY_FALLBACK)");
         const bodyFile = join(archiveDir, `${stamp}-grok-request-${attempt}.json`);
         writeFileSync(bodyFile, JSON.stringify({ model: grokModel, messages, max_tokens: 131072, reasoning_effort: "high" }));
-        const r = sh("curl", ["-s", "-m", "1800", "-X", "POST", "https://api.x.ai/v1/chat/completions", "-H", `Authorization: Bearer ${xaiKey}`, "-H", "Content-Type: application/json", "--data", `@${bodyFile}`]);
-        if (!r.ok) throw new Error(`xai request failed: ${r.out.slice(-200)}`);
-        const d = JSON.parse(r.out);
-        if (!d.choices) throw new Error(`xai error: ${JSON.stringify(d).slice(0, 300)}`);
-        if (d.choices[0].finish_reason === "length") throw new Error("xai output truncated at max_tokens");
-        return d.choices[0].message.content;
+        let lastErr = "";
+        for (const key of keys) {
+          const r = sh("curl", ["-s", "-m", "1800", "-X", "POST", "https://api.x.ai/v1/chat/completions", "-H", `Authorization: Bearer ${key}`, "-H", "Content-Type: application/json", "--data", `@${bodyFile}`]);
+          if (!r.ok) { lastErr = `request failed: ${r.out.slice(-200)}`; continue; }
+          const d = JSON.parse(r.out);
+          if (!d.choices) {
+            const errStr = JSON.stringify(d.error ?? d);
+            if (XAI_CREDITS_EXHAUSTED.test(errStr) && keys.length > 1) {
+              console.log(`[${iter + 1}/${iters}] grok key out of credits — falling back to the next xAI key`);
+              lastErr = `credits: ${errStr.slice(0, 160)}`;
+              continue;
+            }
+            throw new Error(`xai error: ${errStr.slice(0, 300)}`);
+          }
+          if (d.choices[0].finish_reason === "length") throw new Error("xai output truncated at max_tokens");
+          xaiKeyResolved = key;
+          return d.choices[0].message.content;
+        }
+        throw new Error(`all xai keys failed: ${lastErr}`);
       },
     },
     {
@@ -297,7 +319,7 @@ ${block}
         throw new Error(`claude proposer: all model candidates unavailable: ${last.slice(-300)}`);
       },
     },
-  ].filter((p) => (p.name !== "grok" || xaiKey) && (p.name !== "codex" || openaiKey));
+  ].filter((p) => (p.name !== "grok" || xaiKey || xaiKeyFallback) && (p.name !== "codex" || openaiKey));
 
   // v2 rules: every proposer gets up to `attempts` tries with gate/fuel
   // feedback between tries, stopping early once it holds a promotable

@@ -64,8 +64,20 @@ function callFable() {
   if (!r.ok) throw new Error(`claude failed: ${r.out.slice(-200)}`);
   return r.out;
 }
+// GLM runs through the SAME claude -p agent path as Fable, just pointed at
+// z.ai's Anthropic-compatible endpoint (consumes the GLM Coding Plan
+// subscription — no token balance needed). True apples-to-apples: identical
+// CLI agent, only the backend model differs.
 function callGlm() {
   if (!glmKey) throw new Error("GLM_API_KEY / ZAI_API_KEY not set");
+  const scratch = join(outDir, "glm-scratch");
+  mkdirSync(scratch, { recursive: true });
+  const env = { ...process.env, ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_AUTH_TOKEN: glmKey, API_TIMEOUT_MS: "3000000" };
+  const r = sh("claude", ["-p", prompt, "--model", glmModel, "--dangerously-skip-permissions"], { cwd: scratch, env });
+  if (!r.ok) throw new Error(`glm (claude -p) failed: ${r.out.slice(-200)}`);
+  return r.out;
+}
+function callGlmRawUnused() {
   const bodyFile = join(outDir, "glm-req.json");
   writeFileSync(bodyFile, JSON.stringify({ model: glmModel, messages: [{ role: "user", content: prompt }], max_tokens: 120000, thinking: { type: "enabled" } }));
   const r = sh("curl", ["-s", "-m", "1800", "-X", "POST", "https://api.z.ai/api/paas/v4/chat/completions", "-H", `Authorization: Bearer ${glmKey}`, "-H", "Content-Type: application/json", "--data", `@${bodyFile}`]);

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-19T21:44:38.403Z",
+  "updatedAt": "2026-06-19T22:04:42.443Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9935,
-    "tasks": 1173,
-    "integrated": 1174
+    "events": 9944,
+    "tasks": 1174,
+    "integrated": 1175
   },
   "throughput": {
-    "last24h": 22,
-    "last7d": 139,
-    "velocity": 19.9
+    "last24h": 23,
+    "last7d": 140,
+    "velocity": 20
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-19",
-      "count": 22
+      "count": 23
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-19",
-      "total": 1174
+      "total": 1175
     }
   ],
   "states": {
-    "integrated": 1167,
+    "integrated": 1168,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "budget-preempt-audit-signal-sigkill-coverage",
+    "task": "memory-recent-sse-capability-denial-buffered-json-live-cover",
     "state": "in_progress",
-    "since": "2026-06-19T21:21:30.954Z"
+    "since": "2026-06-19T22:00:41.191Z"
   },
   "recent": [
+    {
+      "at": "2026-06-19T21:45:58.734Z",
+      "task": "budget-preempt-audit-signal-sigkill-coverage",
+      "note": "committed d12239e1 on loop/main-track: server_preempt_intent_emits_signal_sent_sigkill_for_trapped_subprocess pins the third signal_sent arm"
+    },
     {
       "at": "2026-06-19T14:24:49.577Z",
       "task": "capability-usage-budget-multi-use",
@@ -315,11 +320,6 @@
       "at": "2026-06-19T04:47:54.884Z",
       "task": "http-tool-call-delegated-denial",
       "note": "Committed 26889918 on loop/main-track. live_http_tool_call_delegated_denial.rs (3 phases: known-tool capability denial, unknown-tool gate-be"
-    },
-    {
-      "at": "2026-06-19T04:33:45.468Z",
-      "task": "http-a2a-send-delegated-denial",
-      "note": "Committed 313649d5 on loop/main-track. live_http_a2a_send_delegated_denial.rs (3 phases: anti-spoof rejection, a2a.send capability denial, n"
     }
   ]
 }

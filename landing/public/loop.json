@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-19T11:41:19.524Z",
+  "updatedAt": "2026-06-19T12:01:23.847Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9899,
+    "events": 9904,
     "tasks": 1169,
-    "integrated": 1170
+    "integrated": 1171
   },
   "throughput": {
-    "last24h": 20,
-    "last7d": 149,
-    "velocity": 21.3
+    "last24h": 21,
+    "last7d": 148,
+    "velocity": 21.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-19",
-      "count": 18
+      "count": 19
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-19",
-      "total": 1170
+      "total": 1171
     }
   ],
   "states": {
-    "integrated": 1163,
+    "integrated": 1164,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "secret-access-name-scope-gate-live-denial",
-    "state": "in_progress",
-    "since": "2026-06-19T11:08:36.465Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-19T11:50:24.951Z",
+      "task": "secret-access-name-scope-gate-live-denial",
+      "note": "Integrated as 959adb7d, pushed 7dce0a76..959adb7d to origin/loop/main-track. Committable artifacts: live_secret_access_scope_gate.rs + READM"
+    },
     {
       "at": "2026-06-19T10:47:03.529Z",
       "task": "operator-identity-gate-http-peers-rotate-denial",
@@ -315,11 +315,6 @@
       "at": "2026-06-18T14:41:27.888Z",
       "task": "runtime-subprocess-output-cap-live-coverage",
       "note": "Pushed b53e31aa to origin/loop/main-track. live_output_cap.rs pins the stdout 16 MiB output-cap kill boundary (OutputTooLarge + real-cap + p"
-    },
-    {
-      "at": "2026-06-18T13:54:17.049Z",
-      "task": "runtime-subprocess-timeout-kill-live-coverage",
-      "note": "Pushed c5f7a4f0 to origin/loop/main-track. live_timeout_kill.rs pins the cpu_ms_per_task timeout-kill boundary (Timeout + promptness + no-le"
     }
   ]
 }

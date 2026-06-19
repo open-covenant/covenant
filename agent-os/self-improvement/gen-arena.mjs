@@ -19,6 +19,12 @@ const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
 const rounds = new Map();
 let order = 0;
 for (const v of ledger.versions) {
+  // Public board shows only real measured results. A non-promoted entry that
+  // produced no scored candidate (scalar 0 — infra outage, dead key, rate
+  // limit, model down, or a compile/format failure) is operational noise, not
+  // competition, and is omitted. The ledger keeps the full record; the board
+  // stays clean automatically no matter what a round logs.
+  if (!v.promoted && (v.candidate ?? 0) === 0) continue;
   const key = v.version.split(":")[0];
   if (!rounds.has(key)) rounds.set(key, { order: order++, entries: [] });
   rounds.get(key).entries.push({

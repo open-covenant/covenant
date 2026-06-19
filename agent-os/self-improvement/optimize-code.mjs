@@ -41,10 +41,8 @@ const round = (n) => Math.round(n * 1000) / 1000;
 const MODEL_UNAVAIL = /issue with the selected model|may not exist or you may not have access|currently unavailable|is unavailable|model_not_found|not_found_error/i;
 let claudeModelResolved = null;
 
-// Grok key fallback: when the primary xAI key is out of credits / over its
-// spending limit, fall through to XAI_API_KEY_FALLBACK. Detected on the error
-// body, then the working key is cached for the run.
-const XAI_CREDITS_EXHAUSTED = /used all available credits|spending limit|insufficient|quota|billing|credits/i;
+// Grok key fallback: on ANY key-level failure of the primary xAI key, fall
+// through to XAI_API_KEY_FALLBACK; the working key is cached for the run.
 let xaiKeyResolved = null;
 
 function dotenv(name) {
@@ -233,25 +231,32 @@ ${block}
       mode: "block",
       build: blockBuild,
       // Multi-turn chat: feedback goes back as user turns. Tries the primary
-      // xAI key, then the fallback key if the primary is out of credits.
+      // xAI key, then the fallback key on ANY key-level failure (credits,
+      // permission, rate, transient) — not just credit-matched strings, which
+      // was too narrow (a "permission-denied" error skipped the fallback).
       call: (messages, attempt) => {
         const keys = (xaiKeyResolved ? [xaiKeyResolved] : [xaiKey, xaiKeyFallback]).filter(Boolean);
         if (!keys.length) throw new Error("no XAI key available (XAI_API_KEY / XAI_API_KEY_FALLBACK)");
         const bodyFile = join(archiveDir, `${stamp}-grok-request-${attempt}.json`);
         writeFileSync(bodyFile, JSON.stringify({ model: grokModel, messages, max_tokens: 131072, reasoning_effort: "high" }));
         let lastErr = "";
-        for (const key of keys) {
+        for (let i = 0; i < keys.length; i++) {
+          const key = keys[i];
+          const hasMore = i < keys.length - 1;
           const r = sh("curl", ["-s", "-m", "1800", "-X", "POST", "https://api.x.ai/v1/chat/completions", "-H", `Authorization: Bearer ${key}`, "-H", "Content-Type: application/json", "--data", `@${bodyFile}`]);
-          if (!r.ok) { lastErr = `request failed: ${r.out.slice(-200)}`; continue; }
-          const d = JSON.parse(r.out);
+          if (!r.ok) {
+            lastErr = `request failed: ${r.out.slice(-160)}`;
+            if (hasMore) { console.log(`[${iter + 1}/${iters}] grok key #${i + 1} request failed — trying next xAI key`); continue; }
+            throw new Error(`xai request failed (all keys): ${lastErr}`);
+          }
+          let d;
+          try { d = JSON.parse(r.out); } catch { lastErr = `unparseable: ${r.out.slice(-160)}`; if (hasMore) continue; throw new Error(`xai unparseable (all keys): ${lastErr}`); }
           if (!d.choices) {
-            const errStr = JSON.stringify(d.error ?? d);
-            if (XAI_CREDITS_EXHAUSTED.test(errStr) && keys.length > 1) {
-              console.log(`[${iter + 1}/${iters}] grok key out of credits — falling back to the next xAI key`);
-              lastErr = `credits: ${errStr.slice(0, 160)}`;
-              continue;
-            }
-            throw new Error(`xai error: ${errStr.slice(0, 300)}`);
+            const errStr = JSON.stringify(d.error ?? d).slice(0, 200);
+            lastErr = errStr;
+            // Any key-level error -> try the next key; only the last key throws.
+            if (hasMore) { console.log(`[${iter + 1}/${iters}] grok key #${i + 1} failed (${errStr.slice(0, 80)}) — falling back to the next xAI key`); continue; }
+            throw new Error(`xai error (all keys): ${errStr}`);
           }
           if (d.choices[0].finish_reason === "length") throw new Error("xai output truncated at max_tokens");
           xaiKeyResolved = key;

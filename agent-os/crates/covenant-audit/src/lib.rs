@@ -475,19 +475,26 @@ pub enum AuditKind {
         credits: u64,
         tx_sig: Option<String>,
     },
-    /// The daemon issued a signed completion proof for a task an external
+    /// The daemon issued a signed completion proof for a job an external
     /// escrow is funding (e.g. Orbserv's OrbMarket). This is the release
-    /// signal: the escrow verifies `signature_b58` over the proof against
-    /// the daemon pubkey and releases to `worker_pubkey`. The row is self-
+    /// signal: the escrow verifies `signature_b58` over the proof against the
+    /// daemon pubkey and releases to `worker_address`. The row is self-
     /// verifiable — it carries the signature and the `audit_root_hex` the
     /// proof bound — so the chain holds an attributable record of every
-    /// release signal Covenant produced. `result_hash_hex` is the hash of
-    /// the delivered result; `validation_passed` is whether the work
-    /// validated. Covenant custodies no funds; this proves, it does not pay.
+    /// release signal Covenant produced. `result_hash_hex` and
+    /// `validation_passed` are derived from the worker's run in this chain,
+    /// not from the caller; `escrow_id`/`amount`/`asset`/`network` are the
+    /// escrow context the caller supplied. Covenant custodies no funds; this
+    /// proves, it does not pay.
     EscrowCompletionProven {
         proof_id: Uuid,
-        task_id: Uuid,
-        worker_pubkey: String,
+        escrow_id: String,
+        job_id: Uuid,
+        hirer_address: String,
+        worker_address: String,
+        amount: String,
+        asset: String,
+        network: String,
         provider: String,
         result_hash_hex: String,
         validation_passed: bool,
@@ -495,19 +502,23 @@ pub enum AuditKind {
         signature_b58: String,
     },
     /// An external escrow reported it released funds against a completion
-    /// proof and executed the transfer. `proof_id` joins this row to the
-    /// [`AuditKind::EscrowCompletionProven`] signal that authorized the
-    /// release; `receipt_id` joins it to the settlement receipt. `amount` is
-    /// the atomic amount released; `tx_sig` is the on-chain signature when the
-    /// escrow supplied one. Covenant moved no funds and debited no budget;
-    /// this records the payout the escrow made with its own custody.
+    /// proof and executed the transfer. `decision_id` joins this row to the
+    /// [`AuditKind::EscrowCompletionProven`] proof that authorized the release
+    /// (its `proof_id`); `receipt_id` joins it to the settlement receipt.
+    /// `amount` is the atomic amount released; `tx_sig` is the on-chain
+    /// signature when the escrow supplied one. Covenant moved no funds and
+    /// debited no budget; this records the payout the escrow made with its own
+    /// custody.
     EscrowReleased {
-        proof_id: Uuid,
+        decision_id: Uuid,
         receipt_id: Uuid,
-        provider: String,
-        network: String,
-        asset: String,
+        escrow_id: String,
+        hirer_address: String,
+        worker_address: String,
         amount: String,
+        asset: String,
+        network: String,
+        provider: String,
         tx_sig: Option<String>,
     },
     /// Logged when the operator runs the settlement receipt backfill. A
@@ -589,18 +600,18 @@ pub trait AuditLog: Send + Sync {
             _ => None,
         }))
     }
-    /// Receipt id of an already-recorded `EscrowReleased` row for `proof_id`,
+    /// Receipt id of an already-recorded `EscrowReleased` row for `decision_id`,
     /// if one exists. Same idempotency role as [`Self::settled_receipt_for`]
     /// for the escrow path: an escrow that retries a release report joins the
     /// original receipt instead of writing a duplicate row.
-    async fn released_receipt_for(&self, proof_id: Uuid) -> Result<Option<Uuid>, AuditError> {
+    async fn released_receipt_for(&self, decision_id: Uuid) -> Result<Option<Uuid>, AuditError> {
         let events = self.recent(usize::MAX).await?;
         Ok(events.iter().rev().find_map(|e| match &e.kind {
             AuditKind::EscrowReleased {
-                proof_id: p,
+                decision_id: d,
                 receipt_id,
                 ..
-            } if *p == proof_id => Some(*receipt_id),
+            } if *d == decision_id => Some(*receipt_id),
             _ => None,
         }))
     }

@@ -2423,32 +2423,56 @@ impl Server {
                 .await
             }
             Request::ProveCompletion {
-                task_id,
-                worker_pubkey,
+                escrow_id,
+                job_id,
+                hirer_address,
+                worker_address,
+                amount,
+                asset,
+                network,
                 provider,
-                result_hash_hex,
-                validation_passed,
             } => {
                 self.prove_completion(
-                    task_id,
-                    worker_pubkey,
-                    provider,
-                    result_hash_hex,
-                    validation_passed,
+                    escrow::ProveRequest {
+                        escrow_id,
+                        job_id,
+                        hirer_address,
+                        worker_address,
+                        amount,
+                        asset,
+                        network,
+                        provider,
+                    },
                     peer,
                 )
                 .await
             }
             Request::RecordEscrowRelease {
-                proof_id,
-                provider,
-                network,
-                asset,
+                escrow_id,
+                decision_id,
+                hirer_address,
+                worker_address,
                 amount,
+                asset,
+                network,
+                provider,
                 tx_sig,
             } => {
-                self.record_escrow_release(proof_id, provider, network, asset, amount, tx_sig, peer)
-                    .await
+                self.record_escrow_release(
+                    escrow::ReleaseFacts {
+                        decision_id,
+                        escrow_id,
+                        hirer_address,
+                        worker_address,
+                        amount,
+                        asset,
+                        network,
+                        provider,
+                        tx_sig,
+                    },
+                    peer,
+                )
+                .await
             }
             Request::GetReputation { worker_pubkey } => {
                 self.get_reputation(worker_pubkey, peer).await
@@ -6125,15 +6149,7 @@ impl Server {
         }
     }
 
-    async fn prove_completion(
-        &self,
-        task_id: Uuid,
-        worker_pubkey: String,
-        provider: String,
-        result_hash_hex: String,
-        validation_passed: bool,
-        peer: &AgentId,
-    ) -> Response {
+    async fn prove_completion(&self, req: escrow::ProveRequest, peer: &AgentId) -> Response {
         let check = self
             .check_capabilities(
                 "escrow:prove".into(),
@@ -6163,14 +6179,6 @@ impl Server {
             };
         }
 
-        let facts = escrow::CompletionFacts {
-            task_id,
-            worker_pubkey,
-            provider,
-            result_hash_hex,
-            validation_passed,
-        };
-
         let issuer = self.identity.agent_id();
         let context = escrow::ProveContext {
             identity: self.identity.as_ref(),
@@ -6178,11 +6186,12 @@ impl Server {
             issuer: &issuer,
         };
 
-        match escrow::prove_completion(&context, config.as_ref(), &facts).await {
+        match escrow::prove_completion(&context, config.as_ref(), &req).await {
             Ok(signed) => Response::CompletionProven {
-                proof_json: signed.proof_json,
-                signature_b58: signed.signature_b58,
-                signer_pubkey_b58: signed.signer_pubkey_b58,
+                decision_id: signed.decision_id(),
+                worker_address: signed.proof.worker_address.clone(),
+                issued_at: signed.proof.proven_at.to_string(),
+                proof: signed.proof_blob_b64,
             },
             Err(e) => Response::Error {
                 message: format!("escrow completion proof failed: {e}"),
@@ -6190,17 +6199,7 @@ impl Server {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn record_escrow_release(
-        &self,
-        proof_id: Uuid,
-        provider: String,
-        network: String,
-        asset: String,
-        amount: String,
-        tx_sig: Option<String>,
-        peer: &AgentId,
-    ) -> Response {
+    async fn record_escrow_release(&self, facts: escrow::ReleaseFacts, peer: &AgentId) -> Response {
         let check = self
             .check_capabilities(
                 "escrow:release".into(),
@@ -6230,15 +6229,6 @@ impl Server {
             };
         }
 
-        let facts = escrow::ReleaseFacts {
-            proof_id,
-            provider,
-            network,
-            asset,
-            amount,
-            tx_sig,
-        };
-
         let issuer = self.identity.agent_id();
         let context = escrow::ReleaseContext {
             settlement: self.settlement.as_ref(),
@@ -6247,9 +6237,8 @@ impl Server {
         };
 
         match escrow::record_escrow_release(&context, config.as_ref(), peer, &facts).await {
-            Ok(receipt_id) => Response::EscrowReleased {
-                receipt_id,
-                proof_id,
+            Ok(recorded_at) => Response::EscrowReleased {
+                recorded_at: recorded_at.to_string(),
             },
             Err(e) => Response::Error {
                 message: format!("escrow release recording failed: {e}"),
@@ -56637,33 +56626,61 @@ budget_credits_per_hour = {credits}
         );
     }
 
-    fn prove_completion_req(worker_pubkey: &str) -> Request {
+    fn prove_completion_req(job_id: Uuid, worker_address: &str) -> Request {
         Request::ProveCompletion {
-            task_id: uuid::Uuid::from_u128(0x7a5c),
-            worker_pubkey: worker_pubkey.into(),
+            escrow_id: "escrow_xyz".into(),
+            job_id: job_id.to_string(),
+            hirer_address: "0x0fA12125753428C58aE439E57fab3A94Bd93C78b".into(),
+            worker_address: worker_address.into(),
+            amount: "10000000".into(),
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into(),
+            network: "eip155:84532".into(),
             provider: "orbserv".into(),
-            result_hash_hex: "abc123".into(),
-            validation_passed: true,
         }
     }
 
-    fn escrow_release_req(proof_id: uuid::Uuid) -> Request {
+    fn escrow_release_req(decision_id: uuid::Uuid, worker_address: &str) -> Request {
         Request::RecordEscrowRelease {
-            proof_id,
+            escrow_id: "escrow_xyz".into(),
+            decision_id,
+            hirer_address: "0x0fA12125753428C58aE439E57fab3A94Bd93C78b".into(),
+            worker_address: worker_address.into(),
+            amount: "10000000".into(),
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into(),
+            network: "eip155:84532".into(),
             provider: "orbserv".into(),
-            network: "eip155:8453".into(),
-            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
-            amount: "80000".into(),
-            tx_sig: Some("0xsig".into()),
+            tx_sig: Some("0xpayout".into()),
         }
+    }
+
+    /// Seed the worker's run for `job` into the audit chain, the way a real
+    /// dispatch would, so prove has a completion to derive from.
+    async fn seed_escrow_run(audit: &covenant_audit::InMemoryAuditLog, job: Uuid) {
+        audit
+            .record(covenant_audit::AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: 1,
+                issuer: AgentId::new("daemon@local", [9u8; 32]),
+                kind: covenant_audit::AuditKind::IntentDispatched {
+                    intent_id: job,
+                    intent_text: "do the work".into(),
+                    matched_agent: None,
+                    result_hash_hex: "9f86d081".into(),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn escrow_prove_rejects_when_capability_missing() {
         let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
             .with_escrow(escrow::EscrowConfig { enabled: true });
-        let worker = bs58::encode([7u8; 32]).into_string();
-        match s.op_respond(prove_completion_req(&worker)).await {
+        match s
+            .op_respond(prove_completion_req(Uuid::from_u128(0x7a5c), "0xWorker"))
+            .await
+        {
             Response::Error { message } => assert!(
                 message.contains("escrow.completion.prove"),
                 "error must name the missing capability: {message}"
@@ -56676,8 +56693,10 @@ budget_credits_per_hour = {credits}
     async fn escrow_prove_rejects_when_not_configured() {
         let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
         grant_action(&s, "escrow.completion.prove").await;
-        let worker = bs58::encode([7u8; 32]).into_string();
-        match s.op_respond(prove_completion_req(&worker)).await {
+        match s
+            .op_respond(prove_completion_req(Uuid::from_u128(0x7a5c), "0xWorker"))
+            .await
+        {
             Response::Error { message } => assert!(
                 message.contains("not configured"),
                 "error must say 'not configured': {message}"
@@ -56687,59 +56706,87 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
+    async fn escrow_prove_denies_when_no_run_for_job() {
+        // Capability + config are fine, but no run exists in the chain for the
+        // job, so there is nothing to attest and prove must refuse.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: true });
+        grant_action(&s, "escrow.completion.prove").await;
+        match s
+            .op_respond(prove_completion_req(Uuid::from_u128(0xdead), "0xWorker"))
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("no run found"), "got: {message}")
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn escrow_loop_prove_verify_release_reputation_end_to_end() {
-        // The exact path Orbserv's escrow drives over the gateway: prove,
-        // verify the signed proof as the escrow would, release against it, then
-        // read the reputation the loop produced.
+        // The exact path Orbserv's escrow drives over the gateway: a worker run
+        // exists in the chain, prove derives + signs against it, the escrow
+        // verifies the opaque blob, releases, and reputation reflects the loop.
+        use base64::Engine as _;
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let job = Uuid::from_u128(0x7a5c);
+        seed_escrow_run(&audit, job).await;
         let s =
             server_with_audit(audit.clone()).with_escrow(escrow::EscrowConfig { enabled: true });
         grant_action(&s, "escrow.completion.prove").await;
         grant_action(&s, "escrow.release.record").await;
         grant_action(&s, "reputation.read").await;
 
-        let worker = bs58::encode([7u8; 32]).into_string();
+        let worker = "0x7A4D3Ae53E9F96599143e1BF057ba11A7e09Ab3E";
 
-        // 1. Prove completion -> a signed proof.
-        let (proof_json, signature_b58, signer_pubkey_b58) =
-            match s.op_respond(prove_completion_req(&worker)).await {
-                Response::CompletionProven {
-                    proof_json,
-                    signature_b58,
-                    signer_pubkey_b58,
-                } => (proof_json, signature_b58, signer_pubkey_b58),
-                other => panic!("expected CompletionProven, got: {other:?}"),
-            };
-
-        // 2. Verify the signature over the exact proof_json, as the escrow does.
-        covenant_identity::verify_b58(&signer_pubkey_b58, proof_json.as_bytes(), &signature_b58)
-            .expect("escrow must be able to verify the proof signature");
-        let proof: escrow::CompletionProof = serde_json::from_str(&proof_json).unwrap();
-        assert_eq!(proof.worker_pubkey, worker);
-        assert!(proof.validation_passed);
-
-        // 3. Release against the proof; a retry returns the same receipt.
-        let first = match s.op_respond(escrow_release_req(proof.proof_id)).await {
-            Response::EscrowReleased {
-                receipt_id,
-                proof_id,
+        // 1. Prove -> decision_id + one opaque base64 proof blob.
+        let (decision_id, proof_blob) = match s.op_respond(prove_completion_req(job, worker)).await
+        {
+            Response::CompletionProven {
+                decision_id,
+                proof,
+                worker_address,
+                ..
             } => {
-                assert_eq!(proof_id, proof.proof_id);
-                receipt_id
+                assert_eq!(worker_address, worker);
+                (decision_id, proof)
             }
-            other => panic!("expected EscrowReleased, got: {other:?}"),
+            other => panic!("expected CompletionProven, got: {other:?}"),
         };
-        match s.op_respond(escrow_release_req(proof.proof_id)).await {
-            Response::EscrowReleased { receipt_id, .. } => {
-                assert_eq!(receipt_id, first, "release must be idempotent on proof_id")
-            }
+
+        // 2. Verify the blob the way the escrow does: decode, then ed25519.
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&proof_blob)
+            .unwrap();
+        let bundle: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        covenant_identity::verify_b58(
+            bundle["signer_pubkey_b58"].as_str().unwrap(),
+            bundle["proof_json"].as_str().unwrap().as_bytes(),
+            bundle["signature_b58"].as_str().unwrap(),
+        )
+        .expect("escrow must be able to verify the proof blob");
+        // The derived facts came from the seeded run, not the request.
+        let proof: escrow::CompletionProof =
+            serde_json::from_str(bundle["proof_json"].as_str().unwrap()).unwrap();
+        assert_eq!(proof.result_hash_hex, "9f86d081");
+        assert!(proof.validation_passed);
+        assert_eq!(proof.proof_id, decision_id);
+
+        // 3. Release against the proof; a retry is idempotent.
+        match s.op_respond(escrow_release_req(decision_id, worker)).await {
+            Response::EscrowReleased { recorded_at } => assert!(!recorded_at.is_empty()),
+            other => panic!("expected EscrowReleased, got: {other:?}"),
+        }
+        match s.op_respond(escrow_release_req(decision_id, worker)).await {
+            Response::EscrowReleased { .. } => {}
             other => panic!("expected EscrowReleased, got: {other:?}"),
         }
 
         // 4. Reputation reflects the loop: one proof, one pass, one release.
         match s
             .op_respond(Request::GetReputation {
-                worker_pubkey: worker.clone(),
+                worker_pubkey: worker.into(),
             })
             .await
         {
@@ -56760,7 +56807,7 @@ budget_credits_per_hour = {credits}
             other => panic!("expected Reputation, got: {other:?}"),
         }
 
-        // Both escrow rows are in the audit chain.
+        // One proof row and exactly one release row (idempotent retry).
         let kinds: Vec<_> = audit
             .recent(32)
             .await
@@ -56768,12 +56815,21 @@ budget_credits_per_hour = {credits}
             .into_iter()
             .map(|e| e.kind)
             .collect();
-        assert!(kinds
-            .iter()
-            .any(|k| matches!(k, covenant_audit::AuditKind::EscrowCompletionProven { .. })));
-        assert!(kinds
-            .iter()
-            .any(|k| matches!(k, covenant_audit::AuditKind::EscrowReleased { .. })));
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|k| matches!(k, covenant_audit::AuditKind::EscrowCompletionProven { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|k| matches!(k, covenant_audit::AuditKind::EscrowReleased { .. }))
+                .count(),
+            1,
+            "release must be idempotent on decision_id"
+        );
     }
 
     #[tokio::test]

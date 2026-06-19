@@ -37,6 +37,7 @@ covenant-metaplex = { path = "../covenant-metaplex" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+base64 = "0.22"
 bs58 = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }

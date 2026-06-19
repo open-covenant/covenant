@@ -116,7 +116,7 @@ mod imp {
         0xc67178f2,
     ];
 
-    fn tail_wk_table() -> [[u32; 64]; 16] {
+    const fn tail_wk_table() -> [[u32; 64]; 16] {
         let mut tbl = [[0u32; 64]; 16];
         let mut n = 0;
         while n < 16 {
@@ -143,6 +143,8 @@ mod imp {
         }
         tbl
     }
+
+    const TAIL_WK: [[u32; 64]; 16] = tail_wk_table();
 
     // Lowercase hex char -> 0..15, masked so indexing never bounds-checks.
     #[cfg(target_arch = "wasm32")]
@@ -3026,7 +3028,7 @@ mod imp {
         let mut failures = Vec::new();
 
         let event_hexes = digest_all(&event_lines);
-        let tail = tail_wk_table();
+        let tail = &TAIL_WK;
         let mut previous = zero_hash();
         #[cfg(target_arch = "wasm32")]
         let zero_prev = zero_hash();
@@ -3094,7 +3096,7 @@ mod imp {
                         }
                         let cand: &[Option<&[u8; 64]>; 4] =
                             spec_span[..4].try_into().expect("4-lane window");
-                        link_quad(cand, &event_hexes[index..], &tail, &mut spec_buf);
+                        link_quad(cand, &event_hexes[index..], tail, &mut spec_buf);
                     } else {
                         spec_span = [None; 5];
                         mid_wk_quad(&event_hexes[index..], &mut seq_wk);
@@ -3112,16 +3114,16 @@ mod imp {
                             spec_on = false;
                         }
                         chain_store = if spec_batch {
-                            link_hex(&previous, event_hex, &tail)
+                            link_hex(&previous, event_hex, tail)
                         } else {
-                            link_hex_mid(&previous, &seq_wk[index & 3], event_hex[63], &tail)
+                            link_hex_mid(&previous, &seq_wk[index & 3], event_hex[63], tail)
                         };
                         &chain_store
                     }
                 }
             };
             #[cfg(not(target_arch = "wasm32"))]
-            let chain_store = link_hex(&previous, event_hex, &tail);
+            let chain_store = link_hex(&previous, event_hex, tail);
             #[cfg(not(target_arch = "wasm32"))]
             let chain = &chain_store;
             let mut slow: Option<Option<(Cow<'_, str>, u64)>> = None;
@@ -3280,13 +3282,13 @@ mod imp {
     }
 
     pub fn fold_chain(lines: &[&[u8]]) -> Vec<ChainEntry> {
-        let tail = tail_wk_table();
+        let tail = &TAIL_WK;
         let event_hexes = digest_all(lines);
         let mut previous = zero_hash();
         let mut entries = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
             let event_hex = event_hexes[index];
-            let chain = link_hex(&previous, &event_hex, &tail);
+            let chain = link_hex(&previous, &event_hex, tail);
             let (event_id, timestamp_ms) = match parse_event(line) {
                 Ok((id, ts)) => (id.into_owned(), ts),
                 Err(()) => (String::new(), 0),

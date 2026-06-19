@@ -38,7 +38,7 @@ const round = (n) => Math.round(n * 1000) / 1000;
 
 // Claude CLI model fallback: an unavailable model prints this and exits 0, so
 // detect the string. Resolved working model is cached across attempts in a run.
-const MODEL_UNAVAIL = /issue with the selected model|may not exist or you may not have access/i;
+const MODEL_UNAVAIL = /issue with the selected model|may not exist or you may not have access|currently unavailable|is unavailable|model_not_found|not_found_error/i;
 let claudeModelResolved = null;
 
 // Grok key fallback: when the primary xAI key is out of credits / over its
@@ -431,7 +431,13 @@ ${block}
   } else {
     console.log(`REJECTED ${stamp}: no candidate beat the incumbent by the margin`);
   }
-  writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
+  // Merge-write: re-read the on-disk ledger and append only versions not
+  // already present, so a stale in-memory snapshot (e.g. a run that started
+  // before the ledger existed, or a concurrent run) can never clobber history.
+  const onDisk = existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, "utf8")) : { versions: [] };
+  const seen = new Set(onDisk.versions.map((v) => v.version));
+  for (const v of ledger.versions) if (!seen.has(v.version)) { onDisk.versions.push(v); seen.add(v.version); }
+  writeFileSync(ledgerPath, JSON.stringify(onDisk, null, 2));
 
   const arena = sh("node", [join(here, "gen-arena.mjs")]);
   if (arena.ok) {

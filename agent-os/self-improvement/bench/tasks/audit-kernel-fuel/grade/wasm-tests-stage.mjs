@@ -14,6 +14,12 @@ const die = (msg) => { console.error(msg); process.exit(1); };
 const benchRoot = process.env.COVENANT_BENCH_ROOT;
 if (!benchRoot) die("COVENANT_BENCH_ROOT not set — run this stage via bench/run.mjs");
 const runner = join(benchRoot, "runners", "fuel-runner", "target", "release", "fuel-runner");
+// Self-heal: rebuild the runner if missing (e.g. target/ was wiped). The
+// fuel-stage does this too; this gate runs earlier, so it must as well.
+if (!existsSync(runner)) {
+  const b = spawnSync("cargo", ["build", "--release"], { cwd: join(benchRoot, "runners", "fuel-runner"), encoding: "utf8" });
+  if (b.status !== 0) die(`fuel-runner build failed: ${(b.stderr ?? "").slice(-400)}`);
+}
 
 const build = spawnSync(
   "cargo",

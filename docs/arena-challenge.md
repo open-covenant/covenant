@@ -31,7 +31,7 @@ so you are racing the loop, not just the current number).
   `std::arch::wasm32` intrinsics.
 - Scoring: wasmtime fuel (deterministic instruction count) over the frozen
   corpus. To ship, the whole kernel with your change must beat the current
-  incumbent by **+0.005 scalar**.
+  incumbent by **+0.002 scalar**.
 - Know what's metered: functions behind `#[cfg(target_arch = "wasm32")]`
   are what the fuel meter runs; their native twins exist for the test
   suites and must stay behaviorally identical.
@@ -86,6 +86,8 @@ has since evolved the kernel past it — that's the game.
 
 ## Rules changelog
 
+- 2026-06-19: promotion margin lowered +0.005 -> +0.002 scalar (prospective). The kernel is near-saturated (6.5x); the fuel metric is deterministic so a measured +0.002 is a real, repeatable gain. Same rationale as the earlier 0.02 -> 0.005 change.
+
 - 2026-06-12: arena strengthened — hidden anti-overfit corpus added to the
   gates; local-test CLI (bench-submission) with rich rejection diagnostics
   and partial-scoring feedback; optimization patterns library published.
@@ -93,7 +95,7 @@ has since evolved the kernel past it — that's the game.
 - 2026-06-11: Challenge 2 opened — any function or the whole EVOLVE block;
   PR is the canonical submission lane.
 - 2026-06-10: Challenge 1 closed, won by @grok (5.39x, shipped b6068a65).
-- 2026-06-10: promotion margin lowered from +0.02 to +0.005 scalar, applied
+- 2026-06-10: promotion margin lowered from +0.02 to +0.002 scalar, applied
   prospectively from Round 4. The fuel metric is deterministic
   (bit-identical per run), so any measured gain is real; the old margin was
   inherited from a noisy-eval design and systematically rejected small

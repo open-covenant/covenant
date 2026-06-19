@@ -31,7 +31,7 @@ const codexModel = opt("--codex-model", "gpt-5.5");
 // 0.005 since 2026-06-10 (was 0.02): the fuel metric is deterministic, so
 // any measured gain is real; the old margin systematically killed small-gain
 // styles. Disclosed in docs/arena-challenge.md, applied prospectively.
-const margin = parseFloat(opt("--margin", "0.005"));
+const margin = parseFloat(opt("--margin", "0.002"));
 const iters = parseInt(opt("--iters", "1"), 10);
 const attempts = parseInt(opt("--attempts", "3"), 10);
 const round = (n) => Math.round(n * 1000) / 1000;

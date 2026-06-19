@@ -1409,16 +1409,19 @@ async fn settle_spend_route(
 }
 
 /// HTTP body shape for `POST /escrow/prove`. Mirrors the
-/// [`Request::ProveCompletion`] fields. `worker_pubkey` is the bs58 key of the
-/// agent the escrow should pay; `result_hash_hex` is the delivered result's
-/// hash.
+/// [`Request::ProveCompletion`] fields. `job_id` is the Covenant job uuid the
+/// worker ran under; the daemon derives the result hash and validation from
+/// that run, not from this body.
 #[derive(Deserialize)]
 struct ProveCompletionBody {
-    task_id: uuid::Uuid,
-    worker_pubkey: String,
+    escrow_id: String,
+    job_id: String,
+    hirer_address: String,
+    worker_address: String,
+    amount: String,
+    asset: String,
+    network: String,
     provider: String,
-    result_hash_hex: String,
-    validation_passed: bool,
 }
 
 async fn prove_completion_route(
@@ -1430,11 +1433,14 @@ async fn prove_completion_route(
         s.server
             .respond(
                 Request::ProveCompletion {
-                    task_id: b.task_id,
-                    worker_pubkey: b.worker_pubkey,
+                    escrow_id: b.escrow_id,
+                    job_id: b.job_id,
+                    hirer_address: b.hirer_address,
+                    worker_address: b.worker_address,
+                    amount: b.amount,
+                    asset: b.asset,
+                    network: b.network,
                     provider: b.provider,
-                    result_hash_hex: b.result_hash_hex,
-                    validation_passed: b.validation_passed,
                 },
                 &peer,
             )
@@ -1443,15 +1449,18 @@ async fn prove_completion_route(
 }
 
 /// HTTP body shape for `POST /escrow/release`. Mirrors the
-/// [`Request::RecordEscrowRelease`] fields. `proof_id` is the id from the
+/// [`Request::RecordEscrowRelease`] fields. `decision_id` is the id from the
 /// matching `/escrow/prove` response; `amount` is a decimal string.
 #[derive(Deserialize)]
 struct RecordEscrowReleaseBody {
-    proof_id: uuid::Uuid,
-    provider: String,
-    network: String,
-    asset: String,
+    escrow_id: String,
+    decision_id: uuid::Uuid,
+    hirer_address: String,
+    worker_address: String,
     amount: String,
+    asset: String,
+    network: String,
+    provider: String,
     #[serde(default)]
     tx_sig: Option<String>,
 }
@@ -1465,11 +1474,14 @@ async fn record_escrow_release_route(
         s.server
             .respond(
                 Request::RecordEscrowRelease {
-                    proof_id: b.proof_id,
-                    provider: b.provider,
-                    network: b.network,
-                    asset: b.asset,
+                    escrow_id: b.escrow_id,
+                    decision_id: b.decision_id,
+                    hirer_address: b.hirer_address,
+                    worker_address: b.worker_address,
                     amount: b.amount,
+                    asset: b.asset,
+                    network: b.network,
+                    provider: b.provider,
                     tx_sig: b.tx_sig,
                 },
                 &peer,

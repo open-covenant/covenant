@@ -51,7 +51,7 @@ pub async fn compute_reputation(
 
     for e in &events {
         if let AuditKind::EscrowCompletionProven {
-            worker_pubkey: w,
+            worker_address: w,
             validation_passed,
             proof_id,
             ..
@@ -74,7 +74,7 @@ pub async fn compute_reputation(
         .filter(|e| {
             matches!(
                 &e.kind,
-                AuditKind::EscrowReleased { proof_id, .. } if proof_ids.contains(proof_id)
+                AuditKind::EscrowReleased { decision_id, .. } if proof_ids.contains(decision_id)
             )
         })
         .count() as u64;
@@ -117,8 +117,13 @@ mod tests {
                 issuer: issuer(),
                 kind: AuditKind::EscrowCompletionProven {
                     proof_id,
-                    task_id: Uuid::new_v4(),
-                    worker_pubkey: worker.into(),
+                    escrow_id: "escrow_x".into(),
+                    job_id: Uuid::new_v4(),
+                    hirer_address: "0xHirer".into(),
+                    worker_address: worker.into(),
+                    amount: "80000".into(),
+                    asset: "0xUSDC".into(),
+                    network: "eip155:84532".into(),
                     provider: "orbserv".into(),
                     result_hash_hex: "abc".into(),
                     validation_passed: passed,
@@ -137,12 +142,15 @@ mod tests {
                 timestamp_ms: 2,
                 issuer: issuer(),
                 kind: AuditKind::EscrowReleased {
-                    proof_id,
+                    decision_id: proof_id,
                     receipt_id: Uuid::new_v4(),
-                    provider: "orbserv".into(),
-                    network: "eip155:8453".into(),
-                    asset: "0xUSDC".into(),
+                    escrow_id: "escrow_x".into(),
+                    hirer_address: "0xHirer".into(),
+                    worker_address: "0xWorker".into(),
                     amount: "80000".into(),
+                    asset: "0xUSDC".into(),
+                    network: "eip155:84532".into(),
+                    provider: "orbserv".into(),
                     tx_sig: None,
                 },
             })

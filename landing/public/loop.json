@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-19T21:03:49.447Z",
+  "updatedAt": "2026-06-19T21:23:53.599Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9931,
-    "tasks": 1172,
+    "events": 9935,
+    "tasks": 1173,
     "integrated": 1174
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1167,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-preempt-audit-signal-sigkill-coverage",
+    "state": "in_progress",
+    "since": "2026-06-19T21:21:30.954Z"
+  },
   "recent": [
     {
       "at": "2026-06-19T14:24:49.577Z",

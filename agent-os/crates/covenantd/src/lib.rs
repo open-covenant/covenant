@@ -57883,6 +57883,117 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_preempt_intent_emits_signal_sent_sigkill_for_trapped_subprocess() {
+        // Subprocess installs `trap '' TERM` so it IGNORES the
+        // cooperative SIGTERM and can only be terminated by the
+        // uncatchable SIGKILL once grace expires — the proven SigKilled
+        // recipe from covenant-runtime's
+        // preempt_subprocess_pg_returns_sig_killed_when_group_survives_grace.
+        // Asserts the daemon-layer mapping PreemptOutcome::SigKilled ->
+        // BudgetPreempted{signal_sent="SIGKILL"}. This is the third arm
+        // of the signal_sent map: the "none" (already-dead) and
+        // "SIGTERM" (cooperative-exit) arms are pinned by sibling tests,
+        // but no test asserts a FORCED kill is recorded as "SIGKILL". A
+        // refactor that relabeled the SigKilled arm to "SIGTERM" would
+        // claim a graceful exit where the process actually had to be
+        // force-killed and would pass the rest of the suite; this
+        // catches it.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let server = server_with_audit_and_budget(
+            audit.clone(),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+
+        // `trap '' TERM` is installed FIRST so the shell ignores the
+        // cooperative SIGTERM for the whole grace window; it then prints
+        // a readiness marker and busy-loops to keep the group alive. The
+        // test blocks on that marker before preempting, so the outcome
+        // is deterministically SigKilled even under heavy concurrent test
+        // load — a fixed head-start would race the trap install when the
+        // machine is saturated and flake to ExitedDuringGrace.
+        let mut std_cmd = std::process::Command::new("sh");
+        std_cmd
+            .arg("-c")
+            .arg("trap '' TERM; echo ready; while true; do sleep 0.1; done")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn trap-ignore subprocess");
+        let pid = child.id().expect("child pid available before reap");
+
+        // Block until the shell has installed the TERM trap (it prints
+        // "ready" immediately after `trap ''`) so the preempt SIGTERM can
+        // never beat the trap.
+        let stdout = child.stdout.take().expect("child stdout piped");
+        let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(stdout));
+        let ready = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+            .await
+            .expect("shell must print readiness within 5s")
+            .expect("read readiness line");
+        assert_eq!(
+            ready.as_deref(),
+            Some("ready"),
+            "shell must emit its readiness marker after installing the TERM trap",
+        );
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "trapped@local".into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let (result, _exit) = tokio::join!(
+            server.preempt_intent(
+                intent_id,
+                "test:sigkill_escalation".into(),
+                std::time::Duration::from_millis(250)
+            ),
+            child.wait(),
+        );
+
+        assert!(
+            matches!(
+                result,
+                PreemptResult::Preempted {
+                    outcome: covenant_runtime::PreemptOutcome::SigKilled,
+                }
+            ),
+            "a subprocess that traps and ignores SIGTERM must be SIGKILLed after grace, surfacing PreemptOutcome::SigKilled (not ExitedDuringGrace); got {result:?}",
+        );
+
+        let events = audit.recent(32).await.expect("audit recent must succeed");
+        let row = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::BudgetPreempted {
+                    intent_id: id,
+                    signal_sent,
+                    ..
+                } if *id == intent_id => Some(signal_sent.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected exactly one BudgetPreempted row for intent_id {intent_id}; events seen: {events:?}"
+                )
+            });
+        assert_eq!(
+            row, "SIGKILL",
+            "SigKilled must map to signal_sent=\"SIGKILL\" so post-mortem distinguishes a forced kill from a cooperative SIGTERM exit",
+        );
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

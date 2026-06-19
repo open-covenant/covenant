@@ -1,29 +1,17 @@
 {
-  "updatedAt": "2026-06-16T18:25:04.618Z",
+  "updatedAt": "2026-06-19T11:01:11.804Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9385,
-    "tasks": 1111,
-    "integrated": 1112
+    "events": 9895,
+    "tasks": 1168,
+    "integrated": 1170
   },
   "throughput": {
-    "last24h": 16,
-    "last7d": 153,
-    "velocity": 21.9
+    "last24h": 21,
+    "last7d": 151,
+    "velocity": 21.6
   },
   "daily": [
-    {
-      "date": "05-27",
-      "count": 6
-    },
-    {
-      "date": "05-28",
-      "count": 11
-    },
-    {
-      "date": "05-29",
-      "count": 10
-    },
     {
       "date": "05-30",
       "count": 19
@@ -94,22 +82,22 @@
     },
     {
       "date": "06-16",
-      "count": 13
+      "count": 16
+    },
+    {
+      "date": "06-17",
+      "count": 21
+    },
+    {
+      "date": "06-18",
+      "count": 16
+    },
+    {
+      "date": "06-19",
+      "count": 18
     }
   ],
   "cumulative": [
-    {
-      "date": "05-27",
-      "total": 478
-    },
-    {
-      "date": "05-28",
-      "total": 489
-    },
-    {
-      "date": "05-29",
-      "total": 499
-    },
     {
       "date": "05-30",
       "total": 518
@@ -180,14 +168,25 @@
     },
     {
       "date": "06-16",
-      "total": 1112
+      "total": 1115
+    },
+    {
+      "date": "06-17",
+      "total": 1136
+    },
+    {
+      "date": "06-18",
+      "total": 1152
+    },
+    {
+      "date": "06-19",
+      "total": 1170
     }
   ],
   "states": {
-    "integrated": 1105,
+    "integrated": 1163,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -200,7 +199,7 @@
     },
     {
       "name": "audit",
-      "count": 91
+      "count": 93
     },
     {
       "name": "live",
@@ -215,111 +214,107 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "capability-usage-budget-grammar",
-    "state": "in_progress",
-    "since": "2026-06-16T18:12:17.511Z"
-  },
+  "inFlight": null,
   "recent": [
     {
-      "at": "2026-06-16T17:22:18.908Z",
-      "task": "tool-exec-input-schema-validation",
-      "note": "Committed fba07161. Epic tool-execution-accountability now 2/2."
+      "at": "2026-06-19T10:47:03.529Z",
+      "task": "operator-identity-gate-http-peers-rotate-denial",
+      "note": "Committed 7dce0a76 and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
     },
     {
-      "at": "2026-06-16T16:18:39.595Z",
-      "task": "tool-exec-direct-call-audit",
-      "note": "Integrated as 154ca5b3 on origin/loop/main-track. AuditKind::ToolCallCompleted {tool, arguments_hash_hex, duration_ms, outcome:ToolCallOutco"
+      "at": "2026-06-19T10:34:14.509Z",
+      "task": "operator-identity-gate-http-audit-verify-denial",
+      "note": "Committed ad2344f6 and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
     },
     {
-      "at": "2026-06-16T14:49:59.453Z",
-      "task": "sdk-quickstart-docs",
-      "note": "Integrated as 2 commits pushed to origin/loop/main-track (d3ab49c5..1374284c): fix(sdk) 2a127707 corrects the denial parser to read the daem"
+      "at": "2026-06-19T10:14:50.703Z",
+      "task": "operator-identity-postcap-http-memory-backfill-denial",
+      "note": "Committed df508c3c and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
     },
     {
-      "at": "2026-06-16T14:23:16.876Z",
-      "task": "sdk-error-ergonomics",
-      "note": "Integrated as d3ab49c5, pushed to origin/loop/main-track (52bf60f1..d3ab49c5). SdkError::Denied{message,capability,kind:DenialKind} classifi"
+      "at": "2026-06-19T10:02:07.125Z",
+      "task": "operator-identity-postcap-http-settlement-backfill-denial",
+      "note": "Committed 193189b4 and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
     },
     {
-      "at": "2026-06-16T14:11:47.584Z",
-      "task": "sdk-worked-examples",
-      "note": "Integrated as 52bf60f1, pushed to origin/loop/main-track (1ed231b1..52bf60f1). Added a2a worker surface (try_recv_a2a_task/post_a2a_result/t"
+      "at": "2026-06-19T09:50:26.971Z",
+      "task": "operator-identity-postcap-http-compact-memory-denial",
+      "note": "Committed 11f8e7cc and pushed to origin/loop/main-track. test+README only; agent-os/autonomy is gitignored loop-state. Live test passes, mut"
     },
     {
-      "at": "2026-06-16T13:38:00.179Z",
-      "task": "sdk-author-surface",
-      "note": "Integrated as 1ed231b1, pushed to origin/loop/main-track (9ee9315a..1ed231b1). covenant-sdk async author Client over covenant-ipc: connect_d"
+      "at": "2026-06-19T09:05:38.766Z",
+      "task": "operator-identity-postcap-memory-backfill-denial",
+      "note": "Pushed to origin/loop/main-track as 5f6e0bb3; test live_ipc_memory_backfill_delegated_denial.rs. Post-capability operator-identity gate on b"
     },
     {
-      "at": "2026-06-16T11:38:32.203Z",
-      "task": "conformance-runner-and-docs",
-      "note": "Integrated as 9ee9315a, pushed to origin/loop/main-track. Unified conformance runner + --check guard in validate.sh + docs/conformance.md + "
+      "at": "2026-06-19T08:53:54.815Z",
+      "task": "operator-identity-postcap-settlement-backfill-denial",
+      "note": "Pushed to origin/loop/main-track as 872297a1; test live_ipc_settlement_backfill_delegated_denial.rs. Post-capability operator-identity gate "
     },
     {
-      "at": "2026-06-16T11:15:52.801Z",
-      "task": "conformance-audit-record-vectors",
-      "note": "Integrated as ab3f3f0c, pushed to origin/loop/main-track. Full AuditKind wire schema (36 variants) frozen as golden vectors with compile-tim"
+      "at": "2026-06-19T08:40:04.942Z",
+      "task": "operator-identity-postcap-compact-memory-denial",
+      "note": "Pushed to origin/loop/main-track as 55605e6b; test live_ipc_compact_memory_delegated_denial.rs. Post-capability operator-identity gate on co"
     },
     {
-      "at": "2026-06-16T10:42:35.518Z",
-      "task": "conformance-capability-grammar",
-      "note": "committed b89f4e41 on loop/main-track. Capability grammar frozen as 12 golden Capability vectors (1 per ScopeNamespace) + drift runner + con"
+      "at": "2026-06-19T07:17:58.554Z",
+      "task": "operator-identity-verify-audit-denial",
+      "note": "Pushed to origin/loop/main-track; test live_ipc_audit_verify_delegated_denial.rs. Epic operator-identity-gate-denial now 3/3."
     },
     {
-      "at": "2026-06-16T09:54:36.187Z",
-      "task": "conformance-ipc-golden-vectors",
-      "note": "committed 7aae13be on loop/main-track. IPC wire shapes frozen as 100 byte-exact golden vectors (50 req + 50 resp) with drift runner, exhaust"
+      "at": "2026-06-19T07:09:28.493Z",
+      "task": "operator-identity-retry-a2a-stale-denial",
+      "note": "Pushed to origin/loop/main-track; test live_ipc_retry_a2a_stale_delegated_denial.rs."
     },
     {
-      "at": "2026-06-16T08:11:57.243Z",
-      "task": "secret-remove-env-exposure",
-      "note": "Committed 17ac0b27 on loop/main-track. SubprocessRunner now clears the child env and passes only PATH/HOME/COVENANT_*; daemon env secrets no"
+      "at": "2026-06-19T06:59:45.019Z",
+      "task": "operator-identity-rotate-token-denial",
+      "note": "Committed a497b507, pushed to origin/loop/main-track. README 2970/432; test live_ipc_rotate_token_delegated_denial.rs."
     },
     {
-      "at": "2026-06-16T07:17:27.494Z",
-      "task": "secret-scope-and-audit",
-      "note": "Committed 046e46c9 on loop/main-track. SecretAccessGranted now carries signature_b58 joining each released secret to the grant that authoriz"
+      "at": "2026-06-19T06:29:45.957Z",
+      "task": "memory-repair-cross-peer-ownership",
+      "note": "committed 1a552c38 (test + README metric); live_memory_repair_cross_peer.rs under memory-retention; mutation-proven cross-peer write-isolati"
     },
     {
-      "at": "2026-06-16T06:02:42.715Z",
-      "task": "secret-broker-daemon-mediated",
-      "note": "Daemon-mediated secret broker landed: secret.access scope matcher + GetSecret/Response::Secret IPC + SecretAccess audit kinds + fail-closed "
+      "at": "2026-06-19T06:14:56.471Z",
+      "task": "capability-revoke-cross-peer-subject",
+      "note": "committed eceddf1b (test + README metric); live_ipc_revoke_capability_cross_peer.rs under cli-capabilities surface; mutation-proven peer-iso"
     },
     {
-      "at": "2026-06-15T23:11:55.101Z",
-      "task": "capscope-gateway-egress-scopes",
-      "note": "Committed 78d4b680 on loop/main-track: feat(permissions) destination-scoped x402 outbound egress. covenant-permissions adds ScopeNamespace::"
+      "at": "2026-06-19T06:02:44.865Z",
+      "task": "a2a-respond-unknown-task-rejection",
+      "note": "committed 9bf2fb33 (test + README metric); live_a2a_respond_unknown_task.rs registered under a2a-mailbox surface; mutation-proven"
     },
     {
-      "at": "2026-06-15T18:55:17.015Z",
-      "task": "capscope-memory-write-scopes",
-      "note": "Pinned memory.write deny-by-default (failure modes #2+#3). Committing on loop/main-track: covenantd test + metrics (README 2836->2837). No p"
+      "at": "2026-06-19T04:47:54.884Z",
+      "task": "http-tool-call-delegated-denial",
+      "note": "Committed 26889918 on loop/main-track. live_http_tool_call_delegated_denial.rs (3 phases: known-tool capability denial, unknown-tool gate-be"
     },
     {
-      "at": "2026-06-15T18:29:57.972Z",
-      "task": "capscope-tool-call-scoping",
-      "note": "Pinned cross-tool capability isolation (failure mode #1). Committing on loop/main-track: covenantd test + metrics count (README 2835->2836)."
+      "at": "2026-06-19T04:33:45.468Z",
+      "task": "http-a2a-send-delegated-denial",
+      "note": "Committed 313649d5 on loop/main-track. live_http_a2a_send_delegated_denial.rs (3 phases: anti-spoof rejection, a2a.send capability denial, n"
     },
     {
-      "at": "2026-06-15T18:01:00.494Z",
-      "task": "capscope-a2a-verb-scopes",
-      "note": "Committed 742018df on loop/main-track: test(a2a) mutual isolation of a2a.repair.requeue vs force_error + docs/capabilities.md exact-match cl"
+      "at": "2026-06-19T04:00:10.101Z",
+      "task": "http-chain-flush-delegated-denial",
+      "note": "Integrated as 5c9563f4 (test-only: tests/live_http_chain_flush_delegated_denial.rs + README metrics 2963->2964 / 425->426). live-coverage.js"
     },
     {
-      "at": "2026-06-15T16:57:41.369Z",
-      "task": "provenance-record-schema-golden-vectors",
-      "note": "Committed a056cbf3 (test(audit): freeze provenance record schema as golden vectors). Neutral identity, pre-commit identity guard ok. Additiv"
+      "at": "2026-06-19T03:11:16.888Z",
+      "task": "provenance-query-live-coverage",
+      "note": "Integrated as f362d8fc (test-only: tests/live_provenance_query.rs + README metrics 2962->2963 / 424->425). live-coverage.json provenance-que"
     },
     {
-      "at": "2026-06-15T15:13:27.335Z",
-      "task": "provenance-privileged-action-query-surface",
-      "note": "Committed b88100a4. IPC operator provenance query (QueryProvenance/ProvenanceActions) over chain-verified audit log; operator-gated, project"
+      "at": "2026-06-18T14:41:27.888Z",
+      "task": "runtime-subprocess-output-cap-live-coverage",
+      "note": "Pushed b53e31aa to origin/loop/main-track. live_output_cap.rs pins the stdout 16 MiB output-cap kill boundary (OutputTooLarge + real-cap + p"
     },
     {
-      "at": "2026-06-15T13:30:38.108Z",
-      "task": "provenance-audit-successful-capability-revocation",
-      "note": "Committed a04b6412 on loop/main-track. Scope: covenant-audit (AuditKind::CapabilityRevoked + serde test), covenantd (revoke_capability succe"
+      "at": "2026-06-18T13:54:17.049Z",
+      "task": "runtime-subprocess-timeout-kill-live-coverage",
+      "note": "Pushed c5f7a4f0 to origin/loop/main-track. live_timeout_kill.rs pins the cpu_ms_per_task timeout-kill boundary (Timeout + promptness + no-le"
     }
   ]
 }

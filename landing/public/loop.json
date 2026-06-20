@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-20T18:14:34.851Z",
+  "updatedAt": "2026-06-20T18:35:16.209Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9980,
+    "events": 9981,
     "tasks": 1178,
     "integrated": 1179
   },
@@ -187,7 +187,7 @@
     "integrated": 1172,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "budget-preempt-restart-recovery",
-    "state": "in_progress",
-    "since": "2026-06-20T16:31:55.309Z"
+    "state": "self_review",
+    "since": "2026-06-20T18:25:10.620Z"
   },
   "recent": [
     {

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T20:55:53.314Z",
+  "updatedAt": "2026-06-20T21:15:57.742Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9981,
+    "events": 9985,
     "tasks": 1178,
-    "integrated": 1179
+    "integrated": 1180
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 92,
-    "velocity": 13.1
+    "last24h": 6,
+    "last7d": 93,
+    "velocity": 13.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-20",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-20",
-      "total": 1179
+      "total": 1180
     }
   ],
   "states": {
-    "integrated": 1172,
+    "integrated": 1173,
     "proposed": 1,
-    "blocked": 4,
-    "self_review": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "budget-preempt-restart-recovery",
-    "state": "self_review",
-    "since": "2026-06-20T18:25:10.620Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-20T21:05:17.701Z",
+      "task": "budget-preempt-restart-recovery",
+      "note": "Committed + pushed to origin/loop/main-track. Epic budget-preempt-restart-recovery 1/1 integrated."
+    },
     {
       "at": "2026-06-20T16:24:29.759Z",
       "task": "budget-projection-tick-linear-extrapolation-wiring",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T07:09:28.493Z",
       "task": "operator-identity-retry-a2a-stale-denial",
       "note": "Pushed to origin/loop/main-track; test live_ipc_retry_a2a_stale_delegated_denial.rs."
-    },
-    {
-      "at": "2026-06-19T06:59:45.019Z",
-      "task": "operator-identity-rotate-token-denial",
-      "note": "Committed a497b507, pushed to origin/loop/main-track. README 2970/432; test live_ipc_rotate_token_delegated_denial.rs."
     }
   ]
 }

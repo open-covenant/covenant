@@ -25,7 +25,10 @@ const ledgerPath = join(archiveDir, "ledger.json");
 
 const argv = process.argv.slice(2);
 const opt = (f, d) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : d; };
-const proposerModel = opt("--model", "claude-fable-5");
+// Fable 5 was disabled for all users by a US export-control directive
+// (2026-06-12, no restore date), so the Claude lane defaults to Opus 4.8.
+// The in-call fallback still tries it first if --model is set, then degrades.
+const proposerModel = opt("--model", "claude-opus-4-8");
 const grokModel = opt("--grok-model", "grok-4.3");
 const codexModel = opt("--codex-model", "gpt-5.5");
 // 0.005 since 2026-06-10 (was 0.02): the fuel metric is deterministic, so

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T21:58:41.101Z",
+  "updatedAt": "2026-06-20T22:16:10.613Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9989,
+    "events": 9994,
     "tasks": 1179,
-    "integrated": 1180
+    "integrated": 1181
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 93,
-    "velocity": 13.3
+    "last24h": 6,
+    "last7d": 94,
+    "velocity": 13.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-20",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-20",
-      "total": 1180
+      "total": 1181
     }
   ],
   "states": {
-    "integrated": 1173,
+    "integrated": 1174,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "budget-projection-tick-nocapacity-skip-coverage",
-    "state": "in_progress",
-    "since": "2026-06-20T21:26:09.928Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-20T22:00:40.512Z",
+      "task": "budget-projection-tick-nocapacity-skip-coverage",
+      "note": "Committed + pushed to origin/loop/main-track. Epic budget-projection-tick-nocapacity-skip-coverage 1/1 integrated."
+    },
     {
       "at": "2026-06-20T21:05:17.701Z",
       "task": "budget-preempt-restart-recovery",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T07:17:58.554Z",
       "task": "operator-identity-verify-audit-denial",
       "note": "Pushed to origin/loop/main-track; test live_ipc_audit_verify_delegated_denial.rs. Epic operator-identity-gate-denial now 3/3."
-    },
-    {
-      "at": "2026-06-19T07:09:28.493Z",
-      "task": "operator-identity-retry-a2a-stale-denial",
-      "note": "Pushed to origin/loop/main-track; test live_ipc_retry_a2a_stale_delegated_denial.rs."
     }
   ]
 }

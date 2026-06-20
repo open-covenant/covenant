@@ -1234,17 +1234,46 @@ mod imp {
                             let b1: &[u8; 64] = &tails[1];
                             let b2: &[u8; 64] = &tails[2];
                             let b3: &[u8; 64] = &tails[3];
-                            let q0 = quad::<0>(b0, b1, b2, b3);
-                            let q1 = quad::<16>(b0, b1, b2, b3);
-                            let q2 = quad::<32>(b0, b1, b2, b3);
-                            let q3 = quad::<48>(b0, b1, b2, b3);
-                            compressm_at!(
-                                &mut state,
-                                [
-                                    q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3],
-                                    q2[0], q2[1], q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
-                                ],
-                            );
+                            // For rem < 32 the tail's schedule words 8..=14 are
+                            // all zero (content+0x80 fit in bytes 0..32, and the
+                            // bit length's high word is 0 for sub-512MB lines).
+                            // Feeding them as literal zeros lets the compressor
+                            // const-fold their sigma/add terms away.
+                            if r0 < 32
+                                && r1 < 32
+                                && r2 < 32
+                                && r3 < 32
+                                && (l0.len() | l1.len() | l2.len() | l3.len()) < (1 << 29)
+                            {
+                                let q0 = quad::<0>(b0, b1, b2, b3);
+                                let q1 = quad::<16>(b0, b1, b2, b3);
+                                let z = u32x4(0, 0, 0, 0);
+                                let w15 = u32x4(
+                                    (l0.len() as u32).wrapping_mul(8),
+                                    (l1.len() as u32).wrapping_mul(8),
+                                    (l2.len() as u32).wrapping_mul(8),
+                                    (l3.len() as u32).wrapping_mul(8),
+                                );
+                                compressm_at!(
+                                    &mut state,
+                                    [
+                                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3],
+                                        z, z, z, z, z, z, z, w15,
+                                    ],
+                                );
+                            } else {
+                                let q0 = quad::<0>(b0, b1, b2, b3);
+                                let q1 = quad::<16>(b0, b1, b2, b3);
+                                let q2 = quad::<32>(b0, b1, b2, b3);
+                                let q3 = quad::<48>(b0, b1, b2, b3);
+                                compressm_at!(
+                                    &mut state,
+                                    [
+                                        q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3],
+                                        q2[0], q2[1], q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
+                                    ],
+                                );
+                            }
                             lanes_hex(&state)
                         } else {
                             digest4([l0, l1, l2, l3], $blocks)

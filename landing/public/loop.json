@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T10:53:12.126Z",
+  "updatedAt": "2026-06-20T11:13:15.859Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9968,
+    "events": 9971,
     "tasks": 1177,
     "integrated": 1178
   },
   "throughput": {
     "last24h": 8,
-    "last7d": 97,
-    "velocity": 13.9
+    "last7d": 95,
+    "velocity": 13.6
   },
   "daily": [
     {
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1171,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-projection-tick-linear-extrapolation-wiring",
+    "state": "in_progress",
+    "since": "2026-06-20T10:54:15.772Z"
+  },
   "recent": [
     {
       "at": "2026-06-20T10:39:45.399Z",

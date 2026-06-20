@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T23:36:25.308Z",
+  "updatedAt": "2026-06-20T23:56:30.048Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10006,
+    "events": 10011,
     "tasks": 1181,
-    "integrated": 1182
+    "integrated": 1183
   },
   "throughput": {
-    "last24h": 7,
-    "last7d": 95,
-    "velocity": 13.6
+    "last24h": 8,
+    "last7d": 96,
+    "velocity": 13.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-20",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-20",
-      "total": 1182
+      "total": 1183
     }
   ],
   "states": {
-    "integrated": 1175,
+    "integrated": 1176,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sdk-denial-classify-grant-retry-live-coverage",
-    "state": "in_progress",
-    "since": "2026-06-20T23:25:43.454Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-20T23:55:13.612Z",
+      "task": "sdk-denial-classify-grant-retry-live-coverage",
+      "note": "Committed 7013279d + pushed to origin/loop/main-track (060cc23f..7013279d). All git-identity guards passed. Epic sdk-denial-classify-grant-r"
+    },
     {
       "at": "2026-06-20T22:57:20.118Z",
       "task": "sync-status-md-next-step-for-integrated-slices",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T08:53:54.815Z",
       "task": "operator-identity-postcap-settlement-backfill-denial",
       "note": "Pushed to origin/loop/main-track as 872297a1; test live_ipc_settlement_backfill_delegated_denial.rs. Post-capability operator-identity gate "
-    },
-    {
-      "at": "2026-06-19T08:40:04.942Z",
-      "task": "operator-identity-postcap-compact-memory-denial",
-      "note": "Pushed to origin/loop/main-track as 55605e6b; test live_ipc_compact_memory_delegated_denial.rs. Post-capability operator-identity gate on co"
     }
   ]
 }

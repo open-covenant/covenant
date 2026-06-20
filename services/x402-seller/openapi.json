@@ -10,14 +10,6 @@
   },
   "servers": [{ "url": "https://x402-seller.opencovenant.org" }],
   "paths": {
-    "/health": {
-      "get": {
-        "operationId": "health",
-        "summary": "Check service liveness and readiness status.",
-        "tags": ["meta"],
-        "responses": { "200": { "description": "Service is up" } }
-      }
-    },
     "/x402/passport/{asset}": {
       "get": {
         "operationId": "getPassport",
@@ -109,8 +101,11 @@
       },
       "Attestation": {
         "type": "object",
+        "description": "Independently verifiable: digest = sha256(canonical(payload)) lowercase hex, where canonical is JSON with recursively-sorted keys and no insignificant whitespace (UTF-8); message = domain + \"\\n\" + digest; ed25519-verify base58-decoded signature_b58 over the UTF-8 message against pubkey_b58. Pin the expected pubkey from GET /.well-known/x402 (attestation.publicKey).",
         "properties": {
-          "domain": { "type": "string" },
+          "alg": { "type": "string", "description": "Signature algorithm — \"ed25519\"." },
+          "domain": { "type": "string", "description": "Domain prefix bound into the signed message." },
+          "canonicalization": { "type": "string" },
           "payload": {
             "type": "object",
             "properties": {
@@ -120,7 +115,7 @@
             }
           },
           "digest_sha256_hex": { "type": "string" },
-          "pubkey_b58": { "type": "string" },
+          "pubkey_b58": { "type": "string", "description": "Signer pubkey; must match attestation.publicKey from /.well-known/x402." },
           "signature_b58": { "type": "string" }
         }
       }

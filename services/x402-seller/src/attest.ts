@@ -9,6 +9,14 @@ import bs58 from 'bs58';
 
 const DOMAIN = 'covenant.attest.v1\n';
 
+// Published so any consumer can verify an attestation without trusting this
+// server: pin the pubkey, recompute the digest, check the signature.
+export const ATTEST_DOMAIN = DOMAIN.trimEnd();
+export const ATTEST_CANONICALIZATION = 'JSON, recursively key-sorted, no insignificant whitespace, UTF-8';
+export const ATTEST_VERIFY_RECIPE =
+  `digest = sha256(canonical(payload)) as lowercase hex; message = "${DOMAIN.trimEnd()}\\n" + digest; ` +
+  'ed25519-verify base58-decoded signature_b58 over the UTF-8 message against the published pubkey.';
+
 function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -25,7 +33,9 @@ const b64url = (b: Buffer | Uint8Array): string => Buffer.from(b).toString('base
 const PKCS8_ED25519_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
 export interface Attestation {
+  alg: string;
   domain: string;
+  canonicalization: string;
   payload: { subject: string; claim: unknown; ts: number };
   digest_sha256_hex: string;
   pubkey_b58: string;
@@ -48,7 +58,9 @@ export class Attestor {
     const digest = createHash('sha256').update(canonical(payload), 'utf8').digest('hex');
     const sig = edSign(null, Buffer.from(`${DOMAIN}${digest}`, 'utf8'), this.key);
     return {
+      alg: 'ed25519',
       domain: DOMAIN.trimEnd(),
+      canonicalization: ATTEST_CANONICALIZATION,
       payload,
       digest_sha256_hex: digest,
       pubkey_b58: this.pubkeyB58,

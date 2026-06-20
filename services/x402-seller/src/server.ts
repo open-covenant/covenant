@@ -34,7 +34,7 @@ import { HTTPFacilitatorClient, type RoutesConfig } from "@x402/core/server";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { zauthProvider } from "@zauthx402/sdk/middleware";
 import { getPassport } from "./passport.js";
-import { Attestor } from "./attest.js";
+import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
 
 const PORT = Number(process.env.PORT ?? 10000);
 const PAY_TO = process.env.COVENANT_TREASURY ?? "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM";
@@ -78,6 +78,16 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
     resources: [`${base}/x402/passport/{asset}`, `${base}/x402/attest`],
     instructions:
       "Covenant Trust x402 seller. Pay USDC on Solana to verify an agent's on-chain identity passport (GET /x402/passport/<mpl-core-asset>) or to obtain a Covenant-signed attestation over a claim (POST /x402/attest).",
+    // Pin this key to verify /x402/attest responses without trusting this server.
+    attestation: attestor
+      ? {
+          algorithm: "ed25519",
+          publicKey: attestor.pubkeyB58,
+          domain: ATTEST_DOMAIN,
+          canonicalization: ATTEST_CANONICALIZATION,
+          verify: ATTEST_VERIFY_RECIPE,
+        }
+      : null,
   });
 });
 

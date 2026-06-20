@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T22:56:18.029Z",
+  "updatedAt": "2026-06-20T23:16:21.578Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9998,
+    "events": 10002,
     "tasks": 1180,
-    "integrated": 1181
+    "integrated": 1182
   },
   "throughput": {
-    "last24h": 6,
-    "last7d": 94,
-    "velocity": 13.4
+    "last24h": 7,
+    "last7d": 95,
+    "velocity": 13.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-20",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-20",
-      "total": 1181
+      "total": 1182
     }
   ],
   "states": {
-    "integrated": 1174,
+    "integrated": 1175,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sync-status-md-next-step-for-integrated-slices",
-    "state": "in_progress",
-    "since": "2026-06-20T22:50:52.773Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-20T22:57:20.118Z",
+      "task": "sync-status-md-next-step-for-integrated-slices",
+      "note": "Integrated; committing status.md next-step sync + autonomy task/backlog records."
+    },
     {
       "at": "2026-06-20T22:00:40.512Z",
       "task": "budget-projection-tick-nocapacity-skip-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T08:40:04.942Z",
       "task": "operator-identity-postcap-compact-memory-denial",
       "note": "Pushed to origin/loop/main-track as 55605e6b; test live_ipc_compact_memory_delegated_denial.rs. Post-capability operator-identity gate on co"
-    },
-    {
-      "at": "2026-06-19T07:17:58.554Z",
-      "task": "operator-identity-verify-audit-denial",
-      "note": "Pushed to origin/loop/main-track; test live_ipc_audit_verify_delegated_denial.rs. Epic operator-identity-gate-denial now 3/3."
     }
   ]
 }

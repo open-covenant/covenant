@@ -410,6 +410,12 @@ struct PersistedEntry {
 
 /// Per-row ownership verdict recovery reaches for a persisted pid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// SameProcess/Vanished/Reused are constructed only by the Linux
+// `validate_ownership` (which reads /proc); off Linux the production path
+// builds only `Unverifiable`, so the lib build (which does not see the test
+// seam's constructions) would otherwise flag them dead. Mirrors the
+// `parse_proc_stat` cfg-allow below for the same Linux-only reason.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 enum OwnershipCheck {
     /// The pid still maps to the recorded process — safe to re-track.
     SameProcess,

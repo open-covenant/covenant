@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-20T23:16:21.578Z",
+  "updatedAt": "2026-06-20T23:36:25.308Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10002,
-    "tasks": 1180,
+    "events": 10006,
+    "tasks": 1181,
     "integrated": 1182
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1175,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "sdk-denial-classify-grant-retry-live-coverage",
+    "state": "in_progress",
+    "since": "2026-06-20T23:25:43.454Z"
+  },
   "recent": [
     {
       "at": "2026-06-20T22:57:20.118Z",

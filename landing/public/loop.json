@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T01:26:20.691Z",
+  "updatedAt": "2026-06-20T01:46:24.352Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9953,
+    "events": 9958,
     "tasks": 1175,
-    "integrated": 1176
+    "integrated": 1177
   },
   "throughput": {
-    "last24h": 24,
-    "last7d": 137,
-    "velocity": 19.6
+    "last24h": 25,
+    "last7d": 138,
+    "velocity": 19.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-20",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-20",
-      "total": 1176
+      "total": 1177
     }
   ],
   "states": {
-    "integrated": 1169,
+    "integrated": 1170,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "budget-preempt-audit-write-failed-surfaced-unit-coverage",
-    "state": "in_progress",
-    "since": "2026-06-20T01:16:41.012Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-20T01:39:07.896Z",
+      "task": "budget-preempt-audit-write-failed-surfaced-unit-coverage",
+      "note": "committed 55e94b6f on loop/main-track: server_preempt_intent_surfaces_audit_write_failed_when_audit_append_fails pins the AuditWriteFailed a"
+    },
     {
       "at": "2026-06-20T00:59:34.808Z",
       "task": "memory-recent-sse-capability-denial-buffered-json-live-cover",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T06:14:56.471Z",
       "task": "capability-revoke-cross-peer-subject",
       "note": "committed eceddf1b (test + README metric); live_ipc_revoke_capability_cross_peer.rs under cli-capabilities surface; mutation-proven peer-iso"
-    },
-    {
-      "at": "2026-06-19T06:02:44.865Z",
-      "task": "a2a-respond-unknown-task-rejection",
-      "note": "committed 9bf2fb33 (test + README metric); live_a2a_respond_unknown_task.rs registered under a2a-mailbox surface; mutation-proven"
     }
   ]
 }

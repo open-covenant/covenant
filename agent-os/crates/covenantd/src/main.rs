@@ -67,7 +67,17 @@ async fn main() -> Result<()> {
     let router = Arc::new(covenant_router::Router::from_cards(cards));
     let runtime_config = covenantd::runtime_runner_config_from_env(&home)?;
     let hermes_config = covenantd::hermes_gateway_config_from_env();
-    let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::new());
+    let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::with_persistence(
+        home.join("runtime").join("subprocess-tracker.jsonl"),
+    ));
+    // Re-adopt in-flight subprocess pids persisted by a prior daemon
+    // instance BEFORE the tracker is handed to the runner/server or the
+    // projection-tick driver spawns, so nothing races a half-populated
+    // tracker. recover() validates each pid's ownership and re-tracks only
+    // genuine survivors; reused or unverifiable pids are refused, never
+    // signalled. Survivors that are over budget are reaped by the
+    // projection tick on its next iteration.
+    subprocess_tracker.recover();
     // Live audit step-trail (opt-in via COVENANT_LIVE_TRACE=1): the Hermes
     // runner streams each tool trace through this channel and the drainer
     // writes them into the chain as they arrive. Off by default — the proven

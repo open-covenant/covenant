@@ -38,7 +38,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 mod hermes;
@@ -338,18 +338,127 @@ pub struct TrackedSubprocess {
     pub started_at_ms: u64,
 }
 
-/// Daemon-side in-memory tracker of subprocesses spawned for in-flight
-/// intents. Keyed by `intent_id: Uuid` so the budget-projection tick
-/// (sub-slice B) and signal dispatcher (sub-slice C) can look up the
-/// spawn record without scanning the entire process table.
+/// Process-identity token captured for a tracked subprocess so a daemon
+/// restart can tell a genuine survivor from a reused pid before it ever
+/// signals one. `pgid` and `start_time_ticks` are read straight from
+/// `/proc/<pid>/stat` (fields 5 and 22) at register time on Linux; both
+/// are absent on targets without `/proc`. `start_time_ticks` is the
+/// kernel's boot-relative process start time in clock ticks — a value the
+/// kernel does not reissue for a reused pid, so an exact match proves
+/// identity with no USER_HZ / boot-time arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct ProcIdentity {
+    pgid: i64,
+    start_time_ticks: u64,
+}
+
+impl ProcIdentity {
+    /// Live identity for `pid` from `/proc` on Linux. `None` when the
+    /// process is gone, the stat line is unparseable, or the target has
+    /// no `/proc`; recovery treats every `None` as "cannot prove
+    /// ownership → do not re-track".
+    #[cfg(target_os = "linux")]
+    fn current(pid: u32) -> Option<Self> {
+        parse_proc_stat(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn current(_pid: u32) -> Option<Self> {
+        None
+    }
+}
+
+/// Extract pgid (field 5) and starttime (field 22) from a
+/// `/proc/<pid>/stat` line. Field 2 (`comm`) is parenthesized and may
+/// itself contain spaces or parens, so the trailing fields are located
+/// relative to the LAST `')'` rather than by naive whitespace splitting.
+/// Compiled on every target so the parser is unit-testable off Linux,
+/// where it is otherwise unused.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_stat(stat: &str) -> Option<ProcIdentity> {
+    let after_comm = stat.get(stat.rfind(')')? + 1..)?;
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    // `after_comm` begins at field 3 (state), so field N sits at index N-3.
+    Some(ProcIdentity {
+        pgid: fields.get(2)?.parse().ok()?,
+        start_time_ticks: fields.get(19)?.parse().ok()?,
+    })
+}
+
+/// Internal storage for one tracked subprocess: the public
+/// [`TrackedSubprocess`] plus the [`ProcIdentity`] captured at register
+/// time. Private so the tracker's public API and `TrackedSubprocess`
+/// stay unchanged while recovery gains the ownership token it needs.
+#[derive(Debug, Clone)]
+struct StoredEntry {
+    tracked: TrackedSubprocess,
+    identity: Option<ProcIdentity>,
+}
+
+/// One JSON line in `subprocess-tracker.jsonl`. The file is rewritten
+/// atomically on every mutation, so the newest file is always a complete,
+/// self-compacting snapshot of the live set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedEntry {
+    intent_id: Uuid,
+    agent_id: String,
+    pid: u32,
+    started_at_ms: u64,
+    #[serde(default)]
+    identity: Option<ProcIdentity>,
+}
+
+/// Per-row ownership verdict recovery reaches for a persisted pid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnershipCheck {
+    /// The pid still maps to the recorded process — safe to re-track.
+    SameProcess,
+    /// The pid no longer exists — drop the stale row (benign).
+    Vanished,
+    /// The pid exists but its identity differs from the record: the pid
+    /// was reused, so re-tracking is refused and it is never signalled.
+    Reused,
+    /// Ownership cannot be established (no `/proc`, no recorded token) —
+    /// refused conservatively.
+    Unverifiable,
+}
+
+/// Outcome counts from one [`SubprocessTracker::recover`] pass, for
+/// startup logging and test assertions.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryReport {
+    /// Survivors re-tracked so the projection tick can reap any over budget.
+    pub retracked: usize,
+    /// Persisted pids that no longer exist (ESRCH) — benign.
+    pub dropped_vanished: usize,
+    /// Persisted pids whose live identity does not match the record (pid
+    /// reuse) — refused, never signalled.
+    pub dropped_reused: usize,
+    /// Persisted pids that could not be validated — refused conservatively.
+    pub dropped_unverifiable: usize,
+}
+
+/// Daemon-side tracker of subprocesses spawned for in-flight intents.
+/// Keyed by `intent_id: Uuid` so the budget-projection tick can look up a
+/// spawn record without scanning the process table.
 ///
-/// In-memory only by design: a daemon restart loses the tracker and the
-/// orphan subprocesses outlive their preempt window. Recovery via
-/// pidfile or `/proc` scan is a separate followup slice documented in
-/// the parent task's expected failure mode 3.
+/// In-memory by default ([`Self::new`]). A tracker built with
+/// [`Self::with_persistence`] additionally mirrors its entries to a JSONL
+/// snapshot on every mutation so a daemon restart can re-adopt still-live
+/// subprocesses via [`Self::recover`] instead of orphaning them past
+/// their preempt window. Recovery validates each persisted pid's process
+/// identity (pgid + `/proc` start time) and refuses to re-track — and
+/// therefore to signal — a pid that was reused.
 #[derive(Debug, Default)]
 pub struct SubprocessTracker {
-    entries: RwLock<HashMap<Uuid, TrackedSubprocess>>,
+    entries: RwLock<HashMap<Uuid, StoredEntry>>,
+    /// `Some` enables durable snapshots to this path; `None` (the
+    /// `new()`/`default()` case) is a pure in-memory tracker — the
+    /// behavior every existing caller and test relies on.
+    persist_path: Option<PathBuf>,
+    /// Serializes snapshot writes so two concurrent mutations cannot
+    /// interleave their tempfile + rename.
+    persist_lock: std::sync::Mutex<()>,
 }
 
 impl SubprocessTracker {
@@ -357,26 +466,63 @@ impl SubprocessTracker {
         Self::default()
     }
 
-    /// Inserts a tracker entry. If `intent_id` is already present the
-    /// existing entry is overwritten — this should not happen under
-    /// normal dispatch flow and may indicate a race in the runner
-    /// integration that this slice intentionally does not yet wire.
+    /// Tracker that durably mirrors its entries to `path` (typically
+    /// `$COVENANT_HOME/runtime/subprocess-tracker.jsonl`) for restart
+    /// recovery. The parent directory is created eagerly; a failure there
+    /// is logged and falls back to an in-memory-only tracker rather than
+    /// aborting daemon startup.
+    pub fn with_persistence(path: PathBuf) -> Self {
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                warn!(
+                    path = %parent.display(),
+                    error = %e,
+                    "subprocess-tracker: cannot create persistence dir; continuing in-memory only"
+                );
+                return Self::new();
+            }
+        }
+        Self {
+            persist_path: Some(path),
+            ..Self::default()
+        }
+    }
+
+    /// Inserts a tracker entry, capturing the process's identity token for
+    /// later restart validation, then best-effort persists the snapshot.
+    /// If `intent_id` is already present the existing entry is overwritten.
     pub fn register(&self, intent_id: Uuid, entry: TrackedSubprocess) {
-        let mut guard = self
-            .entries
-            .write()
-            .expect("subprocess tracker rwlock poisoned");
-        guard.insert(intent_id, entry);
+        let identity = ProcIdentity::current(entry.pid);
+        {
+            let mut guard = self
+                .entries
+                .write()
+                .expect("subprocess tracker rwlock poisoned");
+            guard.insert(
+                intent_id,
+                StoredEntry {
+                    tracked: entry,
+                    identity,
+                },
+            );
+        }
+        self.persist();
     }
 
     /// Removes the tracker entry for `intent_id` if present, returning
     /// the previous value for callers that want to audit the lifetime.
     pub fn unregister(&self, intent_id: &Uuid) -> Option<TrackedSubprocess> {
-        let mut guard = self
-            .entries
-            .write()
-            .expect("subprocess tracker rwlock poisoned");
-        guard.remove(intent_id)
+        let removed = {
+            let mut guard = self
+                .entries
+                .write()
+                .expect("subprocess tracker rwlock poisoned");
+            guard.remove(intent_id)
+        };
+        if removed.is_some() {
+            self.persist();
+        }
+        removed.map(|s| s.tracked)
     }
 
     pub fn get(&self, intent_id: &Uuid) -> Option<TrackedSubprocess> {
@@ -384,7 +530,7 @@ impl SubprocessTracker {
             .entries
             .read()
             .expect("subprocess tracker rwlock poisoned");
-        guard.get(intent_id).cloned()
+        guard.get(intent_id).map(|s| s.tracked.clone())
     }
 
     pub fn len(&self) -> usize {
@@ -410,8 +556,176 @@ impl SubprocessTracker {
             .entries
             .read()
             .expect("subprocess tracker rwlock poisoned");
-        guard.iter().map(|(k, v)| (*k, v.clone())).collect()
+        guard.iter().map(|(k, v)| (*k, v.tracked.clone())).collect()
     }
+
+    /// Re-adopt in-flight subprocesses persisted by a prior daemon
+    /// instance: load the snapshot, validate each pid's current ownership,
+    /// re-track only genuine survivors, and rewrite the snapshot to drop
+    /// the rest. A missing or corrupt file recovers as empty. No-op for an
+    /// in-memory-only tracker.
+    ///
+    /// MUST run before the projection-tick driver is spawned so the driver
+    /// never races a half-populated tracker (the double-kill race in the
+    /// parent task's failure modes); the daemon's `main` calls this
+    /// synchronously at the construction site, before the driver spawn.
+    /// Recovery itself never signals — re-tracked survivors are reaped by
+    /// the projection tick only if they are over budget, reusing the
+    /// already-validated preempt path.
+    pub fn recover(&self) -> RecoveryReport {
+        self.recover_with(validate_ownership)
+    }
+
+    fn recover_with(&self, validate: impl Fn(&PersistedEntry) -> OwnershipCheck) -> RecoveryReport {
+        let Some(path) = self.persist_path.as_ref() else {
+            return RecoveryReport::default();
+        };
+        let rows = load_snapshot(path);
+        let mut report = RecoveryReport::default();
+        {
+            let mut guard = self
+                .entries
+                .write()
+                .expect("subprocess tracker rwlock poisoned");
+            for row in &rows {
+                match validate(row) {
+                    OwnershipCheck::SameProcess => {
+                        guard.insert(
+                            row.intent_id,
+                            StoredEntry {
+                                tracked: TrackedSubprocess {
+                                    agent_id: row.agent_id.clone(),
+                                    pid: row.pid,
+                                    started_at_ms: row.started_at_ms,
+                                },
+                                identity: row.identity,
+                            },
+                        );
+                        report.retracked += 1;
+                    }
+                    OwnershipCheck::Vanished => report.dropped_vanished += 1,
+                    OwnershipCheck::Reused => {
+                        warn!(
+                            pid = row.pid,
+                            intent_id = %row.intent_id,
+                            "subprocess-tracker: recovered pid was reused by another process; refusing to re-track"
+                        );
+                        report.dropped_reused += 1;
+                    }
+                    OwnershipCheck::Unverifiable => report.dropped_unverifiable += 1,
+                }
+            }
+        }
+        // Rewrite the on-disk snapshot so it reflects only survivors.
+        self.persist();
+        if report.retracked > 0 || report.dropped_reused > 0 {
+            info!(
+                retracked = report.retracked,
+                dropped_vanished = report.dropped_vanished,
+                dropped_reused = report.dropped_reused,
+                dropped_unverifiable = report.dropped_unverifiable,
+                "subprocess-tracker: restart recovery complete"
+            );
+        }
+        report
+    }
+
+    /// Best-effort snapshot of the current entries to the JSONL file via a
+    /// tempfile + atomic rename. A persist failure is logged and swallowed
+    /// — durability must never block or fail a spawn.
+    fn persist(&self) {
+        let Some(path) = self.persist_path.as_ref() else {
+            return;
+        };
+        // Hold the persist lock across BOTH the snapshot read and the write.
+        // Serializing only the write would let two concurrent mutations read
+        // in one order and rename in the other, stranding an older snapshot
+        // over a newer one (and racing the shared `.tmp` path). With the read
+        // under the lock, the last mutation to acquire it observes the latest
+        // committed entries and writes them last.
+        let _serialize = self
+            .persist_lock
+            .lock()
+            .expect("subprocess tracker persist mutex poisoned");
+        let rows: Vec<PersistedEntry> = {
+            let guard = self
+                .entries
+                .read()
+                .expect("subprocess tracker rwlock poisoned");
+            guard
+                .iter()
+                .map(|(id, s)| PersistedEntry {
+                    intent_id: *id,
+                    agent_id: s.tracked.agent_id.clone(),
+                    pid: s.tracked.pid,
+                    started_at_ms: s.tracked.started_at_ms,
+                    identity: s.identity,
+                })
+                .collect()
+        };
+        if let Err(e) = write_snapshot(path, &rows) {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "subprocess-tracker: snapshot persist failed; recovery may miss in-flight pids"
+            );
+        }
+    }
+}
+
+/// Validate a persisted pid's ownership before recovery re-tracks it. On
+/// Linux this compares the live `/proc` identity against the recorded
+/// token; off Linux ownership is unprovable, so recovery never re-tracks
+/// (a documented no-op on targets without `/proc`).
+#[cfg(target_os = "linux")]
+fn validate_ownership(row: &PersistedEntry) -> OwnershipCheck {
+    let Some(recorded) = row.identity else {
+        return OwnershipCheck::Unverifiable;
+    };
+    match ProcIdentity::current(row.pid) {
+        None => OwnershipCheck::Vanished,
+        Some(live) if live == recorded => OwnershipCheck::SameProcess,
+        Some(_) => OwnershipCheck::Reused,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn validate_ownership(_row: &PersistedEntry) -> OwnershipCheck {
+    OwnershipCheck::Unverifiable
+}
+
+/// Read a `subprocess-tracker.jsonl` snapshot, tolerating a missing file
+/// (empty) and skipping any unparseable line so one corrupt row cannot
+/// strand recovery of the rest.
+fn load_snapshot(path: &Path) -> Vec<PersistedEntry> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| match serde_json::from_str::<PersistedEntry>(line) {
+            Ok(row) => Some(row),
+            Err(e) => {
+                warn!(error = %e, "subprocess-tracker: skipping unparseable recovery row");
+                None
+            }
+        })
+        .collect()
+}
+
+/// Atomically replace the snapshot file with one JSON line per entry.
+fn write_snapshot(path: &Path, rows: &[PersistedEntry]) -> std::io::Result<()> {
+    let mut buf = String::new();
+    for row in rows {
+        let line = serde_json::to_string(row)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        buf.push_str(&line);
+        buf.push('\n');
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, buf.as_bytes())?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Outcome of one [`preempt_subprocess_pg`] call. The daemon-side
@@ -3318,6 +3632,270 @@ cpu_ms_per_task = 5000
         assert!(tracker.is_empty());
         assert_eq!(tracker.get(&intent_id), None);
         assert_eq!(tracker.unregister(&intent_id), None);
+    }
+
+    fn persisted(intent_id: Uuid, pid: u32, identity: Option<ProcIdentity>) -> PersistedEntry {
+        PersistedEntry {
+            intent_id,
+            agent_id: "agent.research@local".into(),
+            pid,
+            started_at_ms: 1_700_000_000_000,
+            identity,
+        }
+    }
+
+    fn tracked(pid: u32) -> TrackedSubprocess {
+        TrackedSubprocess {
+            agent_id: "agent.research@local".into(),
+            pid,
+            started_at_ms: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn parse_proc_stat_reads_fields_past_a_parenthesized_comm() {
+        // The comm field is parenthesized and may itself contain spaces
+        // and a ')', so pgid (field 5) and starttime (field 22) must be
+        // located relative to the LAST ')'. A naive split on the first
+        // whitespace would read the wrong columns.
+        let mut fields = vec!["4242", "(weird ) name)", "R", "1", "4200"];
+        for _ in 6..=21 {
+            fields.push("0");
+        }
+        fields.push("99887"); // field 22: starttime
+        let id = parse_proc_stat(&fields.join(" ")).expect("stat must parse past the tricky comm");
+        assert_eq!(
+            id.pgid, 4200,
+            "pgid must be read from field 5, after the last ')'"
+        );
+        assert_eq!(
+            id.start_time_ticks, 99887,
+            "starttime must be read from field 22"
+        );
+    }
+
+    #[test]
+    fn subprocess_tracker_recover_retracks_validated_survivor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+        let id = Uuid::new_v4();
+        let seed = SubprocessTracker::with_persistence(path.clone());
+        seed.register(id, tracked(4242));
+
+        let fresh = SubprocessTracker::with_persistence(path);
+        let report = fresh.recover_with(|_| OwnershipCheck::SameProcess);
+        assert_eq!(
+            report.retracked, 1,
+            "a validated survivor must be re-tracked"
+        );
+        assert!(
+            fresh.get(&id).is_some(),
+            "the re-tracked entry must be visible so the projection tick can reap it"
+        );
+    }
+
+    #[test]
+    fn subprocess_tracker_recover_refuses_reused_pid_so_it_is_never_signalled() {
+        // The load-bearing security property (failure mode 1): a recovered
+        // pid whose live identity differs from the record was reused, so it
+        // must NOT be re-tracked — recovery never re-populates it, so the
+        // projection tick never signals it. Mutation-proof: routing Reused
+        // to the re-track arm would leave the entry present and fail here.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+        let id = Uuid::new_v4();
+        let seed = SubprocessTracker::with_persistence(path.clone());
+        seed.register(id, tracked(4242));
+
+        let fresh = SubprocessTracker::with_persistence(path);
+        let report = fresh.recover_with(|_| OwnershipCheck::Reused);
+        assert_eq!(report.dropped_reused, 1);
+        assert_eq!(report.retracked, 0);
+        assert!(
+            fresh.get(&id).is_none(),
+            "a reused pid must never be re-tracked, so the daemon can never signal it"
+        );
+        assert!(fresh.is_empty());
+    }
+
+    #[test]
+    fn subprocess_tracker_recover_drops_vanished_and_unverifiable_pids() {
+        // Failure mode 2: a vanished pid (ESRCH) is benign; a live but
+        // unverifiable pid is do-not-signal. Both drop without re-tracking.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (decision, tag) in [
+            (OwnershipCheck::Vanished, "vanished"),
+            (OwnershipCheck::Unverifiable, "unverifiable"),
+        ] {
+            let path = dir.path().join(format!("tracker-{tag}.jsonl"));
+            let id = Uuid::new_v4();
+            let seed = SubprocessTracker::with_persistence(path.clone());
+            seed.register(id, tracked(4242));
+
+            let fresh = SubprocessTracker::with_persistence(path);
+            let report = fresh.recover_with(move |_| decision);
+            assert!(fresh.get(&id).is_none(), "{tag}: must not re-track");
+            assert_eq!(report.retracked, 0, "{tag}: must not re-track");
+            match decision {
+                OwnershipCheck::Vanished => assert_eq!(report.dropped_vanished, 1),
+                OwnershipCheck::Unverifiable => assert_eq!(report.dropped_unverifiable, 1),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn subprocess_tracker_recover_tolerates_missing_and_corrupt_files() {
+        // Failure mode 5: a missing file recovers as empty; a corrupt line
+        // is skipped so one bad row cannot strand recovery of the rest.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = SubprocessTracker::with_persistence(dir.path().join("absent.jsonl"));
+        assert_eq!(
+            missing.recover_with(|_| OwnershipCheck::SameProcess),
+            RecoveryReport::default(),
+            "a missing snapshot must recover as empty"
+        );
+
+        let path = dir.path().join("mixed.jsonl");
+        let good = persisted(Uuid::new_v4(), 4242, None);
+        let line = serde_json::to_string(&good).expect("serialize good row");
+        std::fs::write(&path, format!("{{ not json\n{line}\ngarbage}}\n"))
+            .expect("write mixed file");
+        let tracker = SubprocessTracker::with_persistence(path);
+        let report = tracker.recover_with(|_| OwnershipCheck::SameProcess);
+        assert_eq!(
+            report.retracked, 1,
+            "the one valid row recovers despite corrupt neighbors"
+        );
+        assert!(tracker.get(&good.intent_id).is_some());
+    }
+
+    #[test]
+    fn subprocess_tracker_persist_snapshot_round_trips_through_register_unregister() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+        let tracker = SubprocessTracker::with_persistence(path.clone());
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        tracker.register(id_a, tracked(1));
+        tracker.register(id_b, tracked(2));
+        assert_eq!(load_snapshot(&path).len(), 2, "both registers land on disk");
+
+        tracker.unregister(&id_a);
+        let rows = load_snapshot(&path);
+        assert_eq!(
+            rows.len(),
+            1,
+            "unregister rewrites the snapshot without the removed entry"
+        );
+        assert_eq!(rows[0].intent_id, id_b);
+    }
+
+    #[test]
+    fn subprocess_tracker_new_performs_no_disk_io() {
+        // The in-memory constructor every existing caller uses must stay a
+        // pure memory tracker: register/unregister touch no disk and
+        // recover() is a no-op.
+        let tracker = SubprocessTracker::new();
+        let id = Uuid::new_v4();
+        tracker.register(id, tracked(1));
+        assert_eq!(tracker.len(), 1);
+        tracker.unregister(&id);
+        assert_eq!(tracker.recover(), RecoveryReport::default());
+    }
+
+    #[test]
+    fn subprocess_tracker_persist_failure_does_not_block_register() {
+        // Failure mode 5: persistence is best-effort on the spawn hot path.
+        // Pointing the snapshot under a path whose parent is a regular file
+        // makes every write fail; register must still succeed in-memory and
+        // must not panic. (Constructed directly because with_persistence
+        // would detect the bad parent and fall back to in-memory.)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"regular file, not a directory").expect("write blocker");
+        let tracker = SubprocessTracker {
+            persist_path: Some(blocker.join("tracker.jsonl")),
+            ..SubprocessTracker::default()
+        };
+        let id = Uuid::new_v4();
+        tracker.register(id, tracked(1));
+        assert_eq!(
+            tracker.len(),
+            1,
+            "register must succeed in-memory even when the snapshot write fails"
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn subprocess_tracker_recover_off_linux_is_a_documented_no_op() {
+        // Failure mode 3: with no /proc, the real validator cannot prove
+        // ownership, so recover() re-tracks nothing and reports every row
+        // unverifiable — the off-Linux no-op proven on the macOS dev host.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+        let id = Uuid::new_v4();
+        let seed = SubprocessTracker::with_persistence(path.clone());
+        seed.register(id, tracked(4242));
+
+        let fresh = SubprocessTracker::with_persistence(path);
+        let report = fresh.recover();
+        assert_eq!(
+            report.retracked, 0,
+            "off Linux recovery must re-track nothing"
+        );
+        assert_eq!(report.dropped_unverifiable, 1);
+        assert!(fresh.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subprocess_tracker_recover_real_proc_retracks_live_then_refuses_reused() {
+        // End-to-end on real /proc: a live child whose recorded identity
+        // matches is re-tracked; tampering the recorded start_time (the
+        // pid-reuse shape) makes the live identity diverge and recovery
+        // refuses it. Exercises the cfg(linux) validate_ownership + /proc
+        // read the cross-platform seam tests stub out.
+        use std::os::unix::process::CommandExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+
+        let id = Uuid::new_v4();
+        let seed = SubprocessTracker::with_persistence(path.clone());
+        seed.register(id, tracked(pid));
+
+        let live = SubprocessTracker::with_persistence(path.clone());
+        assert_eq!(
+            live.recover().retracked,
+            1,
+            "live child with matching /proc identity must re-track"
+        );
+        assert!(live.get(&id).is_some());
+
+        let mut rows = load_snapshot(&path);
+        rows[0].identity = rows[0].identity.map(|idn| ProcIdentity {
+            start_time_ticks: idn.start_time_ticks.wrapping_add(1),
+            ..idn
+        });
+        write_snapshot(&path, &rows).expect("rewrite tampered snapshot");
+        let tampered = SubprocessTracker::with_persistence(path);
+        let report = tampered.recover();
+        assert_eq!(
+            report.dropped_reused, 1,
+            "a mismatched start_time must be refused as a reused pid"
+        );
+        assert!(tampered.get(&id).is_none());
+
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[cfg(unix)]

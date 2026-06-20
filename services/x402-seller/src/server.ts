@@ -1,88 +1,86 @@
 /**
- * Covenant x402 seller endpoint.
+ * Covenant Trust — public x402 v2 seller.
  *
- * A public x402 v2 resource: AI agents pay per call in USDC on Solana for
- * a Covenant agent reputation/attestation lookup. `@x402/express` issues
- * the 402 challenge via a locally-registered (signer-less) SVM server
- * scheme, then verifies + settles through a facilitator client. USDC
- * lands at the treasury payTo. `@zauthx402/sdk` reports telemetry to the
- * zauth provider dashboard; the Bazaar discovery the paywall emits lets
- * zauth's crawler list us in the directory.
+ * Agents pay per call in USDC on Solana to verify a counterparty before they
+ * transact with it:
+ *   GET  /x402/passport/:asset  — on-chain identity passport (MPL Core asset +
+ *                                 014 Registry binding + Covenant attestation).
+ *   POST /x402/attest           — a Covenant-signed, independently-verifiable
+ *                                 ed25519 attestation over a claim.
  *
- * If the facilitator can't settle, `@x402/express` fails closed: the
- * buyer gets a 402 and is never charged, the resource is never released.
+ * `@x402/express` issues the 402 challenge via a locally-registered (signer-less)
+ * SVM scheme, then verifies + settles through the PayAI facilitator (which
+ * sponsors the Solana fee payer). USDC lands at the treasury payTo. If the
+ * facilitator can't settle, the middleware fails closed — the buyer is never
+ * charged and the resource is never released. Handlers that return >= 400 also
+ * cancel settlement, so an unknown asset or a bad request is free.
  *
- * Env (see .env / Render vars):
- *   PORT                    listen port (Render injects)
- *   COVENANT_TREASURY       payTo — where USDC revenue lands
- *   X402_FACILITATOR_URL    facilitator base (verify/settle + feePayer)
- *   FACILITATOR_PUBKEY      sponsor feePayer advertised in the challenge
- *   X402_SYNC_FACILITATOR   "false" to skip facilitator sync at boot
- *   ZAUTH_API_KEY           zauth provider key (telemetry; optional)
- *   PRICE_ATOMIC            price in atomic USDC (1000 = $0.001)
+ * Env (Render vars):
+ *   PORT                            listen port (Render injects)
+ *   COVENANT_TREASURY               payTo — where USDC revenue lands
+ *   X402_FACILITATOR_URL            facilitator base (verify/settle + feePayer)
+ *   FACILITATOR_PUBKEY              sponsor feePayer advertised in the challenge
+ *   X402_SYNC_FACILITATOR           "false" to skip facilitator sync at boot
+ *   ZAUTH_API_KEY                   zauth provider key (telemetry; optional)
+ *   COVENANT_SOLANA_MAINNET_RPC_URL DAS-capable RPC for the passport lookup
+ *   COVENANT_ATTEST_KEYPAIR         64-byte JSON array — the attestation signer
  */
-import express, { type Request, type Response, type NextFunction } from "express";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import express, { type Request, type Response } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
 import { HTTPFacilitatorClient, type RoutesConfig } from "@x402/core/server";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { zauthProvider } from "@zauthx402/sdk/middleware";
+import { getPassport } from "./passport.js";
+import { Attestor } from "./attest.js";
 
 const PORT = Number(process.env.PORT ?? 10000);
 const PAY_TO = process.env.COVENANT_TREASURY ?? "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM";
-// PayAI is an x402-v2 facilitator that sponsors Solana mainnet (its
-// /supported lists exact on solana:5eykt4Us… with this feePayer). It
-// co-signs the sponsor + settles, so no local signing key is needed.
 const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? "https://facilitator.payai.network";
 const FEE_PAYER = process.env.FACILITATOR_PUBKEY ?? "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4";
 const SYNC = process.env.X402_SYNC_FACILITATOR !== "false";
 const ZAUTH_API_KEY = process.env.ZAUTH_API_KEY;
-const PRICE_ATOMIC = process.env.PRICE_ATOMIC ?? "1000"; // 1000 = $0.001 (USDC 6dp)
+const RPC_URL = process.env.COVENANT_SOLANA_MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+const RPC_TIMEOUT = Number(process.env.RPC_TIMEOUT_MS ?? 9000);
 
 const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" as const;
 const USDC_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-const RESOURCE_PATH = "/x402/agent/:pubkey";
-// Default Render host, retired from the public hub in favour of the custom
-// domain (see the host gate below).
-const RETIRED_HOST = "covenant-x402-seller.onrender.com";
-const CANONICAL_URL = process.env.PUBLIC_URL ?? "https://x402-seller.opencovenant.org";
+
+const attestor = process.env.COVENANT_ATTEST_KEYPAIR
+  ? new Attestor(JSON.parse(process.env.COVENANT_ATTEST_KEYPAIR) as number[])
+  : null;
+
+const openapi = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "openapi.json"), "utf8"),
+);
 
 const app = express();
-// Render terminates TLS and forwards over http; trust the proxy so
-// req.protocol reflects the real https scheme (used in discovery URLs).
+// Render terminates TLS and forwards over http; trust the proxy so req.protocol
+// reflects the real https scheme in discovery URLs.
 app.set("trust proxy", true);
 app.use(express.json());
 
-// Free liveness check, off the paywall.
 app.get("/health", (_req: Request, res: Response) => {
-  res.json({ ok: true, service: "covenant-x402-seller", resource: RESOURCE_PATH });
+  res.json({ ok: true, service: "covenant-x402-seller", resources: ["/x402/passport/:asset", "/x402/attest"] });
 });
 
-// x402 discovery — lets crawlers (zauth directory, x402scan) list this
-// endpoint. Off the paywall.
+app.get("/openapi.json", (_req: Request, res: Response) => {
+  res.set("cache-control", "public, max-age=300").json(openapi);
+});
+
+// x402 discovery — lets crawlers (zauth directory, x402scan) list the resources.
 app.get("/.well-known/x402", (req: Request, res: Response) => {
   const base = `${req.protocol}://${req.get("host")}`;
   res.json({
     version: 1,
-    resources: [`${base}/x402/agent/{pubkey}`],
+    resources: [`${base}/x402/passport/{asset}`, `${base}/x402/attest`],
     instructions:
-      "Covenant x402 seller. GET /x402/agent/<solana-pubkey> returns a 402 x402-v2 challenge; pay USDC on Solana and retry to receive a Covenant agent attestation.",
+      "Covenant Trust x402 seller. Pay USDC on Solana to verify an agent's on-chain identity passport (GET /x402/passport/<mpl-core-asset>) or to obtain a Covenant-signed attestation over a claim (POST /x402/attest).",
   });
 });
 
-// Retire the default onrender host from the zauth provider hub: the custom
-// domain is the only advertised endpoint. The paid resource returns 410 Gone
-// for the onrender host so zauth's health check fails and drops the duplicate
-// listing; /health and the canonical host stay live, so Render's own probe is
-// unaffected.
-app.use(RESOURCE_PATH, (req: Request, res: Response, next: NextFunction) => {
-  if (req.hostname === RETIRED_HOST) {
-    res.status(410).json({ error: "gone", canonical: CANONICAL_URL });
-    return;
-  }
-  next();
-});
-
-// zauth provider telemetry — observes traffic, never blocks payments.
 if (ZAUTH_API_KEY) {
   app.use(zauthProvider(ZAUTH_API_KEY));
 } else {
@@ -91,22 +89,27 @@ if (ZAUTH_API_KEY) {
 
 const facilitator = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
 
-const routes: RoutesConfig = {
-  [`GET ${RESOURCE_PATH}`]: {
-    accepts: {
-      scheme: "exact",
-      network: SOLANA_MAINNET,
-      payTo: PAY_TO,
-      price: { asset: USDC_SOLANA, amount: PRICE_ATOMIC },
-      maxTimeoutSeconds: 300,
-      extra: { feePayer: FEE_PAYER },
-    },
-    description:
-      "Covenant agent reputation/attestation lookup: verified on-chain presence and reputation summary for a Solana agent pubkey.",
-    mimeType: "application/json",
-    serviceName: "Covenant",
-    tags: ["covenant", "reputation", "attestation", "agent"],
+const gate = (amount: string, description: string) => ({
+  accepts: {
+    scheme: "exact" as const,
+    network: SOLANA_MAINNET,
+    payTo: PAY_TO,
+    price: { asset: USDC_SOLANA, amount },
+    maxTimeoutSeconds: 300,
+    extra: { feePayer: FEE_PAYER },
   },
+  description,
+  mimeType: "application/json",
+  serviceName: "Covenant",
+  tags: ["covenant", "trust", "identity", "attestation", "agent"],
+});
+
+const routes: RoutesConfig = {
+  "GET /x402/passport/:asset": gate(
+    "1000",
+    "Verify an agent's on-chain identity passport: MPL Core asset, 014 Registry binding, and Covenant attestation.",
+  ),
+  "POST /x402/attest": gate("5000", "Create a Covenant-signed ed25519 attestation over a claim."),
 };
 
 app.use(
@@ -120,26 +123,32 @@ app.use(
   ),
 );
 
-// Paid resource — reached only after verified payment. Returning >= 400
-// cancels settlement, so the buyer is never charged for an error.
-app.get(RESOURCE_PATH, (req: Request, res: Response) => {
-  const pubkey = req.params.pubkey;
-  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(pubkey)) {
-    res.status(400).json({ error: "pubkey must be a base58 Solana address" });
+// Paid — reached only after verified payment. Returning >= 400 cancels
+// settlement, so an unknown asset or bad request is never charged.
+app.get("/x402/passport/:asset", async (req: Request, res: Response) => {
+  try {
+    const { status, body } = await getPassport(RPC_URL, RPC_TIMEOUT, req.params.asset);
+    res.status(status).json(body);
+  } catch {
+    res.status(502).json({ error: "chain/DAS upstream unavailable" });
+  }
+});
+
+app.post("/x402/attest", (req: Request, res: Response) => {
+  if (!attestor) {
+    res.status(503).json({ error: "attestation signer not configured" });
     return;
   }
-  res.json({
-    type: "covenant_agent_attestation_v0",
-    chain: "solana",
-    agent: pubkey,
-    issuer: "covenant",
-    issuedAt: new Date().toISOString(),
-    note: "v0 attestation surface; reputation fields wire to the Covenant audit/reputation layer next.",
-  });
+  const { subject, claim } = (req.body ?? {}) as { subject?: unknown; claim?: unknown };
+  if (typeof subject !== "string" || !subject || subject.length > 256 || claim === undefined) {
+    res.status(400).json({ error: "subject (1–256 char string) and claim are required" });
+    return;
+  }
+  res.json(attestor.attest(subject, claim, Math.floor(Date.now() / 1000)));
 });
 
 app.listen(PORT, () => {
   console.log(
-    `covenant-x402-seller on :${PORT} — paid ${RESOURCE_PATH}, payTo ${PAY_TO}, feePayer ${FEE_PAYER}, facilitator ${FACILITATOR_URL}`,
+    `covenant-x402-seller on :${PORT} — paid /x402/passport/:asset + /x402/attest, payTo ${PAY_TO}, facilitator ${FACILITATOR_URL}`,
   );
 });

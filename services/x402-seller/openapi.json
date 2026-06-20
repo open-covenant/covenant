@@ -3,7 +3,7 @@
   "info": {
     "title": "Covenant Trust",
     "version": "1.0.0",
-    "description": "Verify the trust of an AI agent before you transact with it. On-chain identity passports and Covenant-signed attestations, priced per call in USDC over x402 on Solana.",
+    "description": "Verify another agent before you transact with it. On-chain identity passports and Covenant-signed attestations, priced per call in USDC over x402 on Solana.",
     "contact": { "url": "https://opencovenant.org" },
     "license": { "name": "Apache-2.0" },
     "x-guidance": "Use /x402/passport/{asset} to confirm a counterparty agent's on-chain identity (MPL Core asset + 014 Registry binding + Covenant attestation) before delegating work or paying it, and /x402/attest to obtain a Covenant-signed, independently-verifiable statement over a claim."

@@ -1,8 +1,8 @@
-// Covenant-signed attestation over an arbitrary claim. The verify-api holds a
-// dedicated ed25519 key (separate from the daemon identity) so the public
-// product never reaches into internal infra. A verifier recomputes
-// sha256(canonical(payload)), prepends the domain, and checks the signature
-// against the published pubkey — no trust in this server required.
+// Covenant-signed attestation over an arbitrary claim. Signs with a dedicated
+// ed25519 key, separate from the daemon identity, so the public product never
+// reaches into internal infra. A verifier recomputes sha256(canonical(payload)),
+// prepends the domain, and checks the signature against the published pubkey —
+// no trust in this server required.
 
 import { createPrivateKey, createPublicKey, createHash, sign as edSign, verify as edVerify } from 'node:crypto';
 import bs58 from 'bs58';

@@ -129,7 +129,11 @@ pub enum BudgetProjectionPolicy {
 /// track to exceed its `remaining` budget under the chosen
 /// [`BudgetProjectionPolicy`]. The daemon-side projection tick
 /// (deferred to sub-slice B2) walks the `SubprocessTracker` entries
-/// and pushes overshooting `intent_id`s into the preempt-queue.
+/// and pushes overshooting `intent_id`s into the preempt-queue. The
+/// first three inputs — `current_debit`, `observation_window_ms`,
+/// `observed_debit_samples` — are produced per-agent by
+/// [`BudgetLedger::debit_rate_since`]; `remaining` comes from
+/// [`BudgetLedger::tokens_remaining`].
 ///
 /// The function is intentionally pure and `u64`-typed so the projection
 /// contract is testable in isolation and never silently shifts when the
@@ -187,6 +191,29 @@ pub struct BudgetDebit {
     /// the pair, so the budget log and the receipt log can be joined.
     pub paired_receipt: Uuid,
     pub at_ms: u64,
+}
+
+/// Per-agent debit-rate observation over the `[since_ms, now_ms]` window,
+/// returned by [`BudgetLedger::debit_rate_since`]. Packages the three
+/// observation inputs of [`project_overshoot`] — `current_debit`,
+/// `observation_window_ms`, and `observed_debit_samples` — so the
+/// daemon-side projection tick can extrapolate an in-flight subprocess's
+/// spend instead of waiting for the bucket to bottom out. The fourth
+/// `project_overshoot` input, `remaining`, comes from
+/// [`BudgetLedger::tokens_remaining`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DebitRateSignal {
+    /// Sum of [`BudgetDebit::credits`] for the agent's debits in the
+    /// window, saturating at `u64::MAX`.
+    pub current_debit: u64,
+    /// `now_ms.saturating_sub(since_ms)` — how long this window has been
+    /// observed. [`project_overshoot`] consults it only as the
+    /// `>= min_observation_window_ms` gate, so a freshly started intent
+    /// (small window) stays on conservative post-completion accounting.
+    pub observation_window_ms: u64,
+    /// Count of the agent's debits in the window, saturating at
+    /// `u32::MAX`, gating [`project_overshoot`]'s `min_debit_samples`.
+    pub observed_debit_samples: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -276,6 +303,23 @@ pub trait BudgetLedger: Send + Sync {
     /// Verifier-facing.
     async fn recent_debits_all(&self, limit: usize) -> Result<Vec<BudgetDebit>, BudgetError>;
 
+    /// Per-agent debit-rate signal over `[since_ms, now_ms]`: the
+    /// cumulative debit, observation window, and sample count the agent
+    /// has produced in that window, packaged for [`project_overshoot`].
+    /// Like [`recent_debits`] this is a pure read of the debit log and
+    /// does NOT require a provisioned bucket, so it never returns
+    /// [`BudgetError::NoCapacity`]. The projection tick passes the owning
+    /// intent's start as `since_ms`, scoping the window to the in-flight
+    /// work; debits match on the agent's pubkey and `at_ms >= since_ms`.
+    ///
+    /// [`recent_debits`]: BudgetLedger::recent_debits
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError>;
+
     /// Drop debit events with `at_ms < before_ms`. See module docs for
     /// the snapshot-based non-destructive compaction model.
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError>;
@@ -328,6 +372,31 @@ fn refill_eta_ms(bucket: &Bucket, credits: u64, now: u64) -> u64 {
     let needed = (credits - bucket.tokens_remaining) as u128;
     let ms = (needed * MS_PER_HOUR).div_ceil(bucket.capacity as u128);
     now.saturating_add(ms.min(u64::MAX as u128) as u64)
+}
+
+/// Fold a debit log into a [`DebitRateSignal`] for one agent over the
+/// `[since_ms, now_ms]` window. Shared verbatim by both ledger backends
+/// so the rate contract can't drift between in-memory and JSONL.
+fn debit_rate_signal(
+    debits: &[BudgetDebit],
+    agent: &AgentId,
+    since_ms: u64,
+    now_ms: u64,
+) -> DebitRateSignal {
+    let mut current_debit: u64 = 0;
+    let mut observed_debit_samples: u32 = 0;
+    for debit in debits
+        .iter()
+        .filter(|d| d.agent.pubkey == agent.pubkey && d.at_ms >= since_ms)
+    {
+        current_debit = current_debit.saturating_add(debit.credits);
+        observed_debit_samples = observed_debit_samples.saturating_add(1);
+    }
+    DebitRateSignal {
+        current_debit,
+        observation_window_ms: now_ms.saturating_sub(since_ms),
+        observed_debit_samples,
+    }
 }
 
 /// In-process ledger suitable for tests.
@@ -455,6 +524,16 @@ impl BudgetLedger for InMemoryLedger {
         let debits = self.debits.lock().await;
         let start = debits.len().saturating_sub(limit);
         Ok(debits[start..].to_vec())
+    }
+
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError> {
+        let debits = self.debits.lock().await;
+        Ok(debit_rate_signal(&debits, agent, since_ms, now_ms))
     }
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
@@ -933,6 +1012,16 @@ impl BudgetLedger for JsonlLedger {
         let debits = self.debits.lock().await;
         let start = debits.len().saturating_sub(limit);
         Ok(debits[start..].to_vec())
+    }
+
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError> {
+        let debits = self.debits.lock().await;
+        Ok(debit_rate_signal(&debits, agent, since_ms, now_ms))
     }
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
@@ -3779,5 +3868,199 @@ mod tests {
         // Saturating add prevents a panic on u64::MAX inputs; the
         // saturated value > any finite remaining → flag.
         assert!(project_overshoot(u64::MAX, 1000, 5, 100, policy));
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_sums_filters_and_windows() {
+        // debit_rate_since produces project_overshoot's three
+        // observation inputs: current_debit (sum), observed_debit_samples
+        // (count), observation_window_ms (now - since). The signal must
+        // (a) include only debits with at_ms >= since_ms — inclusive of
+        // the window start — (b) scope to the queried agent's pubkey, and
+        // (c) report the window as now_ms.saturating_sub(since_ms). Seed a
+        // log straddling the cutoff and owned by two agents so a `>=`->`>`
+        // flip on the cutoff or a dropped pubkey filter is caught.
+        const SINCE: u64 = 100;
+        const NOW: u64 = 200;
+        let l = InMemoryLedger::new();
+        let a = agent("alice@local");
+        let b = agent("bob@local");
+        {
+            let mut debits = l.debits.lock().await;
+            // counted: stamped exactly at the window start (>= is inclusive)
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE,
+            });
+            // counted: inside the window
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 7,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+            // excluded: one tick below the window start
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 9,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE - 1,
+            });
+            // excluded: in-window time but a different agent
+            debits.push(BudgetDebit {
+                agent: b.clone(),
+                credits: 1000,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+        }
+
+        let sig = l.debit_rate_since(&a, SINCE, NOW).await.unwrap();
+        assert_eq!(
+            sig.current_debit, 12,
+            "sum only a's in-window debits (5 at the cutoff + 7 after); the 9 below the \
+             cutoff and bob's 1000 are excluded — a `>=`->`>` flip drops the 5, a lost \
+             pubkey filter adds the 1000",
+        );
+        assert_eq!(
+            sig.observed_debit_samples, 2,
+            "exactly two of a's debits fall in [SINCE, NOW]",
+        );
+        assert_eq!(
+            sig.observation_window_ms,
+            NOW - SINCE,
+            "window is now - since",
+        );
+
+        // The other agent's signal sees only its own debit — proves the
+        // pubkey filter both ways.
+        let sig_b = l.debit_rate_since(&b, SINCE, NOW).await.unwrap();
+        assert_eq!(sig_b.current_debit, 1000);
+        assert_eq!(sig_b.observed_debit_samples, 1);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_saturates_current_debit() {
+        // A pathological debit log must saturate, not wrap or panic: the
+        // sum uses saturating_add. Two debits whose credits exceed u64
+        // together pin the cap.
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: u64::MAX,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 10,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 20,
+            });
+        }
+        let sig = l.debit_rate_since(&a, 0, 100).await.unwrap();
+        assert_eq!(
+            sig.current_debit,
+            u64::MAX,
+            "saturating_add caps at u64::MAX instead of wrapping or panicking",
+        );
+        assert_eq!(sig.observed_debit_samples, 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_window_zero_on_clock_skew() {
+        // now_ms < since_ms (NTP skew or a stale `now` from the caller)
+        // must not underflow; the window saturates to 0 while in-window
+        // debits are still summed.
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 4,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 600,
+            });
+        }
+        let sig = l.debit_rate_since(&a, 500, 400).await.unwrap();
+        assert_eq!(
+            sig.observation_window_ms, 0,
+            "now (400) < since (500) saturates the window to 0",
+        );
+        assert_eq!(
+            sig.current_debit, 4,
+            "the at_ms=600 debit is still >= since=500 and is summed",
+        );
+        assert_eq!(sig.observed_debit_samples, 1);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_empty_log_needs_no_bucket() {
+        // Like recent_debits, debit_rate_since is a pure debit-log read:
+        // an agent with no provisioned bucket and no debits yields a
+        // zero-debit signal rather than BudgetError::NoCapacity.
+        let l = InMemoryLedger::new();
+        let a = agent("never-provisioned@local");
+        let sig = l.debit_rate_since(&a, 0, 100).await.unwrap();
+        assert_eq!(sig.current_debit, 0);
+        assert_eq!(sig.observed_debit_samples, 0);
+        assert_eq!(sig.observation_window_ms, 100);
+    }
+
+    #[tokio::test]
+    async fn jsonl_debit_rate_since_matches_contract_on_production_backend() {
+        // The production ledger must carry the same signal contract; a
+        // single-backend impl would leave the daemon's real ledger
+        // untested. debit_rate_since reads the in-memory debit log
+        // (populated by try_debit and by replay on open), so seed it and
+        // assert the same sum / pubkey-filter / boundary / window
+        // behavior as the in-memory backend.
+        const SINCE: u64 = 100;
+        const NOW: u64 = 200;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let l = JsonlLedger::open(path).await.unwrap();
+        let a = agent("alice@local");
+        let b = agent("bob@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 7,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 9,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE - 1,
+            });
+            debits.push(BudgetDebit {
+                agent: b.clone(),
+                credits: 1000,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+        }
+        let sig = l.debit_rate_since(&a, SINCE, NOW).await.unwrap();
+        assert_eq!(sig.current_debit, 12);
+        assert_eq!(sig.observed_debit_samples, 2);
+        assert_eq!(sig.observation_window_ms, NOW - SINCE);
+        let sig_b = l.debit_rate_since(&b, SINCE, NOW).await.unwrap();
+        assert_eq!(sig_b.current_debit, 1000);
+        assert_eq!(sig_b.observed_debit_samples, 1);
     }
 }

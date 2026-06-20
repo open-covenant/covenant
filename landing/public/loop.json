@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T06:28:26.006Z",
+  "updatedAt": "2026-06-20T06:49:01.657Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9958,
-    "tasks": 1175,
+    "events": 9962,
+    "tasks": 1176,
     "integrated": 1177
   },
   "throughput": {
-    "last24h": 19,
-    "last7d": 120,
-    "velocity": 17.1
+    "last24h": 18,
+    "last7d": 119,
+    "velocity": 17
   },
   "daily": [
     {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1170,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-debit-rate-signal",
+    "state": "in_progress",
+    "since": "2026-06-20T06:39:12.046Z"
+  },
   "recent": [
     {
       "at": "2026-06-20T01:39:07.896Z",

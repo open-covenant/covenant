@@ -1,9 +1,10 @@
 //! Live HTTP coverage for the dual-mode `GET /memory/recent` handler
 //! wired in ADR 0010 slice 6.h.
 //!
-//! Three `#[ignore]`'d tests, each spawning a fresh covenantd against
-//! a temp `COVENANT_HOME` and granting `memory.read` over HTTP before
-//! issuing the request under test:
+//! Four `#[ignore]`'d tests. The first three spawn a fresh covenantd
+//! against a temp `COVENANT_HOME` and grant `memory.read` over HTTP
+//! before issuing the request under test; the fourth deliberately
+//! skips the grant to exercise the capability-failure fallback:
 //!
 //! 1. `Accept: text/event-stream` selects the SSE branch. The
 //!    response carries the pinned header trio (`Content-Type:
@@ -20,6 +21,15 @@
 //! 3. No Accept header at all selects the buffered branch as well —
 //!    the SSE classifier is opt-in (no `*/*` fallback), so the
 //!    absent-Accept case must behave identically to (2).
+//! 4. `Accept: text/event-stream` with NO `memory.read` grant returns
+//!    `Content-Type: application/json` and a buffered error envelope
+//!    naming the missing capability — NOT a faked SSE stream wrapping
+//!    the error. `recent_memory_envelopes`'s `Err(Response)` arm is the
+//!    daemon's "streaming refused" signal; the handler renders it as
+//!    buffered JSON regardless of Accept, since an SSE `stream_error`
+//!    frame is reserved for streams that opened then failed mid-flight.
+//!    Mirrors `live_http_intent_sse.rs`'s capability-failure test for
+//!    the memory route.
 //!
 //! Assertions key off the SSE-frame structure (split body on `\n\n`,
 //! parse `event:` and `data:` lines) and exact-string Content-Type
@@ -93,7 +103,7 @@ struct Daemon {
     _home: tempfile::TempDir,
 }
 
-async fn spawn_daemon_with_memory_read_grant() -> Daemon {
+async fn spawn_daemon() -> Daemon {
     let home = tempfile::tempdir().expect("tempdir");
     let port = pick_free_port();
     let base = format!("http://127.0.0.1:{port}");
@@ -119,13 +129,24 @@ async fn spawn_daemon_with_memory_read_grant() -> Daemon {
 
     let token = read_operator_token(home.path()).await;
 
+    Daemon {
+        child,
+        base,
+        token,
+        _home: home,
+    }
+}
+
+async fn spawn_daemon_with_memory_read_grant() -> Daemon {
+    let daemon = spawn_daemon().await;
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("reqwest client");
     let grant: Value = client
-        .post(format!("{base}/capabilities/grant"))
-        .bearer_auth(&token)
+        .post(format!("{}/capabilities/grant", daemon.base))
+        .bearer_auth(&daemon.token)
         .json(&serde_json::json!({ "action": "memory.read" }))
         .send()
         .await
@@ -138,12 +159,7 @@ async fn spawn_daemon_with_memory_read_grant() -> Daemon {
         "operator self-grant of memory.read must succeed before issuing GET /memory/recent: {grant:?}",
     );
 
-    Daemon {
-        child,
-        base,
-        token,
-        _home: home,
-    }
+    daemon
 }
 
 impl Daemon {
@@ -352,6 +368,61 @@ async fn live_http_memory_recent_buffered_when_no_accept_header() {
         body,
         serde_json::json!({ "kind": "memories", "records": [] }),
         "no Accept header must yield the v1 byte-identical empty-page shape; got {body:?}",
+    );
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "live: spawns covenantd + asserts SSE-Accept GET /memory/recent without a memory.read grant returns BUFFERED JSON error, not a faked SSE error stream"]
+async fn live_http_memory_recent_sse_accept_renders_capability_failure_as_buffered_json() {
+    let daemon = spawn_daemon().await;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client");
+    let response = client
+        .get(format!("{}/memory/recent", daemon.base))
+        .bearer_auth(&daemon.token)
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .send()
+        .await
+        .expect("send GET /memory/recent SSE-accept without grant");
+
+    assert!(
+        response.status().is_success(),
+        "Err-arm fallback must still respond 2xx (the daemon returns the error envelope as a buffered JSON body, not as an HTTP-level failure): got {} body={:?}",
+        response.status(),
+        response.text().await.unwrap_or_default(),
+    );
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .expect("Err-arm fallback response must carry Content-Type")
+        .to_str()
+        .expect("ASCII Content-Type")
+        .to_string();
+    assert_eq!(
+        content_type, "application/json",
+        "Err-arm fallback must render as buffered JSON regardless of Accept; rendering as text/event-stream here would force v2 consumers to disambiguate 'streaming refused' from 'streaming failed mid-flight' on the wire",
+    );
+
+    let body: Value = response
+        .json()
+        .await
+        .expect("Err-arm fallback body must parse as JSON");
+    assert_eq!(
+        body["kind"], "error",
+        "missing memory.read grant must surface as Response::Error: got {body:?}",
+    );
+    let message = body["message"]
+        .as_str()
+        .expect("error envelope must carry a message string");
+    assert!(
+        message.contains("memory.read"),
+        "Err-arm message must name the missing capability so the operator can grant it; got {message:?}",
     );
 
     daemon.shutdown().await;

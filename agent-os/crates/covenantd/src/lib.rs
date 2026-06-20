@@ -58357,6 +58357,157 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[tokio::test]
+    async fn server_projection_tick_iteration_skips_deprovisioned_agent_nocapacity() {
+        // An agent deprovisioned (or never provisioned) mid-flight has no
+        // budget bucket, so would_exceed returns BudgetError::NoCapacity. The
+        // tick's `Err(BudgetError::NoCapacity(_)) => continue` arm must SKIP
+        // the entry — not preempt it — leaving the intent to complete or fail
+        // on its own next debit. This is distinct from an EXHAUSTED agent
+        // (tokens_remaining == 0, which IS preempted): no-bucket means
+        // deprovisioned, not over-budget. The natural conflation is
+        // "no capacity == over budget == kill"; routing NoCapacity to the
+        // preempt path (Err(NoCapacity) => true) would terminate a
+        // deprovisioned agent's still-legitimate subprocess.
+        //
+        // Sentinel pid is a high nonexistent value (not 0) so a mutation that
+        // routes NoCapacity to preempt yields a clean ESRCH
+        // (no-such-process-group) -> BudgetPreempted { signal_sent: "none" }
+        // the assertions catch, rather than kill(0) signalling this test's
+        // own process group. Under correct behavior the pid is never read.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget);
+
+        // Deliberately NO set_capacity: the agent has no bucket.
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "deprovisioned".into(),
+                pid: 2_000_000,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let count = server
+            .run_projection_tick_iteration(
+                std::time::Duration::from_millis(100),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
+            .await;
+
+        assert_eq!(
+            count, 0,
+            "a deprovisioned (no-bucket) agent must be skipped, not preempted; got {count}",
+        );
+        let events = audit.recent(8).await.expect("audit recent must succeed");
+        assert!(
+            !events.iter().any(|e| matches!(
+                e.kind,
+                AuditKind::BudgetPreempted { .. } | AuditKind::BudgetPreemptFailed { .. }
+            )),
+            "skipping a no-bucket agent must emit no preempt audit row; got {events:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn server_projection_tick_iteration_continues_past_nocapacity_to_preempt_exhausted() {
+        // Loop-continuation: a NoCapacity skip must not abort the tick. Seed
+        // one deprovisioned (no-bucket) entry AND one exhausted entry in the
+        // same tick; the exhausted entry must still be preempted. A refactor
+        // that flipped the NoCapacity arm's `continue` to `break` (or
+        // `return`) would stop the iteration early and drop the exhausted
+        // agent's preempt whenever the deprovisioned entry is visited first.
+        // HashMap order is unspecified, so the assertions are order-
+        // independent: exactly one preempt (the exhausted intent), the
+        // no-bucket intent never produces a row.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget.clone());
+
+        let nocap_intent = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            nocap_intent,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "deprovisioned".into(),
+                pid: 2_000_000,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let exhausted_card_id = "burnsdown";
+        let exhausted_agent = agent_id_for_card_id(exhausted_card_id);
+        budget
+            .set_capacity(&exhausted_agent, 1)
+            .await
+            .expect("set_capacity must succeed");
+        budget
+            .try_debit(&exhausted_agent, 1, Uuid::new_v4())
+            .await
+            .expect("try_debit must drain bucket");
+        assert!(
+            budget
+                .would_exceed(&exhausted_agent, 1)
+                .await
+                .expect("would_exceed must succeed"),
+            "test precondition: exhausted agent bucket must be drained",
+        );
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let exhausted_pid = child.id().expect("child pid available before reap");
+        let exhausted_intent = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            exhausted_intent,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: exhausted_card_id.into(),
+                pid: exhausted_pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let (count, _exit) = tokio::join!(
+            server.run_projection_tick_iteration(
+                std::time::Duration::from_millis(250),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            ),
+            child.wait(),
+        );
+
+        assert_eq!(
+            count, 1,
+            "tick must preempt the exhausted agent and skip the no-bucket agent; got {count}",
+        );
+        let events = audit.recent(16).await.expect("audit recent must succeed");
+        assert!(
+            !events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::BudgetPreempted { intent_id, .. }
+                | AuditKind::BudgetPreemptFailed { intent_id, .. }
+                if *intent_id == nocap_intent
+            )),
+            "the no-bucket (deprovisioned) intent must never produce a preempt audit row; got {events:?}",
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::BudgetPreempted { intent_id, .. } if *intent_id == exhausted_intent
+            )),
+            "the exhausted intent must be preempted even when a no-bucket entry shares the tick; got {events:?}",
+        );
+    }
+
     #[test]
     fn projection_tick_config_from_values_uses_defaults_when_unset() {
         let config =

@@ -28,7 +28,7 @@ mkdirSync(outDir, { recursive: true });
 const argv = process.argv.slice(2);
 const opt = (f, d) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : d; };
 const attempts = parseInt(opt("--attempts", "3"), 10);
-const fableModel = opt("--fable-model", "claude-fable-5");
+const fableModel = opt("--fable-model", "claude-opus-4-8");
 const glmModel = opt("--glm-model", "glm-5.2");
 
 const sh = (cmd, args, o = {}) => { const r = spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...o }); return { ok: r.status === 0, out: `${r.stdout ?? ""}${r.stderr ?? ""}` }; };
@@ -100,7 +100,7 @@ async function runArm(name, call) {
 const arms = [];
 console.log("GLM-5.2 (z.ai Coding Plan, via claude -p):");
 arms.push(await runArm("glm", callGlm));
-console.log("Fable 5:");
+console.log("Claude (Opus 4.8 — Fable disabled by export control 2026-06-12):");
 arms.push(await runArm("fable", callFable));
 
 console.log(`\n=== A/B RESULT — function lane, n=${attempts} each, incumbent ${incScalar} ===`);

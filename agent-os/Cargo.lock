@@ -1583,6 +1583,7 @@ dependencies = [
  "covenant-router",
  "covenant-runtime",
  "covenant-sap-bridge",
+ "covenant-sdk",
  "covenant-settlement",
  "covenant-types",
  "covenant-x402",

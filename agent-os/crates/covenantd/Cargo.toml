@@ -57,6 +57,7 @@ covenant-llm = { path = "../covenant-llm" }
 covenant-manifest = { path = "../covenant-manifest" }
 covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
+covenant-sdk = { path = "../covenant-sdk" }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

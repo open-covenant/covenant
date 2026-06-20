@@ -16196,6 +16196,10 @@ required = {caps:?}
     }
 
     fn server_with_audit(audit: Arc<covenant_audit::InMemoryAuditLog>) -> Server {
+        server_with_audit_dyn(audit)
+    }
+
+    fn server_with_audit_dyn(audit: Arc<dyn covenant_audit::AuditLog>) -> Server {
         Server::new(
             Arc::new(Router::from_cards(vec![])),
             Arc::new(MockRunner::new("")),
@@ -57992,6 +57996,117 @@ budget_credits_per_hour = {credits}
             row, "SIGKILL",
             "SigKilled must map to signal_sent=\"SIGKILL\" so post-mortem distinguishes a forced kill from a cooperative SIGTERM exit",
         );
+    }
+
+    /// An [`AuditLog`](covenant_audit::AuditLog) whose every method fails,
+    /// for exercising the required-audit-write-failed branch of
+    /// [`Server::preempt_intent`]. Only `record` is reached on the preempt
+    /// path; the read methods fail too so the double can never masquerade as
+    /// a working log.
+    #[cfg(unix)]
+    struct FailingAuditLog;
+
+    #[cfg(unix)]
+    fn injected_audit_error() -> covenant_audit::AuditError {
+        covenant_audit::AuditError::Io(std::io::Error::other("injected audit write failure"))
+    }
+
+    #[cfg(unix)]
+    #[async_trait::async_trait]
+    impl covenant_audit::AuditLog for FailingAuditLog {
+        async fn record(
+            &self,
+            _event: covenant_audit::AuditEvent,
+        ) -> Result<(), covenant_audit::AuditError> {
+            Err(injected_audit_error())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
+            Err(injected_audit_error())
+        }
+        async fn purge_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_audit::AuditError> {
+            Err(injected_audit_error())
+        }
+        async fn verify_integrity(
+            &self,
+        ) -> Result<covenant_audit::AuditIntegrityReport, covenant_audit::AuditError> {
+            Err(injected_audit_error())
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_preempt_intent_surfaces_audit_write_failed_when_audit_append_fails() {
+        // The kill lands but the BudgetPreempted accountability row cannot
+        // persist: preempt_intent must surface AuditWriteFailed (carrying the
+        // real subprocess outcome plus the audit error) rather than swallow
+        // the failure and report a clean Preempted. A hard-preempt whose audit
+        // record was lost is an enforcement action with no durable trail; the
+        // operator must be able to tell it apart from a fully-accounted kill.
+        //
+        // Drives the deterministic AlreadyDead path (spawn -> reap -> stale
+        // pid, the recipe from _emits_signal_sent_none_for_already_dead_pid)
+        // so no live signal handling is involved and the only variable under
+        // test is the audit append failing.
+        use std::os::unix::process::CommandExt;
+        let server = server_with_audit_dyn(Arc::new(FailingAuditLog));
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("0.01")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+        let _ = child.wait().await;
+
+        // Let the kernel finalize process-table cleanup so kill(-pid, 0)
+        // returns ESRCH (AlreadyDead) rather than hitting a half-reaped zombie.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "stale@local".into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let result = server
+            .preempt_intent(
+                intent_id,
+                "test:audit_write_failed".into(),
+                std::time::Duration::from_millis(100),
+            )
+            .await;
+
+        match result {
+            PreemptResult::AuditWriteFailed { outcome, error } => {
+                assert!(
+                    matches!(outcome, covenant_runtime::PreemptOutcome::AlreadyDead),
+                    "AuditWriteFailed must carry the real subprocess outcome so the caller learns the kill still landed; got {outcome:?}",
+                );
+                assert!(
+                    !error.is_empty(),
+                    "AuditWriteFailed must surface the audit error string (retry/escalate guidance), not an empty placeholder",
+                );
+            }
+            other => panic!(
+                "a failed required-audit append on the preempt path must surface as AuditWriteFailed, not a swallowed clean Preempted; got {other:?}",
+            ),
+        }
     }
 
     fn server_with_audit_and_budget(

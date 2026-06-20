@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-20T00:46:13.424Z",
+  "updatedAt": "2026-06-20T01:06:17.069Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9944,
+    "events": 9949,
     "tasks": 1174,
-    "integrated": 1175
+    "integrated": 1176
   },
   "throughput": {
-    "last24h": 23,
+    "last24h": 24,
     "last7d": 137,
     "velocity": 19.6
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-20",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-20",
-      "total": 1175
+      "total": 1176
     }
   ],
   "states": {
-    "integrated": 1168,
+    "integrated": 1169,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "memory-recent-sse-capability-denial-buffered-json-live-cover",
-    "state": "in_progress",
-    "since": "2026-06-19T22:00:41.191Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-20T00:59:34.808Z",
+      "task": "memory-recent-sse-capability-denial-buffered-json-live-cover",
+      "note": "committed 00418332 on loop/main-track: live_http_memory_recent_sse_accept_renders_capability_failure_as_buffered_json pins the memory-route "
+    },
     {
       "at": "2026-06-19T21:45:58.734Z",
       "task": "budget-preempt-audit-signal-sigkill-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T06:02:44.865Z",
       "task": "a2a-respond-unknown-task-rejection",
       "note": "committed 9bf2fb33 (test + README metric); live_a2a_respond_unknown_task.rs registered under a2a-mailbox surface; mutation-proven"
-    },
-    {
-      "at": "2026-06-19T04:47:54.884Z",
-      "task": "http-tool-call-delegated-denial",
-      "note": "Committed 26889918 on loop/main-track. live_http_tool_call_delegated_denial.rs (3 phases: known-tool capability denial, unknown-tool gate-be"
     }
   ]
 }

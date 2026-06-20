@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T10:33:08.342Z",
+  "updatedAt": "2026-06-20T10:53:12.126Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9962,
-    "tasks": 1176,
-    "integrated": 1177
+    "events": 9968,
+    "tasks": 1177,
+    "integrated": 1178
   },
   "throughput": {
-    "last24h": 9,
-    "last7d": 99,
-    "velocity": 14.1
+    "last24h": 8,
+    "last7d": 97,
+    "velocity": 13.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-20",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-20",
-      "total": 1177
+      "total": 1178
     }
   ],
   "states": {
-    "integrated": 1170,
-    "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "integrated": 1171,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "budget-debit-rate-signal",
-    "state": "in_progress",
-    "since": "2026-06-20T06:39:12.046Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-20T10:39:45.399Z",
+      "task": "budget-debit-rate-signal",
+      "note": "Committed 7700edd6 on loop/main-track. Tracked diff = covenant-budget/src/lib.rs (DebitRateSignal + debit_rate_since + shared fold + 5 tests"
+    },
     {
       "at": "2026-06-20T01:39:07.896Z",
       "task": "budget-preempt-audit-write-failed-surfaced-unit-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T06:29:45.957Z",
       "task": "memory-repair-cross-peer-ownership",
       "note": "committed 1a552c38 (test + README metric); live_memory_repair_cross_peer.rs under memory-retention; mutation-proven cross-peer write-isolati"
-    },
-    {
-      "at": "2026-06-19T06:14:56.471Z",
-      "task": "capability-revoke-cross-peer-subject",
-      "note": "committed eceddf1b (test + README metric); live_ipc_revoke_capability_cross_peer.rs under cli-capabilities surface; mutation-proven peer-iso"
     }
   ]
 }

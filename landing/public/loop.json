@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-20T21:15:57.742Z",
+  "updatedAt": "2026-06-20T21:36:01.432Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9985,
-    "tasks": 1178,
+    "events": 9989,
+    "tasks": 1179,
     "integrated": 1180
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1173,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-projection-tick-nocapacity-skip-coverage",
+    "state": "in_progress",
+    "since": "2026-06-20T21:26:09.928Z"
+  },
   "recent": [
     {
       "at": "2026-06-20T21:05:17.701Z",

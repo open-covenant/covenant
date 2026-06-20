@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-20T16:14:10.568Z",
+  "updatedAt": "2026-06-20T16:34:14.190Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9971,
-    "tasks": 1177,
-    "integrated": 1178
+    "events": 9980,
+    "tasks": 1178,
+    "integrated": 1179
   },
   "throughput": {
-    "last24h": 4,
-    "last7d": 91,
-    "velocity": 13
+    "last24h": 5,
+    "last7d": 92,
+    "velocity": 13.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-20",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-20",
-      "total": 1178
+      "total": 1179
     }
   ],
   "states": {
-    "integrated": 1171,
+    "integrated": 1172,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "budget-projection-tick-linear-extrapolation-wiring",
+    "task": "budget-preempt-restart-recovery",
     "state": "in_progress",
-    "since": "2026-06-20T10:54:15.772Z"
+    "since": "2026-06-20T16:31:55.309Z"
   },
   "recent": [
+    {
+      "at": "2026-06-20T16:24:29.759Z",
+      "task": "budget-projection-tick-linear-extrapolation-wiring",
+      "note": "Integrated as ebf98c37 on loop/main-track. 4 files (lib.rs +502/-48, README metrics, docs/runtime-sandbox-security.md, docs/ipc-and-http-gat"
+    },
     {
       "at": "2026-06-20T10:39:45.399Z",
       "task": "budget-debit-rate-signal",
@@ -315,11 +320,6 @@
       "at": "2026-06-19T06:59:45.019Z",
       "task": "operator-identity-rotate-token-denial",
       "note": "Committed a497b507, pushed to origin/loop/main-track. README 2970/432; test live_ipc_rotate_token_delegated_denial.rs."
-    },
-    {
-      "at": "2026-06-19T06:29:45.957Z",
-      "task": "memory-repair-cross-peer-ownership",
-      "note": "committed 1a552c38 (test + README metric); live_memory_repair_cross_peer.rs under memory-retention; mutation-proven cross-peer write-isolati"
     }
   ]
 }

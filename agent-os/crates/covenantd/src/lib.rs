@@ -621,17 +621,29 @@ fn parse_env_usize(name: &str, value: &str) -> Result<usize> {
         .with_context(|| format!("{name} must be an integer"))
 }
 
-/// Cadence and grace window for the budget projection tick driver.
-/// `period_ms` controls how often [`Server::run_projection_tick_iteration`]
-/// runs; `grace_ms` is the SIGTERM→SIGKILL window passed to every
-/// dispatched [`Server::preempt_intent`] call. Both are read from
-/// environment variables at daemon startup (see
-/// [`projection_tick_config_from_env`]) so operators can tune cadence
-/// without a rebuild.
+/// Conservative thresholds applied when an operator selects the
+/// `linear` projection policy without specifying the gates explicitly.
+/// A window floor keeps a sub-second initial spike from extrapolating to
+/// infinity; a sample floor keeps a single fee-paying tool call from
+/// projecting a runaway agent. Operators tune them via
+/// `COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS` / `_MIN_SAMPLES`.
+const DEFAULT_PROJECTION_MIN_WINDOW_MS: u64 = 1_000;
+const DEFAULT_PROJECTION_MIN_SAMPLES: u32 = 3;
+
+/// Cadence, grace window, and projection policy for the budget tick
+/// driver. `period_ms` controls how often
+/// [`Server::run_projection_tick_iteration`] runs; `grace_ms` is the
+/// SIGTERM→SIGKILL window passed to every dispatched
+/// [`Server::preempt_intent`] call; `policy` selects whether the tick
+/// preempts only on bucket exhaustion (the default) or also on linear
+/// debit-rate extrapolation. All three are read from environment
+/// variables at daemon startup (see [`projection_tick_config_from_env`])
+/// so operators can tune behavior without a rebuild.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectionTickConfig {
     pub period_ms: u64,
     pub grace_ms: u64,
+    pub policy: covenant_budget::BudgetProjectionPolicy,
 }
 
 impl Default for ProjectionTickConfig {
@@ -639,6 +651,7 @@ impl Default for ProjectionTickConfig {
         Self {
             period_ms: 250,
             grace_ms: 2_000,
+            policy: covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
         }
     }
 }
@@ -651,12 +664,24 @@ pub fn projection_tick_config_from_env() -> Result<ProjectionTickConfig> {
         std::env::var("COVENANT_BUDGET_PREEMPT_GRACE_MS")
             .ok()
             .as_deref(),
+        std::env::var("COVENANT_BUDGET_PROJECTION_POLICY")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_BUDGET_PROJECTION_MIN_SAMPLES")
+            .ok()
+            .as_deref(),
     )
 }
 
 pub fn projection_tick_config_from_values(
     period_ms: Option<&str>,
     grace_ms: Option<&str>,
+    policy: Option<&str>,
+    min_window_ms: Option<&str>,
+    min_samples: Option<&str>,
 ) -> Result<ProjectionTickConfig> {
     let mut config = ProjectionTickConfig::default();
     if let Some(value) = period_ms {
@@ -668,7 +693,48 @@ pub fn projection_tick_config_from_values(
     if let Some(value) = grace_ms {
         config.grace_ms = parse_env_u64("COVENANT_BUDGET_PREEMPT_GRACE_MS", value)?;
     }
+    config.policy = parse_projection_policy(policy, min_window_ms, min_samples)?;
     Ok(config)
+}
+
+/// Resolve the [`covenant_budget::BudgetProjectionPolicy`] from operator
+/// env input. Absent/`none`/`no_extrapolation` selects the conservative
+/// default; `linear`/`linear_extrapolation` selects rate extrapolation,
+/// reading its observation-window and sample gates from the threshold
+/// env vars (falling back to [`DEFAULT_PROJECTION_MIN_WINDOW_MS`] /
+/// [`DEFAULT_PROJECTION_MIN_SAMPLES`]). An unrecognized policy or a
+/// non-integer threshold is a hard error so a typo never silently
+/// downgrades enforcement to the default.
+fn parse_projection_policy(
+    policy: Option<&str>,
+    min_window_ms: Option<&str>,
+    min_samples: Option<&str>,
+) -> Result<covenant_budget::BudgetProjectionPolicy> {
+    use covenant_budget::BudgetProjectionPolicy;
+    let policy = policy.map(str::trim).filter(|s| !s.is_empty());
+    match policy {
+        None | Some("none") | Some("no_extrapolation") => {
+            Ok(BudgetProjectionPolicy::NoExtrapolation)
+        }
+        Some("linear") | Some("linear_extrapolation") => {
+            let min_observation_window_ms = match min_window_ms {
+                Some(value) => parse_env_u64("COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS", value)?,
+                None => DEFAULT_PROJECTION_MIN_WINDOW_MS,
+            };
+            let min_debit_samples = match min_samples {
+                Some(value) => parse_env_u32("COVENANT_BUDGET_PROJECTION_MIN_SAMPLES", value)?,
+                None => DEFAULT_PROJECTION_MIN_SAMPLES,
+            };
+            Ok(BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms,
+                min_debit_samples,
+            })
+        }
+        Some(other) => anyhow::bail!(
+            "COVENANT_BUDGET_PROJECTION_POLICY must be one of none, no_extrapolation, \
+             linear, linear_extrapolation; got {other:?}"
+        ),
+    }
 }
 
 /// Spawn the budget projection tick driver. Returns a `JoinHandle` so
@@ -688,11 +754,12 @@ pub fn spawn_projection_tick_driver(
     tokio::spawn(async move {
         let period = Duration::from_millis(config.period_ms);
         let grace = Duration::from_millis(config.grace_ms);
+        let policy = config.policy;
         let mut interval = tokio::time::interval(period);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let preempted = server.run_projection_tick_iteration(grace).await;
+            let preempted = server.run_projection_tick_iteration(grace, policy).await;
             if preempted > 0 {
                 info!(
                     preempted,
@@ -1747,26 +1814,17 @@ impl Server {
         }
     }
 
-    /// Walk every in-flight tracker entry, ask the budget ledger whether
-    /// the owning agent's bucket is exhausted, and dispatch
-    /// [`Server::preempt_intent`] for every flagged entry. Returns the
-    /// number of successful preempts (`PreemptResult::Preempted`).
+    /// Walk every in-flight tracker entry and dispatch
+    /// [`Server::preempt_intent`] for each entry [`Self::projection_decision`]
+    /// flags under `policy`. Returns the number of successful preempts
+    /// (`PreemptResult::Preempted`).
     ///
     /// This is the single-iteration core of the budget projection tick.
     /// The `spawn_projection_tick_driver` task wires a `tokio::time::interval`
-    /// driver that calls this on each tick; the iteration is exposed as
-    /// a separate `pub async fn` so tests can drive it deterministically
-    /// without time-mocking, and so the driver keeps only scheduling
-    /// concerns (cadence, shutdown signal, policy).
-    ///
-    /// `would_exceed(agent, 1)` is the v0.x exhaustion trigger: the
-    /// [`BudgetLedger`] trait does not expose per-agent capacity, so the
-    /// `LinearExtrapolation` policy from
-    /// [`covenant_budget::project_overshoot`] needs a per-intent
-    /// debit-rate signal that the ledger schema does not yet carry.
-    /// Exhaustion-as-trigger delivers the operator-promised hard-guarantee
-    /// shape ("tokens_remaining == 0 → kill the in-flight subprocess")
-    /// without expanding the budget trait surface.
+    /// driver that calls this on each tick with the configured policy; the
+    /// iteration is exposed as a separate `pub async fn` so tests can drive
+    /// it deterministically without time-mocking, and so the driver keeps
+    /// only scheduling concerns (cadence, shutdown signal).
     ///
     /// Error policy: `BudgetError::NoCapacity` for an agent that was
     /// deprovisioned mid-flight skips that entry silently — the agent
@@ -1774,21 +1832,20 @@ impl Server {
     /// fail on its own next debit attempt. Any other `BudgetError`
     /// produces a `warn!` and the entry is skipped; the next tick will
     /// retry.
-    pub async fn run_projection_tick_iteration(&self, grace: std::time::Duration) -> usize {
+    pub async fn run_projection_tick_iteration(
+        &self,
+        grace: std::time::Duration,
+        policy: covenant_budget::BudgetProjectionPolicy,
+    ) -> usize {
         let mut preempted = 0;
         for (intent_id, entry) in self.subprocess_tracker.snapshot() {
             let agent = agent_id_for_card_id(&entry.agent_id);
-            match self.budget.would_exceed(&agent, 1).await {
-                Ok(true) => {
-                    if let PreemptResult::Preempted { .. } = self
-                        .preempt_intent(intent_id, "budget_overshoot".into(), grace)
-                        .await
-                    {
-                        preempted += 1;
-                    }
-                }
-                Ok(false) => {}
-                Err(BudgetError::NoCapacity(_)) => {}
+            let preempt = match self
+                .projection_decision(&agent, entry.started_at_ms, policy)
+                .await
+            {
+                Ok(flag) => flag,
+                Err(BudgetError::NoCapacity(_)) => continue,
                 Err(e) => {
                     warn!(
                         agent = %entry.agent_id,
@@ -1796,10 +1853,75 @@ impl Server {
                         error = %e,
                         "projection-tick: budget lookup failed; skipping entry until next tick"
                     );
+                    continue;
+                }
+            };
+            if preempt {
+                if let PreemptResult::Preempted { .. } = self
+                    .preempt_intent(intent_id, "budget_overshoot".into(), grace)
+                    .await
+                {
+                    preempted += 1;
                 }
             }
         }
         preempted
+    }
+
+    /// Decide whether the in-flight subprocess for one tracker entry must
+    /// be preempted this tick.
+    ///
+    /// The empty-bucket hard guarantee comes first and is
+    /// policy-independent: `would_exceed(agent, 1)` is true exactly when
+    /// `tokens_remaining == 0`, so an exhausted agent is always flagged.
+    /// This preserves the operator-promised "exhausted budget kills the
+    /// in-flight subprocess" shape the daemon shipped before linear
+    /// projection existed.
+    ///
+    /// Under [`BudgetProjectionPolicy::NoExtrapolation`] (the default)
+    /// nothing further runs, so the default tick is byte-identical to the
+    /// pre-projection behavior: it never consults
+    /// [`covenant_budget::project_overshoot`], whose post-completion arm
+    /// (`current_debit > remaining`) would otherwise add preempts the
+    /// exhaustion trigger does not.
+    ///
+    /// Under `LinearExtrapolation` a not-yet-exhausted agent is
+    /// additionally projected from its per-agent debit rate over
+    /// `[started_at_ms, now]` (`debit_rate_since`) against current
+    /// `tokens_remaining`. The window is keyed per-agent, not per-intent:
+    /// an agent running concurrent intents shares one debit window, so the
+    /// projection is a conservative aggregate that can flag every intent
+    /// of an over-spending agent — the same per-agent fan-out the
+    /// exhaustion trigger already has.
+    ///
+    /// [`BudgetProjectionPolicy::NoExtrapolation`]: covenant_budget::BudgetProjectionPolicy
+    async fn projection_decision(
+        &self,
+        agent: &AgentId,
+        started_at_ms: u64,
+        policy: covenant_budget::BudgetProjectionPolicy,
+    ) -> Result<bool, BudgetError> {
+        if self.budget.would_exceed(agent, 1).await? {
+            return Ok(true);
+        }
+        if matches!(
+            policy,
+            covenant_budget::BudgetProjectionPolicy::NoExtrapolation
+        ) {
+            return Ok(false);
+        }
+        let signal = self
+            .budget
+            .debit_rate_since(agent, started_at_ms, epoch_ms())
+            .await?;
+        let remaining = self.budget.tokens_remaining(agent).await?;
+        Ok(covenant_budget::project_overshoot(
+            signal.current_debit,
+            signal.observation_window_ms,
+            signal.observed_debit_samples,
+            remaining,
+            policy,
+        ))
     }
 
     /// Best-effort outbound error frame on the read-side failures the
@@ -27119,6 +27241,28 @@ required = {caps:?}
             limit: usize,
         ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
             Ok(self.debits.iter().take(limit).cloned().collect())
+        }
+        async fn debit_rate_since(
+            &self,
+            agent: &AgentId,
+            since_ms: u64,
+            now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            let mut current_debit: u64 = 0;
+            let mut observed_debit_samples: u32 = 0;
+            for debit in self
+                .debits
+                .iter()
+                .filter(|d| d.agent.pubkey == agent.pubkey && d.at_ms >= since_ms)
+            {
+                current_debit = current_debit.saturating_add(debit.credits);
+                observed_debit_samples = observed_debit_samples.saturating_add(1);
+            }
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit,
+                observation_window_ms: now_ms.saturating_sub(since_ms),
+                observed_debit_samples,
+            })
         }
         async fn compact_older_than(
             &self,
@@ -58143,7 +58287,10 @@ budget_credits_per_hour = {credits}
         let server = server_with_audit_and_budget(audit.clone(), budget);
 
         let count = server
-            .run_projection_tick_iteration(std::time::Duration::from_millis(100))
+            .run_projection_tick_iteration(
+                std::time::Duration::from_millis(100),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
             .await;
 
         assert_eq!(
@@ -58191,7 +58338,10 @@ budget_credits_per_hour = {credits}
         );
 
         let count = server
-            .run_projection_tick_iteration(std::time::Duration::from_millis(100))
+            .run_projection_tick_iteration(
+                std::time::Duration::from_millis(100),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
             .await;
 
         assert_eq!(
@@ -58209,14 +58359,22 @@ budget_credits_per_hour = {credits}
 
     #[test]
     fn projection_tick_config_from_values_uses_defaults_when_unset() {
-        let config = projection_tick_config_from_values(None, None).expect("defaults");
+        let config =
+            projection_tick_config_from_values(None, None, None, None, None).expect("defaults");
         assert_eq!(config.period_ms, 250);
         assert_eq!(config.grace_ms, 2_000);
+        assert_eq!(
+            config.policy,
+            covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            "absent COVENANT_BUDGET_PROJECTION_POLICY must default to NoExtrapolation so the \
+             tick stays byte-identical to the pre-projection exhaustion-only behavior",
+        );
     }
 
     #[test]
     fn projection_tick_config_from_values_rejects_zero_period() {
-        let err = projection_tick_config_from_values(Some("0"), None).unwrap_err();
+        let err =
+            projection_tick_config_from_values(Some("0"), None, None, None, None).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("COVENANT_BUDGET_PROJECTION_TICK_MS"),
@@ -58233,10 +58391,302 @@ budget_credits_per_hour = {credits}
         // Zero grace is acceptable: preempt_subprocess_pg interprets it
         // as immediate SIGKILL (no SIGTERM-then-wait). A refactor that
         // bailed on zero grace would surface here as a returned Err.
-        let config = projection_tick_config_from_values(Some("100"), Some("0"))
+        let config = projection_tick_config_from_values(Some("100"), Some("0"), None, None, None)
             .expect("zero grace must parse");
         assert_eq!(config.period_ms, 100);
         assert_eq!(config.grace_ms, 0);
+    }
+
+    #[test]
+    fn projection_tick_config_parses_linear_policy() {
+        use covenant_budget::BudgetProjectionPolicy;
+        // Explicit thresholds thread into the LinearExtrapolation variant
+        // verbatim.
+        let explicit =
+            projection_tick_config_from_values(None, None, Some("linear"), Some("5000"), Some("7"))
+                .expect("linear policy with explicit thresholds must parse");
+        assert_eq!(
+            explicit.policy,
+            BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms: 5_000,
+                min_debit_samples: 7,
+            },
+        );
+        // The linear_extrapolation alias with unset thresholds falls back
+        // to the conservative constants, not zero (zero would let a
+        // one-sample sub-millisecond spike extrapolate to a runaway).
+        let defaulted = projection_tick_config_from_values(
+            None,
+            None,
+            Some("linear_extrapolation"),
+            None,
+            None,
+        )
+        .expect("linear alias with default thresholds must parse");
+        assert_eq!(
+            defaulted.policy,
+            BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms: DEFAULT_PROJECTION_MIN_WINDOW_MS,
+                min_debit_samples: DEFAULT_PROJECTION_MIN_SAMPLES,
+            },
+        );
+        // Explicit "none" resolves to the conservative default.
+        let none = projection_tick_config_from_values(None, None, Some("none"), None, None)
+            .expect("none must parse");
+        assert_eq!(none.policy, BudgetProjectionPolicy::NoExtrapolation);
+    }
+
+    #[test]
+    fn projection_tick_config_rejects_unknown_policy() {
+        // A typo'd policy fails loudly rather than silently downgrading to
+        // NoExtrapolation, which would erase an operator's opt-in to linear
+        // preemption with no signal.
+        let err = projection_tick_config_from_values(None, None, Some("quadratic"), None, None)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("COVENANT_BUDGET_PROJECTION_POLICY"),
+            "rejection must name the offending env var: {err:?}",
+        );
+        assert!(
+            msg.contains("quadratic"),
+            "rejection must echo the bad value so an operator can spot the typo: {err:?}",
+        );
+    }
+
+    #[test]
+    fn projection_tick_config_rejects_non_integer_thresholds() {
+        // Non-integer window / sample gates are hard errors, never silent
+        // fallbacks to the defaults.
+        let window_err =
+            projection_tick_config_from_values(None, None, Some("linear"), Some("soon"), None)
+                .unwrap_err();
+        assert!(
+            window_err
+                .to_string()
+                .contains("COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS"),
+            "non-integer window must name its env var: {window_err:?}",
+        );
+        let samples_err =
+            projection_tick_config_from_values(None, None, Some("linear"), None, Some("many"))
+                .unwrap_err();
+        assert!(
+            samples_err
+                .to_string()
+                .contains("COVENANT_BUDGET_PROJECTION_MIN_SAMPLES"),
+            "non-integer samples must name its env var: {samples_err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_tick_decision_exhausted_preempts_under_default_policy() {
+        // Empty-bucket hard guarantee: an exhausted agent is flagged
+        // regardless of policy. Mutation-proof: dropping the would_exceed
+        // leg from projection_decision makes this return false (the
+        // NoExtrapolation early-return) and fails the assert.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit, budget.clone());
+        let agent = agent_id_for_card_id("drained");
+        budget.set_capacity(&agent, 1).await.expect("set_capacity");
+        budget
+            .try_debit(&agent, 1, Uuid::new_v4())
+            .await
+            .expect("try_debit drains bucket");
+
+        let preempt = server
+            .projection_decision(
+                &agent,
+                epoch_ms(),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
+            .await
+            .expect("decision must succeed for a provisioned agent");
+        assert!(
+            preempt,
+            "exhausted bucket must preempt even under NoExtrapolation (policy-independent guarantee)",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_tick_decision_default_policy_skips_linear_projection() {
+        // Under the NoExtrapolation default a non-exhausted agent is never
+        // preempted, even when accrued debit already exceeds remaining: the
+        // default must NOT consult project_overshoot, whose post-completion
+        // arm (current_debit > remaining) would otherwise fire.
+        // Mutation-proof: removing the NoExtrapolation early-return routes
+        // through project_overshoot(90, .., 10) == true and fails here,
+        // catching a default-behavior regression.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit, budget.clone());
+        let agent = agent_id_for_card_id("healthy");
+        budget
+            .set_capacity(&agent, 100)
+            .await
+            .expect("set_capacity");
+        budget
+            .try_debit(&agent, 90, Uuid::new_v4())
+            .await
+            .expect("try_debit");
+
+        let preempt = server
+            .projection_decision(
+                &agent,
+                epoch_ms().saturating_sub(10_000),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
+            .await
+            .expect("decision must succeed");
+        assert!(
+            !preempt,
+            "NoExtrapolation must not preempt a non-exhausted agent (remaining=10) even though current_debit=90 > remaining",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_tick_decision_linear_preempts_on_projected_overshoot() {
+        // Under LinearExtrapolation a not-yet-exhausted agent whose
+        // projected total (2 * current_debit) exceeds remaining is flagged.
+        // capacity 100, debit 40 -> remaining 60, current_debit 40; 2*40=80
+        // > 60. would_exceed(agent,1) is false (remaining 60), so the
+        // preempt can ONLY come from the linear leg. Mutation-proof:
+        // neutering the LinearExtrapolation branch to Ok(false) fails this.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit, budget.clone());
+        let agent = agent_id_for_card_id("accelerating");
+        budget
+            .set_capacity(&agent, 100)
+            .await
+            .expect("set_capacity");
+        budget
+            .try_debit(&agent, 40, Uuid::new_v4())
+            .await
+            .expect("try_debit");
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 1,
+        };
+        let preempt = server
+            .projection_decision(&agent, epoch_ms().saturating_sub(10_000), policy)
+            .await
+            .expect("decision must succeed");
+        assert!(
+            preempt,
+            "linear policy must flag a non-exhausted agent whose 2x projected debit (80) exceeds remaining (60)",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_tick_decision_linear_below_threshold_does_not_preempt() {
+        // The same projected-overshoot agent stays unflagged when it has
+        // fewer debit samples than min_debit_samples: the conservative gate
+        // keeps a thin sample set off the extrapolation path. Pins the
+        // threshold gate so a dropped sample-count check can't slip a
+        // spurious early preempt through.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit, budget.clone());
+        let agent = agent_id_for_card_id("warmingup");
+        budget
+            .set_capacity(&agent, 100)
+            .await
+            .expect("set_capacity");
+        budget
+            .try_debit(&agent, 40, Uuid::new_v4())
+            .await
+            .expect("try_debit");
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 5,
+        };
+        let preempt = server
+            .projection_decision(&agent, epoch_ms().saturating_sub(10_000), policy)
+            .await
+            .expect("decision must succeed");
+        assert!(
+            !preempt,
+            "with only 1 debit sample below min_debit_samples=5 the linear policy must stay conservative",
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn projection_tick_iteration_linear_preempts_real_subprocess() {
+        // End-to-end proof the policy flows through the iteration loop and
+        // the linear leg drives a REAL preempt. The agent is NOT exhausted
+        // (capacity 100, debit 40 -> remaining 60), so would_exceed(agent,1)
+        // is false; the only path to a preempt is project_overshoot under
+        // LinearExtrapolation (2*40 > 60). A refactor that ignored the
+        // policy param or dropped the linear leg surfaces here as count==0.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget.clone());
+
+        let agent_card_id = "linearburn";
+        let agent = agent_id_for_card_id(agent_card_id);
+        budget
+            .set_capacity(&agent, 100)
+            .await
+            .expect("set_capacity");
+        budget
+            .try_debit(&agent, 40, Uuid::new_v4())
+            .await
+            .expect("try_debit");
+        assert!(
+            !budget.would_exceed(&agent, 1).await.expect("would_exceed"),
+            "test precondition: agent must NOT be exhausted so only the linear leg can preempt",
+        );
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: agent_card_id.into(),
+                pid,
+                started_at_ms: epoch_ms().saturating_sub(10_000),
+            },
+        );
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 1,
+        };
+        let (count, _exit) = tokio::join!(
+            server.run_projection_tick_iteration(std::time::Duration::from_millis(250), policy),
+            child.wait(),
+        );
+        assert_eq!(
+            count, 1,
+            "non-exhausted agent projected to overshoot under linear policy must preempt once; got {count}",
+        );
+
+        let events = audit.recent(16).await.expect("audit recent");
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::BudgetPreempted { intent_id: id, reason, .. }
+                    if *id == intent_id && reason.as_str() == "budget_overshoot"
+            )),
+            "linear preempt must emit a BudgetPreempted row tagged budget_overshoot; events: {events:?}",
+        );
     }
 
     #[cfg(unix)]
@@ -58290,6 +58740,7 @@ budget_credits_per_hour = {credits}
             ProjectionTickConfig {
                 period_ms: 50,
                 grace_ms: 100,
+                policy: covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
             },
         );
 
@@ -58383,7 +58834,10 @@ budget_credits_per_hour = {credits}
         );
 
         let (count, _exit) = tokio::join!(
-            server.run_projection_tick_iteration(std::time::Duration::from_millis(250)),
+            server.run_projection_tick_iteration(
+                std::time::Duration::from_millis(250),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            ),
             child.wait(),
         );
 

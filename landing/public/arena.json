@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-06-19T19:38:06.887Z",
+  "updatedAt": "2026-06-20T04:34:13.820Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
@@ -10,7 +10,7 @@
     "Claude": 8,
     "Grok": 1,
     "Codex": 5,
-    "rejectedRounds": 6
+    "rejectedRounds": 7
   },
   "curve": [
     {
@@ -137,6 +137,35 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k31",
+      "display": "Round 22",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 6.563,
+          "incumbent": 6.563,
+          "gain": 0,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0 < margin 0.002"
+        },
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.564,
+          "incumbent": 6.563,
+          "gain": 0.001,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0.001 < margin 0.002"
+        }
+      ]
+    },
     {
       "round": "k30",
       "display": "Round 21",

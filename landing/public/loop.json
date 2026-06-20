@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-20T01:06:17.069Z",
+  "updatedAt": "2026-06-20T01:26:20.691Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 9949,
-    "tasks": 1174,
+    "events": 9953,
+    "tasks": 1175,
     "integrated": 1176
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1169,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-preempt-audit-write-failed-surfaced-unit-coverage",
+    "state": "in_progress",
+    "since": "2026-06-20T01:16:41.012Z"
+  },
   "recent": [
     {
       "at": "2026-06-20T00:59:34.808Z",

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T17:40:00.056Z",
+  "updatedAt": "2026-06-21T18:00:03.913Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10189,
+    "events": 10193,
     "tasks": 1202,
-    "integrated": 1204
+    "integrated": 1205
   },
   "throughput": {
-    "last24h": 25,
-    "last7d": 117,
-    "velocity": 16.7
+    "last24h": 26,
+    "last7d": 118,
+    "velocity": 16.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 21
+      "count": 22
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1204
+      "total": 1205
     }
   ],
   "states": {
-    "integrated": 1196,
+    "integrated": 1197,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "peers-purge-read-failure-surfaced-unit-coverage",
-    "state": "in_progress",
-    "since": "2026-06-21T17:38:20.098Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T17:49:40.250Z",
+      "task": "peers-purge-read-failure-surfaced-unit-coverage",
+      "note": "integrated: purge_peers peer-registry read-failure bail arm pinned. peers-store-read-failure-coverage epic now 2/2. Security: read-only test"
+    },
     {
       "at": "2026-06-21T17:37:47.991Z",
       "task": "peers-list-summaries-read-failure-surfaced-unit-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T02:18:32.235Z",
       "task": "sdk-outofscope-classify-live-coverage",
       "note": "Integrated: commit 16178826 on loop/main-track. Single live test + README metrics bump (450 live tests). Backlog refilled from the roadmap l"
-    },
-    {
-      "at": "2026-06-21T01:51:51.248Z",
-      "task": "budget-checkpoint-resume-fallback-recovery",
-      "note": "noop state-check"
     }
   ]
 }

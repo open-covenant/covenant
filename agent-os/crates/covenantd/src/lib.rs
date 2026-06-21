@@ -58919,6 +58919,37 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn recent_debits_surfaces_error_when_budget_ledger_recent_debits_fails() {
+        // A recent_debits fan-out whose budget ledger cannot read its debit log
+        // must NOT be reported as an empty Response::Debits: the operator would
+        // see a silently-truncated budget view (spent credits invisible)
+        // indistinguishable from a ledger that genuinely holds nothing, hiding a
+        // durability fault behind a clean response. recent_debits has no cap
+        // gate but fans out over router agents (skipping
+        // budget_credits_per_hour == 0 cards), so the test seeds a card with a
+        // non-zero budget and swaps the budget field to the failing double — the
+        // only arm needing both a seeded card and an injected ledger.
+        let mut server = server_with(vec![stub_card_with_budget("spend", vec![], 10)], "");
+        server.budget = Arc::new(FailingBudgetReads);
+        let resp = server.op_respond(Request::RecentDebits { limit: 10 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("budget:"),
+                    "a recent_debits read whose ledger fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected budget recent_debits read failure"),
+                    "the surfaced error must carry the ledger's cause for triage, got: {message}",
+                );
+            }
+            other => panic!(
+                "expected Response::Error when recent_debits() fails, got {other:?}"
+            ),
+        }
+    }
+
     /// Like [`FailingCapabilityStore`] but the fault is on the usage-snapshot
     /// read path: only `usage_snapshot` fails, so [`Server::capability_usage`]
     /// reaches its bail arm while the other trait methods stay inert.

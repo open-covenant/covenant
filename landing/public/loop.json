@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T21:40:44.779Z",
+  "updatedAt": "2026-06-21T22:00:48.467Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10269,
-    "tasks": 1211,
-    "integrated": 1213
+    "events": 10275,
+    "tasks": 1212,
+    "integrated": 1214
   },
   "throughput": {
     "last24h": 33,
-    "last7d": 126,
-    "velocity": 18
+    "last7d": 127,
+    "velocity": 18.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 30
+      "count": 31
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1213
+      "total": 1214
     }
   ],
   "states": {
-    "integrated": 1205,
-    "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "integrated": 1206,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "settlement-backfill-write-failure-surfaced-unit-coverage",
-    "state": "in_progress",
-    "since": "2026-06-21T21:19:28.067Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T21:43:29.678Z",
+      "task": "settlement-backfill-write-failure-surfaced-unit-coverage",
+      "note": "Committed 18419c69 (lib.rs + README.md only; autonomy/ gitignored). FailingBackfillSettlement + settlement_write_failure_backfill pin the se"
+    },
     {
       "at": "2026-06-21T21:04:33.763Z",
       "task": "memory-backfill-write-failure-surfaced-unit-coverage",
@@ -314,11 +314,6 @@
     {
       "at": "2026-06-21T14:10:52.961Z",
       "task": "capability-revoke-list-for-subject-failure-surfaced-unit-cov",
-      "note": "Committed and pushed."
-    },
-    {
-      "at": "2026-06-21T13:54:46.419Z",
-      "task": "capability-purge-failure-surfaced-unit-coverage",
       "note": "Committed and pushed."
     }
   ]

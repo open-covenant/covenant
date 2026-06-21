@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T22:40:56.148Z",
+  "updatedAt": "2026-06-21T23:00:59.863Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10287,
-    "tasks": 1213,
-    "integrated": 1215
+    "events": 10301,
+    "tasks": 1214,
+    "integrated": 1217
   },
   "throughput": {
-    "last24h": 34,
-    "last7d": 128,
-    "velocity": 18.3
+    "last24h": 35,
+    "last7d": 130,
+    "velocity": 18.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 32
+      "count": 34
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1215
+      "total": 1217
     }
   ],
   "states": {
-    "integrated": 1207,
+    "integrated": 1209,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "peers-register-write-failure-surfaced-unit-coverage",
-    "state": "in_progress",
-    "since": "2026-06-21T22:27:18.063Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T22:58:15.736Z",
+      "task": "budget-try-debit-write-failure-surfaced-unit-coverage",
+      "note": "Committed 5e8fee64. FailingDebitBudget + budget_write_failure_try_debit pin the try_debit non-NoCapacity Err bail. budget-store-write-failur"
+    },
+    {
+      "at": "2026-06-21T22:41:41.026Z",
+      "task": "peers-register-write-failure-surfaced-unit-coverage",
+      "note": "Committed 13c53bdc (lib.rs + README.md). FailingRegisterPeerRegistry + peers_write_failure_register pin the peers.register() write Err bail."
+    },
     {
       "at": "2026-06-21T22:21:45.378Z",
       "task": "settlement-mark-batch-confirmed-write-failure-surfaced-unit-",
@@ -310,16 +315,6 @@
       "at": "2026-06-21T15:56:12.645Z",
       "task": "memory-recent-read-failure-surfaced-unit-coverage",
       "note": "Committed afe23f08 on loop/main-track; pushing to origin."
-    },
-    {
-      "at": "2026-06-21T14:46:36.448Z",
-      "task": "capability-revoke-store-failure-surfaced-unit-coverage",
-      "note": "Committed and pushed."
-    },
-    {
-      "at": "2026-06-21T14:31:47.564Z",
-      "task": "capability-revoke-is-revoked-failure-surfaced-unit-coverage",
-      "note": "Committed and pushed."
     }
   ]
 }

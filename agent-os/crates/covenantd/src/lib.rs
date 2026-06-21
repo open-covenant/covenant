@@ -58772,6 +58772,97 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// Revoke-path double: `list_for_subject` returns an empty owned set (so the
+    /// owned-cap find misses and [`Server::revoke_capability`] enters the
+    /// else-branch that checks `is_revoked`), and `is_revoked` fails — pinning
+    /// the is_revoked bail arm rather than the cross-peer 'revoke rejected' arm.
+    struct FailingIsRevokedCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingIsRevokedCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Ok(())
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability is_revoked failure"),
+            ))
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_capability_surfaces_error_when_capability_store_is_revoked_fails() {
+        // When the signature is not among the peer's owned caps, revoke_capability
+        // checks is_revoked before issuing the cross-peer CapabilityRevokeRejected
+        // row. A store fault there must surface Response::Error carrying the cause,
+        // NOT fall through to the 'revoke rejected' message (which hides the fault
+        // behind a clean cross-peer rejection).
+        let server = server_with_capabilities_dyn(Arc::new(FailingIsRevokedCapabilityStore));
+        let resp = server
+            .op_respond(Request::RevokeCapability {
+                signature_b58: bs58::encode(&[1u8; 64]).into_string(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a revoke whose is_revoked fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability is_revoked failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+                assert!(
+                    !message.contains("revoke rejected"),
+                    "the is_revoked fault must not be masked by the cross-peer 'revoke rejected' arm, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when is_revoked() fails, got {other:?}"),
+        }
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

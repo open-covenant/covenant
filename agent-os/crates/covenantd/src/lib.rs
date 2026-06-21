@@ -3484,10 +3484,21 @@ impl Server {
             };
         }
 
-        let display = display.trim().to_string();
-        if display.is_empty() {
+        // The subject's display becomes part of a SignedCapability that must
+        // round-trip through the capability store, where `AgentId` enforces the
+        // `name@host` shape. A bare label like "orbserv-escrow" would serialize
+        // fine but fail to deserialize, bricking every read. Normalize a label
+        // to `<label>@peer`, then validate, so enrollment can never write a row
+        // the store cannot read back.
+        let display = display.trim();
+        let display = if display.contains('@') {
+            display.to_string()
+        } else {
+            format!("{display}@peer")
+        };
+        if let Err(e) = covenant_types::validate_agent_id_display(&display) {
             return Response::Error {
-                message: "enroll: display must be non-empty".into(),
+                message: format!("enroll: display must be a valid agent id (name@host): {e}"),
             };
         }
         // Validate every action's scope up front so a bad action can't leave a
@@ -53375,6 +53386,15 @@ budget_credits_per_hour = {credits}
             .expect("token resolves");
         assert_eq!(bs58::encode(subject.pubkey).into_string(), pubkey_b58);
         assert_ne!(subject.pubkey, s.identity.agent_id().pubkey);
+
+        // The subject MUST round-trip through serde the way the persistent
+        // capability store does: a bare label display would serialize but fail
+        // to deserialize, bricking every cap read. The label is normalized to
+        // `<label>@peer`.
+        let wire = serde_json::to_string(&subject).unwrap();
+        let back: AgentId = serde_json::from_str(&wire).expect("subject display must be storeable");
+        assert_eq!(back.pubkey, subject.pubkey);
+        assert_eq!(subject.display, "orbserv-escrow@peer");
 
         // The subject holds exactly the granted caps — nothing it wasn't given.
         assert!(

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T19:20:18.969Z",
+  "updatedAt": "2026-06-21T19:40:22.473Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10215,
-    "tasks": 1205,
-    "integrated": 1207
+    "events": 10224,
+    "tasks": 1206,
+    "integrated": 1208
   },
   "throughput": {
-    "last24h": 28,
-    "last7d": 120,
-    "velocity": 17.1
+    "last24h": 29,
+    "last7d": 121,
+    "velocity": 17.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 24
+      "count": 25
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-21",
-      "total": 1207
+      "total": 1208
     }
   ],
   "states": {
-    "integrated": 1199,
+    "integrated": 1200,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "mailbox-task-queue-read-failure-surfaced-unit-coverage",
+    "task": "mailbox-compact-read-failure-surfaced-unit-coverage",
     "state": "in_progress",
-    "since": "2026-06-21T19:16:03.174Z"
+    "since": "2026-06-21T19:24:49.817Z"
   },
   "recent": [
+    {
+      "at": "2026-06-21T19:24:27.508Z",
+      "task": "mailbox-task-queue-read-failure-surfaced-unit-coverage",
+      "note": "Integrated: 090daf79. Pushed to origin/loop/main-track. Slice 3/4 of a2a-mailbox-store-read-failure-coverage."
+    },
     {
       "at": "2026-06-21T19:14:49.488Z",
       "task": "mailbox-recent-results-read-failure-surfaced-unit-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-21T11:33:54.545Z",
       "task": "http-reject-audit-write-failure-coverage",
       "note": "Integrated as 7d6675c1 on loop/main-track. test+README only (autonomy records gitignored). Full http_gateway suite 18/18 green; mutation-pro"
-    },
-    {
-      "at": "2026-06-21T04:06:44.876Z",
-      "task": "http-bearer-auth-parse-rejection-live-coverage",
-      "note": "Committing test + backlog template + task record; pushing to loop/main-track."
     }
   ]
 }

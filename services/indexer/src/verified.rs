@@ -33,8 +33,10 @@ const ATTESTATION_TYPE: &str = "covenant_endpoint_attestation_v1";
 const SOURCE: &str = "zauth-directory";
 const REFRESH_INTERVAL: Duration = Duration::from_secs(600);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
-const PROBE_CONCURRENCY: usize = 8;
+const PROBE_CONCURRENCY: usize = 16;
 const DEFAULT_LIMIT: u32 = 50;
+/// zauth's directory caps a single page at 100 regardless of `limit`.
+const PAGE_SIZE: u32 = 100;
 
 #[derive(Clone)]
 pub struct VerifiedState {
@@ -53,6 +55,10 @@ pub struct VerifiedSnapshot {
     generated_at: Option<String>,
     ready: bool,
     count: usize,
+    /// Total verified endpoints zauth's directory reports, so a consumer
+    /// can see coverage (count of total) rather than assume full coverage.
+    #[serde(rename = "directoryVerifiedTotal")]
+    directory_total: Option<u64>,
     attestations: Vec<EndpointAttestation>,
 }
 
@@ -106,7 +112,7 @@ impl VerifiedState {
     }
 
     async fn refresh(&self) -> anyhow::Result<usize> {
-        let endpoints = self.list_directory().await?;
+        let (endpoints, directory_total) = self.list_directory().await?;
         let now = now_unix();
         let mut probed: Vec<(String, ProbeOutcome)> = Vec::with_capacity(endpoints.len());
         for chunk in endpoints.chunks(PROBE_CONCURRENCY) {
@@ -138,25 +144,53 @@ impl VerifiedState {
             generated_at: Some(rfc3339(now)?),
             ready: true,
             count,
+            directory_total,
             attestations,
         };
         Ok(count)
     }
 
-    async fn list_directory(&self) -> anyhow::Result<Vec<DirEndpoint>> {
-        let limit = self.limit.to_string();
-        let resp = self
-            .http
-            .get(DIRECTORY_URL)
-            .query(&[("verified", "true"), ("limit", limit.as_str())])
-            .send()
-            .await?;
-        let status = resp.status();
-        if !status.is_success() {
-            anyhow::bail!("directory status {}", status.as_u16());
+    /// Page through zauth's verified directory up to `self.limit`. The API
+    /// caps a page at 100 (`pagination.limit`), so a single GET silently
+    /// covers at most 100 of the ~200+ verified set — walk `offset` until
+    /// `hasMore` is false or the limit is reached. Returns the endpoints
+    /// plus the directory's reported verified total (for coverage).
+    async fn list_directory(&self) -> anyhow::Result<(Vec<DirEndpoint>, Option<u64>)> {
+        let mut out: Vec<DirEndpoint> = Vec::new();
+        let mut offset: u32 = 0;
+        let mut total: Option<u64> = None;
+        while (out.len() as u32) < self.limit {
+            let want = (self.limit - out.len() as u32).min(PAGE_SIZE);
+            let want_s = want.to_string();
+            let offset_s = offset.to_string();
+            let resp = self
+                .http
+                .get(DIRECTORY_URL)
+                .query(&[
+                    ("verified", "true"),
+                    ("limit", want_s.as_str()),
+                    ("offset", offset_s.as_str()),
+                ])
+                .send()
+                .await?;
+            let status = resp.status();
+            if !status.is_success() {
+                anyhow::bail!("directory status {}", status.as_u16());
+            }
+            let page: DirPage = resp.json().await?;
+            if let Some(p) = &page.pagination {
+                total = Some(p.total);
+            }
+            let got = page.endpoints.len() as u32;
+            out.extend(page.endpoints);
+            let has_more = page.pagination.map(|p| p.has_more).unwrap_or(false);
+            if got == 0 || !has_more {
+                break;
+            }
+            offset += got;
         }
-        let page: DirPage = resp.json().await?;
-        Ok(page.endpoints)
+        out.truncate(self.limit as usize);
+        Ok((out, total))
     }
 }
 
@@ -171,6 +205,16 @@ pub async fn serve_verified(State(state): State<AppState>) -> Json<VerifiedSnaps
 struct DirPage {
     #[serde(default)]
     endpoints: Vec<DirEndpoint>,
+    #[serde(default)]
+    pagination: Option<PageInfo>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+struct PageInfo {
+    #[serde(default)]
+    total: u64,
+    #[serde(rename = "hasMore", default)]
+    has_more: bool,
 }
 
 #[derive(Deserialize, Clone)]

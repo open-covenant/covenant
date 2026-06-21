@@ -58629,6 +58629,34 @@ budget_credits_per_hour = {credits}
         let _ = task.await;
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_operator_token_rotation_rejected() {
+        // OperatorTokenRotationRejected is a must-record kind: a rotation
+        // attempt by a non-operator peer is a probe that must land on the
+        // operator's /audit feed even when the audit store is degraded. If
+        // record_daemon_event_required cannot persist the row, rotate_operator_token
+        // must surface the generic "audit write failed; refusing to proceed"
+        // bail rather than the normal operator-identity rejection — otherwise
+        // the operator answers a probe with a clean refusal that leaves no
+        // durable trail. A real daemon's audit store cannot be made to fail
+        // deterministically over the live socket, so drive it in-process with
+        // the FailingAuditLog double.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let non_operator = LocalIdentity::generate("non-op@local").agent_id();
+        assert_ne!(
+            non_operator.pubkey, s.identity.agent_id().pubkey,
+            "fixture peer must not share the server operator's pubkey"
+        );
+        match s.rotate_operator_token(&non_operator).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the rotate path must surface as the generic bail, not the normal operator-identity rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
     /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
     /// `record` fails, for exercising the bail arm of
     /// [`Server::grant_capability`] when the capability row cannot persist.

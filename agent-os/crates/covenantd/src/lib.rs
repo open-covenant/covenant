@@ -58687,6 +58687,91 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// Like [`FailingCapabilityStore`] but the fault is on the revoke read path:
+    /// only `list_for_subject` fails, so [`Server::revoke_capability`] reaches
+    /// its bail arm (after bs58-decoding a valid signature) while the other
+    /// trait methods stay inert.
+    struct FailingListForSubjectCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingListForSubjectCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Ok(())
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability list_for_subject failure"),
+            ))
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_capability_surfaces_error_when_capability_store_list_for_subject_fails() {
+        // A revocation whose store cannot read the peer's owned caps must NOT
+        // fall through to a clean CapabilityRevoked/reject: the operator would
+        // believe a revoke was attempted when the store could not even be read.
+        let server = server_with_capabilities_dyn(Arc::new(FailingListForSubjectCapabilityStore));
+        let resp = server
+            .op_respond(Request::RevokeCapability {
+                signature_b58: bs58::encode(&[1u8; 64]).into_string(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a revoke whose list_for_subject fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability list_for_subject failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when list_for_subject() fails, got {other:?}"),
+        }
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

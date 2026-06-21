@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-21T01:16:46.591Z",
+  "updatedAt": "2026-06-21T01:36:50.183Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10015,
+    "events": 10019,
     "tasks": 1182,
     "integrated": 1183
   },
@@ -187,7 +187,7 @@
     "integrated": 1176,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "ready": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "budget-checkpoint-resume-fallback-recovery",
-    "state": "in_progress",
-    "since": "2026-06-21T00:30:11.042Z"
+    "state": "ready",
+    "since": "2026-06-21T01:35:52.736Z"
   },
   "recent": [
     {

@@ -53765,6 +53765,33 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn mailbox_read_failure_compact() {
+        // An a2a compaction whose mailbox cannot compact its backing store
+        // must NOT be reported as Response::A2ACompacted { dropped: 0 }: the
+        // operator would see a clean "compacted" response that hides a
+        // durability fault, then act on stale un-compacted state.
+        // compact_a2a is capability-gated on a2a.compact, but
+        // server_with_mailbox_dyn keeps the real InMemoryCapabilityStore, so
+        // the grant takes and the test reaches the compact Err bail arm.
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        grant_action(&server, "a2a.compact").await;
+        let resp = server.op_respond(Request::CompactA2A).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "an a2a compaction whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox compact read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when compact() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn recent_a2a_tasks_visible_when_peer_is_sender() {
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();

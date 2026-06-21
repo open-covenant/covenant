@@ -16342,6 +16342,32 @@ required = {caps:?}
         )
     }
 
+    // Mirrors server_with_audit_dyn but injects the CapabilityStore, so a test
+    // can drive grant_capability with a failing store and reach the bail arm
+    // the infallible InMemoryCapabilityStore default can never hit.
+    fn server_with_capabilities_dyn(
+        capabilities: Arc<dyn covenant_permissions::CapabilityStore>,
+    ) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            capabilities,
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     #[tokio::test]
     async fn query_provenance_projects_filters_and_gates_on_operator() {
         use covenant_audit::{AuditEvent, AuditKind, CapabilityAuthorization, InMemoryAuditLog};
@@ -58303,6 +58329,97 @@ budget_credits_per_hour = {credits}
 
         drop(client);
         let _ = task.await;
+    }
+
+    /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
+    /// `record` fails, for exercising the bail arm of
+    /// [`Server::grant_capability`] when the capability row cannot persist.
+    /// Only `record` is reached on the grant path; the other methods return
+    /// inert defaults so the double never masquerades as a working store.
+    struct FailingCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability record failure"),
+            ))
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn grant_capability_surfaces_error_when_capability_store_record_fails() {
+        // A capability grant whose backing-store row cannot persist must NOT be
+        // reported as CapabilityGranted: the granted peer would believe it holds
+        // a permission that was never durably recorded (absent from
+        // list_for_subject, gone on restart) while the operator's tamper-evident
+        // record also lacks the matching grant row. grant_capability bails to
+        // Response::Error before the CapabilityGranted audit event is written.
+        let server = server_with_capabilities_dyn(Arc::new(FailingCapabilityStore));
+        let resp = server
+            .op_respond(Request::GrantCapability {
+                action: "memory.write".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("failed to record capability"),
+                    "a grant whose capability row fails to persist must surface the record error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability record failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when record() fails, got {other:?}"),
+        }
     }
 
     fn server_with_audit_and_budget(

@@ -59167,6 +59167,140 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`MemoryStore`] double whose `repair` WRITE fails, so
+    /// [`Server::repair_memory`] reaches its `memory: {e}` bail arm. Unlike
+    /// the compact/purge doubles, repair_memory reads the target record via
+    /// `self.memory.get(id)` (for an ownership/visibility check) BEFORE it
+    /// calls `self.memory.repair(request)`, so this double stores seeded
+    /// records in `get`/`put` (the test seeds via `server.memory.put`) while
+    /// `repair` returns `Err`. Every existing repair test constructs the
+    /// Server with an infallible-by-construction double, so the write Err arm
+    /// is dead without this injection.
+    struct FailingRepairMemoryStore {
+        records: std::sync::Mutex<Vec<MemoryRecord>>,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingRepairMemoryStore {
+        async fn put(&self, record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            let mut guard = self.records.lock().expect("repair double poisoned");
+            guard.retain(|r| r.id != record.id);
+            guard.push(record);
+            Ok(())
+        }
+        async fn get(
+            &self,
+            id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(self
+                .records
+                .lock()
+                .expect("repair double poisoned")
+                .iter()
+                .find(|r| r.id == id)
+                .cloned())
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(self.records.lock().expect("repair double poisoned").clone())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            let mut guard = self.records.lock().expect("repair double poisoned");
+            let before = guard.len();
+            guard.retain(|r| r.id != id);
+            Ok(guard.len() < before)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+        async fn repair(
+            &self,
+            _request: covenant_memory::MemoryRepairRequest,
+        ) -> Result<covenant_memory::MemoryRepairOutcome, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory repair write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_write_failure_repair() {
+        // A memory repair whose backing store cannot apply the command must
+        // NOT be reported as Response::MemoryRepaired: the operator would
+        // believe a record was repaired (parent detached / metadata fixed)
+        // when the write failed, hiding a durability fault behind a clean
+        // success. repair_memory gates on operator-identity + the
+        // memory.repair.<action> capability, then reads the target record for
+        // an ownership check before calling self.memory.repair(); so the
+        // double is seeded with the record (owner = the operator) and its
+        // repair() override returns Err. server_with_memory_dyn keeps the real
+        // InMemoryCapabilityStore so the grant takes.
+        let server = server_with_memory_dyn(Arc::new(FailingRepairMemoryStore {
+            records: std::sync::Mutex::new(Vec::new()),
+        }));
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        server
+            .memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: server.identity.agent_id(),
+                text: "stale parent".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 0,
+                parent: Some(parent),
+            })
+            .await
+            .unwrap();
+        grant_action(&server, "memory.repair.dry_run").await;
+        let resp = server
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: Some(parent),
+                    },
+                    reason: "verified stale parent".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a repair whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory repair write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when repair() fails, got {other:?}"),
+        }
+    }
+
     /// A [`Settlement`] double whose `recent` read fails, so
     /// [`Server::recent_receipts`] and [`Server::receipt_batches`] reach their
     /// `settlement: {e}` bail arm while the other trait methods stay inert. The

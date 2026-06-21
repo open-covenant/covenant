@@ -761,6 +761,16 @@ pub enum Request {
     /// connections authenticated under the old token survive until they
     /// drop; HTTP rejects the old token immediately.
     RotateOperatorToken,
+    /// Enroll a new external peer: mint a fresh subject identity + bearer
+    /// token, register it, and grant it `actions`. Gated to the operator
+    /// (`peer.pubkey == self.identity.pubkey`). Returns the scoped token in
+    /// [`Response::PeerEnrolled`] so a partner gets exactly the granted caps
+    /// instead of the operator token. `display` is a label for the peer.
+    EnrollPeer {
+        display: String,
+        #[serde(default)]
+        actions: Vec<String>,
+    },
     /// Operator-triage view of the peer registry. Returns redacted
     /// [`PeerSummary`] rows newest-first. By default surfaces both live
     /// and revoked entries (with `revoked_at: Some(_)`); `status_filter`
@@ -1025,6 +1035,16 @@ pub enum Response {
     /// authenticate with `token_b58`.
     OperatorTokenRotated {
         token_b58: String,
+    },
+    /// Successful response to [`Request::EnrollPeer`]. `token_b58` is the new
+    /// peer's scoped bearer token — hand it to the partner; it is NOT the
+    /// operator token. `pubkey_b58` is the peer's subject key, `granted` the
+    /// capabilities it now holds.
+    PeerEnrolled {
+        token_b58: String,
+        pubkey_b58: String,
+        display: String,
+        granted: Vec<String>,
     },
     /// Successful response to [`Request::ListPeers`]. Token bytes are
     /// **never** carried — only the 6-char `token_prefix`.

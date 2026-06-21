@@ -358,6 +358,23 @@ pub enum AuditKind {
         peer_display: String,
         peer_pubkey_b58: String,
     },
+    /// The operator enrolled a new external peer: a fresh subject identity was
+    /// registered with its own bearer token and granted `granted` capabilities.
+    /// This is a security-relevant grant of external access, so it is recorded
+    /// in the chain. `pubkey_b58` is the new peer's subject key; the bearer
+    /// token itself is never audited.
+    PeerEnrolled {
+        display: String,
+        pubkey_b58: String,
+        granted: Vec<String>,
+    },
+    /// Logged when `EnrollPeer` is rejected because the authenticated peer is
+    /// not the operator. Mirrors [`AuditKind::OperatorTokenRotationRejected`]'s
+    /// daemon-as-issuer audience model.
+    PeerEnrollmentRejected {
+        peer_display: String,
+        peer_pubkey_b58: String,
+    },
     /// Logged when `ListPeers` is rejected because the authenticated
     /// peer is not the operator (`peer.pubkey != self.identity.pubkey`).
     /// Mirrors [`AuditKind::OperatorTokenRotationRejected`]'s daemon-as-issuer

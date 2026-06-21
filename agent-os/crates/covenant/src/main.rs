@@ -2145,6 +2145,9 @@ fn print_usage() {
         "  covenant peers purge (--before-ms M | --older-than-ms D) [--json]  drop revoked peer registrations older than ms epoch / D ms ago"
     );
     eprintln!(
+        "  covenant peers enroll <display> [--grant <action>]...  mint a scoped peer token holding the granted caps (hand to a partner, not the operator token)"
+    );
+    eprintln!(
         "  covenant peers rotate [--json]          mint a fresh operator token and revoke the old one"
     );
     eprintln!(
@@ -4661,7 +4664,9 @@ async fn main() -> Result<()> {
         }
         "peers" => {
             if args.len() < 2 {
-                eprintln!("covenant peers: expected `purge`, `rotate`, `list`, or `revoke`");
+                eprintln!(
+                    "covenant peers: expected `enroll`, `purge`, `rotate`, `list`, or `revoke`"
+                );
                 std::process::exit(2);
             }
             match args[1].as_str() {
@@ -4743,6 +4748,44 @@ async fn main() -> Result<()> {
                                 );
                                 println!("{token_b58}");
                             }
+                        }
+                        Response::Error { message } => bail!("daemon error: {message}"),
+                        other => bail!("unexpected response: {other:?}"),
+                    }
+                }
+                "enroll" => {
+                    let mut display: Option<String> = None;
+                    let mut actions: Vec<String> = Vec::new();
+                    let mut i = 2;
+                    while i < args.len() {
+                        match args[i].as_str() {
+                            "--grant" => {
+                                i += 1;
+                                let a = args
+                                    .get(i)
+                                    .ok_or_else(|| anyhow::anyhow!("--grant needs an action"))?;
+                                actions.push(a.clone());
+                            }
+                            other if !other.starts_with("--") && display.is_none() => {
+                                display = Some(other.to_string());
+                            }
+                            other => bail!("unknown flag '{other}'"),
+                        }
+                        i += 1;
+                    }
+                    let display = display.context("covenant peers enroll: missing <display>")?;
+                    write_frame(&mut stream, &Request::EnrollPeer { display, actions }).await?;
+                    match read_frame::<_, Response>(&mut stream).await? {
+                        Response::PeerEnrolled {
+                            token_b58,
+                            pubkey_b58,
+                            display,
+                            granted,
+                        } => {
+                            println!("enrolled peer {display} ({pubkey_b58})");
+                            println!("granted: {}", granted.join(", "));
+                            println!("token (hand this to the peer, NOT the operator token):");
+                            println!("{token_b58}");
                         }
                         Response::Error { message } => bail!("daemon error: {message}"),
                         other => bail!("unexpected response: {other:?}"),

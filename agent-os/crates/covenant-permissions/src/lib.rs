@@ -1257,6 +1257,10 @@ impl JsonlCapabilityStore {
             if trimmed.is_empty() {
                 continue;
             }
+            // Fail-closed on a malformed row rather than skipping it: a skipped
+            // revocation would let a revoked capability read back as live. The
+            // write side is responsible for never persisting an unreadable row
+            // (see `Server::enroll_peer`, which validates the subject display).
             all.push(serde_json::from_str(trimmed)?);
         }
         Ok(all)

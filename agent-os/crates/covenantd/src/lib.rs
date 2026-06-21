@@ -16625,6 +16625,30 @@ required = {caps:?}
         )
     }
 
+    // Mirrors server_with_budget but injects the PeerRegistry, so a test can
+    // drive list_peers / purge_peers with a failing registry and reach the bail
+    // arm the infallible InMemoryPeerRegistry default can never hit.
+    fn server_with_peers_dyn(peers: Arc<dyn covenant_peer_auth::PeerRegistry>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            peers,
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     async fn grant_action(s: &Server, action: &str) {
         let resp = s
             .op_respond(Request::GrantCapability {
@@ -58946,6 +58970,106 @@ budget_credits_per_hour = {credits}
             }
             other => panic!(
                 "expected Response::Error when recent_debits() fails, got {other:?}"
+            ),
+        }
+    }
+
+    /// A [`covenant_peer_auth::PeerRegistry`] double whose read methods fail,
+    /// so [`Server::list_peers`] (via `list_summaries`) and [`Server::purge_peers`]
+    /// (via `purge_revoked_older_than`) reach their `peers: {e}` bail arms while
+    /// the other trait methods stay inert. The default `InMemoryPeerRegistry`
+    /// reads are infallible, so both arms are dead without this injection.
+    struct FailingPeerRegistryReads;
+
+    #[async_trait::async_trait]
+    impl covenant_peer_auth::PeerRegistry for FailingPeerRegistryReads {
+        async fn register(
+            &self,
+            _entry: covenant_peer_auth::PeerEntry,
+        ) -> Result<(), covenant_peer_auth::PeerError> {
+            Ok(())
+        }
+        async fn resolve(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<Option<AgentId>, covenant_peer_auth::PeerError> {
+            Ok(None)
+        }
+        async fn revoke(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<bool, covenant_peer_auth::PeerError> {
+            Ok(false)
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_peer_auth::PeerEntry>, covenant_peer_auth::PeerError> {
+            Ok(vec![])
+        }
+        async fn list_summaries(
+            &self,
+            _limit: usize,
+            _pubkey_prefix: Option<&str>,
+            _status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
+        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError> {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers list_summaries read failure",
+            )))
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_peer_auth::PeerError> {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers purge read failure",
+            )))
+        }
+        async fn revoke_by_token_prefix(
+            &self,
+            _prefix: &str,
+            _limit: usize,
+        ) -> Result<covenant_peer_auth::RevokeOutcome, covenant_peer_auth::PeerError> {
+            Ok(covenant_peer_auth::RevokeOutcome::NotFound)
+        }
+        async fn find_unique_live_by_token_prefix(
+            &self,
+            _prefix: &str,
+        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn list_peers_surfaces_error_when_peer_registry_list_summaries_fails() {
+        // A list_peers triage read whose peer registry cannot read its entries
+        // must NOT be reported as an empty Response::PeerList: the operator
+        // would see a silently-truncated peer view (registered/revoked entries
+        // invisible) indistinguishable from a registry that genuinely holds
+        // nothing, hiding a durability fault behind a clean response. list_peers
+        // skips its cap + scope gates for the operator, and op_respond IS the
+        // operator, so no grant is needed to reach the list_summaries bail arm.
+        let server = server_with_peers_dyn(Arc::new(FailingPeerRegistryReads));
+        let resp = server
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+                status_filter: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers:"),
+                    "a list_peers read whose registry fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers list_summaries read failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!(
+                "expected Response::Error when list_summaries() fails, got {other:?}"
             ),
         }
     }

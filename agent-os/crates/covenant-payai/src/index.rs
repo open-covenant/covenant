@@ -25,10 +25,18 @@ pub struct SettlementIndexer {
 
 impl SettlementIndexer {
     pub fn new(rpc_url: impl Into<String>) -> Self {
+        // A request timeout matters: some public Solana RPCs stall on
+        // getTransaction, and a reputation read must fail fast rather than hang
+        // the caller (or the daemon) forever.
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .connect_timeout(std::time::Duration::from_secs(8))
+            .build()
+            .unwrap_or_default();
         Self {
             rpc_url: rpc_url.into(),
             fee_payer: PAYAI_SOLANA_FEE_PAYER.to_string(),
-            http: reqwest::Client::new(),
+            http,
         }
     }
 
@@ -447,8 +455,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_payai_mainnet_settlements() {
+        // publicnode by default: api.mainnet-beta throttles getTransaction and
+        // the N+1 read stalls there. Override with SOLANA_RPC_URL.
         let rpc = std::env::var("SOLANA_RPC_URL")
-            .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+            .unwrap_or_else(|_| "https://solana-rpc.publicnode.com".to_string());
         let ix = SettlementIndexer::new(rpc);
         let settlements = ix.recent_settlements(8).await.expect("live fetch");
         eprintln!("live PayAI settlements parsed: {}", settlements.len());

@@ -7,8 +7,9 @@ use crate::types::{PayaiReputation, Settlement, Tier};
 use crate::Result;
 
 /// Compute a wallet's settlement-grounded reputation from a settlement set.
-/// Counts only inbound settlements (wallet == `pay_to`). Deterministic: the
-/// same settlements always yield the same numbers.
+/// Counts only inbound settlements from OTHER wallets (`pay_to == wallet` and
+/// `payer != wallet`). Deterministic: the same settlements always yield the
+/// same numbers.
 pub fn compute_reputation(
     settlements: &[Settlement],
     wallet: &str,
@@ -18,7 +19,10 @@ pub fn compute_reputation(
     let mut volume: u128 = 0;
     let mut counterparties: HashSet<&str> = HashSet::new();
     for s in settlements {
-        if s.pay_to == wallet {
+        // Inbound from a DIFFERENT wallet only. Excluding self-payments stops an
+        // agent inflating its own job count and counterparty set by paying
+        // itself.
+        if s.pay_to == wallet && s.payer != wallet {
             settled_jobs += 1;
             volume = volume.saturating_add(s.amount_micro);
             counterparties.insert(s.payer.as_str());
@@ -93,6 +97,18 @@ mod tests {
         assert_eq!(rep.distinct_counterparties, 0);
         assert_eq!(rep.volume_micro_usdc, 0);
         assert_eq!(rep.score, 0);
+    }
+
+    #[test]
+    fn self_payments_are_excluded() {
+        let s = vec![
+            settle("buyerA", "seller", 2_000_000),
+            settle("seller", "seller", 9_000_000), // self-payment, ignored
+        ];
+        let rep = compute_reputation(&s, "seller", PAYAI_SOLANA_FEE_PAYER);
+        assert_eq!(rep.settled_jobs, 1, "self-payment does not count");
+        assert_eq!(rep.distinct_counterparties, 1, "self is not a counterparty");
+        assert_eq!(rep.volume_micro_usdc, 2_000_000);
     }
 
     #[test]

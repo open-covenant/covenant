@@ -15,7 +15,10 @@ async fn main() {
 
     let ix = SettlementIndexer::new(&rpc);
     let settlements = ix.recent_settlements(limit).await.expect("fetch");
-    eprintln!("scanned ~{limit} signatures, {} settlements", settlements.len());
+    eprintln!(
+        "scanned ~{limit} signatures, {} settlements",
+        settlements.len()
+    );
 
     let mut agg: HashMap<String, (u64, HashSet<String>, u128)> = HashMap::new();
     for s in &settlements {

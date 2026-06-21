@@ -9,7 +9,8 @@ use crate::config::PayAiConfig;
 use crate::oracle::signed_reputation_for;
 
 const REPUTATION_TOOL: &str = "payai.reputation";
-const REPUTATION_DESC: &str = "Settlement-grounded reputation for a wallet on the PayAI x402 rail, \
+const REPUTATION_DESC: &str =
+    "Settlement-grounded reputation for a wallet on the PayAI x402 rail, \
 signed by this Covenant daemon. Reads PayAI's public Solana settlements; never touches payments.";
 
 fn reputation_schema() -> Value {
@@ -54,11 +55,15 @@ impl Tool for PayaiReputationTool {
             .get("wallet")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::InvalidArguments("missing string field `wallet`".into()))?;
+        // Clamp the caller-supplied window: each settlement is an N+1
+        // getTransaction, and Solana's getSignaturesForAddress caps at 1000, so
+        // a single call can never fan out unbounded.
         let limit = arguments
             .get("limit")
             .and_then(Value::as_u64)
             .map(|n| n as usize)
-            .unwrap_or(self.limit);
+            .unwrap_or(self.limit)
+            .clamp(1, 1000);
 
         match signed_reputation_for(
             &self.rpc_url,

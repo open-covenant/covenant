@@ -59752,6 +59752,127 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`covenant_budget::BudgetLedger`] double whose `try_debit` WRITE fails
+    /// with a non-NoCapacity error, so [`Server::dispatch_intent_run`] reaches
+    /// its `budget debit failed for {card.id}: {e}` bail arm (lib.rs:4735).
+    /// dispatch_intent_run gates the debit on the card manifest's
+    /// `budget_credits_per_hour > 0` (a manifest field, NOT a budget call) and
+    /// performs NO budget read before `try_debit`, so a debit-only-failing
+    /// double reaches the bail directly. `try_debit` returning `NoCapacity`
+    /// would instead hit the unseeded warn-and-continue arm (lib.rs:4665, NOT a
+    /// bail), so the override returns `Io` to land on the bail. Every existing
+    /// dispatch test uses the real `InMemoryLedger` (try_debit Ok), so the Err
+    /// arm is dead without this injection.
+    struct FailingDebitBudget;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingDebitBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget try_debit write failure",
+            )))
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn budget_write_failure_try_debit() {
+        // An intent dispatch whose budget ledger cannot persist the debit must
+        // NOT be reported as Response::IntentResult: the operator would believe
+        // the dispatch was free (no credit burn recorded, bucket unchanged)
+        // when the debit failed, hiding an accounting/durability fault behind a
+        // clean success.
+        // dispatch_intent_run gates the debit on the card manifest's
+        // budget_credits_per_hour > 0 (not a budget call) and performs no budget
+        // read before self.budget.try_debit(); the double's override returns
+        // Err(BudgetError::Io) — NOT NoCapacity (which is the unseeded
+        // warn-and-continue arm, not a bail). Setup mirrors
+        // dispatch_passes_when_budget_healthy (lib.rs:53964) with the budget
+        // swapped to the failing double; no register_agent_budgets is needed
+        // because the double's try_debit returns Io, not NoCapacity.
+        let mut s = server_with(
+            vec![stub_card_with_budget("research", vec!["tool.web_search"], 10)],
+            "mocked summary",
+        );
+        s.budget = Arc::new(FailingDebitBudget);
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("budget debit failed for"),
+                    "a dispatch whose try_debit() fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected budget try_debit write failure"),
+                    "the surfaced error must carry the ledger's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when try_debit() fails, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn verify_recent_surfaces_error_when_budget_ledger_recent_debits_all_fails() {
         // A verify_recent drift check whose budget ledger cannot read its debit

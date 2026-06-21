@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T11:38:42.255Z",
+  "updatedAt": "2026-06-21T11:58:45.960Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10057,
-    "tasks": 1186,
-    "integrated": 1189
+    "events": 10066,
+    "tasks": 1187,
+    "integrated": 1190
   },
   "throughput": {
-    "last24h": 11,
-    "last7d": 102,
-    "velocity": 14.6
+    "last24h": 12,
+    "last7d": 103,
+    "velocity": 14.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,18 +180,18 @@
     },
     {
       "date": "06-21",
-      "total": 1189
+      "total": 1190
     }
   ],
   "states": {
-    "integrated": 1181,
+    "integrated": 1182,
     "proposed": 1,
     "blocked": 4
   },
   "areas": [
     {
       "name": "ipc",
-      "count": 139
+      "count": 140
     },
     {
       "name": "covenant",
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T11:51:35.416Z",
+      "task": "ipc-auth-audit-write-failure-coverage",
+      "note": "Integrated as b1e4c05b on loop/main-track. test+README only."
+    },
     {
       "at": "2026-06-21T11:33:54.545Z",
       "task": "http-reject-audit-write-failure-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-19T11:50:24.951Z",
       "task": "secret-access-name-scope-gate-live-denial",
       "note": "Integrated as 959adb7d, pushed 7dce0a76..959adb7d to origin/loop/main-track. Committable artifacts: live_secret_access_scope_gate.rs + READM"
-    },
-    {
-      "at": "2026-06-19T10:47:03.529Z",
-      "task": "operator-identity-gate-http-peers-rotate-denial",
-      "note": "Committed 7dce0a76 and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
     }
   ]
 }

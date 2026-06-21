@@ -58422,6 +58422,89 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// Like [`FailingCapabilityStore`] but the fault is on the read path: only
+    /// `recent` fails, so [`Server::recent_capability`] reaches its bail arm
+    /// while the other trait methods stay inert.
+    struct FailingRecentCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingRecentCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Ok(())
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability recent read failure"),
+            ))
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_capabilities_surfaces_error_when_capability_store_recent_fails() {
+        // A capability-ledger read whose backing store fails must NOT be reported
+        // as an empty Response::Capabilities: the caller would see a silently
+        // truncated ledger (recent grants/revocations invisible) indistinguishable
+        // from a store that genuinely holds nothing, hiding a durability fault.
+        let server = server_with_capabilities_dyn(Arc::new(FailingRecentCapabilityStore));
+        let resp = server
+            .op_respond(Request::RecentCapabilities { limit: 10 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a recent_capabilities read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent() fails, got {other:?}"),
+        }
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

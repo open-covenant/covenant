@@ -59580,6 +59580,103 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`Settlement`] double whose `mark_batch_confirmed` WRITE fails, so
+    /// [`Server::flush_receipts`] reaches its `mark receipt batch: {e}` bail arm
+    /// (lib.rs:6115). `recent` returns one unsettled receipt paid by the
+    /// operator so flush_receipts's payer filter
+    /// (`receipt.payer.pubkey == peer.pubkey`) and `chain_receipt_allowed`
+    /// (allow-all `chain.flush` scope) keep it and `build_receipt_batch`
+    /// includes it (it keeps only receipts with `batch_id.is_none()`); `record`
+    /// stays inert. The handler reaches `mark_batch_confirmed` only after the
+    /// operator-identity + `chain.flush` capability + chain-scope gates pass and
+    /// `build_receipt_batch` succeeds, so the write Err arm is dead under
+    /// infallible stores. The operator identity is random
+    /// (`LocalIdentity::generate`), so the double holds the resolved operator
+    /// [`AgentId`] and is swapped onto the server after construction.
+    struct FailingMarkBatchSettlement {
+        operator: AgentId,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_settlement::Settlement for FailingMarkBatchSettlement {
+        async fn record(
+            &self,
+            _receipt: SettlementReceipt,
+        ) -> Result<(), covenant_settlement::SettlementError> {
+            Ok(())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<SettlementReceipt>, covenant_settlement::SettlementError> {
+            Ok(vec![SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: self.operator.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: Some("devnet".into()),
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            }])
+        }
+        async fn mark_batch_confirmed(
+            &self,
+            _receipt_ids: &[Uuid],
+            _confirmation: ChainConfirmation,
+        ) -> Result<u64, covenant_settlement::SettlementError> {
+            Err(covenant_settlement::SettlementError::Io(std::io::Error::other(
+                "injected settlement mark_batch_confirmed write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_write_failure_flush() {
+        // A receipt-batch confirmation whose backing store cannot persist the
+        // mark_batch_confirmed write must NOT be reported as
+        // Response::ReceiptBatchFlushed: the operator would believe receipts were
+        // anchored (batch_id + confirmation stamped) when the write failed,
+        // hiding a durability fault behind a clean success.
+        // flush_receipts gates on operator-identity + the chain.flush capability
+        // (allow-all scope via grant_action) + the chain scope, then reads
+        // self.settlement.recent(), keeps operator-paid unsettled receipts,
+        // builds the batch, and writes self.settlement.mark_batch_confirmed();
+        // the double's override returns Err. The operator identity is random, so
+        // the double is swapped onto the server after construction with the
+        // resolved operator AgentId (the payer filter requires it).
+        let placeholder = Arc::new(FailingMarkBatchSettlement {
+            operator: AgentId::new("user@local", [0u8; 32]),
+        });
+        let mut server = server_with_settlement_dyn(placeholder);
+        server.settlement = Arc::new(FailingMarkBatchSettlement {
+            operator: server.identity.agent_id(),
+        });
+        grant_action(&server, "chain.flush").await;
+        let resp = server.op_respond(Request::FlushReceipts { limit: 10 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("mark receipt batch:"),
+                    "a flush whose mark_batch_confirmed fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected settlement mark_batch_confirmed write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!(
+                "expected Response::Error when mark_batch_confirmed() fails, got {other:?}"
+            ),
+        }
+    }
+
     /// A [`covenant_budget::BudgetLedger`] double whose read methods fail, so
     /// [`Server::verify_recent`] (via `recent_debits_all`) and
     /// [`Server::recent_debits`] (via `recent_debits`) reach their `budget: {e}`

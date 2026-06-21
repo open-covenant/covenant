@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T01:36:50.183Z",
+  "updatedAt": "2026-06-21T01:56:54.124Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10019,
+    "events": 10021,
     "tasks": 1182,
-    "integrated": 1183
+    "integrated": 1185
   },
   "throughput": {
-    "last24h": 7,
-    "last7d": 96,
-    "velocity": 13.7
+    "last24h": 8,
+    "last7d": 98,
+    "velocity": 14
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 0
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1183
+      "total": 1185
     }
   ],
   "states": {
-    "integrated": 1176,
+    "integrated": 1177,
     "proposed": 1,
-    "blocked": 4,
-    "ready": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "budget-checkpoint-resume-fallback-recovery",
-    "state": "ready",
-    "since": "2026-06-21T01:35:52.736Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T01:51:51.248Z",
+      "task": "budget-checkpoint-resume-fallback-recovery",
+      "note": "noop state-check"
+    },
+    {
+      "at": "2026-06-21T01:37:17.888Z",
+      "task": "budget-checkpoint-resume-fallback-recovery",
+      "note": "committed 0a893499 (test + README metrics); pushed origin/loop/main-track 7013279d..0a893499; recorded in local live-coverage.json under dae"
+    },
     {
       "at": "2026-06-20T23:55:13.612Z",
       "task": "sdk-denial-classify-grant-retry-live-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-19T09:50:26.971Z",
       "task": "operator-identity-postcap-http-compact-memory-denial",
       "note": "Committed 11f8e7cc and pushed to origin/loop/main-track. test+README only; agent-os/autonomy is gitignored loop-state. Live test passes, mut"
-    },
-    {
-      "at": "2026-06-19T09:05:38.766Z",
-      "task": "operator-identity-postcap-memory-backfill-denial",
-      "note": "Pushed to origin/loop/main-track as 5f6e0bb3; test live_ipc_memory_backfill_delegated_denial.rs. Post-capability operator-identity gate on b"
-    },
-    {
-      "at": "2026-06-19T08:53:54.815Z",
-      "task": "operator-identity-postcap-settlement-backfill-denial",
-      "note": "Pushed to origin/loop/main-track as 872297a1; test live_ipc_settlement_backfill_delegated_denial.rs. Post-capability operator-identity gate "
     }
   ]
 }

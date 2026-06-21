@@ -58969,6 +58969,102 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`MemoryStore`] double whose `purge_older_than` WRITE fails, so
+    /// [`Server::purge_memory`] reaches its `memory: {e}` bail arm while the
+    /// other trait methods stay inert. The default in-memory + sqlite impls
+    /// surface real IO errors, but every existing purge test constructs the
+    /// Server with an infallible-by-construction double, so the write Err arm
+    /// is dead without this injection. `repair`/`compact`/`backfill_receipt_correlation`
+    /// inherit their default trait impls and are unreached on the purge path.
+    struct FailingPurgeMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingPurgeMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory purge write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_write_failure_purge() {
+        // A memory purge whose backing store cannot drop the purged records
+        // must NOT be reported as Response::MemoryPurged: the operator would
+        // believe the purge succeeded (records gone) when the underlying write
+        // failed (records remain), hiding a durability fault behind a clean
+        // success. purge_memory gates on the memory.purge capability + scope;
+        // server_with_memory_dyn keeps the real InMemoryCapabilityStore so the
+        // scoped grant takes, and the proven {before_ms:100} grant + {before_ms:99}
+        // request reaches the purge_older_than write Err bail arm.
+        let server = server_with_memory_dyn(Arc::new(FailingPurgeMemoryStore));
+        server
+            .op_respond(Request::GrantCapability {
+                action: "memory.purge".into(),
+                scope: Some(serde_json::json!({
+                    "version": 1,
+                    "tiers": ["working"],
+                    "before_ms": 100,
+                })),
+                expires_at: None,
+            })
+            .await;
+        let resp = server
+            .op_respond(Request::PurgeMemory {
+                tier: Some(MemoryTier::Working),
+                before_ms: 99,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a purge whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory purge write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when purge_older_than() fails, got {other:?}"),
+        }
+    }
+
     /// A [`Settlement`] double whose `recent` read fails, so
     /// [`Server::recent_receipts`] and [`Server::receipt_batches`] reach their
     /// `settlement: {e}` bail arm while the other trait methods stay inert. The

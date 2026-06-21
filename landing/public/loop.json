@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T19:40:22.473Z",
+  "updatedAt": "2026-06-21T20:00:26.005Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10224,
+    "events": 10229,
     "tasks": 1206,
-    "integrated": 1208
+    "integrated": 1209
   },
   "throughput": {
-    "last24h": 29,
-    "last7d": 121,
-    "velocity": 17.3
+    "last24h": 30,
+    "last7d": 122,
+    "velocity": 17.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 25
+      "count": 26
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1208
+      "total": 1209
     }
   ],
   "states": {
-    "integrated": 1200,
+    "integrated": 1201,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "mailbox-compact-read-failure-surfaced-unit-coverage",
-    "state": "in_progress",
-    "since": "2026-06-21T19:24:49.817Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T19:49:39.185Z",
+      "task": "mailbox-compact-read-failure-surfaced-unit-coverage",
+      "note": "Integrated: 78c451c9. Pushed to origin/loop/main-track. Slice 4/4 of a2a-mailbox-store-read-failure-coverage — epic now 4/4 COMPLETE."
+    },
     {
       "at": "2026-06-21T19:24:27.508Z",
       "task": "mailbox-task-queue-read-failure-surfaced-unit-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T11:51:35.416Z",
       "task": "ipc-auth-audit-write-failure-coverage",
       "note": "Integrated as b1e4c05b on loop/main-track. test+README only."
-    },
-    {
-      "at": "2026-06-21T11:33:54.545Z",
-      "task": "http-reject-audit-write-failure-coverage",
-      "note": "Integrated as 7d6675c1 on loop/main-track. test+README only (autonomy records gitignored). Full http_gateway suite 18/18 green; mutation-pro"
     }
   ]
 }

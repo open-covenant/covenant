@@ -818,6 +818,41 @@ impl covenant_peer_auth::PeerRegistry for FailingPeerRegistry {
     }
 }
 
+struct FailingAuditLog;
+
+fn audit_outage_err() -> covenant_audit::AuditError {
+    covenant_audit::AuditError::Io(std::io::Error::other(
+        "audit storage outage (test fixture)",
+    ))
+}
+
+#[async_trait::async_trait]
+impl covenant_audit::AuditLog for FailingAuditLog {
+    async fn record(
+        &self,
+        _event: covenant_audit::AuditEvent,
+    ) -> Result<(), covenant_audit::AuditError> {
+        Err(audit_outage_err())
+    }
+    async fn recent(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
+        Err(audit_outage_err())
+    }
+    async fn purge_older_than(
+        &self,
+        _before_ms: u64,
+    ) -> Result<u64, covenant_audit::AuditError> {
+        Err(audit_outage_err())
+    }
+    async fn verify_integrity(
+        &self,
+    ) -> Result<covenant_audit::AuditIntegrityReport, covenant_audit::AuditError> {
+        Err(audit_outage_err())
+    }
+}
+
 async fn spawn_test_server_with_failing_registry() -> TestServer {
     let identity = Arc::new(LocalIdentity::generate("user@local"));
     let peers: Arc<dyn covenant_peer_auth::PeerRegistry> = Arc::new(FailingPeerRegistry);
@@ -861,6 +896,54 @@ async fn spawn_test_server_with_failing_registry() -> TestServer {
     }
 }
 
+async fn spawn_test_server_with_failing_audit() -> TestServer {
+    let identity = Arc::new(LocalIdentity::generate("user@local"));
+    let peers: Arc<dyn covenant_peer_auth::PeerRegistry> =
+        Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+    let agent_id = covenant_types::AgentId::new(identity.display(), identity.pubkey_bytes());
+    let audit: Arc<dyn AuditLog> = Arc::new(FailingAuditLog);
+    let memory = Arc::new(InMemoryStore::new());
+    let server = Server::new(
+        Arc::new(Router::from_cards(vec![stub_card()])),
+        Arc::new(MockRunner::new("mocked summary")),
+        memory.clone(),
+        Arc::new(InMemorySettlement::new()),
+        audit,
+        Arc::new(InMemoryCapabilityStore::new()),
+        Arc::new(MockEmbedder::new(64)),
+        identity,
+        Arc::new(covenant_memory::IgnoreSet::default()),
+        Arc::new(covenant_mcp::ToolRegistry::from_tools(vec![Arc::new(
+            covenant_mcp::native::EchoTool,
+        )])),
+        Arc::new(covenant_a2a::InMemoryMailbox::new()),
+        peers,
+        Arc::new(covenant_budget::InMemoryLedger::new()),
+    );
+    let (live_traces_tx, _) = tokio::sync::broadcast::channel(16);
+    let app = router(HttpState {
+        server,
+        live_traces_tx,
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let _handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    TestServer {
+        base: format!("http://{addr}"),
+        token: covenant_peer_auth::PeerToken::generate().to_b58(),
+        agent_id,
+        // The failing audit double records nothing and recent() also
+        // fails, so there is no in-memory handle to hand back; the
+        // observable contract is the 503 wire response, not a read-back
+        // row.
+        audit: Arc::new(InMemoryAuditLog::new()),
+        memory,
+        _handle,
+    }
+}
+
 #[tokio::test]
 async fn bearer_auth_surfaces_peer_registry_outage_as_503_with_distinct_audit() {
     // Audit-triage guard: a storage outage in the peer registry used
@@ -897,4 +980,40 @@ async fn bearer_auth_surfaces_peer_registry_outage_as_503_with_distinct_audit() 
         saw_outage_reason,
         "expected an 'peer registry unavailable' audit entry; got: {events:?}"
     );
+}
+
+#[tokio::test]
+async fn reject_surfaces_audit_write_failure_as_503() {
+    // Anti-starvation guard: reject() (covenantd/src/http.rs:248) treats a
+    // successful audit-write as a precondition for the auth-failed
+    // response. If the AuthenticationFailed row cannot land, the daemon
+    // returns a generic 503 "audit write failed; refusing to proceed"
+    // instead of the standard 401 so an attacker who can fill the audit
+    // disk does not get clean rejections while the operator's audit feed
+    // silently falls behind reality. The four happy-rejection 401 arms are
+    // covered live (live_http_bearer_auth_parse_rejections.rs) and the
+    // peer-registry-outage 503 sibling is covered above; this pins the
+    // distinct audit-write-failed arm, which is unreachable through a live
+    // daemon (the audit store cannot be made to fail deterministically
+    // over a real socket) and is only exercisable by injecting a
+    // record-failing audit double.
+    let s = spawn_test_server_with_failing_audit().await;
+    // Unregistered token resolves to Ok(None) on the working registry,
+    // routing through reject("unknown or revoked token") where the audit
+    // write fails — the exact arm under test.
+    let unregistered = covenant_peer_auth::PeerToken::generate().to_b58();
+    let r = reqwest::Client::new()
+        .get(format!("{}/tools", s.base))
+        .bearer_auth(&unregistered)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        503,
+        "audit-write failure must surface as 503, not a clean 401 rejection"
+    );
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["kind"], "error");
+    assert_eq!(body["message"], "audit write failed; refusing to proceed");
 }

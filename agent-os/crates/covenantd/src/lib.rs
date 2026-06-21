@@ -59495,6 +59495,91 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`Settlement`] double whose `backfill` WRITE fails, so
+    /// [`Server::backfill_settlement_receipts`] reaches its `settlement: {e}`
+    /// bail arm while the other trait methods stay inert. `backfill` has a
+    /// DEFAULT trait impl (a no-op for backends without a durable file); this
+    /// override returns `Err` directly so the daemon's
+    /// `match self.settlement.backfill(..)` (lib.rs:14641) hits the bail at
+    /// lib.rs:14672. The handler reaches `backfill` only after the
+    /// operator-identity + `settlement.backfill.<mode>` capability +
+    /// `before_ms = u64::MAX` scope gates pass and `self.home.is_some()` holds,
+    /// and reads no other settlement method first, so recent/record/
+    /// mark_batch_confirmed stay inert. Every existing backfill test constructs
+    /// the Server with an infallible `JsonlReceiptStore`, so the write Err arm
+    /// is dead without this injection.
+    struct FailingBackfillSettlement;
+
+    #[async_trait::async_trait]
+    impl covenant_settlement::Settlement for FailingBackfillSettlement {
+        async fn record(
+            &self,
+            _receipt: SettlementReceipt,
+        ) -> Result<(), covenant_settlement::SettlementError> {
+            Ok(())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<SettlementReceipt>, covenant_settlement::SettlementError> {
+            Ok(Vec::new())
+        }
+        async fn mark_batch_confirmed(
+            &self,
+            _receipt_ids: &[Uuid],
+            _confirmation: ChainConfirmation,
+        ) -> Result<u64, covenant_settlement::SettlementError> {
+            Ok(0)
+        }
+        async fn backfill(
+            &self,
+            _dry_run: bool,
+            _correlations: &[covenant_settlement::ReceiptBackfillCorrelation],
+        ) -> Result<covenant_settlement::BackfillOutcome, covenant_settlement::SettlementError> {
+            Err(covenant_settlement::SettlementError::Io(std::io::Error::other(
+                "injected settlement backfill write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_write_failure_backfill() {
+        // A receipt backfill whose backing store cannot persist the rewrite must
+        // NOT be reported as Response::SettlementReceiptsBackfilled: the operator
+        // would believe the legacy-receipt correlation was applied when it
+        // failed, hiding a durability fault behind a clean success.
+        // backfill_settlement_receipts gates on operator-identity + the
+        // settlement.backfill.<mode> capability + the before_ms=u64::MAX scope
+        // check + a configured home dir, then calls self.settlement.backfill();
+        // the double's override returns Err. server_with_settlement_dyn keeps the
+        // real InMemoryCapabilityStore so the grant takes, and .with_home(...)
+        // satisfies the home-dir precondition (the handler bails at lib.rs:14633
+        // when home is None, before reaching the write).
+        let home = tempfile::tempdir().expect("tempdir");
+        let server = server_with_settlement_dyn(Arc::new(FailingBackfillSettlement))
+            .with_home(home.path().to_path_buf());
+        grant_action(&server, "settlement.backfill.apply").await;
+        let resp = server
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement:"),
+                    "a backfill whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected settlement backfill write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when backfill() fails, got {other:?}"),
+        }
+    }
+
     /// A [`covenant_budget::BudgetLedger`] double whose read methods fail, so
     /// [`Server::verify_recent`] (via `recent_debits_all`) and
     /// [`Server::recent_debits`] (via `recent_debits`) reach their `budget: {e}`

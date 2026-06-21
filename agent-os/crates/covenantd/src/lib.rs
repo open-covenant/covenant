@@ -59074,6 +59074,35 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn purge_peers_surfaces_error_when_peer_registry_purge_fails() {
+        // A purge_peers whose peer registry cannot drop its tombstones must NOT
+        // be reported as Response::PeersPurged { purged: 0 }: the operator would
+        // see a no-op purge (stale revocations retained) indistinguishable from a
+        // registry with nothing to purge, hiding a durability fault behind a
+        // clean response. purge_peers needs the peers.purge capability; the
+        // operator grants it to itself and the scope check passes (unscoped
+        // grant), so the purge reaches the failing registry's bail arm.
+        let server = server_with_peers_dyn(Arc::new(FailingPeerRegistryReads));
+        grant_action(&server, "peers.purge").await;
+        let resp = server.op_respond(Request::PurgePeers { before_ms: 1 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers:"),
+                    "a purge_peers whose registry fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers purge read failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!(
+                "expected Response::Error when purge_revoked_older_than() fails, got {other:?}"
+            ),
+        }
+    }
+
     /// Like [`FailingCapabilityStore`] but the fault is on the usage-snapshot
     /// read path: only `usage_snapshot` fails, so [`Server::capability_usage`]
     /// reaches its bail arm while the other trait methods stay inert.

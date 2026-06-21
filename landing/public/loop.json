@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T17:19:56.282Z",
+  "updatedAt": "2026-06-21T17:40:00.056Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10173,
-    "tasks": 1200,
-    "integrated": 1202
+    "events": 10189,
+    "tasks": 1202,
+    "integrated": 1204
   },
   "throughput": {
-    "last24h": 23,
-    "last7d": 115,
-    "velocity": 16.4
+    "last24h": 25,
+    "last7d": 117,
+    "velocity": 16.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 19
+      "count": 21
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-21",
-      "total": 1202
+      "total": 1204
     }
   ],
   "states": {
-    "integrated": 1194,
+    "integrated": 1196,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "budget-recent-debits-read-failure-surfaced-unit-coverage",
+    "task": "peers-purge-read-failure-surfaced-unit-coverage",
     "state": "in_progress",
-    "since": "2026-06-21T17:05:13.983Z"
+    "since": "2026-06-21T17:38:20.098Z"
   },
   "recent": [
+    {
+      "at": "2026-06-21T17:37:47.991Z",
+      "task": "peers-list-summaries-read-failure-surfaced-unit-coverage",
+      "note": "integrated: list_peers peer-registry read-failure bail arm pinned + server_with_peers_dyn helper. Security: read-only test double, no securi"
+    },
+    {
+      "at": "2026-06-21T17:21:27.851Z",
+      "task": "budget-recent-debits-read-failure-surfaced-unit-coverage",
+      "note": "integrated: recent_debits budget read-failure bail arm pinned. Security: read-only test double, no security surface; cross_review skipped pe"
+    },
     {
       "at": "2026-06-21T17:04:09.737Z",
       "task": "budget-verify-recent-read-failure-surfaced-unit-coverage",
@@ -310,16 +320,6 @@
       "at": "2026-06-21T01:51:51.248Z",
       "task": "budget-checkpoint-resume-fallback-recovery",
       "note": "noop state-check"
-    },
-    {
-      "at": "2026-06-21T01:37:17.888Z",
-      "task": "budget-checkpoint-resume-fallback-recovery",
-      "note": "committed 0a893499 (test + README metrics); pushed origin/loop/main-track 7013279d..0a893499; recorded in local live-coverage.json under dae"
-    },
-    {
-      "at": "2026-06-20T23:55:13.612Z",
-      "task": "sdk-denial-classify-grant-retry-live-coverage",
-      "note": "Committed 7013279d + pushed to origin/loop/main-track (060cc23f..7013279d). All git-identity guards passed. Epic sdk-denial-classify-grant-r"
     }
   ]
 }

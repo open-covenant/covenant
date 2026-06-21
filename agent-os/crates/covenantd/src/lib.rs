@@ -58863,6 +58863,105 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// DELEGATING double for the revoke bail arm: record/list_for_subject forward
+    /// to a real store so a granted cap is found by [`Server::revoke_capability`]'s
+    /// owned-cap lookup, but `revoke` itself fails — pinning the bail arm reached
+    /// only when an owned cap matches the presented signature.
+    struct FailingRevokeCapabilityStore {
+        inner: covenant_permissions::InMemoryCapabilityStore,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingRevokeCapabilityStore {
+        async fn record(
+            &self,
+            signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            self.inner.record(signed).await
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability revoke failure"),
+            ))
+        }
+        async fn is_revoked(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.is_revoked(signature).await
+        }
+        async fn list_for_subject(
+            &self,
+            subject_pubkey: [u8; 32],
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            self.inner.list_for_subject(subject_pubkey).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            self.inner.recent(limit).await
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            self.inner.purge_revoked_older_than(before_ms).await
+        }
+        async fn consume_uses(
+            &self,
+            requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+            self.inner.consume_uses(requests).await
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+            self.inner.usage_snapshot().await
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_capability_surfaces_error_when_capability_store_revoke_fails() {
+        // When the signature matches an owned cap, revoke_capability calls
+        // revoke(bytes). A store fault there must bail to Response::Error, not
+        // report CapabilityRevoked — otherwise the peer believes a grant was
+        // revoked that is still live.
+        let server = server_with_capabilities_dyn(Arc::new(FailingRevokeCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+        }));
+        let signature_b58 = match server
+            .op_respond(Request::GrantCapability {
+                action: "memory.write".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await
+        {
+            Response::CapabilityGranted { signature_b58, .. } => signature_b58,
+            other => panic!("grant should succeed, got {other:?}"),
+        };
+        let resp = server
+            .op_respond(Request::RevokeCapability { signature_b58 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a revoke whose revoke() fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability revoke failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when revoke() fails, got {other:?}"),
+        }
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

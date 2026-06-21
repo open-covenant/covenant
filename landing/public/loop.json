@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T22:20:52.195Z",
+  "updatedAt": "2026-06-21T22:40:56.148Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10276,
-    "tasks": 1212,
-    "integrated": 1214
+    "events": 10287,
+    "tasks": 1213,
+    "integrated": 1215
   },
   "throughput": {
-    "last24h": 33,
-    "last7d": 127,
-    "velocity": 18.1
+    "last24h": 34,
+    "last7d": 128,
+    "velocity": 18.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 31
+      "count": 32
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-21",
-      "total": 1214
+      "total": 1215
     }
   ],
   "states": {
-    "integrated": 1206,
+    "integrated": 1207,
     "proposed": 1,
     "blocked": 4,
-    "triaged": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -215,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "peers-register-write-failure-surfaced-unit-coverage",
+    "state": "in_progress",
+    "since": "2026-06-21T22:27:18.063Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-21T22:21:45.378Z",
+      "task": "settlement-mark-batch-confirmed-write-failure-surfaced-unit-",
+      "note": "Committed ba403224 (lib.rs + README.md). FailingMarkBatchSettlement + settlement_write_failure_flush pin the mark_batch_confirmed write Err "
+    },
     {
       "at": "2026-06-21T21:43:29.678Z",
       "task": "settlement-backfill-write-failure-surfaced-unit-coverage",
@@ -310,11 +319,6 @@
     {
       "at": "2026-06-21T14:31:47.564Z",
       "task": "capability-revoke-is-revoked-failure-surfaced-unit-coverage",
-      "note": "Committed and pushed."
-    },
-    {
-      "at": "2026-06-21T14:10:52.961Z",
-      "task": "capability-revoke-list-for-subject-failure-surfaced-unit-cov",
       "note": "Committed and pushed."
     }
   ]

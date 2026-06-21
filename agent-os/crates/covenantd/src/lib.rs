@@ -58815,6 +58815,110 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`covenant_budget::BudgetLedger`] double whose read methods fail, so
+    /// [`Server::verify_recent`] (via `recent_debits_all`) and
+    /// [`Server::recent_debits`] (via `recent_debits`) reach their `budget: {e}`
+    /// bail arms while the other trait methods stay inert. The default
+    /// `InMemoryLedger` reads are infallible, so both arms are dead without
+    /// this injection.
+    struct FailingBudgetReads;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingBudgetReads {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget recent_debits read failure",
+            )))
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget recent_debits_all read failure",
+            )))
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_recent_surfaces_error_when_budget_ledger_recent_debits_all_fails() {
+        // A verify_recent drift check whose budget ledger cannot read its debit
+        // log must NOT be reported as a clean VerifyReport: the operator would
+        // see a check that silently skipped the budget leg (spent credits
+        // invisible) indistinguishable from a healthy empty ledger, hiding a
+        // durability fault behind a clean response. verify_recent has no cap
+        // gate; the four earlier reads (memory / audit / settlement /
+        // capabilities) stay on real-InMemory defaults and return Ok, so only
+        // the injected budget leg can fail.
+        let server = server_with_budget(Arc::new(FailingBudgetReads));
+        let resp = server.op_respond(Request::Verify { window: 10 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("budget:"),
+                    "a verify_recent budget read whose ledger fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected budget recent_debits_all read failure"),
+                    "the surfaced error must carry the ledger's cause for triage, got: {message}",
+                );
+            }
+            other => panic!(
+                "expected Response::Error when recent_debits_all() fails, got {other:?}"
+            ),
+        }
+    }
+
     /// Like [`FailingCapabilityStore`] but the fault is on the usage-snapshot
     /// read path: only `usage_snapshot` fails, so [`Server::capability_usage`]
     /// reaches its bail arm while the other trait methods stay inert.

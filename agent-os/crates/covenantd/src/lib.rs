@@ -16649,6 +16649,31 @@ required = {caps:?}
         )
     }
 
+    // Mirrors server_with_peers_dyn but injects the Mailbox, so a test can
+    // drive recent_a2a_tasks / recent_a2a_results / a2a_queue / compact_a2a
+    // with a failing mailbox and reach the bail arms the infallible
+    // InMemoryMailbox default can never hit.
+    fn server_with_mailbox_dyn(mailbox: Arc<dyn covenant_a2a::Mailbox>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            mailbox,
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     async fn grant_action(s: &Server, action: &str) {
         let resp = s
             .op_respond(Request::GrantCapability {
@@ -53562,6 +53587,116 @@ required = {caps:?}
                 );
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    // A Mailbox whose four operator/cap-facing read methods fail with a
+    // distinct injected cause, so each handler's `Err(e) => Response::Error
+    // { message: format!("a2a: {e}") }` bail arm — dead under the infallible
+    // InMemoryMailbox default — can be reached and pinned. The blocking
+    // recv_* methods and repair_task are never exercised on these read paths
+    // and return Err(Closed) so the double compiles without constructing
+    // task/result/outcome values.
+    struct FailingMailboxReads;
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingMailboxReads {
+        async fn send_task(
+            &self,
+            _task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_task_for(
+            &self,
+            _recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_result_for(
+            &self,
+            _peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn recent_tasks(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox recent_tasks read failure",
+            )))
+        }
+        async fn task_queue(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox task_queue read failure",
+            )))
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn recent_results(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox recent_results read failure",
+            )))
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox compact read failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn mailbox_read_failure_recent_tasks() {
+        // A recent_a2a_tasks read whose mailbox cannot read its queued/in-flight
+        // tasks must NOT be reported as an empty Response::A2ATasks: the
+        // operator would see a silently-truncated a2a task view
+        // indistinguishable from a genuinely empty queue, hiding a durability
+        // fault behind a clean response. recent_a2a_tasks applies no
+        // capability gate and op_respond IS the operator, so no grant is
+        // needed to reach the recent_tasks bail arm.
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        let resp = server.op_respond(Request::RecentA2ATasks { limit: 10 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a recent_a2a_tasks read whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox recent_tasks read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent_tasks() fails, got {other:?}"),
         }
     }
 

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T16:19:45.421Z",
+  "updatedAt": "2026-06-21T16:39:49.125Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10146,
-    "tasks": 1197,
-    "integrated": 1199
+    "events": 10161,
+    "tasks": 1198,
+    "integrated": 1201
   },
   "throughput": {
-    "last24h": 21,
-    "last7d": 112,
-    "velocity": 16
+    "last24h": 22,
+    "last7d": 114,
+    "velocity": 16.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 16
+      "count": 18
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-21",
-      "total": 1199
+      "total": 1201
     }
   ],
   "states": {
-    "integrated": 1191,
-    "proposed": 2,
+    "integrated": 1193,
+    "proposed": 1,
     "blocked": 4
   },
   "areas": [
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T16:37:12.674Z",
+      "task": "settlement-receipt-batches-read-failure-surfaced-unit-covera",
+      "note": "Committed; pushing. Epic settlement-store-read-failure-coverage now 2/2."
+    },
+    {
+      "at": "2026-06-21T16:25:31.624Z",
+      "task": "settlement-recent-receipts-read-failure-surfaced-unit-covera",
+      "note": "Committed; pushing to origin."
+    },
     {
       "at": "2026-06-21T16:10:26.922Z",
       "task": "memory-search-read-failure-surfaced-unit-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-20T22:57:20.118Z",
       "task": "sync-status-md-next-step-for-integrated-slices",
       "note": "Integrated; committing status.md next-step sync + autonomy task/backlog records."
-    },
-    {
-      "at": "2026-06-20T22:00:40.512Z",
-      "task": "budget-projection-tick-nocapacity-skip-coverage",
-      "note": "Committed + pushed to origin/loop/main-track. Epic budget-projection-tick-nocapacity-skip-coverage 1/1 integrated."
-    },
-    {
-      "at": "2026-06-20T21:05:17.701Z",
-      "task": "budget-preempt-restart-recovery",
-      "note": "Committed + pushed to origin/loop/main-track. Epic budget-preempt-restart-recovery 1/1 integrated."
     }
   ]
 }

@@ -59878,6 +59878,109 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`covenant_peer_auth::PeerRegistry`] double whose `register` WRITE
+    /// fails, so [`Server::rotate_operator_token`] reaches its
+    /// `register new operator token: {e}` bail arm (lib.rs:3442) while the
+    /// other trait methods stay inert. rotate_operator_token gates on
+    /// operator-identity + a home dir, then reads the OLD token from disk
+    /// (`read_operator_token_b58`, NOT the registry) before calling
+    /// `register(new_entry)`; no peers read precedes the write, so a
+    /// register-only-failing double reaches the bail. `op_respond` dispatches
+    /// directly as `self.identity.agent_id()` (no token auth), so swapping
+    /// `s.peers` does not disturb peer selection. Every existing rotate test
+    /// uses the real `InMemoryPeerRegistry`, so the write Err arm is dead
+    /// without this injection. (`revoke` later in the same handler is
+    /// intentionally WARN-only — swallowed, not a bail — so it stays Ok.)
+    struct FailingRegisterPeerRegistry;
+
+    #[async_trait::async_trait]
+    impl covenant_peer_auth::PeerRegistry for FailingRegisterPeerRegistry {
+        async fn register(
+            &self,
+            _entry: covenant_peer_auth::PeerEntry,
+        ) -> Result<(), covenant_peer_auth::PeerError> {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers register write failure",
+            )))
+        }
+        async fn resolve(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<Option<AgentId>, covenant_peer_auth::PeerError> {
+            Ok(None)
+        }
+        async fn revoke(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<bool, covenant_peer_auth::PeerError> {
+            Ok(false)
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_peer_auth::PeerEntry>, covenant_peer_auth::PeerError> {
+            Ok(vec![])
+        }
+        async fn list_summaries(
+            &self,
+            _limit: usize,
+            _pubkey_prefix: Option<&str>,
+            _status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
+        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError> {
+            Ok((vec![], false))
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_peer_auth::PeerError> {
+            Ok(0)
+        }
+        async fn revoke_by_token_prefix(
+            &self,
+            _prefix: &str,
+            _limit: usize,
+        ) -> Result<covenant_peer_auth::RevokeOutcome, covenant_peer_auth::PeerError> {
+            Ok(covenant_peer_auth::RevokeOutcome::NotFound)
+        }
+        async fn find_unique_live_by_token_prefix(
+            &self,
+            _prefix: &str,
+        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn peers_write_failure_register() {
+        // An operator-token rotation whose backing registry cannot persist the
+        // new entry must NOT be reported as Response::OperatorTokenRotated: the
+        // operator would believe the rotation landed (and the old token would
+        // be revoked on the next boot) when register() failed, hiding a
+        // durability fault behind a clean success.
+        // rotate_operator_token gates on operator-identity + a home dir, reads
+        // the old token from disk, then writes self.peers.register(new_entry);
+        // the double's override returns Err. server_with_operator_token supplies
+        // the home dir + on-disk operator.token + the operator identity; s.peers
+        // is swapped to the failing double (op_respond uses
+        // self.identity.agent_id(), so the swap does not affect peer selection).
+        let (mut s, _dir, _old_token, _operator) = server_with_operator_token().await;
+        s.peers = Arc::new(FailingRegisterPeerRegistry);
+        let resp = s.op_respond(Request::RotateOperatorToken).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("register new operator token:"),
+                    "a rotation whose register() fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers register write failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when register() fails, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn list_peers_surfaces_error_when_peer_registry_list_summaries_fails() {
         // A list_peers triage read whose peer registry cannot read its entries

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T15:39:37.835Z",
+  "updatedAt": "2026-06-21T15:59:41.719Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10130,
-    "tasks": 1195,
-    "integrated": 1197
+    "events": 10138,
+    "tasks": 1196,
+    "integrated": 1198
   },
   "throughput": {
-    "last24h": 19,
-    "last7d": 110,
-    "velocity": 15.7
+    "last24h": 20,
+    "last7d": 111,
+    "velocity": 15.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 14
+      "count": 15
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-21",
-      "total": 1197
+      "total": 1198
     }
   ],
   "states": {
-    "integrated": 1189,
+    "integrated": 1190,
     "proposed": 2,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T15:56:12.645Z",
+      "task": "memory-recent-read-failure-surfaced-unit-coverage",
+      "note": "Committed afe23f08 on loop/main-track; pushing to origin."
+    },
     {
       "at": "2026-06-21T14:46:36.448Z",
       "task": "capability-revoke-store-failure-surfaced-unit-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-20T16:24:29.759Z",
       "task": "budget-projection-tick-linear-extrapolation-wiring",
       "note": "Integrated as ebf98c37 on loop/main-track. 4 files (lib.rs +502/-48, README metrics, docs/runtime-sandbox-security.md, docs/ipc-and-http-gat"
-    },
-    {
-      "at": "2026-06-20T10:39:45.399Z",
-      "task": "budget-debit-rate-signal",
-      "note": "Committed 7700edd6 on loop/main-track. Tracked diff = covenant-budget/src/lib.rs (DebitRateSignal + debit_rate_since + shared fold + 5 tests"
     }
   ]
 }

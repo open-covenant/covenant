@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-21T10:58:34.922Z",
+  "updatedAt": "2026-06-21T11:18:38.603Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10048,
-    "tasks": 1185,
+    "events": 10052,
+    "tasks": 1186,
     "integrated": 1188
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1180,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "http-reject-audit-write-failure-coverage",
+    "state": "in_progress",
+    "since": "2026-06-21T11:07:26.308Z"
+  },
   "recent": [
     {
       "at": "2026-06-21T04:06:44.876Z",

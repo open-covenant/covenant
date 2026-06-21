@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T11:18:38.603Z",
+  "updatedAt": "2026-06-21T11:38:42.255Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10052,
+    "events": 10057,
     "tasks": 1186,
-    "integrated": 1188
+    "integrated": 1189
   },
   "throughput": {
-    "last24h": 10,
-    "last7d": 101,
-    "velocity": 14.4
+    "last24h": 11,
+    "last7d": 102,
+    "velocity": 14.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1188
+      "total": 1189
     }
   ],
   "states": {
-    "integrated": 1180,
+    "integrated": 1181,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "http-reject-audit-write-failure-coverage",
-    "state": "in_progress",
-    "since": "2026-06-21T11:07:26.308Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T11:33:54.545Z",
+      "task": "http-reject-audit-write-failure-coverage",
+      "note": "Integrated as 7d6675c1 on loop/main-track. test+README only (autonomy records gitignored). Full http_gateway suite 18/18 green; mutation-pro"
+    },
     {
       "at": "2026-06-21T04:06:44.876Z",
       "task": "http-bearer-auth-parse-rejection-live-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T10:47:03.529Z",
       "task": "operator-identity-gate-http-peers-rotate-denial",
       "note": "Committed 7dce0a76 and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
-    },
-    {
-      "at": "2026-06-19T10:34:14.509Z",
-      "task": "operator-identity-gate-http-audit-verify-denial",
-      "note": "Committed ad2344f6 and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
     }
   ]
 }

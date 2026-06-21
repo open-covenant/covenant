@@ -59065,6 +59065,108 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`MemoryStore`] double whose `compact` WRITE fails, so
+    /// [`Server::compact_memory`] reaches its `memory: {e}` bail arm.
+    /// `compact` has a DEFAULT trait impl (composing `all`/`delete`/`put`); this
+    /// override returns `Err` directly so the daemon's
+    /// `match self.memory.compact(request)` hits the bail without seeding
+    /// records. Every existing compact test constructs the Server with an
+    /// infallible-by-construction double, so the write Err arm is dead without
+    /// this injection.
+    struct FailingCompactMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingCompactMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+        async fn compact(
+            &self,
+            _request: MemoryCompactionRequest,
+        ) -> Result<covenant_memory::MemoryCompactionOutcome, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory compact write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_write_failure_compact() {
+        // A memory compaction whose backing store cannot apply the plan must
+        // NOT be reported as Response::MemoryCompacted: the operator would
+        // believe stale records were deleted / marked when the write failed,
+        // hiding a durability fault behind a clean success. compact_memory
+        // gates on operator-identity + the memory.compact.<mode> capability;
+        // server_with_memory_dyn keeps the real InMemoryCapabilityStore so the
+        // grant takes, and the request payload is the proven one from the
+        // existing apply-path compact test.
+        let server = server_with_memory_dyn(Arc::new(FailingCompactMemoryStore));
+        grant_action(&server, "memory.compact.apply").await;
+        let resp = server
+            .op_respond(Request::CompactMemory {
+                request: MemoryCompactionRequest {
+                    mode: MemoryRepairMode::Apply,
+                    policy: covenant_types::MemoryCompactionPolicy {
+                        delete_working_before_ms: Some(20),
+                        delete_episodic_before_ms: Some(20),
+                        mark_longterm_stale_before_ms: Some(20),
+                        detach_stale_parents: true,
+                        marked_at_ms: Some(99),
+                    },
+                    reason: "age-based compaction".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a compaction whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory compact write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when compact() fails, got {other:?}"),
+        }
+    }
+
     /// A [`Settlement`] double whose `recent` read fails, so
     /// [`Server::recent_receipts`] and [`Server::receipt_batches`] reach their
     /// `settlement: {e}` bail arm while the other trait methods stay inert. The

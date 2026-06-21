@@ -16392,6 +16392,30 @@ required = {caps:?}
         )
     }
 
+    // Mirrors server_with_memory_dyn but injects the Settlement store, so a test
+    // can drive recent_receipts / receipt_batches with a failing store and reach
+    // the bail arm the infallible InMemorySettlement default can never hit.
+    fn server_with_settlement_dyn(settlement: Arc<dyn Settlement>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(covenant_memory::InMemoryStore::new()),
+            settlement,
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     #[tokio::test]
     async fn query_provenance_projects_filters_and_gates_on_operator() {
         use covenant_audit::{AuditEvent, AuditKind, CapabilityAuthorization, InMemoryAuditLog};
@@ -58692,6 +58716,72 @@ budget_credits_per_hour = {credits}
                 );
             }
             other => panic!("expected Response::Error when search_similar() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`Settlement`] double whose `recent` read fails, so
+    /// [`Server::recent_receipts`] and [`Server::receipt_batches`] reach their
+    /// `settlement: {e}` bail arm while the other trait methods stay inert. The
+    /// default `InMemorySettlement::recent` is infallible, so the arm is dead
+    /// without this injection.
+    struct FailingSettlement;
+
+    #[async_trait::async_trait]
+    impl covenant_settlement::Settlement for FailingSettlement {
+        async fn record(
+            &self,
+            _receipt: SettlementReceipt,
+        ) -> Result<(), covenant_settlement::SettlementError> {
+            Ok(())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<SettlementReceipt>, covenant_settlement::SettlementError> {
+            Err(covenant_settlement::SettlementError::Io(std::io::Error::other(
+                "injected settlement recent read failure",
+            )))
+        }
+        async fn mark_batch_confirmed(
+            &self,
+            _receipt_ids: &[Uuid],
+            _confirmation: ChainConfirmation,
+        ) -> Result<u64, covenant_settlement::SettlementError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_receipts_surfaces_error_when_settlement_store_recent_fails() {
+        // A settlement-receipt read whose backing store fails must NOT be
+        // reported as an empty Response::Receipts: the operator would see a
+        // silently-truncated settlement view (paid receipts invisible)
+        // indistinguishable from a store that genuinely holds nothing, hiding a
+        // durability fault behind a clean response. The operator grants itself
+        // chain.receipts first so the cap + scope gates pass; the injected
+        // store then fails recent().
+        let server = server_with_settlement_dyn(Arc::new(FailingSettlement));
+        grant_action(&server, "chain.receipts").await;
+        let resp = server
+            .op_respond(Request::RecentReceipts {
+                limit: 10,
+                since_ms: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement:"),
+                    "a recent_receipts read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected settlement recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => {
+                panic!("expected Response::Error when settlement recent() fails, got {other:?}")
+            }
         }
     }
 

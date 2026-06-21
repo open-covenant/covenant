@@ -3,10 +3,10 @@
   "info": {
     "title": "Covenant Trust",
     "version": "1.0.0",
-    "description": "Verify another agent before you transact with it. On-chain identity passports and Covenant-signed attestations, priced per call in USDC over x402 on Solana.",
+    "description": "Verify another agent before you transact with it. On-chain identity passports, Covenant-signed attestations, and PayAI settlement-grounded reputation, priced per call in USDC over x402 on Solana.",
     "contact": { "url": "https://opencovenant.org" },
     "license": { "name": "Apache-2.0" },
-    "x-guidance": "Use /x402/passport/{asset} to confirm a counterparty agent's on-chain identity (MPL Core asset + 014 Registry binding + Covenant attestation) before delegating work or paying it, and /x402/attest to obtain a Covenant-signed, independently-verifiable statement over a claim."
+    "x-guidance": "Use /x402/passport/{asset} to confirm a counterparty agent's on-chain identity (MPL Core asset + 014 Registry binding + Covenant attestation) before delegating work or paying it, /x402/attest to obtain a Covenant-signed, independently-verifiable statement over a claim, and /x402/payai/reputation/{wallet} to read a wallet's reputation computed from its on-chain PayAI settlements."
   },
   "servers": [{ "url": "https://x402-seller.opencovenant.org" }],
   "paths": {
@@ -72,6 +72,30 @@
           "503": { "description": "Signer not configured" }
         }
       }
+    },
+    "/x402/payai/reputation/{wallet}": {
+      "get": {
+        "operationId": "getPayaiReputation",
+        "summary": "Read a wallet's PayAI settlement-grounded reputation.",
+        "tags": ["trust"],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wallet",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The agent's Solana wallet (owner) address (base58).",
+            "example": "CvX23FNQsNQww8ALR3EWgQv2Wt5yM7VvU4HRigGBMMJu"
+          }
+        ],
+        "responses": {
+          "200": { "description": "Reputation plus a Covenant-signed attestation over it", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReputationResult" } } } },
+          "400": { "description": "Not a valid Solana address" },
+          "402": { "description": "Payment Required" },
+          "502": { "description": "Chain/RPC upstream unavailable" },
+          "503": { "description": "Signer not configured" }
+        }
+      }
     }
   },
   "components": {
@@ -129,6 +153,27 @@
           "digest_sha256_hex": { "type": "string" },
           "pubkey_b58": { "type": "string", "description": "Signer pubkey; must match attestation.publicKey from /.well-known/x402." },
           "signature_b58": { "type": "string" }
+        }
+      },
+      "ReputationResult": {
+        "type": "object",
+        "required": ["reputation", "attestation"],
+        "description": "A wallet's reputation computed from on-chain PayAI settlements, plus a Covenant-signed attestation over it (same key and verify recipe as /x402/attest). Recompute over the same settlements to reproduce the numbers; nothing is self-reported.",
+        "properties": {
+          "reputation": {
+            "type": "object",
+            "required": ["wallet", "settled_jobs", "distinct_counterparties", "volume_micro_usdc", "tier", "score", "source_fee_payer"],
+            "properties": {
+              "wallet": { "type": "string", "description": "Solana wallet (owner) the reputation is for." },
+              "settled_jobs": { "type": "integer", "description": "Inbound settlements from other wallets (self-payments excluded)." },
+              "distinct_counterparties": { "type": "integer", "description": "Distinct payer wallets." },
+              "volume_micro_usdc": { "type": "integer", "description": "Lifetime inbound USDC in atomic units (6 decimals)." },
+              "tier": { "type": "string", "enum": ["bronze", "silver", "gold", "platinum"] },
+              "score": { "type": "integer", "description": "0-1000 composite of jobs, distinct counterparties, and volume." },
+              "source_fee_payer": { "type": "string", "description": "PayAI facilitator fee-payer the settlements were read from." }
+            }
+          },
+          "attestation": { "$ref": "#/components/schemas/Attestation" }
         }
       },
       "Discovery": {

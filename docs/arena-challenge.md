@@ -86,6 +86,8 @@ has since evolved the kernel past it — that's the game.
 
 ## Rules changelog
 
+- 2026-06-21: Zhipu GLM-5.2 joined the tournament as a fourth proposer (function lane, via the z.ai Coding Plan), framed equally alongside Claude, Grok, and Codex.
+
 - 2026-06-19: promotion margin lowered +0.005 -> +0.002 scalar (prospective). The kernel is near-saturated (6.5x); the fuel metric is deterministic so a measured +0.002 is a real, repeatable gain. Same rationale as the earlier 0.02 -> 0.005 change.
 
 - 2026-06-12: arena strengthened — hidden anti-overfit corpus added to the

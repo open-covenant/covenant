@@ -12,7 +12,7 @@ const ledgerPath = join(here, "kernel-archive", "ledger.json");
 const outPath = resolve(here, "..", "..", "landing", "public", "arena.json");
 
 const BASELINE_FUEL = 5867618602;
-const PROPOSER_LABELS = { fable: "Claude", grok: "Grok", codex: "Codex" };
+const PROPOSER_LABELS = { fable: "Claude", grok: "Grok", codex: "Codex", glm: "GLM" };
 
 const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
 
@@ -52,7 +52,7 @@ const meta = (key) => {
   return { era: "tournament", display: `Round ${n - TOURNAMENT_START}` };
 };
 
-const tally = { Claude: 0, Grok: 0, Codex: 0, rejectedRounds: 0 };
+const tally = { Claude: 0, Grok: 0, Codex: 0, GLM: 0, rejectedRounds: 0 };
 const solo = { promotions: 0, rejected: 0, finalScalar: 1 };
 const community = { ships: 0 };
 const curve = [{ round: 0, scalar: 1 }];

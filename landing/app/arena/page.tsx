@@ -47,7 +47,7 @@ type Arena = {
   updatedAt: string;
   baselineFuel: number;
   incumbent: { scalar: number; fuelCutPct: number };
-  tally: { Claude: number; Grok: number; Codex: number; rejectedRounds: number };
+  tally: { Claude: number; Grok: number; Codex: number; GLM: number; rejectedRounds: number };
   curve: { round: number | string; scalar: number; proposer?: string }[];
   solo: { promotions: number; rejected: number; finalScalar: number };
   community: { ships: number };
@@ -76,6 +76,7 @@ const ACCENT: Record<string, string> = {
   Claude: "#e8927c",
   Grok: "#8ab4f8",
   Codex: "#7ee0a8",
+  GLM: "#d8a8f0",
 };
 const NEUTRAL = "#737373";
 
@@ -236,23 +237,25 @@ export default async function ArenaPage() {
           <div>
             <div className="arena-scroll lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto lg:pr-4">
               <h2 className="text-balance text-[2.6rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white sm:text-[3rem]">
-                Claude <span className="text-neutral-500">vs</span> Grok{" "}
-                <span className="text-neutral-500">vs</span> Codex
+                Claude <span className="text-neutral-500">·</span> Grok{" "}
+                <span className="text-neutral-500">·</span> Codex{" "}
+                <span className="text-neutral-500">·</span> GLM
               </h2>
 
               <p className="mt-6 text-pretty text-lg font-light leading-relaxed text-neutral-300">
                 Covenant is built by a recursive, self-improving loop: an
                 autonomous agent that ships this codebase and then rewrites its
                 own components to make them measurably better. The arena is
-                where that happens in the open. Each round, three frontier models, Anthropic&apos;s Claude Fable 5, xAI&apos;s Grok 4.3, and
-                OpenAI&apos;s GPT-5.5 Codex each propose a rewrite of live
-                Covenant code. A frozen
-                benchmark neither can touch measures exact instruction cost,
-                held-out suites require bit-identical behavior, and the best
-                proposal ships. Rejections are listed next to wins.
+                where that happens in the open. Each round, four frontier
+                models — Anthropic&apos;s Claude, xAI&apos;s Grok, OpenAI&apos;s
+                GPT-5.5 Codex, and Zhipu&apos;s GLM-5.2 — propose a rewrite of
+                live Covenant code. A frozen benchmark none of them can touch
+                measures exact instruction cost, held-out suites require
+                bit-identical behavior, and the best proposal ships. Rejections
+                are listed next to wins.
               </p>
 
-              <div className="mt-10 grid grid-cols-3 gap-3">
+              <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div className={`${stat} arena-rise`} style={{ animationDelay: "0.05s" }}>
                   <div className={statLabel}>Claude</div>
                   <div className={statValue} style={{ color: ACCENT.Claude }}>
@@ -269,6 +272,12 @@ export default async function ArenaPage() {
                   <div className={statLabel}>Codex</div>
                   <div className={statValue} style={{ color: ACCENT.Codex }}>
                     {arena.tally.Codex}
+                  </div>
+                </div>
+                <div className={`${stat} arena-rise`} style={{ animationDelay: "0.2s" }}>
+                  <div className={statLabel}>GLM</div>
+                  <div className={statValue} style={{ color: ACCENT.GLM }}>
+                    {arena.tally.GLM}
                   </div>
                 </div>
               </div>

@@ -31,6 +31,7 @@ const opt = (f, d) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] :
 const proposerModel = opt("--model", "claude-opus-4-8");
 const grokModel = opt("--grok-model", "grok-4.3");
 const codexModel = opt("--codex-model", "gpt-5.5");
+const glmModel = opt("--glm-model", "glm-5.2");
 // 0.005 since 2026-06-10 (was 0.02): the fuel metric is deterministic, so
 // any measured gain is real; the old margin systematically killed small-gain
 // styles. Disclosed in docs/arena-challenge.md, applied prospectively.
@@ -62,6 +63,7 @@ function dotenv(name) {
 const xaiKey = dotenv("XAI_API_KEY");
 const xaiKeyFallback = dotenv("XAI_API_KEY_FALLBACK");
 const openaiKey = dotenv("OPENAI_API_KEY");
+const glmKey = dotenv("GLM_API_KEY") || dotenv("ZAI_API_KEY");
 
 function sh(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...opts });
@@ -291,6 +293,30 @@ ${block}
       },
     },
     {
+      name: "glm",
+      model: glmModel,
+      mode: "function",
+      seedPrompt: functionPrompt,
+      build: fnBuild,
+      // GLM-5.2 via the z.ai Coding Plan (Anthropic-compatible endpoint), run
+      // through claude -p like the other CLI lanes. Function lane because the
+      // whole block (~39k tokens) truncates it, same as Codex.
+      call: (messages, attempt) => {
+        if (!glmKey) throw new Error("GLM_API_KEY not set");
+        const scratch = join(archiveDir, `${stamp}-glm-scratch`);
+        mkdirSync(scratch, { recursive: true });
+        const folded = messages
+          .map((m) => (m.role === "user" ? m.content : `## Your previous attempt\n\n${m.content}`))
+          .join("\n\n");
+        const r = sh("claude", ["-p", folded, "--model", glmModel, "--dangerously-skip-permissions"], {
+          cwd: scratch,
+          env: { ...process.env, ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_AUTH_TOKEN: glmKey, API_TIMEOUT_MS: "3000000" },
+        });
+        if (!r.ok) throw new Error(`glm proposer failed (attempt ${attempt}): ${r.out.slice(-400)}`);
+        return r.out;
+      },
+    },
+    {
       name: "fable",
       model: proposerModel,
       mode: "block",
@@ -327,7 +353,7 @@ ${block}
         throw new Error(`claude proposer: all model candidates unavailable: ${last.slice(-300)}`);
       },
     },
-  ].filter((p) => (p.name !== "grok" || xaiKey || xaiKeyFallback) && (p.name !== "codex" || openaiKey));
+  ].filter((p) => (p.name !== "grok" || xaiKey || xaiKeyFallback) && (p.name !== "codex" || openaiKey) && (p.name !== "glm" || glmKey));
 
   // v2 rules: every proposer gets up to `attempts` tries with gate/fuel
   // feedback between tries, stopping early once it holds a promotable

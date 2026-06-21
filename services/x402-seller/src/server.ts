@@ -35,6 +35,7 @@ import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { zauthProvider } from "@zauthx402/sdk/middleware";
 import { getPassport } from "./passport.js";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
+import { getReputation } from "./reputation.js";
 
 const PORT = Number(process.env.PORT ?? 10000);
 const PAY_TO = process.env.COVENANT_TREASURY ?? "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM";
@@ -44,6 +45,7 @@ const SYNC = process.env.X402_SYNC_FACILITATOR !== "false";
 const ZAUTH_API_KEY = process.env.ZAUTH_API_KEY;
 const RPC_URL = process.env.COVENANT_SOLANA_MAINNET_RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const RPC_TIMEOUT = Number(process.env.RPC_TIMEOUT_MS ?? 9000);
+const REPUTATION_LIMIT = Number(process.env.REPUTATION_LIMIT ?? 100);
 
 const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" as const;
 const USDC_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -63,7 +65,11 @@ app.set("trust proxy", true);
 app.use(express.json());
 
 app.get("/health", (_req: Request, res: Response) => {
-  res.json({ ok: true, service: "covenant-x402-seller", resources: ["/x402/passport/:asset", "/x402/attest"] });
+  res.json({
+    ok: true,
+    service: "covenant-x402-seller",
+    resources: ["/x402/passport/:asset", "/x402/attest", "/x402/payai/reputation/:wallet"],
+  });
 });
 
 app.get("/openapi.json", (_req: Request, res: Response) => {
@@ -75,9 +81,13 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
   const base = `${req.protocol}://${req.get("host")}`;
   res.json({
     version: 1,
-    resources: [`${base}/x402/passport/{asset}`, `${base}/x402/attest`],
+    resources: [
+      `${base}/x402/passport/{asset}`,
+      `${base}/x402/attest`,
+      `${base}/x402/payai/reputation/{wallet}`,
+    ],
     instructions:
-      "Covenant Trust x402 seller. Pay USDC on Solana to verify an agent's on-chain identity passport (GET /x402/passport/<mpl-core-asset>) or to obtain a Covenant-signed attestation over a claim (POST /x402/attest).",
+      "Covenant Trust x402 seller. Pay USDC on Solana to verify an agent's on-chain identity passport (GET /x402/passport/<mpl-core-asset>), obtain a Covenant-signed attestation over a claim (POST /x402/attest), or read a wallet's PayAI settlement-grounded reputation (GET /x402/payai/reputation/<wallet>).",
     // Pin this key to verify /x402/attest responses without trusting this server.
     attestation: attestor
       ? {
@@ -120,6 +130,10 @@ const routes: RoutesConfig = {
     "Verify an agent's on-chain identity passport: MPL Core asset, 014 Registry binding, and Covenant attestation.",
   ),
   "POST /x402/attest": gate("5000", "Create a Covenant-signed ed25519 attestation over a claim."),
+  "GET /x402/payai/reputation/:wallet": gate(
+    "3000",
+    "Read a wallet's PayAI settlement-grounded reputation: settled jobs, distinct counterparties, volume, tier, and a 0-1000 score, computed from on-chain USDC settlements and Covenant-signed.",
+  ),
 };
 
 app.use(
@@ -157,8 +171,30 @@ app.post("/x402/attest", (req: Request, res: Response) => {
   res.json(attestor.attest(subject, claim, Math.floor(Date.now() / 1000)));
 });
 
+// Paid — a wallet's settlement-grounded reputation, signed with the same
+// published attestation key. Returning >= 400 cancels settlement, so an RPC
+// failure or a bad address is never charged.
+app.get("/x402/payai/reputation/:wallet", async (req: Request, res: Response) => {
+  if (!attestor) {
+    res.status(503).json({ error: "attestation signer not configured" });
+    return;
+  }
+  const wallet = req.params.wallet;
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet)) {
+    res.status(400).json({ error: "wallet must be a base58 Solana address" });
+    return;
+  }
+  try {
+    const reputation = await getReputation(RPC_URL, RPC_TIMEOUT, wallet, REPUTATION_LIMIT);
+    const attestation = attestor.attest(wallet, reputation, Math.floor(Date.now() / 1000));
+    res.json({ reputation, attestation });
+  } catch {
+    res.status(502).json({ error: "chain/RPC upstream unavailable" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(
-    `covenant-x402-seller on :${PORT} — paid /x402/passport/:asset + /x402/attest, payTo ${PAY_TO}, facilitator ${FACILITATOR_URL}`,
+    `covenant-x402-seller on :${PORT} — paid /x402/passport/:asset + /x402/attest + /x402/payai/reputation/:wallet, payTo ${PAY_TO}, facilitator ${FACILITATOR_URL}`,
   );
 });

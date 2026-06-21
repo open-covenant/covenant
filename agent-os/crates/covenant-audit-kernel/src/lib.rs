@@ -1424,15 +1424,6 @@ u64::from_le_bytes($buf[$o + 8..$o + 16].try_into().expect("8-byte chunk")),
 )
 }};
 }
-macro_rules! mask64 {
-($buf:ident, $a:literal, $b:literal, $c:literal, $d:literal) => {{
-let m0 = u64::from(i8x16_bitmask(u8x16_eq(load16!($buf, $a), nl)) as u16);
-let m1 = u64::from(i8x16_bitmask(u8x16_eq(load16!($buf, $b), nl)) as u16);
-let m2 = u64::from(i8x16_bitmask(u8x16_eq(load16!($buf, $c), nl)) as u16);
-let m3 = u64::from(i8x16_bitmask(u8x16_eq(load16!($buf, $d), nl)) as u16);
-m0 | (m1 << 16) | (m2 << 32) | (m3 << 48)
-}};
-}
 macro_rules! push_line {
 ($end:expr) => {{
 let end = $end;
@@ -1458,41 +1449,56 @@ push_line!(end);
 }
 }};
 }
+macro_rules! scan64 {
+($buf:ident, $a:literal, $b:literal, $c:literal, $d:literal, $base:expr) => {{
+let e0 = u8x16_eq(load16!($buf, $a), nl);
+let e1 = u8x16_eq(load16!($buf, $b), nl);
+let e2 = u8x16_eq(load16!($buf, $c), nl);
+let e3 = u8x16_eq(load16!($buf, $d), nl);
+if v128_any_true(v128_or(v128_or(e0, e1), v128_or(e2, e3))) {
+let mask = u64::from(i8x16_bitmask(e0) as u16)
+| (u64::from(i8x16_bitmask(e1) as u16) << 16)
+| (u64::from(i8x16_bitmask(e2) as u16) << 32)
+| (u64::from(i8x16_bitmask(e3) as u16) << 48);
+handle_mask!(mask, $base);
+}
+}};
+}
 while i + 1024 <= n {
 let b: &[u8; 1024] = bytes[i..i + 1024].try_into().expect("1024-byte chunk");
-handle_mask!(mask64!(b, 0, 16, 32, 48), i);
-handle_mask!(mask64!(b, 64, 80, 96, 112), i + 64);
-handle_mask!(mask64!(b, 128, 144, 160, 176), i + 128);
-handle_mask!(mask64!(b, 192, 208, 224, 240), i + 192);
-handle_mask!(mask64!(b, 256, 272, 288, 304), i + 256);
-handle_mask!(mask64!(b, 320, 336, 352, 368), i + 320);
-handle_mask!(mask64!(b, 384, 400, 416, 432), i + 384);
-handle_mask!(mask64!(b, 448, 464, 480, 496), i + 448);
-handle_mask!(mask64!(b, 512, 528, 544, 560), i + 512);
-handle_mask!(mask64!(b, 576, 592, 608, 624), i + 576);
-handle_mask!(mask64!(b, 640, 656, 672, 688), i + 640);
-handle_mask!(mask64!(b, 704, 720, 736, 752), i + 704);
-handle_mask!(mask64!(b, 768, 784, 800, 816), i + 768);
-handle_mask!(mask64!(b, 832, 848, 864, 880), i + 832);
-handle_mask!(mask64!(b, 896, 912, 928, 944), i + 896);
-handle_mask!(mask64!(b, 960, 976, 992, 1008), i + 960);
+scan64!(b, 0, 16, 32, 48, i);
+scan64!(b, 64, 80, 96, 112, i + 64);
+scan64!(b, 128, 144, 160, 176, i + 128);
+scan64!(b, 192, 208, 224, 240, i + 192);
+scan64!(b, 256, 272, 288, 304, i + 256);
+scan64!(b, 320, 336, 352, 368, i + 320);
+scan64!(b, 384, 400, 416, 432, i + 384);
+scan64!(b, 448, 464, 480, 496, i + 448);
+scan64!(b, 512, 528, 544, 560, i + 512);
+scan64!(b, 576, 592, 608, 624, i + 576);
+scan64!(b, 640, 656, 672, 688, i + 640);
+scan64!(b, 704, 720, 736, 752, i + 704);
+scan64!(b, 768, 784, 800, 816, i + 768);
+scan64!(b, 832, 848, 864, 880, i + 832);
+scan64!(b, 896, 912, 928, 944, i + 896);
+scan64!(b, 960, 976, 992, 1008, i + 960);
 i += 1024;
 }
 while i + 512 <= n {
 let b: &[u8; 512] = bytes[i..i + 512].try_into().expect("512-byte chunk");
-handle_mask!(mask64!(b, 0, 16, 32, 48), i);
-handle_mask!(mask64!(b, 64, 80, 96, 112), i + 64);
-handle_mask!(mask64!(b, 128, 144, 160, 176), i + 128);
-handle_mask!(mask64!(b, 192, 208, 224, 240), i + 192);
-handle_mask!(mask64!(b, 256, 272, 288, 304), i + 256);
-handle_mask!(mask64!(b, 320, 336, 352, 368), i + 320);
-handle_mask!(mask64!(b, 384, 400, 416, 432), i + 384);
-handle_mask!(mask64!(b, 448, 464, 480, 496), i + 448);
+scan64!(b, 0, 16, 32, 48, i);
+scan64!(b, 64, 80, 96, 112, i + 64);
+scan64!(b, 128, 144, 160, 176, i + 128);
+scan64!(b, 192, 208, 224, 240, i + 192);
+scan64!(b, 256, 272, 288, 304, i + 256);
+scan64!(b, 320, 336, 352, 368, i + 320);
+scan64!(b, 384, 400, 416, 432, i + 384);
+scan64!(b, 448, 464, 480, 496, i + 448);
 i += 512;
 }
 while i + 64 <= n {
 let b: &[u8; 64] = bytes[i..i + 64].try_into().expect("64-byte chunk");
-handle_mask!(mask64!(b, 0, 16, 32, 48), i);
+scan64!(b, 0, 16, 32, 48, i);
 i += 64;
 }
 while i < n {
@@ -2902,7 +2908,7 @@ previous,
 ok &= line[p_pr + 64] == b'"';
 ok
 }
-#[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
+#[inline]
 fn chain_span(line: &[u8]) -> Option<&[u8; 64]> {
 let n = line.len();
 if n < 85 {

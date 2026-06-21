@@ -58785,6 +58785,36 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn receipt_batches_surfaces_error_when_settlement_store_recent_fails() {
+        // A settlement-batch read whose backing store fails must NOT be reported
+        // as an empty batch list: the operator would see a silently-truncated
+        // settlement view (batched receipts invisible) indistinguishable from a
+        // store that genuinely holds nothing, hiding a durability fault behind
+        // a clean response. The operator grants itself chain.batches first so
+        // the cap + scope gates pass; the injected store then fails recent().
+        // The same FailingSettlement double as recent_receipts serves here
+        // because both handlers read self.settlement.recent().
+        let server = server_with_settlement_dyn(Arc::new(FailingSettlement));
+        grant_action(&server, "chain.batches").await;
+        let resp = server.op_respond(Request::ReceiptBatches { limit: 10 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement:"),
+                    "a receipt_batches read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected settlement recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => {
+                panic!("expected Response::Error when settlement recent() fails, got {other:?}")
+            }
+        }
+    }
+
     /// Like [`FailingCapabilityStore`] but the fault is on the usage-snapshot
     /// read path: only `usage_snapshot` fails, so [`Server::capability_usage`]
     /// reaches its bail arm while the other trait methods stay inert.

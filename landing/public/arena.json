@@ -1,16 +1,17 @@
 {
-  "updatedAt": "2026-06-11T22:23:42.517Z",
+  "updatedAt": "2026-06-21T17:35:06.473Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
-    "scalar": 6.394,
-    "fuelCutPct": 84.4
+    "scalar": 6.591,
+    "fuelCutPct": 84.8
   },
   "tally": {
-    "Claude": 6,
-    "Grok": 0,
-    "Codex": 0,
-    "rejectedRounds": 1
+    "Claude": 10,
+    "Grok": 1,
+    "Codex": 5,
+    "GLM": 0,
+    "rejectedRounds": 8
   },
   "curve": [
     {
@@ -86,6 +87,56 @@
       "round": "k15",
       "scalar": 6.394,
       "proposer": "Claude"
+    },
+    {
+      "round": "k16",
+      "scalar": 6.485,
+      "proposer": "Claude"
+    },
+    {
+      "round": "k17",
+      "scalar": 6.492,
+      "proposer": "Codex"
+    },
+    {
+      "round": "k18",
+      "scalar": 6.499,
+      "proposer": "Claude"
+    },
+    {
+      "round": "k19",
+      "scalar": 6.505,
+      "proposer": "Codex"
+    },
+    {
+      "round": "k22",
+      "scalar": 6.547,
+      "proposer": "Codex"
+    },
+    {
+      "round": "k24",
+      "scalar": 6.555,
+      "proposer": "Codex"
+    },
+    {
+      "round": "k28",
+      "scalar": 6.559,
+      "proposer": "Codex"
+    },
+    {
+      "round": "k30",
+      "scalar": 6.563,
+      "proposer": "Grok"
+    },
+    {
+      "round": "k33",
+      "scalar": 6.583,
+      "proposer": "Claude"
+    },
+    {
+      "round": "k34",
+      "scalar": 6.591,
+      "proposer": "Claude"
     }
   ],
   "solo": {
@@ -97,6 +148,407 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k34",
+      "display": "Round 25",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude-opus-4-8",
+          "scalar": 6.591,
+          "incumbent": 6.583,
+          "gain": 0.008,
+          "promoted": true,
+          "commit": "ee2d359a9b9371d2b52695b0d90f24f4dac5f96f",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k33",
+      "display": "Round 24",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 6.563,
+          "incumbent": 6.563,
+          "gain": 0,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "lost tournament to fable (6.563 vs 6.583)"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-opus-4-8",
+          "scalar": 6.583,
+          "incumbent": 6.563,
+          "gain": 0.02,
+          "promoted": true,
+          "commit": "38d861fb24f79803f6949176ffee09d7fe7d4aea",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k32",
+      "display": "Round 23",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 6.453,
+          "incumbent": 6.563,
+          "gain": -0.11,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain -0.11 < margin 0.002"
+        },
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.563,
+          "incumbent": 6.563,
+          "gain": 0,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0 < margin 0.002"
+        }
+      ]
+    },
+    {
+      "round": "k31",
+      "display": "Round 22",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 6.563,
+          "incumbent": 6.563,
+          "gain": 0,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0 < margin 0.002"
+        },
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.564,
+          "incumbent": 6.563,
+          "gain": 0.001,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0.001 < margin 0.002"
+        }
+      ]
+    },
+    {
+      "round": "k30",
+      "display": "Round 21",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.562,
+          "incumbent": 6.559,
+          "gain": 0.003,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "lost tournament to grok (6.562 vs 6.563)"
+        },
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 6.563,
+          "incumbent": 6.559,
+          "gain": 0.004,
+          "promoted": true,
+          "commit": "bc304f73d3763c6e03c520c39bb38e6f65b8b711",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k28",
+      "display": "Round 19",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.559,
+          "incumbent": 6.555,
+          "gain": 0.004,
+          "promoted": true,
+          "commit": "4613f264",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k27",
+      "display": "Round 18",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.559,
+          "incumbent": 6.555,
+          "gain": 0.004,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0.004 < margin 0.005"
+        }
+      ]
+    },
+    {
+      "round": "k26",
+      "display": "Round 17",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.559,
+          "incumbent": 6.555,
+          "gain": 0.004,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0.004 < margin 0.005"
+        }
+      ]
+    },
+    {
+      "round": "k25",
+      "display": "Round 16",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.559,
+          "incumbent": 6.555,
+          "gain": 0.004,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0.004 < margin 0.005"
+        }
+      ]
+    },
+    {
+      "round": "k24",
+      "display": "Round 15",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.555,
+          "incumbent": 6.547,
+          "gain": 0.008,
+          "promoted": true,
+          "commit": "33bd6456bb06acaad07b7c68fa8a745015a28652",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k23",
+      "display": "Round 14",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.547,
+          "incumbent": 6.547,
+          "gain": 0,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0 < margin 0.005"
+        }
+      ]
+    },
+    {
+      "round": "k22",
+      "display": "Round 13",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.547,
+          "incumbent": 6.505,
+          "gain": 0.042,
+          "promoted": true,
+          "commit": "9a8bf8a3e9af1d8b243d9e4c8ffdfd9a45ef644f",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k21",
+      "display": "Round 12",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.506,
+          "incumbent": 6.505,
+          "gain": 0.001,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0.001 < margin 0.005"
+        }
+      ]
+    },
+    {
+      "round": "k20",
+      "display": "Round 11",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.502,
+          "incumbent": 6.505,
+          "gain": -0.003,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain -0.003 < margin 0.005"
+        }
+      ]
+    },
+    {
+      "round": "k19",
+      "display": "Round 10",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.505,
+          "incumbent": 6.499,
+          "gain": 0.006,
+          "promoted": true,
+          "commit": "c02425cbded322fdc8839fce7760e3e3c199b688",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k18",
+      "display": "Round 9",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.498,
+          "incumbent": 6.492,
+          "gain": 0.006,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "lost tournament to fable (6.498 vs 6.499)"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 6.499,
+          "incumbent": 6.492,
+          "gain": 0.007,
+          "promoted": true,
+          "commit": "2be4865e18c1e8591384ded33ae354e529bc440e",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k17",
+      "display": "Round 8",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.492,
+          "incumbent": 6.485,
+          "gain": 0.007,
+          "promoted": true,
+          "commit": "99475826b305f73d86a9448b5074cc59dd329bf0",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k16",
+      "display": "Round 7",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 6.394,
+          "incumbent": 6.394,
+          "gain": 0,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "lost tournament to fable (6.394 vs 6.485)"
+        },
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.439,
+          "incumbent": 6.394,
+          "gain": 0.045,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "lost tournament to fable (6.439 vs 6.485)"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 6.485,
+          "incumbent": 6.394,
+          "gain": 0.091,
+          "promoted": true,
+          "commit": "20071afb359d2b29488d6c6db4c181e5fbdca515",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
     {
       "round": "k15",
       "display": "Round 6",
@@ -286,35 +738,6 @@
           "commit": "54017d7cf628c3d4e434f0e928cb04487fb47535",
           "handle": null,
           "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k9",
-      "display": "Shakedown",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Grok",
-          "model": "grok-4.3",
-          "scalar": 0,
-          "incumbent": 4.426,
-          "gain": -4.426,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "proposal failed: proposer output is not a complete EVOLVE block: ```rust\n// EVOLVE-BLOCK-START\nmod imp {\n    use super::{ChainEntry, ChainRe"
-        },
-        {
-          "proposer": "Claude",
-          "model": "claude-fable-5",
-          "scalar": 0,
-          "incumbent": 4.426,
-          "gain": -4.426,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "proposal failed: proposer output is not a complete EVOLVE block: /// sha256(line) as lowercase hex; same block walk as the scalar\n        //"
         }
       ]
     },

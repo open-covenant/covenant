@@ -58611,6 +58611,90 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// Like [`FailingRecentMemoryStore`] but the fault is on the vector-search
+    /// read path: only `search_similar` fails, so [`Server::search_memory`]
+    /// reaches its `memory: {e}` bail arm while the other trait methods stay
+    /// inert.
+    struct FailingSearchMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingSearchMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory search read failure",
+            )))
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn search_memory_surfaces_error_when_memory_store_search_fails() {
+        // A vector-search read whose backing store fails must NOT be reported
+        // as an empty Response::Memories: the caller would see a silently
+        // truncated recall view (no matches) indistinguishable from a store
+        // that genuinely holds nothing relevant, hiding a durability fault
+        // behind a clean response. The operator grants itself memory.read so
+        // the cap + scope gates pass and the MockEmbedder succeeds; the
+        // injected store then fails search_similar().
+        let server = server_with_memory_dyn(Arc::new(FailingSearchMemoryStore));
+        grant_action(&server, "memory.read").await;
+        let resp = server
+            .op_respond(Request::SearchMemory {
+                query: "hello".into(),
+                tier: None,
+                limit: 10,
+                min_relevance: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a search_memory read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory search read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when search_similar() fails, got {other:?}"),
+        }
+    }
+
     /// Like [`FailingCapabilityStore`] but the fault is on the usage-snapshot
     /// read path: only `usage_snapshot` fails, so [`Server::capability_usage`]
     /// reaches its bail arm while the other trait methods stay inert.

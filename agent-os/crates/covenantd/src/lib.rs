@@ -12,6 +12,7 @@ pub mod escrow;
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
+pub mod payai;
 pub mod reputation;
 pub mod spend_authz;
 pub mod sse;
@@ -1219,6 +1220,10 @@ pub struct Server {
     /// the operator has not enabled Metaplex; in that state no
     /// `metaplex.*` tool is advertised or callable.
     metaplex: Option<Arc<metaplex::MetaplexState>>,
+    /// Opt-in PayAI trust surface: settlement-grounded reputation read off the
+    /// public x402 rail. None when the operator has not enabled it; in that
+    /// state no `payai.*` tool is advertised or callable.
+    payai: Option<Arc<payai::PayAiState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1273,6 +1278,7 @@ impl Server {
             escrow: None,
             hyre: None,
             metaplex: None,
+            payai: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1387,6 +1393,14 @@ impl Server {
     /// sidecar, which holds the minting key out of the daemon.
     pub fn with_metaplex(mut self, state: metaplex::MetaplexState) -> Self {
         self.metaplex = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable the PayAI trust surface. Advertises `payai.reputation` (signed,
+    /// settlement-grounded). Read-only over public Solana settlements; never
+    /// touches payments.
+    pub fn with_payai(mut self, state: payai::PayAiState) -> Self {
+        self.payai = Some(Arc::new(state));
         self
     }
 
@@ -4063,6 +4077,9 @@ impl Server {
         if let Some(state) = &self.metaplex {
             tools.extend(covenant_metaplex::metaplex_specs(&state.config));
         }
+        if let Some(state) = &self.payai {
+            tools.extend(covenant_payai::payai_specs(&state.config));
+        }
         Response::ToolList { tools }
     }
 
@@ -4130,6 +4147,9 @@ impl Server {
         }
         if name.starts_with("metaplex.") {
             return self.metaplex_tool_call(name, arguments).await;
+        }
+        if name.starts_with("payai.") {
+            return self.payai_tool_call(name, arguments).await;
         }
 
         match self.tools.call(&name, arguments).await {
@@ -4215,6 +4235,35 @@ impl Server {
                 message: format!(
                     "unknown or disabled metaplex tool: {name} (reads need \
                      COVENANT_METAPLEX_DAS_URL; writes need the signer sidecar + RPC)"
+                ),
+            };
+        };
+        match tool.call(arguments).await {
+            Ok(r) => Response::ToolResult {
+                content: r.content,
+                is_error: r.is_error,
+            },
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Execute a PayAI tool. The `tool.call.<name>` capability + scope are
+    /// already enforced by [`Self::call_tool`]. Read-only: it reads PayAI's
+    /// public settlements and returns a signed reputation; it never moves funds.
+    async fn payai_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
+        let Some(state) = self.payai.clone() else {
+            return Response::Error {
+                message: "payai surface is not enabled on this daemon.".into(),
+            };
+        };
+        let Some(tool) = covenant_payai::payai_tool(&state.config, &name, self.identity.clone())
+        else {
+            return Response::Error {
+                message: format!(
+                    "unknown or disabled payai tool: {name} \
+                     (needs COVENANT_PAYAI_ENABLED + an RPC url)"
                 ),
             };
         };

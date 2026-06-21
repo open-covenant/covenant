@@ -1313,6 +1313,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-payai"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bs58",
+ "covenant-identity",
+ "covenant-mcp",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 1.0.69",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-peer-auth"
 version = "0.1.0"
 dependencies = [
@@ -1560,6 +1578,7 @@ dependencies = [
  "covenant-mcp",
  "covenant-memory",
  "covenant-metaplex",
+ "covenant-payai",
  "covenant-peer-auth",
  "covenant-permissions",
  "covenant-router",

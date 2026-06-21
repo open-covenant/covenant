@@ -400,6 +400,27 @@ async fn main() -> Result<()> {
         }
     };
 
+    let server = {
+        let cfg = covenant_payai::PayAiConfig::from_env();
+        if cfg.enabled {
+            info!(
+                limit = cfg.limit,
+                has_rpc = !cfg.rpc_url.is_empty(),
+                "payai trust surface enabled (payai.reputation)"
+            );
+            if cfg.rpc_url.is_empty() {
+                tracing::warn!(
+                    "COVENANT_PAYAI_ENABLED is set but no RPC url \
+                     (COVENANT_PAYAI_RPC_URL or COVENANT_SOLANA_RPC_URL); \
+                     payai.reputation will error until one is provided"
+                );
+            }
+            server.with_payai(covenantd::payai::PayAiState::new(cfg))
+        } else {
+            server
+        }
+    };
+
     server
         .register_agent_budgets()
         .await

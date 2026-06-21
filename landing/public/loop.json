@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T14:39:18.641Z",
+  "updatedAt": "2026-06-21T14:59:23.532Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10124,
+    "events": 10129,
     "tasks": 1194,
-    "integrated": 1196
+    "integrated": 1197
   },
   "throughput": {
-    "last24h": 18,
-    "last7d": 109,
-    "velocity": 15.6
+    "last24h": 19,
+    "last7d": 110,
+    "velocity": 15.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 13
+      "count": 14
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1196
+      "total": 1197
     }
   ],
   "states": {
-    "integrated": 1188,
+    "integrated": 1189,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "capability-revoke-store-failure-surfaced-unit-coverage",
-    "state": "in_progress",
-    "since": "2026-06-21T14:32:06.203Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T14:46:36.448Z",
+      "task": "capability-revoke-store-failure-surfaced-unit-coverage",
+      "note": "Committed and pushed."
+    },
     {
       "at": "2026-06-21T14:31:47.564Z",
       "task": "capability-revoke-is-revoked-failure-surfaced-unit-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-20T10:39:45.399Z",
       "task": "budget-debit-rate-signal",
       "note": "Committed 7700edd6 on loop/main-track. Tracked diff = covenant-budget/src/lib.rs (DebitRateSignal + debit_rate_since + shared fold + 5 tests"
-    },
-    {
-      "at": "2026-06-20T01:39:07.896Z",
-      "task": "budget-preempt-audit-write-failed-surfaced-unit-coverage",
-      "note": "committed 55e94b6f on loop/main-track: server_preempt_intent_surfaces_audit_write_failed_when_audit_append_fails pins the AuditWriteFailed a"
     }
   ]
 }

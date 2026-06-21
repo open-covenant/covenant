@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T20:40:33.455Z",
+  "updatedAt": "2026-06-21T21:00:37.072Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10251,
-    "tasks": 1209,
-    "integrated": 1211
+    "events": 10260,
+    "tasks": 1210,
+    "integrated": 1212
   },
   "throughput": {
-    "last24h": 32,
-    "last7d": 124,
-    "velocity": 17.7
+    "last24h": 33,
+    "last7d": 125,
+    "velocity": 17.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 28
+      "count": 29
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-21",
-      "total": 1211
+      "total": 1212
     }
   ],
   "states": {
-    "integrated": 1203,
+    "integrated": 1204,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "memory-repair-write-failure-surfaced-unit-coverage",
+    "task": "memory-backfill-write-failure-surfaced-unit-coverage",
     "state": "in_progress",
-    "since": "2026-06-21T20:35:10.438Z"
+    "since": "2026-06-21T20:52:44.483Z"
   },
   "recent": [
+    {
+      "at": "2026-06-21T20:51:04.231Z",
+      "task": "memory-repair-write-failure-surfaced-unit-coverage",
+      "note": "Integrated: dc39640f. Pushed to origin/loop/main-track. Slice 3/4 of memory-store-write-failure-coverage."
+    },
     {
       "at": "2026-06-21T20:33:41.666Z",
       "task": "memory-compact-write-failure-surfaced-unit-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-21T13:39:17.665Z",
       "task": "capability-usage-snapshot-failure-surfaced-unit-coverage",
       "note": "Committed and pushed."
-    },
-    {
-      "at": "2026-06-21T13:29:35.767Z",
-      "task": "capability-recent-read-failure-surfaced-unit-coverage",
-      "note": "Committed b6ec78ef, pushed to origin/loop/main-track."
     }
   ]
 }

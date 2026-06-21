@@ -58587,6 +58587,106 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
+    /// `purge_revoked_older_than` fails, for exercising the bail arm of
+    /// [`Server::purge_capabilities`]. Unlike the read-side doubles, this one
+    /// DELEGATES record/list_for_subject/is_revoked/consume_uses to a real
+    /// [`covenant_permissions::InMemoryCapabilityStore`] so the capabilities.purge
+    /// cap-gate and scope-gate (which read list_for_subject) still pass and
+    /// execution reaches purge before it fails.
+    struct FailingPurgeCapabilityStore {
+        inner: covenant_permissions::InMemoryCapabilityStore,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingPurgeCapabilityStore {
+        async fn record(
+            &self,
+            signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            self.inner.record(signed).await
+        }
+        async fn revoke(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.revoke(signature).await
+        }
+        async fn is_revoked(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.is_revoked(signature).await
+        }
+        async fn list_for_subject(
+            &self,
+            subject_pubkey: [u8; 32],
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            self.inner.list_for_subject(subject_pubkey).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+            self.inner.recent(limit).await
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability purge failure"),
+            ))
+        }
+        async fn consume_uses(
+            &self,
+            requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+            self.inner.consume_uses(requests).await
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+            self.inner.usage_snapshot().await
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_capabilities_surfaces_error_when_capability_store_purge_fails() {
+        // A purge whose backing store fails must NOT be reported as
+        // Response::CapabilitiesPurged { purged: 0 } (indistinguishable from a
+        // successful purge that removed nothing): stale revoked capabilities
+        // would persist silently, defeating the purge the operator requested.
+        // The double delegates record/list_for_subject to a real store so the
+        // capabilities.purge cap-gate and scope-gate pass, then purge fails.
+        let server = server_with_capabilities_dyn(Arc::new(FailingPurgeCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+        }));
+        server
+            .op_respond(Request::GrantCapability {
+                action: "capabilities.purge".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        let resp = server
+            .op_respond(Request::PurgeCapabilities { before_ms: 0 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a purge whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability purge failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when purge() fails, got {other:?}"),
+        }
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

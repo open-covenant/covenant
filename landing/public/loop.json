@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-21T12:18:50.197Z",
+  "updatedAt": "2026-06-21T12:38:54.206Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10066,
-    "tasks": 1187,
+    "events": 10070,
+    "tasks": 1188,
     "integrated": 1190
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1182,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "capability-grant-record-failure-surfaced-unit-coverage",
+    "state": "in_progress",
+    "since": "2026-06-21T12:25:07.395Z"
+  },
   "recent": [
     {
       "at": "2026-06-21T11:51:35.416Z",

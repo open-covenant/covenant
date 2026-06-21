@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-21T16:39:49.125Z",
+  "updatedAt": "2026-06-21T16:59:52.667Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10161,
-    "tasks": 1198,
+    "events": 10165,
+    "tasks": 1199,
     "integrated": 1201
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1193,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-verify-recent-read-failure-surfaced-unit-coverage",
+    "state": "in_progress",
+    "since": "2026-06-21T16:52:02.256Z"
+  },
   "recent": [
     {
       "at": "2026-06-21T16:37:12.674Z",

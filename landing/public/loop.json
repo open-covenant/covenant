@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T12:38:54.206Z",
+  "updatedAt": "2026-06-21T12:58:58.371Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10070,
+    "events": 10075,
     "tasks": 1188,
-    "integrated": 1190
+    "integrated": 1191
   },
   "throughput": {
-    "last24h": 12,
-    "last7d": 103,
-    "velocity": 14.7
+    "last24h": 13,
+    "last7d": 104,
+    "velocity": 14.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1190
+      "total": 1191
     }
   ],
   "states": {
-    "integrated": 1182,
+    "integrated": 1183,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "capability-grant-record-failure-surfaced-unit-coverage",
-    "state": "in_progress",
-    "since": "2026-06-21T12:25:07.395Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T12:58:29.524Z",
+      "task": "capability-grant-record-failure-surfaced-unit-coverage",
+      "note": "Committed 39e24396 and pushed to origin/loop/main-track. Epic capability-grant-record-failure-coverage now 1/1 integrated."
+    },
     {
       "at": "2026-06-21T11:51:35.416Z",
       "task": "ipc-auth-audit-write-failure-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T12:54:33.147Z",
       "task": "a2a-queue-status-cross-peer-visibility",
       "note": "integrated as 007087df; pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-19T11:50:24.951Z",
-      "task": "secret-access-name-scope-gate-live-denial",
-      "note": "Integrated as 959adb7d, pushed 7dce0a76..959adb7d to origin/loop/main-track. Committable artifacts: live_secret_access_scope_gate.rs + READM"
     }
   ]
 }

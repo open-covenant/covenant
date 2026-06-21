@@ -59301,6 +59301,104 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`MemoryStore`] double whose `backfill_receipt_correlation` WRITE
+    /// fails, so [`Server::backfill_memory_records`] reaches its `memory: {e}`
+    /// bail arm. `backfill_receipt_correlation` has a DEFAULT trait impl (a
+    /// get/put walk); this override returns `Err` directly so the daemon's
+    /// `match self.memory.backfill_receipt_correlation(..)` hits the bail. The
+    /// handler reads `memory.recent()` + `settlement.recent()` first; both
+    /// Ok-empty under `server_with_memory_dyn` (real InMemorySettlement), so
+    /// no seeding is needed. Every existing backfill test constructs the
+    /// Server with an infallible-by-construction double, so the write Err arm
+    /// is dead without this injection.
+    struct FailingBackfillMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingBackfillMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+        async fn backfill_receipt_correlation(
+            &self,
+            _dry_run: bool,
+            _correlations: Vec<covenant_memory::MemoryReceiptBackfillCorrelation>,
+        ) -> Result<covenant_memory::BackfillReceiptCorrelationOutcome, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory backfill write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_write_failure_backfill() {
+        // A memory-receipt backfill whose backing store cannot persist the
+        // correlations must NOT be reported as Response::MemoryRecordsBackfilled:
+        // the operator would believe receipt_id linkage was written when it
+        // failed, hiding a durability fault behind a clean success.
+        // backfill_memory_records gates on operator-identity + the
+        // memory.backfill.<mode> capability + scope, then reads recent memory
+        // and receipts (both Ok-empty under server_with_memory_dyn) before
+        // calling self.memory.backfill_receipt_correlation(); the double's
+        // override returns Err. server_with_memory_dyn keeps the real
+        // InMemoryCapabilityStore so the grant takes.
+        let server = server_with_memory_dyn(Arc::new(FailingBackfillMemoryStore));
+        grant_action(&server, "memory.backfill.apply").await;
+        let resp = server
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a backfill whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory backfill write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when backfill() fails, got {other:?}"),
+        }
+    }
+
     /// A [`Settlement`] double whose `recent` read fails, so
     /// [`Server::recent_receipts`] and [`Server::receipt_batches`] reach their
     /// `settlement: {e}` bail arm while the other trait methods stay inert. The

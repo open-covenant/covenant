@@ -5,10 +5,10 @@ use sha2::{Digest, Sha256};
 use crate::sign::SignedEnvelope;
 use crate::{PayaiError, Result};
 
-/// A Covenant-signed proof of what was delivered for a PayAI settlement. It
-/// binds the on-chain settlement to the work output. Covenant never moved the
-/// money; this attests the delivery the payment paid for — closing x402's
-/// "irreversible payment, no delivery proof" gap.
+/// Covenant-signed proof of what was delivered for a PayAI settlement, binding
+/// the on-chain settlement to the work output. Covenant never moved the money;
+/// this attests the delivery the payment paid for, closing x402's gap of an
+/// irreversible payment with no delivery proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkReceipt {
     pub kind: String,
@@ -29,8 +29,8 @@ pub struct WorkReceipt {
 impl WorkReceipt {
     pub const KIND: &'static str = "covenant_work_receipt_v1";
 
-    /// Build a receipt, hashing `output` for you. `issued_at_ms` is supplied by
-    /// the caller (no implicit clock — keeps the type deterministic/testable).
+    /// Build a receipt, hashing `output`. `issued_at_ms` is caller-supplied (no
+    /// implicit clock, so the type stays deterministic/testable).
     pub fn new(
         settlement_tx: impl Into<String>,
         network: impl Into<String>,

@@ -1,8 +1,8 @@
 //! On-demand reputation oracle: fetch recent PayAI settlements, compute a
-//! wallet's settlement-grounded reputation, and sign it. This is what the
-//! daemon's MCP tool / HTTP read call. It computes over the recent settlement
-//! window on demand; a background indexer with a persistent store (full
-//! per-wallet history, cached) is the production follow-up.
+//! wallet's settlement-grounded reputation, and sign it. Backs the daemon's MCP
+//! tool / HTTP read, computing over the recent settlement window per call. A
+//! background indexer with a cached per-wallet store is the production
+//! follow-up.
 
 use covenant_identity::LocalIdentity;
 

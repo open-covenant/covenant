@@ -1,7 +1,7 @@
 use crate::PAYAI_SOLANA_FEE_PAYER;
 
-/// Daemon-side config for the PayAI trust surface. Off by default; the daemon
-/// builds it from env and only advertises tools when `enabled`.
+/// Daemon-side PayAI config. Off by default; built from env, advertises tools
+/// only when `enabled`.
 #[derive(Debug, Clone)]
 pub struct PayAiConfig {
     pub enabled: bool,
@@ -25,9 +25,8 @@ impl Default for PayAiConfig {
 }
 
 impl PayAiConfig {
-    /// `COVENANT_PAYAI_ENABLED` gates it; the RPC url falls back to the
-    /// daemon's shared `COVENANT_SOLANA_RPC_URL` when a PayAI-specific one
-    /// isn't set.
+    /// `COVENANT_PAYAI_ENABLED` gates it; RPC url falls back to the shared
+    /// `COVENANT_SOLANA_RPC_URL` when no PayAI-specific one is set.
     pub fn from_env() -> Self {
         let enabled = std::env::var("COVENANT_PAYAI_ENABLED")
             .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
@@ -52,7 +51,7 @@ impl PayAiConfig {
         }
     }
 
-    /// The fee-payer to watch — the override, or PayAI's default.
+    /// Fee-payer to watch: the override, or PayAI's default.
     pub fn fee_payer(&self) -> &str {
         self.fee_payer.as_deref().unwrap_or(PAYAI_SOLANA_FEE_PAYER)
     }

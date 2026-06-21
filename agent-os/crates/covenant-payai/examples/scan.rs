@@ -1,5 +1,5 @@
-//! Aggregate recent PayAI settlements per seller — pulls real numbers for the
-//! demo. `RPC=<url> LIMIT=<n> cargo run -p covenant-payai --example scan`
+//! Aggregate recent PayAI settlements per seller.
+//! `RPC=<url> LIMIT=<n> cargo run -p covenant-payai --example scan`
 
 use std::collections::{HashMap, HashSet};
 
@@ -28,7 +28,7 @@ async fn main() {
         e.2 += s.amount_micro;
     }
 
-    // The hub = most settled jobs. The strongest reputation story.
+    // hub = wallet with the most settled jobs.
     let hub = agg
         .iter()
         .max_by_key(|(_, (jobs, _, _))| *jobs)

@@ -7,8 +7,8 @@ use crate::{PayaiError, Result};
 
 /// A signed credential envelope. `payload` is the exact JSON string that was
 /// signed; verifiers re-check the signature over these bytes and parse them
-/// verbatim — they never re-serialize. This deliberately matches Covenant's
-/// escrow completion proofs and dodges cross-language canonicalization drift.
+/// verbatim, never re-serializing. Matches Covenant's escrow completion proofs
+/// and dodges cross-language canonicalization drift.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedEnvelope {
     pub payload: String,
@@ -28,7 +28,7 @@ impl SignedEnvelope {
         })
     }
 
-    /// Sign the SAME payload bytes as an existing envelope — a counter-signature
+    /// Sign the SAME payload bytes as an existing envelope: a counter-signature
     /// (e.g. a buyer accepting a seller's receipt). Payload is byte-identical;
     /// only the signer differs.
     pub fn countersign(identity: &LocalIdentity, other: &SignedEnvelope) -> SignedEnvelope {
@@ -50,7 +50,7 @@ impl SignedEnvelope {
         .map_err(|e| PayaiError::Verify(e.to_string()))
     }
 
-    /// Parse the payload back into a typed value. Does NOT verify — call
+    /// Parse the payload back into a typed value. Does NOT verify; call
     /// [`Self::verify`] first.
     pub fn deserialize<T: DeserializeOwned>(&self) -> Result<T> {
         Ok(serde_json::from_str(&self.payload)?)

@@ -55,9 +55,8 @@ impl Tool for PayaiReputationTool {
             .get("wallet")
             .and_then(Value::as_str)
             .ok_or_else(|| ToolError::InvalidArguments("missing string field `wallet`".into()))?;
-        // Clamp the caller-supplied window: each settlement is an N+1
-        // getTransaction, and Solana's getSignaturesForAddress caps at 1000, so
-        // a single call can never fan out unbounded.
+        // Clamp the window: each settlement is an N+1 getTransaction, and
+        // getSignaturesForAddress caps at 1000, so a call can't fan out unbounded.
         let limit = arguments
             .get("limit")
             .and_then(Value::as_u64)

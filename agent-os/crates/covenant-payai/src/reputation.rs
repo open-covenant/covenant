@@ -19,9 +19,8 @@ pub fn compute_reputation(
     let mut volume: u128 = 0;
     let mut counterparties: HashSet<&str> = HashSet::new();
     for s in settlements {
-        // Inbound from a DIFFERENT wallet only. Excluding self-payments stops an
-        // agent inflating its own job count and counterparty set by paying
-        // itself.
+        // Inbound from a DIFFERENT wallet only: excluding self-payments stops an
+        // agent inflating its own jobs and counterparty set by paying itself.
         if s.pay_to == wallet && s.payer != wallet {
             settled_jobs += 1;
             volume = volume.saturating_add(s.amount_micro);
@@ -51,7 +50,7 @@ fn score(jobs: u64, distinct: u64, volume_micro: u128) -> u32 {
     (jobs_score + cp_score + vol_score).min(1000)
 }
 
-/// Sign a reputation read with the Covenant identity → a verifiable credential.
+/// Sign a reputation read with the Covenant identity (a verifiable credential).
 pub fn sign_reputation(identity: &LocalIdentity, rep: &PayaiReputation) -> Result<SignedEnvelope> {
     SignedEnvelope::sign(identity, rep)
 }

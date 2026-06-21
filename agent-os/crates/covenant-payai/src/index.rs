@@ -13,10 +13,10 @@ pub struct SignatureInfo {
     pub block_time: Option<i64>,
 }
 
-/// Reads PayAI's public Solana settlement stream over JSON-RPC. Read-only: it
+/// Reads PayAI's public Solana settlement stream over JSON-RPC. Read-only:
 /// watches the facilitator fee-payer (which co-signs every settlement) and
-/// parses the USDC transfers. It never signs or sends a transaction — no
-/// `solana-sdk`, just `reqwest`.
+/// parses the USDC transfers. Never signs or sends a transaction (no
+/// `solana-sdk`, just `reqwest`).
 pub struct SettlementIndexer {
     rpc_url: String,
     fee_payer: String,
@@ -25,9 +25,7 @@ pub struct SettlementIndexer {
 
 impl SettlementIndexer {
     pub fn new(rpc_url: impl Into<String>) -> Self {
-        // A request timeout matters: some public Solana RPCs stall on
-        // getTransaction, and a reputation read must fail fast rather than hang
-        // the caller (or the daemon) forever.
+        // fail fast: some public RPCs stall on getTransaction, can't hang the daemon.
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(20))
             .connect_timeout(std::time::Duration::from_secs(8))
@@ -119,9 +117,8 @@ impl SettlementIndexer {
         .await
     }
 
-    /// Fetch the latest `limit` signatures and parse every USDC settlement out
-    /// of them. One RPC per transaction (sequential; fine for the indexer's
-    /// poll cadence).
+    /// Fetch the latest `limit` signatures and parse every USDC settlement from
+    /// them. One RPC per transaction (sequential; fine for the poll cadence).
     pub async fn recent_settlements(&self, limit: usize) -> Result<Vec<Settlement>> {
         let sigs = self.fetch_signatures(limit, None).await?;
         let mut out = Vec::new();
@@ -136,10 +133,10 @@ impl SettlementIndexer {
     }
 }
 
-/// Parse all USDC settlements out of a `jsonParsed` transaction. Pure and
-/// total: returns empty for a failed or non-USDC transaction. Attributes
-/// transfers to OWNER wallets (resolved from token balances), not token
-/// accounts, so reputation keys on agents rather than ATAs.
+/// Parse all USDC settlements from a `jsonParsed` transaction; empty for a
+/// failed or non-USDC transaction. Attributes transfers to OWNER wallets
+/// (resolved from token balances), not token accounts, so reputation keys on
+/// agents rather than ATAs.
 pub fn parse_settlements(tx: &Value, signature: &str) -> Vec<Settlement> {
     if tx
         .pointer("/meta/err")
@@ -316,8 +313,8 @@ mod tests {
     use wiremock::matchers::{body_string_contains, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    // A realistic jsonParsed transferChecked of USDC: buyer ATA (idx 1) → seller
-    // ATA (idx 3), 0.5 USDC. postTokenBalances resolve the ATAs to owner wallets.
+    // jsonParsed transferChecked of USDC: buyer ATA (idx 1) -> seller ATA
+    // (idx 3), 0.5 USDC. postTokenBalances resolve the ATAs to owner wallets.
     fn usdc_tx() -> Value {
         json!({
             "slot": 321,
@@ -449,14 +446,14 @@ mod tests {
         assert!(matches!(err, PayaiError::Rpc(m) if m.contains("status 503")));
     }
 
-    // Live smoke test against PayAI's real mainnet settlements. Ignored by
-    // default (network + rate limits). Run with:
+    // Live smoke test against real mainnet settlements. Ignored by default
+    // (network + rate limits). Run with:
     //   cargo test -p covenant-payai -- --ignored live_payai_mainnet
     #[tokio::test]
     #[ignore]
     async fn live_payai_mainnet_settlements() {
-        // publicnode by default: api.mainnet-beta throttles getTransaction and
-        // the N+1 read stalls there. Override with SOLANA_RPC_URL.
+        // publicnode by default: api.mainnet-beta throttles getTransaction so
+        // the N+1 read stalls. Override with SOLANA_RPC_URL.
         let rpc = std::env::var("SOLANA_RPC_URL")
             .unwrap_or_else(|_| "https://solana-rpc.publicnode.com".to_string());
         let ix = SettlementIndexer::new(rpc);

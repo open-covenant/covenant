@@ -16,8 +16,7 @@ pub struct Settlement {
     pub amount_micro: u128,
 }
 
-/// Volume tier shown as the badge. Thresholds are whole USDC of lifetime
-/// inbound settled volume.
+/// Volume tier. Thresholds are whole USDC of lifetime inbound settled volume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
@@ -52,7 +51,7 @@ impl Tier {
 }
 
 /// Settlement-grounded reputation for one wallet. Recompute over the same
-/// settlements to reproduce these numbers exactly — nothing self-reported.
+/// settlements to reproduce these numbers exactly; nothing self-reported.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PayaiReputation {
     pub wallet: String,

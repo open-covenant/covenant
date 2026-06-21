@@ -1221,8 +1221,8 @@ pub struct Server {
     /// `metaplex.*` tool is advertised or callable.
     metaplex: Option<Arc<metaplex::MetaplexState>>,
     /// Opt-in PayAI trust surface: settlement-grounded reputation read off the
-    /// public x402 rail. None when the operator has not enabled it; in that
-    /// state no `payai.*` tool is advertised or callable.
+    /// public x402 rail. None when disabled; then no `payai.*` tool is
+    /// advertised or callable.
     payai: Option<Arc<payai::PayAiState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
@@ -1396,9 +1396,8 @@ impl Server {
         self
     }
 
-    /// Enable the PayAI trust surface. Advertises `payai.reputation` (signed,
-    /// settlement-grounded). Read-only over public Solana settlements; never
-    /// touches payments.
+    /// Enable the PayAI trust surface. Advertises `payai.reputation`; read-only
+    /// over public Solana settlements, never touches payments.
     pub fn with_payai(mut self, state: payai::PayAiState) -> Self {
         self.payai = Some(Arc::new(state));
         self
@@ -4249,9 +4248,9 @@ impl Server {
         }
     }
 
-    /// Execute a PayAI tool. The `tool.call.<name>` capability + scope are
-    /// already enforced by [`Self::call_tool`]. Read-only: it reads PayAI's
-    /// public settlements and returns a signed reputation; it never moves funds.
+    /// Execute a PayAI tool. Capability + scope are already enforced by
+    /// [`Self::call_tool`]. Read-only: returns a signed reputation, never
+    /// moves funds.
     async fn payai_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
         let Some(state) = self.payai.clone() else {
             return Response::Error {

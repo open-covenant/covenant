@@ -16368,6 +16368,30 @@ required = {caps:?}
         )
     }
 
+    // Mirrors server_with_capabilities_dyn but injects the MemoryStore, so a test
+    // can drive recent_memory / search_memory with a failing store and reach the
+    // bail arm the infallible InMemoryStore default can never hit.
+    fn server_with_memory_dyn(memory: Arc<dyn MemoryStore>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            memory,
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     #[tokio::test]
     async fn query_provenance_projects_filters_and_gates_on_operator() {
         use covenant_audit::{AuditEvent, AuditKind, CapabilityAuthorization, InMemoryAuditLog};
@@ -58498,6 +58522,88 @@ budget_credits_per_hour = {credits}
                 );
                 assert!(
                     message.contains("injected capability recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`MemoryStore`] double whose `recent` read fails, so
+    /// [`Server::recent_memory`] reaches its `memory: {e}` bail arm while the
+    /// other trait methods stay inert. The default `InMemoryStore::recent` is
+    /// infallible, so the arm is dead without this injection.
+    struct FailingRecentMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingRecentMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory recent read failure",
+            )))
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_memory_surfaces_error_when_memory_store_recent_fails() {
+        // A memory read whose backing store fails must NOT be reported as an
+        // empty Response::Memories: the caller would see a silently-truncated
+        // memory view (records invisible) indistinguishable from a store that
+        // genuinely holds nothing, hiding a durability fault behind a clean
+        // response. The operator grants itself memory.read first so the
+        // capability + scope gates pass; the injected store then fails recent().
+        let server = server_with_memory_dyn(Arc::new(FailingRecentMemoryStore));
+        grant_action(&server, "memory.read").await;
+        let resp = server
+            .op_respond(Request::RecentMemory {
+                tier: None,
+                limit: 10,
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a recent_memory read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory recent read failure"),
                     "the surfaced error must carry the store's cause for triage, got: {message}",
                 );
             }

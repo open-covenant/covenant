@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T15:59:41.719Z",
+  "updatedAt": "2026-06-21T16:19:45.421Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10138,
-    "tasks": 1196,
-    "integrated": 1198
+    "events": 10146,
+    "tasks": 1197,
+    "integrated": 1199
   },
   "throughput": {
-    "last24h": 20,
-    "last7d": 111,
-    "velocity": 15.9
+    "last24h": 21,
+    "last7d": 112,
+    "velocity": 16
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 15
+      "count": 16
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-21",
-      "total": 1198
+      "total": 1199
     }
   ],
   "states": {
-    "integrated": 1190,
+    "integrated": 1191,
     "proposed": 2,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T16:10:26.922Z",
+      "task": "memory-search-read-failure-surfaced-unit-coverage",
+      "note": "Committed 85059e1f on loop/main-track; pushing to origin. Epic memory-store-read-failure-coverage now 2/2."
+    },
     {
       "at": "2026-06-21T15:56:12.645Z",
       "task": "memory-recent-read-failure-surfaced-unit-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-20T21:05:17.701Z",
       "task": "budget-preempt-restart-recovery",
       "note": "Committed + pushed to origin/loop/main-track. Epic budget-preempt-restart-recovery 1/1 integrated."
-    },
-    {
-      "at": "2026-06-20T16:24:29.759Z",
-      "task": "budget-projection-tick-linear-extrapolation-wiring",
-      "note": "Integrated as ebf98c37 on loop/main-track. 4 files (lib.rs +502/-48, README metrics, docs/runtime-sandbox-security.md, docs/ipc-and-http-gat"
     }
   ]
 }

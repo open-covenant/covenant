@@ -53701,6 +53701,35 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn mailbox_read_failure_recent_results() {
+        // A recent_a2a_results read whose mailbox cannot read its posted
+        // results must NOT be reported as an empty Response::A2AResults: the
+        // operator would see a silently-truncated result view
+        // indistinguishable from a genuinely empty result set, hiding a
+        // durability fault behind a clean response. recent_a2a_results applies
+        // no capability gate and op_respond IS the operator, so no grant is
+        // needed to reach the recent_results bail arm (the lookup_task_sender
+        // join never runs because recent_results bails first).
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        let resp = server
+            .op_respond(Request::RecentA2AResults { limit: 10 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a recent_a2a_results read whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox recent_results read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent_results() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn recent_a2a_tasks_visible_when_peer_is_sender() {
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();

@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-21T03:37:12.602Z",
+  "updatedAt": "2026-06-21T03:57:16.270Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10039,
-    "tasks": 1184,
+    "events": 10043,
+    "tasks": 1185,
     "integrated": 1187
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1179,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "http-bearer-auth-parse-rejection-live-coverage",
+    "state": "in_progress",
+    "since": "2026-06-21T03:38:27.632Z"
+  },
   "recent": [
     {
       "at": "2026-06-21T03:06:17.527Z",

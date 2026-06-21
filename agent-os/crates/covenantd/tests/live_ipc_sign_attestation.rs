@@ -314,3 +314,86 @@ async fn live_ipc_sign_attestation_rejects_empty_message() {
     let _ = child.kill().await;
     let _ = child.wait().await;
 }
+
+#[tokio::test]
+#[ignore = "live: pins the UPPER inclusive endpoint of the 1..=4096 message-size bound — a 4096-byte attestation must be accepted (Response::IdentityAttestation), biting a 1..=4096 -> 1..4096 off-by-one the 5000-byte reject test cannot catch"]
+async fn live_ipc_sign_attestation_accepts_max_4096_byte_message() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let mut child = spawn_daemon(home.path()).await;
+    let mut stream = authenticated_stream(home.path()).await;
+    grant_identity_attest(&mut stream).await;
+
+    // Exactly the inclusive upper bound. A one-char regression to the exclusive
+    // range 1..4096 would route this through the size-bound Error arm instead of
+    // signing it — the 5000-byte reject test cannot catch that because 5000 is
+    // rejected by both forms.
+    let message_b58 = bs58::encode(vec![9u8; 4096]).into_string();
+    let ts = now_ms();
+
+    match req(
+        &mut stream,
+        Request::SignAttestation { message_b58, ts },
+    )
+    .await
+    {
+        Response::IdentityAttestation {
+            pubkey_b58,
+            ts: echoed_ts,
+            ..
+        } => {
+            assert_eq!(echoed_ts, ts, "max-length receipt must echo the request ts");
+            let id = daemon_identity(home.path());
+            assert_eq!(
+                pubkey_b58,
+                bs58::encode(id.pubkey_bytes()).into_string(),
+                "max-length attestation must still be signed by the daemon identity"
+            );
+        }
+        other => panic!("4096-byte (inclusive upper bound) message must be ACCEPTED, got {other:?}"),
+    }
+
+    drop(stream);
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+#[tokio::test]
+#[ignore = "live: pins the LOWER inclusive endpoint of the 1..=4096 message-size bound — a 1-byte attestation must be accepted (Response::IdentityAttestation), biting a 1..=4096 -> 2..=4096 start bump the 0-byte empty-reject test cannot catch"]
+async fn live_ipc_sign_attestation_accepts_min_1_byte_message() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let mut child = spawn_daemon(home.path()).await;
+    let mut stream = authenticated_stream(home.path()).await;
+    grant_identity_attest(&mut stream).await;
+
+    // Exactly the inclusive lower bound. A start bump to 2..=4096 would reject
+    // this — the 0-byte empty test cannot catch that because 0 is rejected by
+    // both forms (it pins the reject side, not the 1-byte accept edge).
+    let message_b58 = bs58::encode(vec![42u8; 1]).into_string();
+    let ts = now_ms();
+
+    match req(
+        &mut stream,
+        Request::SignAttestation { message_b58, ts },
+    )
+    .await
+    {
+        Response::IdentityAttestation {
+            pubkey_b58,
+            ts: echoed_ts,
+            ..
+        } => {
+            assert_eq!(echoed_ts, ts, "min-length receipt must echo the request ts");
+            let id = daemon_identity(home.path());
+            assert_eq!(
+                pubkey_b58,
+                bs58::encode(id.pubkey_bytes()).into_string(),
+                "min-length attestation must still be signed by the daemon identity"
+            );
+        }
+        other => panic!("1-byte (inclusive lower bound) message must be ACCEPTED, got {other:?}"),
+    }
+
+    drop(stream);
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}

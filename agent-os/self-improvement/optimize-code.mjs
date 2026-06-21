@@ -310,7 +310,10 @@ ${block}
           .join("\n\n");
         const r = sh("claude", ["-p", folded, "--model", glmModel, "--dangerously-skip-permissions"], {
           cwd: scratch,
-          env: { ...process.env, ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_AUTH_TOKEN: glmKey, API_TIMEOUT_MS: "3000000" },
+          // 64k output cap: the default 32k truncates GLM when it emits verbose
+          // reasoning ahead of the function (observed round 35). GLM-5.2 supports
+          // 128k output; 64k is ample headroom for a single function + thinking.
+          env: { ...process.env, ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_AUTH_TOKEN: glmKey, API_TIMEOUT_MS: "3000000", CLAUDE_CODE_MAX_OUTPUT_TOKENS: "64000" },
         });
         if (!r.ok) throw new Error(`glm proposer failed (attempt ${attempt}): ${r.out.slice(-400)}`);
         return r.out;

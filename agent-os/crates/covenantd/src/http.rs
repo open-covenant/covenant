@@ -154,6 +154,7 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         .route("/a2a/repair", post(repair_a2a_task))
         .route("/a2a/compact", post(compact_a2a))
         .route("/peers/purge", post(peers_purge))
+        .route("/peers/enroll", post(peers_enroll))
         .route("/peers/rotate", post(peers_rotate))
         .route("/peers/list", get(peers_list))
         .route("/peers/revoke", post(peers_revoke))
@@ -966,6 +967,33 @@ async fn peers_rotate(
 ) -> Result<Json<Response>, ApiError> {
     Ok(Json(
         s.server.respond(Request::RotateOperatorToken, &peer).await,
+    ))
+}
+
+/// HTTP body for `POST /peers/enroll`. Operator-only; mints a scoped peer
+/// token holding `actions` so a partner never gets the operator token.
+#[derive(Deserialize)]
+struct PeersEnrollBody {
+    display: String,
+    #[serde(default)]
+    actions: Vec<String>,
+}
+
+async fn peers_enroll(
+    State(s): State<HttpState>,
+    Extension(peer): Extension<AgentId>,
+    Json(b): Json<PeersEnrollBody>,
+) -> Result<Json<Response>, ApiError> {
+    Ok(Json(
+        s.server
+            .respond(
+                Request::EnrollPeer {
+                    display: b.display,
+                    actions: b.actions,
+                },
+                &peer,
+            )
+            .await,
     ))
 }
 

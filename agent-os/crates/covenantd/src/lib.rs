@@ -2559,6 +2559,9 @@ impl Server {
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
             Request::RecentDebits { limit } => self.recent_debits(limit).await,
             Request::RotateOperatorToken => self.rotate_operator_token(peer).await,
+            Request::EnrollPeer { display, actions } => {
+                self.enroll_peer(display, actions, peer).await
+            }
             Request::ListPeers {
                 limit,
                 pubkey_prefix,
@@ -3454,6 +3457,104 @@ impl Server {
 
         Response::OperatorTokenRotated {
             token_b58: new_token.to_b58(),
+        }
+    }
+
+    /// Enroll a new external peer: mint a fresh subject identity + bearer
+    /// token, register it, and grant it `actions` — so a partner gets a scoped
+    /// token holding exactly those caps instead of the operator token. Gated to
+    /// the operator identity.
+    async fn enroll_peer(&self, display: String, actions: Vec<String>, peer: &AgentId) -> Response {
+        let operator = self.identity.agent_id();
+        if peer.pubkey != operator.pubkey {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: operator.clone(),
+                kind: AuditKind::PeerEnrollmentRejected {
+                    peer_display: peer.display.clone(),
+                    peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
+                },
+            };
+            if let Err(e) = self.record_daemon_event_required(event).await {
+                return audit_failure_response(e);
+            }
+            return Response::Error {
+                message: "enrolling a peer requires the operator identity".into(),
+            };
+        }
+
+        let display = display.trim().to_string();
+        if display.is_empty() {
+            return Response::Error {
+                message: "enroll: display must be non-empty".into(),
+            };
+        }
+        // Validate every action's scope up front so a bad action can't leave a
+        // half-enrolled peer (registered but ungranted) behind.
+        let empty_scope = serde_json::json!({});
+        for action in &actions {
+            if let Err(e) = validate_scope(action, &empty_scope) {
+                return Response::Error {
+                    message: format!("enroll: invalid action {action:?}: {e}"),
+                };
+            }
+        }
+
+        // Mint a fresh identity for the peer. The private key is discarded: the
+        // peer authenticates by bearer token, not by signing, so the keypair
+        // only supplies a stable subject pubkey for capability + audit
+        // attribution.
+        let subject = LocalIdentity::generate(display.clone()).agent_id();
+        let token = PeerToken::generate();
+        let token_b58 = token.to_b58();
+        let entry = PeerEntry {
+            token,
+            agent_id: subject.clone(),
+            registered_at: epoch_ms(),
+        };
+        if let Err(e) = self.peers.register(entry).await {
+            return Response::Error {
+                message: format!("enroll: register peer: {e}"),
+            };
+        }
+
+        let mut granted = Vec::with_capacity(actions.len());
+        for action in actions {
+            let cap = Capability {
+                subject: subject.clone(),
+                action: action.clone(),
+                scope: empty_scope.clone(),
+                granted_by: operator.clone(),
+                expires_at: None,
+            };
+            let signed = sign_capability(cap, self.identity.signing_key());
+            if let Err(e) = self.capabilities.record(signed).await {
+                return Response::Error {
+                    message: format!("enroll: record capability {action:?}: {e}"),
+                };
+            }
+            granted.push(action);
+        }
+
+        let pubkey_b58 = bs58::encode(subject.pubkey).into_string();
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::PeerEnrolled {
+                display: display.clone(),
+                pubkey_b58: pubkey_b58.clone(),
+                granted: granted.clone(),
+            },
+        };
+        self.record_peer_event(peer, event).await;
+
+        Response::PeerEnrolled {
+            token_b58,
+            pubkey_b58,
+            display,
+            granted,
         }
     }
 
@@ -53242,6 +53343,79 @@ budget_credits_per_hour = {credits}
         )
         .with_home(dir.path().to_path_buf());
         (s, dir, old_token, operator)
+    }
+
+    #[tokio::test]
+    async fn enroll_peer_mints_scoped_token_and_grants_subject() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let resp = s
+            .op_respond(Request::EnrollPeer {
+                display: "orbserv-escrow".into(),
+                actions: vec!["escrow.release.record".into(), "reputation.read".into()],
+            })
+            .await;
+        let (token_b58, pubkey_b58, granted) = match resp {
+            Response::PeerEnrolled {
+                token_b58,
+                pubkey_b58,
+                granted,
+                ..
+            } => (token_b58, pubkey_b58, granted),
+            other => panic!("expected PeerEnrolled, got: {other:?}"),
+        };
+        assert_eq!(granted, vec!["escrow.release.record", "reputation.read"]);
+
+        // The scoped token resolves to the new subject (which is NOT the operator).
+        let token = covenant_peer_auth::PeerToken::from_b58(&token_b58).unwrap();
+        let subject = s
+            .peers
+            .resolve(&token)
+            .await
+            .unwrap()
+            .expect("token resolves");
+        assert_eq!(bs58::encode(subject.pubkey).into_string(), pubkey_b58);
+        assert_ne!(subject.pubkey, s.identity.agent_id().pubkey);
+
+        // The subject holds exactly the granted caps — nothing it wasn't given.
+        assert!(
+            s.check_capabilities("x".into(), vec!["escrow.release.record".into()], &subject)
+                .await
+                .passed
+        );
+        assert!(
+            s.check_capabilities("x".into(), vec!["reputation.read".into()], &subject)
+                .await
+                .passed
+        );
+        let has_ungranted = s
+            .check_capabilities("x".into(), vec!["escrow.completion.prove".into()], &subject)
+            .await
+            .passed;
+        assert!(
+            !has_ungranted,
+            "subject must not hold a cap it was not granted"
+        );
+    }
+
+    #[tokio::test]
+    async fn enroll_peer_rejects_non_operator() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let foreign = AgentId::new("foreign@host", [42u8; 32]);
+        match s
+            .respond(
+                Request::EnrollPeer {
+                    display: "x".into(),
+                    actions: vec![],
+                },
+                &foreign,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"), "got: {message}")
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
     }
 
     /// Happy path: rotation under the operator identity returns the new

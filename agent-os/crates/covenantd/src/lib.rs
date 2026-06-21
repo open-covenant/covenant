@@ -58253,6 +58253,58 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_surfaces_ipc_audit_write_failure_as_response_error() {
+        // IPC sibling of the HTTP reject() guard and the preempt
+        // AuditWriteFailed arm above: handle()'s auth loop treats a
+        // successful audit-write as a precondition for the auth-failed
+        // reply. If record_auth_failure("ipc", reason) cannot persist the
+        // AuthenticationFailed row, handle() writes Response::Error
+        // { "audit write failed; refusing to proceed" } instead of
+        // Response::AuthenticationFailed (lib.rs:2053 unknown-token arm,
+        // lib.rs:2067 non-Authenticate-first-frame arm) and closes the
+        // connection, so an attacker who fills the audit disk does not
+        // get clean 401s while the operator's audit feed falls behind
+        // reality. live_peer_auth.rs pins the AuthenticationFailed arms
+        // over the live socket, but this sub-arm is live-unreachable (a
+        // real daemon's audit store cannot be made to fail
+        // deterministically); drive it in-process with a FailingAuditLog
+        // double over a UnixStream::pair().
+        use covenant_ipc::{read_frame, write_frame, Request, Response};
+        use tokio::net::UnixStream;
+
+        let server = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let (mut client, server_side) = UnixStream::pair().expect("unix socket pair");
+        let connection_id = Uuid::new_v4();
+        let task = tokio::spawn(async move {
+            let _ = server.handle(connection_id, server_side).await;
+        });
+
+        // Unregistered token -> authenticate() returns None on the empty
+        // InMemoryPeerRegistry -> the None arm calls record_auth_failure,
+        // which the FailingAuditLog double rejects -> Response::Error.
+        let unregistered = covenant_peer_auth::PeerToken::generate().to_b58();
+        write_frame(&mut client, &Request::Authenticate { token_b58: unregistered })
+            .await
+            .expect("write Authenticate frame");
+
+        let resp: Response = read_frame(&mut client)
+            .await
+            .expect("client must receive the framed Response::Error before EOF");
+        match resp {
+            Response::Error { message } => assert_eq!(
+                message,
+                "audit write failed; refusing to proceed",
+                "a failed required-audit write on the IPC auth path must surface as Response::Error, not a clean AuthenticationFailed",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+
+        drop(client);
+        let _ = task.await;
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

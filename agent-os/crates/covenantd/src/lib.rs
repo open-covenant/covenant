@@ -58684,6 +58684,33 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_operator_peer_revoke_rejected() {
+        // OperatorPeerRevokeRejected is a must-record kind: a non-operator
+        // peer attempting to revoke a registry entry without `peers.revoke`
+        // is a destructive probe that must land on the operator's /audit feed
+        // even when the audit store is degraded. If record_daemon_event_required
+        // cannot persist the row, revoke_peer must surface the generic
+        // "audit write failed; refusing to proceed" bail rather than the
+        // normal capability rejection — otherwise the operator answers a
+        // destructive probe with a clean refusal that leaves no durable
+        // trail. Drive it in-process with the FailingAuditLog double.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let non_operator = LocalIdentity::generate("non-op@local").agent_id();
+        assert_ne!(
+            non_operator.pubkey, s.identity.agent_id().pubkey,
+            "fixture peer must not share the server operator's pubkey"
+        );
+        match s.revoke_peer("abcdef".into(), false, None, &non_operator).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the peer-revoke path must surface as the generic bail, not the normal capability rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
     /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
     /// `record` fails, for exercising the bail arm of
     /// [`Server::grant_capability`] when the capability row cannot persist.

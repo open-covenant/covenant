@@ -32,6 +32,7 @@ import express, { type Request, type Response } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
 import { HTTPFacilitatorClient, type RoutesConfig } from "@x402/core/server";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
+import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { zauthProvider } from "@zauthx402/sdk/middleware";
 import { getPassport } from "./passport.js";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
@@ -109,7 +110,10 @@ if (ZAUTH_API_KEY) {
 
 const facilitator = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
 
-const gate = (amount: string, description: string) => ({
+// `extensions` carries the bazaar discovery declaration so each resource is
+// listed in the facilitator's discovery catalog (x402scan, the PayAI bazaar).
+// Without it the routes still settle but stay invisible to discovery crawlers.
+const gate = (amount: string, description: string, extensions: Record<string, unknown>) => ({
   accepts: {
     scheme: "exact" as const,
     network: SOLANA_MAINNET,
@@ -122,17 +126,64 @@ const gate = (amount: string, description: string) => ({
   mimeType: "application/json",
   serviceName: "Covenant",
   tags: ["covenant", "trust", "identity", "attestation", "agent"],
+  extensions,
 });
 
 const routes: RoutesConfig = {
   "GET /x402/passport/:asset": gate(
     "1000",
     "Verify an agent's on-chain identity passport: MPL Core asset, 014 Registry binding, and Covenant attestation.",
+    declareDiscoveryExtension({
+      pathParams: { asset: "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH" },
+      pathParamsSchema: {
+        properties: { asset: { type: "string", description: "MPL Core asset address (base58)" } },
+        required: ["asset"],
+      },
+      output: {
+        example: {
+          asset: { id: "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH", inCovenantCollection: true },
+          registry: { registered: true },
+          attestation: { covenantAuthored: true },
+        },
+      },
+    }),
   ),
-  "POST /x402/attest": gate("5000", "Create a Covenant-signed ed25519 attestation over a claim."),
+  "POST /x402/attest": gate(
+    "5000",
+    "Create a Covenant-signed ed25519 attestation over a claim.",
+    declareDiscoveryExtension({
+      input: { subject: "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH", claim: { delivered: true } },
+      inputSchema: {
+        properties: { subject: { type: "string" }, claim: {} },
+        required: ["subject", "claim"],
+      },
+      bodyType: "json",
+      output: { example: { alg: "ed25519", signature_b58: "…", pubkey_b58: "…" } },
+    }),
+  ),
   "GET /x402/payai/reputation/:wallet": gate(
     "3000",
     "Read a wallet's PayAI settlement-grounded reputation: settled jobs, distinct counterparties, volume, tier, and a 0-1000 score, computed from on-chain USDC settlements and Covenant-signed.",
+    declareDiscoveryExtension({
+      pathParams: { wallet: "CvX23FNQsNQww8ALR3EWgQv2Wt5yM7VvU4HRigGBMMJu" },
+      pathParamsSchema: {
+        properties: { wallet: { type: "string", description: "Solana wallet (owner) address (base58)" } },
+        required: ["wallet"],
+      },
+      output: {
+        example: {
+          reputation: {
+            wallet: "CvX23FNQsNQww8ALR3EWgQv2Wt5yM7VvU4HRigGBMMJu",
+            settled_jobs: 115,
+            distinct_counterparties: 78,
+            volume_micro_usdc: 117000,
+            tier: "bronze",
+            score: 600,
+          },
+          attestation: { alg: "ed25519", signature_b58: "…", pubkey_b58: "…" },
+        },
+      },
+    }),
   ),
 };
 

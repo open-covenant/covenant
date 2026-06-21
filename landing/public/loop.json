@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T20:00:26.005Z",
+  "updatedAt": "2026-06-21T20:20:29.700Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10229,
-    "tasks": 1206,
-    "integrated": 1209
+    "events": 10242,
+    "tasks": 1208,
+    "integrated": 1210
   },
   "throughput": {
-    "last24h": 30,
-    "last7d": 122,
-    "velocity": 17.4
+    "last24h": 31,
+    "last7d": 123,
+    "velocity": 17.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 26
+      "count": 27
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-21",
-      "total": 1209
+      "total": 1210
     }
   ],
   "states": {
-    "integrated": 1201,
+    "integrated": 1202,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "memory-compact-write-failure-surfaced-unit-coverage",
+    "state": "in_progress",
+    "since": "2026-06-21T20:18:49.305Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-21T20:16:40.347Z",
+      "task": "memory-purge-write-failure-surfaced-unit-coverage",
+      "note": "Integrated: 0267b377. Pushed to origin/loop/main-track. Slice 1/4 of memory-store-write-failure-coverage."
+    },
     {
       "at": "2026-06-21T19:49:39.185Z",
       "task": "mailbox-compact-read-failure-surfaced-unit-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-21T12:58:29.524Z",
       "task": "capability-grant-record-failure-surfaced-unit-coverage",
       "note": "Committed 39e24396 and pushed to origin/loop/main-track. Epic capability-grant-record-failure-coverage now 1/1 integrated."
-    },
-    {
-      "at": "2026-06-21T11:51:35.416Z",
-      "task": "ipc-auth-audit-write-failure-coverage",
-      "note": "Integrated as b1e4c05b on loop/main-track. test+README only."
     }
   ]
 }

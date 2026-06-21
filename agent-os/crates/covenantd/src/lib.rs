@@ -53730,6 +53730,41 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn mailbox_read_failure_task_queue() {
+        // An a2a_queue read whose mailbox cannot read its queued/in-flight
+        // task queue must NOT be reported as an empty Response::A2AQueue: the
+        // operator would see a silently-truncated queue view
+        // indistinguishable from a genuinely empty queue, hiding a durability
+        // fault behind a clean response. a2a_queue applies no capability gate
+        // and op_respond IS the operator, so no grant is needed to reach the
+        // task_queue bail arm. task_queue is read before recent_results, so the
+        // surfaced cause is the task_queue failure (not the later
+        // recent_results join), pinning the FIRST bail arm specifically.
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        let resp = server
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "an a2a_queue read whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox task_queue read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when task_queue() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn recent_a2a_tasks_visible_when_peer_is_sender() {
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-21T02:57:05.177Z",
+  "updatedAt": "2026-06-21T03:17:08.911Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10034,
+    "events": 10039,
     "tasks": 1184,
-    "integrated": 1186
+    "integrated": 1187
   },
   "throughput": {
-    "last24h": 9,
-    "last7d": 99,
-    "velocity": 14.1
+    "last24h": 10,
+    "last7d": 100,
+    "velocity": 14.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-21",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-21",
-      "total": 1186
+      "total": 1187
     }
   ],
   "states": {
-    "integrated": 1178,
+    "integrated": 1179,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sign-attestation-message-size-boundary-live-coverage",
-    "state": "in_progress",
-    "since": "2026-06-21T02:43:30.150Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-21T03:06:17.527Z",
+      "task": "sign-attestation-message-size-boundary-live-coverage",
+      "note": "Committed d34a569c (test-only: +2 #[ignore=live] boundary tests, README live=452). Mutation-proven both inclusive endpoints of sign_attestat"
+    },
     {
       "at": "2026-06-21T02:18:32.235Z",
       "task": "sdk-outofscope-classify-live-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-19T10:14:50.703Z",
       "task": "operator-identity-postcap-http-memory-backfill-denial",
       "note": "Committed df508c3c and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
-    },
-    {
-      "at": "2026-06-19T10:02:07.125Z",
-      "task": "operator-identity-postcap-http-settlement-backfill-denial",
-      "note": "Committed 193189b4 and pushed to origin/loop/main-track. test+README only; agent-os/autonomy gitignored. Live test passes, mutation-proven, "
     }
   ]
 }

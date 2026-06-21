@@ -5,6 +5,7 @@ use serde::Serialize;
 use tower_http::cors::CorsLayer;
 
 use crate::model::{IndexerSnapshot, SolanaEventRecord};
+use crate::verified::VerifiedState;
 use crate::x402_gate::X402Gate;
 
 pub const FIXTURE_MODE: &str = "fixture";
@@ -16,6 +17,7 @@ pub struct AppState {
     pub confirmations: u64,
     pub events: Arc<Vec<SolanaEventRecord>>,
     pub x402: Option<X402Gate>,
+    pub verified: Option<VerifiedState>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -25,10 +27,11 @@ pub fn router(state: AppState) -> Router {
         .route("/events", get(events));
 
     if state.x402.is_some() {
-        router = router.route(
-            "/x402/stats/summary",
-            get(crate::x402_gate::paid_summary),
-        );
+        router = router.route("/x402/stats/summary", get(crate::x402_gate::paid_summary));
+    }
+
+    if state.verified.is_some() {
+        router = router.route("/verified", get(crate::verified::serve_verified));
     }
 
     router.layer(CorsLayer::permissive()).with_state(state)

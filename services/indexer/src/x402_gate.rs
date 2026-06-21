@@ -389,19 +389,23 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/verify"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "isValid": true,
-                "payer": "PAYER1111111111111111111111111111111111111"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "isValid": true,
+                    "payer": "PAYER1111111111111111111111111111111111111"
+                })),
+            )
             .mount(&server)
             .await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/settle"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "success": true,
-                "transaction": "5sigSettleSignature1111111111111111111111111111111",
-                "network": "solana"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": true,
+                    "transaction": "5sigSettleSignature1111111111111111111111111111111",
+                    "network": "solana"
+                })),
+            )
             .mount(&server)
             .await;
 
@@ -439,10 +443,12 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/verify"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "isValid": false,
-                "invalidReason": "invalid_exact_svm_payload_transaction_could_not_be_decoded"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "isValid": false,
+                    "invalidReason": "invalid_exact_svm_payload_transaction_could_not_be_decoded"
+                })),
+            )
             .mount(&server)
             .await;
 
@@ -479,12 +485,14 @@ mod tests {
             .await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/settle"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "success": false,
-                "errorReason": "blockhash_not_found",
-                "transaction": "",
-                "network": "solana"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": false,
+                    "errorReason": "blockhash_not_found",
+                    "transaction": "",
+                    "network": "solana"
+                })),
+            )
             .mount(&server)
             .await;
 

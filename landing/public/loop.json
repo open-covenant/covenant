@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-21T23:21:03.685Z",
+  "updatedAt": "2026-06-21T23:41:07.504Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10302,
+    "events": 10309,
     "tasks": 1215,
     "integrated": 1217
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1209,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "ready": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "operator-token-rotation-audit-write-failure-surfaced-unit-co",
+    "state": "ready",
+    "since": "2026-06-21T23:40:07.161Z"
+  },
   "recent": [
     {
       "at": "2026-06-21T22:58:15.736Z",

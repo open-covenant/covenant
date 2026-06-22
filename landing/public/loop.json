@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-22T04:42:07.459Z",
+  "updatedAt": "2026-06-22T05:02:11.096Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10382,
-    "tasks": 1223,
+    "events": 10386,
+    "tasks": 1224,
     "integrated": 1226
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1218,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "memory-recent-ipc-stream-capability-gate-live-coverage",
+    "state": "in_progress",
+    "since": "2026-06-22T04:49:24.845Z"
+  },
   "recent": [
     {
       "at": "2026-06-22T01:51:33.891Z",

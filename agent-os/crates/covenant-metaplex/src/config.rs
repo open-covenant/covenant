@@ -26,6 +26,12 @@ pub const MPL_AGENT_REPUTATION_PROGRAM_ID: &str = "REPREG5c1gPHuHukEyANpksLdHFaJ
 /// Bubblegum (compressed NFTs). The v2 instruction set shares this id.
 pub const MPL_BUBBLEGUM_PROGRAM_ID: &str = "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY";
 
+/// Canonical Covenant attestation authority on mainnet: the only key whose
+/// AppData writes count as Covenant-authored. A verifier checks an
+/// attestation's on-chain `data_authority` against this. Tunable per-call,
+/// but this is the production default.
+pub const COVENANT_ATTESTATION_AUTHORITY: &str = "DKxXrxxCzAwLSXRUWzUouiW46GNf4PR2mjjhAbtCAkcK";
+
 /// Metaplex program ids the signer sidecar is permitted to target.
 /// Pinned so a poisoned config cannot redirect a signed instruction at
 /// an attacker-controlled program. The sidecar re-checks this list
@@ -213,7 +219,8 @@ mod tests {
 
     #[test]
     fn config_round_trips_through_serde_with_defaults() {
-        let c: MetaplexConfig = serde_json::from_value(serde_json::json!({ "enabled": true })).unwrap();
+        let c: MetaplexConfig =
+            serde_json::from_value(serde_json::json!({ "enabled": true })).unwrap();
         assert!(c.enabled);
         assert_eq!(c.cluster, "devnet");
         assert_eq!(c.per_action_cap_lamports, 0);

@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use crate::config::MetaplexConfig;
 use crate::das::DasClient;
 use crate::request::{AttestationPayload, SignerRequest, SignerResponse};
+use crate::verify::{default_authority, verify_agent, verify_attestation};
 
 /// Prefix every Metaplex tool name carries.
 pub const TOOL_PREFIX: &str = "metaplex.";
@@ -32,6 +33,8 @@ const READ_SLUGS: &[&str] = &[
     "das.assets_by_owner",
     "das.search",
     "das.get_asset_proof",
+    "verify.attestation",
+    "verify.agent",
 ];
 const WRITE_SLUGS: &[&str] = &["attest.audit_root", "identity.register"];
 
@@ -64,16 +67,24 @@ fn description(slug: &str) -> &'static str {
         "das.get_asset_proof" => "Fetch the merkle proof for a compressed asset (cNFT) via the Metaplex DAS API.",
         "attest.audit_root" => "Anchor a Covenant audit-root attestation into an MPL Core asset's AppData plugin (DAS-indexed).",
         "identity.register" => "Bind the daemon's agent identity to an MPL Agent Identity record on an MPL Core asset.",
+        "verify.attestation" => "Verify one MPL Core asset is a valid Covenant audit-root attestation (ERC-8004 shape, authored by the Covenant authority). DAS-only, no keys.",
+        "verify.agent" => "Check whether an agent identity is Covenant-accountable: does it carry a verified audit-root attestation? DAS-only, no Covenant infra in the path.",
         _ => "Metaplex tool.",
     }
 }
 
 fn input_schema(slug: &str) -> Value {
     match slug {
-        "das.get_asset" | "das.get_asset_proof" => json!({
+        "das.get_asset" | "das.get_asset_proof" | "verify.attestation" => json!({
             "type": "object",
             "properties": { "id": { "type": "string", "description": "Asset id (mint or compressed-asset id)" } },
             "required": ["id"],
+            "additionalProperties": false,
+        }),
+        "verify.agent" => json!({
+            "type": "object",
+            "properties": { "agent": { "type": "string", "description": "Agent identity asset id to check for Covenant accountability" } },
+            "required": ["agent"],
             "additionalProperties": false,
         }),
         "das.assets_by_owner" => json!({
@@ -215,6 +226,19 @@ impl ReadTool {
                     .map_err(das_err)
             }
             "das.search" => self.das.search_assets(args).await.map_err(das_err),
+            "verify.attestation" => {
+                let id = str_arg(&args, "id")?;
+                let asset = self.das.get_asset(id).await.map_err(das_err)?;
+                let verdict = verify_attestation(&asset, default_authority());
+                Ok(serde_json::to_value(verdict).unwrap_or(Value::Null))
+            }
+            "verify.agent" => {
+                let agent = str_arg(&args, "agent")?;
+                let verdict = verify_agent(self.das.as_ref(), agent, default_authority())
+                    .await
+                    .map_err(das_err)?;
+                Ok(serde_json::to_value(verdict).unwrap_or(Value::Null))
+            }
             other => Err(ToolError::NotFound(format!("{TOOL_PREFIX}{other}"))),
         }
     }
@@ -286,9 +310,11 @@ impl WriteTool {
                     release_target,
                     release_subject,
                     release_scope,
-                    args.get("recordedAt").and_then(Value::as_u64).ok_or_else(|| {
-                        ToolError::InvalidArguments("recordedAt (integer) is required".into())
-                    })?,
+                    args.get("recordedAt")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| {
+                            ToolError::InvalidArguments("recordedAt (integer) is required".into())
+                        })?,
                 )
                 .with_subject(self.agent_asset.clone(), self.agent_registration.clone());
                 // `asset` (append to an existing attestation asset) is not
@@ -431,14 +457,17 @@ mod tests {
     fn read_only_config_lists_only_read_tools() {
         let specs = metaplex_specs(&enabled_reads());
         let names: Vec<_> = specs.iter().map(|s| s.name.clone()).collect();
-        assert_eq!(names.len(), 4);
-        assert!(names.iter().all(|n| n.starts_with("metaplex.das.")));
+        assert_eq!(names.len(), 6);
+        assert!(names
+            .iter()
+            .all(|n| n.starts_with("metaplex.das.") || n.starts_with("metaplex.verify.")));
+        assert!(names.contains(&"metaplex.verify.agent".to_string()));
     }
 
     #[test]
     fn full_config_lists_read_and_write_tools() {
         let specs = metaplex_specs(&enabled_all());
-        assert_eq!(specs.len(), 6);
+        assert_eq!(specs.len(), 8);
         assert!(specs.iter().any(|s| s.name == "metaplex.attest.audit_root"));
     }
 
@@ -450,12 +479,7 @@ mod tests {
     #[test]
     fn write_tool_unavailable_without_signer() {
         let cfg = enabled_all();
-        let got = metaplex_tool(
-            &cfg,
-            "metaplex.attest.audit_root",
-            Arc::new(NullDas),
-            None,
-        );
+        let got = metaplex_tool(&cfg, "metaplex.attest.audit_root", Arc::new(NullDas), None);
         assert!(got.is_none(), "write tool must be None without a signer");
     }
 

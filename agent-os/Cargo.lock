@@ -1133,6 +1133,7 @@ dependencies = [
  "covenant-memory",
  "covenant-peer-auth",
  "covenant-permissions",
+ "covenant-sns",
  "covenant-types",
  "covenant-x402",
  "covenant-zauth",

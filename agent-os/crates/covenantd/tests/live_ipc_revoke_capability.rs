@@ -1,7 +1,8 @@
 //! Live integration test: spawns covenantd against a tempdir HOME and drives
-//! `Request::RevokeCapability` over the raw IPC socket after a grant —
-//! confirming the active row, revoking it, the idempotent second revoke, and
-//! the drained ledger.
+//! `Request::RevokeCapability` over the raw IPC socket — confirming the grant,
+//! active row, first revoke, idempotent second revoke, and drained ledger, and
+//! pinning the two signature-decode rejections that fire before any capability
+//! or ownership gate (wrong-length and non-base58 `signature_b58`).
 //!
 //! The verb is covered today over the CLI (`live_cli_capabilities_revoke.rs`,
 //! `live_cli_capabilities_revoke_json.rs`) but never over the raw Unix socket
@@ -184,6 +185,71 @@ async fn live_ipc_revoke_capability_round_trip() {
             "the revoked capability must not remain active: {capabilities:?}"
         ),
         other => panic!("expected Response::Capabilities, got {other:?}"),
+    }
+
+    drop(stream);
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+#[tokio::test]
+#[ignore = "live: asserts Request::RevokeCapability with a signature_b58 that decodes to != 64 bytes flattens onto Response::Error — the bs58 Ok-but-wrong-length arm, which the round-trip test bypasses by granting a real 64-byte cap"]
+async fn live_ipc_revoke_capability_rejects_wrong_length_signature() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let mut child = spawn_daemon(home.path()).await;
+    let mut stream = authenticated_stream(home.path()).await;
+
+    // 63 bytes decodes cleanly but is one short of the 64-byte ed25519
+    // signature the ownership lookup keys on. The decoded length is checked
+    // before any capability or ownership gate, so no grant is needed.
+    let wrong_len = bs58::encode(vec![1u8; 63]).into_string();
+    match req(
+        &mut stream,
+        Request::RevokeCapability {
+            signature_b58: wrong_len,
+        },
+    )
+    .await
+    {
+        Response::Error { message } => {
+            assert!(
+                message.contains("signature must decode to 64 bytes"),
+                "wrong-length signature must hit the length bail, got: {message}"
+            );
+        }
+        other => panic!("expected Response::Error for wrong-length signature, got {other:?}"),
+    }
+
+    drop(stream);
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+#[tokio::test]
+#[ignore = "live: asserts Request::RevokeCapability with a non-base58 signature_b58 flattens onto Response::Error — the bs58::decode Err arm, distinct from the wrong-length arm"]
+async fn live_ipc_revoke_capability_rejects_malformed_signature_b58() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let mut child = spawn_daemon(home.path()).await;
+    let mut stream = authenticated_stream(home.path()).await;
+
+    // `-` and space sit outside every base58 alphabet, so bs58::decode Errs
+    // before the 64-byte length check. The decode runs first, so no grant is
+    // needed.
+    match req(
+        &mut stream,
+        Request::RevokeCapability {
+            signature_b58: "not base58!".to_string(),
+        },
+    )
+    .await
+    {
+        Response::Error { message } => {
+            assert!(
+                message.contains("invalid base58 signature"),
+                "non-base58 signature must hit the decode-Err bail, got: {message}"
+            );
+        }
+        other => panic!("expected Response::Error for malformed signature_b58, got {other:?}"),
     }
 
     drop(stream);

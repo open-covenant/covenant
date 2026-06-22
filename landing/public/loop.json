@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T19:06:23.880Z",
+  "updatedAt": "2026-06-22T19:26:28.284Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10488,
+    "events": 10493,
     "tasks": 1236,
-    "integrated": 1238
+    "integrated": 1239
   },
   "throughput": {
-    "last24h": 32,
-    "last7d": 140,
-    "velocity": 20
+    "last24h": 31,
+    "last7d": 141,
+    "velocity": 20.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 18
+      "count": 19
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1238
+      "total": 1239
     }
   ],
   "states": {
-    "integrated": 1230,
+    "integrated": 1231,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sap-bridge-worker-stdout-decode-failure-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T19:01:46.335Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T19:22:56.685Z",
+      "task": "sap-bridge-worker-stdout-decode-failure-coverage",
+      "note": "Committed bf4368e6 on loop/main-track; 3 decode arms covered and mutation-proven"
+    },
     {
       "at": "2026-06-22T18:38:07.424Z",
       "task": "metaplex-signer-nonzero-exit-surfaced-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T23:59:52.214Z",
       "task": "operator-peer-revoke-audit-write-failure-surfaced-unit-cover",
       "note": "Committed 03c55281. handler-audit-write-failure-coverage 3/7. Pushing."
-    },
-    {
-      "at": "2026-06-21T23:51:58.906Z",
-      "task": "operator-peers-list-audit-write-failure-surfaced-unit-covera",
-      "note": "Committed c8346ed2. audit_write_failure_operator_peers_list_rejected pins the list_peers record_daemon_event_required bail (lib.rs:3576). ha"
     }
   ]
 }

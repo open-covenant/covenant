@@ -58748,6 +58748,33 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_capability_revoke_rejected() {
+        // CapabilityRevokeRejected is a must-record kind: a peer attempting
+        // to revoke a capability signature it does not own (a cross-peer
+        // revoke) is a subject-mismatch probe that must land on the
+        // operator's /audit feed even when the audit store is degraded. If
+        // record_daemon_event_required cannot persist the row, revoke_capability
+        // must surface the generic "audit write failed; refusing to proceed"
+        // bail rather than the normal subject-mismatch rejection — otherwise
+        // the operator answers a cross-peer revoke probe with a clean refusal
+        // that leaves no durable trail. Drive it in-process with the
+        // FailingAuditLog double (the default in-memory capability store is
+        // retained, so list_for_subject returns empty and is_revoked returns
+        // false for a signature that was never granted).
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let peer = LocalIdentity::generate("peer@local").agent_id();
+        let signature_b58 = bs58::encode([0xABu8; 64]).into_string();
+        match s.revoke_capability(signature_b58, &peer).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the cross-peer revoke path must surface as the generic bail, not the normal subject-mismatch rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
     /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
     /// `record` fails, for exercising the bail arm of
     /// [`Server::grant_capability`] when the capability row cannot persist.

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-22T11:23:43.576Z",
+  "updatedAt": "2026-06-22T11:43:47.538Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10400,
-    "tasks": 1225,
+    "events": 10404,
+    "tasks": 1226,
     "integrated": 1228
   },
   "throughput": {
-    "last24h": 40,
+    "last24h": 39,
     "last7d": 137,
     "velocity": 19.6
   },
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1220,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "embedder-search-failure-surfaced-coverage",
+    "state": "in_progress",
+    "since": "2026-06-22T11:29:50.463Z"
+  },
   "recent": [
     {
       "at": "2026-06-22T10:24:14.393Z",

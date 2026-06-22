@@ -450,4 +450,26 @@ mod tests {
             "a non-UTF-8 signer stdout must surface the from_utf8 bail: {err}"
         );
     }
+
+    #[tokio::test]
+    async fn sign_with_limits_surfaces_nonzero_signer_exit() {
+        // A sidecar that fails (missing keypair, RPC/DAS error) exits nonzero
+        // and writes its reason to stderr; sign_with_limits must surface both
+        // the exit status and the stderr text so an operator can triage the
+        // write rejection instead of seeing it masked as a decode failure on
+        // empty stdout. Mirrors the x402 signer's nonzero-exit coverage.
+        let (_dir, script) = fake_signer("echo 'no minting key' >&2; exit 3");
+        let signer = SubprocessMetaplexSigner {
+            program: script,
+            env: vec![],
+        };
+        let err = signer
+            .sign_with_limits(sample_request(), 4096, std::time::Duration::from_secs(30))
+            .await
+            .expect_err("nonzero exit must surface, not proceed to decode");
+        assert!(
+            err.contains("signer exited") && err.contains("no minting key"),
+            "a nonzero signer exit must surface its status and stderr: {err}"
+        );
+    }
 }

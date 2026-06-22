@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T18:46:19.743Z",
+  "updatedAt": "2026-06-22T19:06:23.880Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10485,
-    "tasks": 1235,
+    "events": 10488,
+    "tasks": 1236,
     "integrated": 1238
   },
   "throughput": {
     "last24h": 32,
-    "last7d": 141,
-    "velocity": 20.1
+    "last7d": 140,
+    "velocity": 20
   },
   "daily": [
     {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1230,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "sap-bridge-worker-stdout-decode-failure-coverage",
+    "state": "in_progress",
+    "since": "2026-06-22T19:01:46.335Z"
+  },
   "recent": [
     {
       "at": "2026-06-22T18:38:07.424Z",

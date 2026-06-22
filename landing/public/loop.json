@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T01:41:33.519Z",
+  "updatedAt": "2026-06-22T02:01:37.299Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10373,
-    "tasks": 1222,
-    "integrated": 1225
+    "events": 10382,
+    "tasks": 1223,
+    "integrated": 1226
   },
   "throughput": {
     "last24h": 41,
-    "last7d": 138,
-    "velocity": 19.7
+    "last7d": 139,
+    "velocity": 19.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-22",
-      "total": 1225
+      "total": 1226
     }
   ],
   "states": {
-    "integrated": 1217,
+    "integrated": 1218,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T01:51:33.891Z",
+      "task": "operator-token-insecure-mode-refusal-live-coverage",
+      "note": "Slice complete: test + README committed."
+    },
     {
       "at": "2026-06-22T01:38:06.940Z",
       "task": "peer-self-revoke-force-recovery-live-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-21T19:14:49.488Z",
       "task": "mailbox-recent-results-read-failure-surfaced-unit-coverage",
       "note": "Integrated: e5dada55. Pushed to origin/loop/main-track. Slice 2/4 of a2a-mailbox-store-read-failure-coverage."
-    },
-    {
-      "at": "2026-06-21T18:42:56.563Z",
-      "task": "mailbox-recent-tasks-read-failure-surfaced-unit-coverage",
-      "note": "Integrated: 76816bf3. Slice 1/4 of a2a-mailbox-store-read-failure-coverage. Helper server_with_mailbox_dyn + FailingMailboxReads double (4 f"
     }
   ]
 }

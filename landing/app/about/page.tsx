@@ -128,8 +128,8 @@ const SECTIONS: Section[] = [
     body: (
       <p className={paragraph}>
         We are careful to separate what ships from what is planned. Today the local control plane is
-        real and live-tested across two dozen Rust crates and roughly two thousand tests, including
-        more than two hundred that exercise real process, model, and network boundaries.
+        real and live-tested across nearly thirty Rust crates and more than two thousand five hundred
+        tests, including over three hundred that exercise real process, model, and network boundaries.
         Production-grade isolation for untrusted code, networked multi-peer operation, and on-chain
         settlement are on the roadmap, not the changelog. The line between done, experimental, and
         planned is documented in BUILT.md and throughout the docs. If a claim is not true yet, we do

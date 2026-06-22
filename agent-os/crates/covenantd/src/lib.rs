@@ -1578,9 +1578,14 @@ impl Server {
             "witness-loop",
             "audit",
             epoch_ms() / 1000,
+        )
+        .with_subject(
+            (!state.config.agent_asset.is_empty()).then(|| state.config.agent_asset.clone()),
+            (!state.config.agent_registration.is_empty())
+                .then(|| state.config.agent_registration.clone()),
         );
         let request = covenant_metaplex::SignerRequest::AttestAuditRoot {
-            payload,
+            payload: Box::new(payload),
             asset: None,
             // The sidecar resolves the collection from its own env
             // (COVENANT_METAPLEX_COLLECTION), same as tool-driven writes.
@@ -2433,32 +2438,56 @@ impl Server {
                 .await
             }
             Request::ProveCompletion {
-                task_id,
-                worker_pubkey,
+                escrow_id,
+                job_id,
+                hirer_address,
+                worker_address,
+                amount,
+                asset,
+                network,
                 provider,
-                result_hash_hex,
-                validation_passed,
             } => {
                 self.prove_completion(
-                    task_id,
-                    worker_pubkey,
-                    provider,
-                    result_hash_hex,
-                    validation_passed,
+                    escrow::ProveRequest {
+                        escrow_id,
+                        job_id,
+                        hirer_address,
+                        worker_address,
+                        amount,
+                        asset,
+                        network,
+                        provider,
+                    },
                     peer,
                 )
                 .await
             }
             Request::RecordEscrowRelease {
-                proof_id,
-                provider,
-                network,
-                asset,
+                escrow_id,
+                decision_id,
+                hirer_address,
+                worker_address,
                 amount,
+                asset,
+                network,
+                provider,
                 tx_sig,
             } => {
-                self.record_escrow_release(proof_id, provider, network, asset, amount, tx_sig, peer)
-                    .await
+                self.record_escrow_release(
+                    escrow::ReleaseFacts {
+                        decision_id,
+                        escrow_id,
+                        hirer_address,
+                        worker_address,
+                        amount,
+                        asset,
+                        network,
+                        provider,
+                        tx_sig,
+                    },
+                    peer,
+                )
+                .await
             }
             Request::GetReputation { worker_pubkey } => {
                 self.get_reputation(worker_pubkey, peer).await
@@ -2545,6 +2574,9 @@ impl Server {
             Request::ResumeIntent { intent_id } => self.resume_intent(intent_id, peer).await,
             Request::RecentDebits { limit } => self.recent_debits(limit).await,
             Request::RotateOperatorToken => self.rotate_operator_token(peer).await,
+            Request::EnrollPeer { display, actions } => {
+                self.enroll_peer(display, actions, peer).await
+            }
             Request::ListPeers {
                 limit,
                 pubkey_prefix,
@@ -3440,6 +3472,115 @@ impl Server {
 
         Response::OperatorTokenRotated {
             token_b58: new_token.to_b58(),
+        }
+    }
+
+    /// Enroll a new external peer: mint a fresh subject identity + bearer
+    /// token, register it, and grant it `actions` — so a partner gets a scoped
+    /// token holding exactly those caps instead of the operator token. Gated to
+    /// the operator identity.
+    async fn enroll_peer(&self, display: String, actions: Vec<String>, peer: &AgentId) -> Response {
+        let operator = self.identity.agent_id();
+        if peer.pubkey != operator.pubkey {
+            let event = AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: operator.clone(),
+                kind: AuditKind::PeerEnrollmentRejected {
+                    peer_display: peer.display.clone(),
+                    peer_pubkey_b58: bs58::encode(peer.pubkey).into_string(),
+                },
+            };
+            if let Err(e) = self.record_daemon_event_required(event).await {
+                return audit_failure_response(e);
+            }
+            return Response::Error {
+                message: "enrolling a peer requires the operator identity".into(),
+            };
+        }
+
+        // The subject's display becomes part of a SignedCapability that must
+        // round-trip through the capability store, where `AgentId` enforces the
+        // `name@host` shape. A bare label like "orbserv-escrow" would serialize
+        // fine but fail to deserialize, bricking every read. Normalize a label
+        // to `<label>@peer`, then validate, so enrollment can never write a row
+        // the store cannot read back.
+        let display = display.trim();
+        let display = if display.contains('@') {
+            display.to_string()
+        } else {
+            format!("{display}@peer")
+        };
+        if let Err(e) = covenant_types::validate_agent_id_display(&display) {
+            return Response::Error {
+                message: format!("enroll: display must be a valid agent id (name@host): {e}"),
+            };
+        }
+        // Validate every action's scope up front so a bad action can't leave a
+        // half-enrolled peer (registered but ungranted) behind.
+        let empty_scope = serde_json::json!({});
+        for action in &actions {
+            if let Err(e) = validate_scope(action, &empty_scope) {
+                return Response::Error {
+                    message: format!("enroll: invalid action {action:?}: {e}"),
+                };
+            }
+        }
+
+        // Mint a fresh identity for the peer. The private key is discarded: the
+        // peer authenticates by bearer token, not by signing, so the keypair
+        // only supplies a stable subject pubkey for capability + audit
+        // attribution.
+        let subject = LocalIdentity::generate(display.clone()).agent_id();
+        let token = PeerToken::generate();
+        let token_b58 = token.to_b58();
+        let entry = PeerEntry {
+            token,
+            agent_id: subject.clone(),
+            registered_at: epoch_ms(),
+        };
+        if let Err(e) = self.peers.register(entry).await {
+            return Response::Error {
+                message: format!("enroll: register peer: {e}"),
+            };
+        }
+
+        let mut granted = Vec::with_capacity(actions.len());
+        for action in actions {
+            let cap = Capability {
+                subject: subject.clone(),
+                action: action.clone(),
+                scope: empty_scope.clone(),
+                granted_by: operator.clone(),
+                expires_at: None,
+            };
+            let signed = sign_capability(cap, self.identity.signing_key());
+            if let Err(e) = self.capabilities.record(signed).await {
+                return Response::Error {
+                    message: format!("enroll: record capability {action:?}: {e}"),
+                };
+            }
+            granted.push(action);
+        }
+
+        let pubkey_b58 = bs58::encode(subject.pubkey).into_string();
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::PeerEnrolled {
+                display: display.clone(),
+                pubkey_b58: pubkey_b58.clone(),
+                granted: granted.clone(),
+            },
+        };
+        self.record_peer_event(peer, event).await;
+
+        Response::PeerEnrolled {
+            token_b58,
+            pubkey_b58,
+            display,
+            granted,
         }
     }
 
@@ -6165,15 +6306,7 @@ impl Server {
         }
     }
 
-    async fn prove_completion(
-        &self,
-        task_id: Uuid,
-        worker_pubkey: String,
-        provider: String,
-        result_hash_hex: String,
-        validation_passed: bool,
-        peer: &AgentId,
-    ) -> Response {
+    async fn prove_completion(&self, req: escrow::ProveRequest, peer: &AgentId) -> Response {
         let check = self
             .check_capabilities(
                 "escrow:prove".into(),
@@ -6203,14 +6336,6 @@ impl Server {
             };
         }
 
-        let facts = escrow::CompletionFacts {
-            task_id,
-            worker_pubkey,
-            provider,
-            result_hash_hex,
-            validation_passed,
-        };
-
         let issuer = self.identity.agent_id();
         let context = escrow::ProveContext {
             identity: self.identity.as_ref(),
@@ -6218,11 +6343,12 @@ impl Server {
             issuer: &issuer,
         };
 
-        match escrow::prove_completion(&context, config.as_ref(), &facts).await {
+        match escrow::prove_completion(&context, config.as_ref(), &req).await {
             Ok(signed) => Response::CompletionProven {
-                proof_json: signed.proof_json,
-                signature_b58: signed.signature_b58,
-                signer_pubkey_b58: signed.signer_pubkey_b58,
+                decision_id: signed.decision_id(),
+                worker_address: signed.proof.worker_address.clone(),
+                issued_at: signed.proof.proven_at.to_string(),
+                proof: signed.proof_blob_b64,
             },
             Err(e) => Response::Error {
                 message: format!("escrow completion proof failed: {e}"),
@@ -6230,17 +6356,7 @@ impl Server {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn record_escrow_release(
-        &self,
-        proof_id: Uuid,
-        provider: String,
-        network: String,
-        asset: String,
-        amount: String,
-        tx_sig: Option<String>,
-        peer: &AgentId,
-    ) -> Response {
+    async fn record_escrow_release(&self, facts: escrow::ReleaseFacts, peer: &AgentId) -> Response {
         let check = self
             .check_capabilities(
                 "escrow:release".into(),
@@ -6270,15 +6386,6 @@ impl Server {
             };
         }
 
-        let facts = escrow::ReleaseFacts {
-            proof_id,
-            provider,
-            network,
-            asset,
-            amount,
-            tx_sig,
-        };
-
         let issuer = self.identity.agent_id();
         let context = escrow::ReleaseContext {
             settlement: self.settlement.as_ref(),
@@ -6287,9 +6394,8 @@ impl Server {
         };
 
         match escrow::record_escrow_release(&context, config.as_ref(), peer, &facts).await {
-            Ok(receipt_id) => Response::EscrowReleased {
-                receipt_id,
-                proof_id,
+            Ok(recorded_at) => Response::EscrowReleased {
+                recorded_at: recorded_at.to_string(),
             },
             Err(e) => Response::Error {
                 message: format!("escrow release recording failed: {e}"),
@@ -53295,6 +53401,88 @@ budget_credits_per_hour = {credits}
         (s, dir, old_token, operator)
     }
 
+    #[tokio::test]
+    async fn enroll_peer_mints_scoped_token_and_grants_subject() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let resp = s
+            .op_respond(Request::EnrollPeer {
+                display: "orbserv-escrow".into(),
+                actions: vec!["escrow.release.record".into(), "reputation.read".into()],
+            })
+            .await;
+        let (token_b58, pubkey_b58, granted) = match resp {
+            Response::PeerEnrolled {
+                token_b58,
+                pubkey_b58,
+                granted,
+                ..
+            } => (token_b58, pubkey_b58, granted),
+            other => panic!("expected PeerEnrolled, got: {other:?}"),
+        };
+        assert_eq!(granted, vec!["escrow.release.record", "reputation.read"]);
+
+        // The scoped token resolves to the new subject (which is NOT the operator).
+        let token = covenant_peer_auth::PeerToken::from_b58(&token_b58).unwrap();
+        let subject = s
+            .peers
+            .resolve(&token)
+            .await
+            .unwrap()
+            .expect("token resolves");
+        assert_eq!(bs58::encode(subject.pubkey).into_string(), pubkey_b58);
+        assert_ne!(subject.pubkey, s.identity.agent_id().pubkey);
+
+        // The subject MUST round-trip through serde the way the persistent
+        // capability store does: a bare label display would serialize but fail
+        // to deserialize, bricking every cap read. The label is normalized to
+        // `<label>@peer`.
+        let wire = serde_json::to_string(&subject).unwrap();
+        let back: AgentId = serde_json::from_str(&wire).expect("subject display must be storeable");
+        assert_eq!(back.pubkey, subject.pubkey);
+        assert_eq!(subject.display, "orbserv-escrow@peer");
+
+        // The subject holds exactly the granted caps — nothing it wasn't given.
+        assert!(
+            s.check_capabilities("x".into(), vec!["escrow.release.record".into()], &subject)
+                .await
+                .passed
+        );
+        assert!(
+            s.check_capabilities("x".into(), vec!["reputation.read".into()], &subject)
+                .await
+                .passed
+        );
+        let has_ungranted = s
+            .check_capabilities("x".into(), vec!["escrow.completion.prove".into()], &subject)
+            .await
+            .passed;
+        assert!(
+            !has_ungranted,
+            "subject must not hold a cap it was not granted"
+        );
+    }
+
+    #[tokio::test]
+    async fn enroll_peer_rejects_non_operator() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let foreign = AgentId::new("foreign@host", [42u8; 32]);
+        match s
+            .respond(
+                Request::EnrollPeer {
+                    display: "x".into(),
+                    actions: vec![],
+                },
+                &foreign,
+            )
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"), "got: {message}")
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
     /// Happy path: rotation under the operator identity returns the new
     /// token, the registry resolves it to the operator, the old token
     /// no longer resolves, and the on-disk file holds the new b58.
@@ -56674,6 +56862,212 @@ budget_credits_per_hour = {credits}
                 .iter()
                 .any(|e| matches!(&e.kind, covenant_audit::AuditKind::SpendSettled { .. })),
             "spend_settled audit row must be recorded"
+        );
+    }
+
+    fn prove_completion_req(job_id: Uuid, worker_address: &str) -> Request {
+        Request::ProveCompletion {
+            escrow_id: "escrow_xyz".into(),
+            job_id: job_id.to_string(),
+            hirer_address: "0x0fA12125753428C58aE439E57fab3A94Bd93C78b".into(),
+            worker_address: worker_address.into(),
+            amount: "10000000".into(),
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into(),
+            network: "eip155:84532".into(),
+            provider: "orbserv".into(),
+        }
+    }
+
+    fn escrow_release_req(decision_id: uuid::Uuid, worker_address: &str) -> Request {
+        Request::RecordEscrowRelease {
+            escrow_id: "escrow_xyz".into(),
+            decision_id,
+            hirer_address: "0x0fA12125753428C58aE439E57fab3A94Bd93C78b".into(),
+            worker_address: worker_address.into(),
+            amount: "10000000".into(),
+            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into(),
+            network: "eip155:84532".into(),
+            provider: "orbserv".into(),
+            tx_sig: Some("0xpayout".into()),
+        }
+    }
+
+    /// Seed the worker's run for `job` into the audit chain, the way a real
+    /// dispatch would, so prove has a completion to derive from.
+    async fn seed_escrow_run(audit: &covenant_audit::InMemoryAuditLog, job: Uuid) {
+        audit
+            .record(covenant_audit::AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: 1,
+                issuer: AgentId::new("daemon@local", [9u8; 32]),
+                kind: covenant_audit::AuditKind::IntentDispatched {
+                    intent_id: job,
+                    intent_text: "do the work".into(),
+                    matched_agent: None,
+                    result_hash_hex: "9f86d081".into(),
+                    status: "ok".into(),
+                },
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn escrow_prove_rejects_when_capability_missing() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: true });
+        match s
+            .op_respond(prove_completion_req(Uuid::from_u128(0x7a5c), "0xWorker"))
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("escrow.completion.prove"),
+                "error must name the missing capability: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_prove_rejects_when_not_configured() {
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "escrow.completion.prove").await;
+        match s
+            .op_respond(prove_completion_req(Uuid::from_u128(0x7a5c), "0xWorker"))
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_prove_denies_when_no_run_for_job() {
+        // Capability + config are fine, but no run exists in the chain for the
+        // job, so there is nothing to attest and prove must refuse.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: true });
+        grant_action(&s, "escrow.completion.prove").await;
+        match s
+            .op_respond(prove_completion_req(Uuid::from_u128(0xdead), "0xWorker"))
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("no run found"), "got: {message}")
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_loop_prove_verify_release_reputation_end_to_end() {
+        // The exact path Orbserv's escrow drives over the gateway: a worker run
+        // exists in the chain, prove derives + signs against it, the escrow
+        // verifies the opaque blob, releases, and reputation reflects the loop.
+        use base64::Engine as _;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let job = Uuid::from_u128(0x7a5c);
+        seed_escrow_run(&audit, job).await;
+        let s =
+            server_with_audit(audit.clone()).with_escrow(escrow::EscrowConfig { enabled: true });
+        grant_action(&s, "escrow.completion.prove").await;
+        grant_action(&s, "escrow.release.record").await;
+        grant_action(&s, "reputation.read").await;
+
+        let worker = "0x7A4D3Ae53E9F96599143e1BF057ba11A7e09Ab3E";
+
+        // 1. Prove -> decision_id + one opaque base64 proof blob.
+        let (decision_id, proof_blob) = match s.op_respond(prove_completion_req(job, worker)).await
+        {
+            Response::CompletionProven {
+                decision_id,
+                proof,
+                worker_address,
+                ..
+            } => {
+                assert_eq!(worker_address, worker);
+                (decision_id, proof)
+            }
+            other => panic!("expected CompletionProven, got: {other:?}"),
+        };
+
+        // 2. Verify the blob the way the escrow does: decode, then ed25519.
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&proof_blob)
+            .unwrap();
+        let bundle: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        covenant_identity::verify_b58(
+            bundle["signer_pubkey_b58"].as_str().unwrap(),
+            bundle["proof_json"].as_str().unwrap().as_bytes(),
+            bundle["signature_b58"].as_str().unwrap(),
+        )
+        .expect("escrow must be able to verify the proof blob");
+        // The derived facts came from the seeded run, not the request.
+        let proof: escrow::CompletionProof =
+            serde_json::from_str(bundle["proof_json"].as_str().unwrap()).unwrap();
+        assert_eq!(proof.result_hash_hex, "9f86d081");
+        assert!(proof.validation_passed);
+        assert_eq!(proof.proof_id, decision_id);
+
+        // 3. Release against the proof; a retry is idempotent.
+        match s.op_respond(escrow_release_req(decision_id, worker)).await {
+            Response::EscrowReleased { recorded_at } => assert!(!recorded_at.is_empty()),
+            other => panic!("expected EscrowReleased, got: {other:?}"),
+        }
+        match s.op_respond(escrow_release_req(decision_id, worker)).await {
+            Response::EscrowReleased { .. } => {}
+            other => panic!("expected EscrowReleased, got: {other:?}"),
+        }
+
+        // 4. Reputation reflects the loop: one proof, one pass, one release.
+        match s
+            .op_respond(Request::GetReputation {
+                worker_pubkey: worker.into(),
+            })
+            .await
+        {
+            Response::Reputation {
+                proofs_total,
+                validations_passed,
+                validations_failed,
+                releases,
+                completion_rate_bps,
+                ..
+            } => {
+                assert_eq!(proofs_total, 1);
+                assert_eq!(validations_passed, 1);
+                assert_eq!(validations_failed, 0);
+                assert_eq!(releases, 1);
+                assert_eq!(completion_rate_bps, 10_000);
+            }
+            other => panic!("expected Reputation, got: {other:?}"),
+        }
+
+        // One proof row and exactly one release row (idempotent retry).
+        let kinds: Vec<_> = audit
+            .recent(32)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|k| matches!(k, covenant_audit::AuditKind::EscrowCompletionProven { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|k| matches!(k, covenant_audit::AuditKind::EscrowReleased { .. }))
+                .count(),
+            1,
+            "release must be idempotent on decision_id"
         );
     }
 

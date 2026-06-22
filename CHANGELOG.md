@@ -4,7 +4,7 @@ All notable changes to Covenant are documented here. Format follows [Keep a Chan
 
 Unreleased work is summarized in [`ROADMAP.md`](./ROADMAP.md).
 
-## [0.1.0] - 2026-05-13
+## [0.1.0-alpha.1] - 2026-05-28
 
 First tagged release. The daemon, CLI, and operator console are usable end-to-end; signed releases are produced from CI with cosign keyless OIDC.
 

@@ -184,20 +184,52 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
             if asset.is_some() {
                 bail!("append-to-existing-asset is not supported yet; omit `asset`");
             }
-            covenant_metaplex::validate_root_hash_hex(&payload.root_hash_hex)
+            covenant_metaplex::validate_root_hash_hex(&payload.response_hash)
                 .map_err(|e| anyhow!("{e}"))?;
+            // The signer is the trust boundary: stdin is untrusted, so every
+            // string inscribed on-chain is validated here regardless of who
+            // built the payload (the daemon validates too; this is the gate).
+            for (name, value) in [
+                ("type", payload.r#type.as_str()),
+                ("schema", payload.schema.as_str()),
+                ("hashAlg", payload.hash_alg.as_str()),
+                ("tag", payload.tag.as_str()),
+                ("subject.registry", payload.subject.registry.as_str()),
+                ("covenant.releaseTarget", payload.covenant.release_target.as_str()),
+                ("covenant.releaseSubject", payload.covenant.release_subject.as_str()),
+                ("covenant.releaseScope", payload.covenant.release_scope.as_str()),
+            ] {
+                covenant_metaplex::validate_attestation_field(name, value)
+                    .map_err(|e| anyhow!("{e}"))?;
+            }
+            if let Some(agent_id) = &payload.subject.agent_id {
+                covenant_metaplex::validate_attestation_field("subject.agentId", agent_id)
+                    .map_err(|e| anyhow!("{e}"))?;
+            }
+            for (name, pk) in [
+                ("subject.asset", &payload.subject.asset),
+                ("subject.registration", &payload.subject.registration),
+            ] {
+                if let Some(pk) = pk {
+                    parse_pubkey(pk).with_context(|| name.to_string())?;
+                }
+            }
             let collection = match req_collection {
                 Some(c) => Some(parse_pubkey(c).context("request collection")?),
                 None => collection_from_env()?,
             };
-            let data = serde_json::to_vec(payload).context("encode attestation payload")?;
+            // Stamp the validator with the key that actually signs, so the
+            // on-chain record can't claim an authority the daemon doesn't hold.
+            let mut payload = payload.clone();
+            payload.validator = payer.pubkey().to_string();
+            let data = serde_json::to_vec(&payload).context("encode attestation payload")?;
             let asset = Keypair::new();
             let create_ix = CreateV2Builder::new()
                 .asset(asset.pubkey())
                 .payer(payer.pubkey())
                 .collection(collection)
                 .data_state(DataState::AccountState)
-                .name(truncate(&format!("Covenant root {}", payload.release_target)))
+                .name(truncate(&format!("Covenant root {}", payload.covenant.release_target)))
                 .uri(String::new())
                 .external_plugin_adapters(vec![ExternalPluginAdapterInitInfo::AppData(
                     AppDataInitInfo {

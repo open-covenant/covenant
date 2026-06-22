@@ -38,6 +38,7 @@ covenant-sns = { path = "../covenant-sns" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
+base64 = "0.22"
 bs58 = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
@@ -53,6 +54,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 covenant-audit = { path = "../covenant-audit" }
+covenant-hyre = { path = "../covenant-hyre" }
 covenant-identity = { path = "../covenant-identity" }
 covenant-llm = { path = "../covenant-llm" }
 covenant-manifest = { path = "../covenant-manifest" }

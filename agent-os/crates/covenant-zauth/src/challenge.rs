@@ -84,16 +84,28 @@ pub struct AcceptExtra {
 
 /// Decode the challenge from the `payment-required` response header.
 pub fn decode_from_headers(headers: &HeaderMap) -> Result<Challenge> {
+    let json = decode_header_bytes(headers)?;
+    serde_json::from_slice(&json).map_err(|e| ZauthError::DecodeChallenge(format!("json: {e}")))
+}
+
+/// Decode the challenge header into a raw JSON value. Used to echo the
+/// chosen accept option back verbatim in the x402 v2 payment payload
+/// (the server's matcher deep-equals the requirement against `accepted`),
+/// and to surface a rejected retry's error detail.
+pub fn decode_value_from_headers(headers: &HeaderMap) -> Result<serde_json::Value> {
+    let json = decode_header_bytes(headers)?;
+    serde_json::from_slice(&json).map_err(|e| ZauthError::DecodeChallenge(format!("json: {e}")))
+}
+
+fn decode_header_bytes(headers: &HeaderMap) -> Result<Vec<u8>> {
     let raw = headers
         .get(HEADER)
         .ok_or(ZauthError::MissingChallengeHeader)?;
     let b64 = raw
         .to_str()
         .map_err(|e| ZauthError::DecodeChallenge(format!("header not ascii: {e}")))?;
-    let json = B64
-        .decode(b64)
-        .map_err(|e| ZauthError::DecodeChallenge(format!("base64: {e}")))?;
-    serde_json::from_slice(&json).map_err(|e| ZauthError::DecodeChallenge(format!("json: {e}")))
+    B64.decode(b64)
+        .map_err(|e| ZauthError::DecodeChallenge(format!("base64: {e}")))
 }
 
 /// Pick the first accept option for `(network, asset)` that pays to
@@ -188,9 +200,9 @@ mod tests {
                 "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                 "amount": "50000",
                 "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                "payTo": "ZAU64eKWAgiGNux8BzvgRn8RvWqFhdMVrpJytF7V1qm",
+                "payTo": "ZAU64eKWAgiGNux8bzvgRn8RvWqFhdMVrpJytF7V1qm",
                 "maxTimeoutSeconds": 300,
-                "extra": { "feePayer": "ZAU64eKWAgiGNux8BzvgRn8RvWqFhdMVrpJytF7V1qm" }
+                "extra": { "feePayer": "ZAU64eKWAgiGNux8bzvgRn8RvWqFhdMVrpJytF7V1qm" }
             }
         ]
     }"#;

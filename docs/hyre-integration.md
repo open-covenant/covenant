@@ -11,6 +11,8 @@ The profile lives in the `covenant-hyre` crate plus a thin daemon bridge in
 budgeting, audit, and attestation are reused from the existing x402 accounting
 path that backs every paid call.
 
+> See also: [Covenant x402](./x402.md) for the generic pay-per-call layer Hyre rides on, and [Covenant × zauth](./zauth.md) for x402 endpoint discovery and monitoring.
+
 ## Quick start (operator)
 
 ```sh

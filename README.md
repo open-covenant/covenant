@@ -1,6 +1,7 @@
 # Covenant
 
 [![CI](https://github.com/open-covenant/covenant/actions/workflows/ci.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/ci.yml)
+[![kani](https://github.com/open-covenant/covenant/actions/workflows/kani.yml/badge.svg)](https://github.com/open-covenant/covenant/actions/workflows/kani.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20134416-blue)](https://doi.org/10.5281/zenodo.20134416)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](./rust-toolchain.toml)

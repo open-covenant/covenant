@@ -16317,6 +16317,30 @@ required = {caps:?}
         )
     }
 
+    /// Like [`server_with`], but injects an arbitrary [`Runner`] so a test can
+    /// drive `dispatch_intent`'s runner-failure bail arm (lib.rs:4766) that the
+    /// infallible `MockRunner` can never hit.
+    fn server_with_runner(cards: Vec<AgentCard>, runner: Arc<dyn Runner>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(cards)),
+            runner,
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     fn server_with_audit(audit: Arc<covenant_audit::InMemoryAuditLog>) -> Server {
         server_with_audit_dyn(audit)
     }
@@ -59170,6 +59194,65 @@ budget_credits_per_hour = {credits}
                 status: 503,
                 body: "injected embedder failure".into(),
             })
+        }
+    }
+
+    /// A [`Runner`] double whose `run` always fails, so [`Server::dispatch_intent`]
+    /// reaches its `agent {id} failed: {e}` bail arm (lib.rs:4766) while the rest
+    /// of the daemon behaves normally. Every production path and every existing
+    /// test constructs the Server with the infallible-by-construction
+    /// `MockRunner`, so the runner Err arm is dead without this injection.
+    struct FailingRunner;
+
+    #[async_trait::async_trait]
+    impl Runner for FailingRunner {
+        async fn run(
+            &self,
+            _card: &AgentCard,
+            _intent: &Intent,
+        ) -> Result<AgentResult, covenant_runtime::RunnerError> {
+            Err(covenant_runtime::RunnerError::Io(std::io::Error::other(
+                "injected runner failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_intent_surfaces_error_when_runner_fails() {
+        // A failing agent run must surface to the caller as Response::Error
+        // naming the failing agent and carrying the cause (lib.rs:4766), NOT a
+        // silent success or an attribution-free message — otherwise a crashed
+        // or misbehaving agent looks like a healthy no-op and the intent is
+        // never retried or repaired. Every test builds the Server with the
+        // infallible MockRunner, so this bail arm is dead without the injected
+        // FailingRunner. The default unseeded InMemoryLedger takes its
+        // NoCapacity warn-and-continue path (it does not bail), so dispatch
+        // reaches the runner; the operator grants the card's required cap so
+        // the capability gate passes.
+        let server = server_with_runner(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            Arc::new(FailingRunner),
+        );
+        grant_action(&server, "tool.web_search").await;
+        grant_action(&server, "memory.write").await;
+        match server
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.starts_with("agent research failed: "),
+                    "the bail must name the failing agent with the documented prefix, got {message:?}",
+                );
+                assert!(
+                    message.contains("injected runner failure"),
+                    "the bail must surface the runner cause, got {message:?}",
+                );
+            }
+            other => panic!("a failing runner must bail to Response::Error, got {other:?}"),
         }
     }
 

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T15:45:03.960Z",
+  "updatedAt": "2026-06-22T16:05:16.224Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10440,
+    "events": 10445,
     "tasks": 1230,
-    "integrated": 1232
+    "integrated": 1233
   },
   "throughput": {
     "last24h": 35,
-    "last7d": 138,
-    "velocity": 19.7
+    "last7d": 139,
+    "velocity": 19.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 12
+      "count": 13
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1232
+      "total": 1233
     }
   ],
   "states": {
-    "integrated": 1224,
+    "integrated": 1225,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "mailbox-lookup-task-sender-read-failure-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T15:24:11.903Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T15:47:04.412Z",
+      "task": "mailbox-lookup-task-sender-read-failure-coverage",
+      "note": "committed e516ae29; test-only slice completing Mailbox trait read-failure coverage (lookup_task_sender was the 5th uncovered method); both b"
+    },
     {
       "at": "2026-06-22T15:15:10.496Z",
       "task": "secret-broker-backend-failure-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T21:43:29.678Z",
       "task": "settlement-backfill-write-failure-surfaced-unit-coverage",
       "note": "Committed 18419c69 (lib.rs + README.md only; autonomy/ gitignored). FailingBackfillSettlement + settlement_write_failure_backfill pin the se"
-    },
-    {
-      "at": "2026-06-21T21:04:33.763Z",
-      "task": "memory-backfill-write-failure-surfaced-unit-coverage",
-      "note": "Integrated: 6ecf63c1. Pushed to origin/loop/main-track. Slice 4/4 of memory-store-write-failure-coverage — epic COMPLETE."
     }
   ]
 }

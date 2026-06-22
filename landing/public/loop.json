@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T22:48:34.947Z",
+  "updatedAt": "2026-06-22T23:08:38.725Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10506,
+    "events": 10508,
     "tasks": 1238,
-    "integrated": 1240
+    "integrated": 1241
   },
   "throughput": {
     "last24h": 24,
-    "last7d": 142,
-    "velocity": 20.3
+    "last7d": 143,
+    "velocity": 20.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 20
+      "count": 21
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1240
+      "total": 1241
     }
   ],
   "states": {
-    "integrated": 1232,
+    "integrated": 1233,
     "proposed": 1,
-    "blocked": 4,
-    "validation": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "cli-hash32-empty-arg-coverage",
-    "state": "validation",
-    "since": "2026-06-22T22:48:26.913Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T22:49:44.482Z",
+      "task": "cli-hash32-empty-arg-coverage",
+      "note": "Committed 575aefa5 on loop/main-track; Hash32ArgError Empty arm (parse_hash32_arg main.rs 529) covered + mutation-proven, chain-tx line refs"
+    },
     {
       "at": "2026-06-22T21:18:33.866Z",
       "task": "cli-operator-keypair-invalid-material-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-22T00:17:16.859Z",
       "task": "capability-revoke-cross-peer-audit-write-failure-surfaced-un",
       "note": "Committed 8c15a40d. handler-audit-write-failure-coverage 5/7. Pushing."
-    },
-    {
-      "at": "2026-06-22T00:08:48.534Z",
-      "task": "a2a-sender-mismatch-audit-write-failure-surfaced-unit-covera",
-      "note": "Committed f62c02f7. handler-audit-write-failure-coverage 4/7. Pushing."
     }
   ]
 }

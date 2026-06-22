@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T01:21:26.049Z",
+  "updatedAt": "2026-06-22T01:41:33.519Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10364,
-    "tasks": 1221,
-    "integrated": 1224
+    "events": 10373,
+    "tasks": 1222,
+    "integrated": 1225
   },
   "throughput": {
     "last24h": 41,
-    "last7d": 137,
-    "velocity": 19.6
+    "last7d": 138,
+    "velocity": 19.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-22",
-      "total": 1224
+      "total": 1225
     }
   ],
   "states": {
-    "integrated": 1216,
+    "integrated": 1217,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T01:38:06.940Z",
+      "task": "peer-self-revoke-force-recovery-live-coverage",
+      "note": "Slice complete: test + README metrics committed; live-coverage matrix + task records local."
+    },
     {
       "at": "2026-06-22T00:42:26.252Z",
       "task": "dispatch-budget-exhausted-audit-write-failure-surfaced-unit-",
@@ -310,11 +315,6 @@
       "at": "2026-06-21T18:42:56.563Z",
       "task": "mailbox-recent-tasks-read-failure-surfaced-unit-coverage",
       "note": "Integrated: 76816bf3. Slice 1/4 of a2a-mailbox-store-read-failure-coverage. Helper server_with_mailbox_dyn + FailingMailboxReads double (4 f"
-    },
-    {
-      "at": "2026-06-21T17:49:40.250Z",
-      "task": "peers-purge-read-failure-surfaced-unit-coverage",
-      "note": "integrated: purge_peers peer-registry read-failure bail arm pinned. peers-store-read-failure-coverage epic now 2/2. Security: read-only test"
     }
   ]
 }

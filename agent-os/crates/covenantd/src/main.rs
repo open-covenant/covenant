@@ -405,8 +405,15 @@ async fn main() -> Result<()> {
         if cfg.reads_enabled() {
             info!(
                 resolver = %cfg.resolver_url,
-                "sns profile enabled (sns.resolve / sns.reverse / sns.record)"
+                writes = cfg.writes_enabled(),
+                "sns profile enabled (resolve/reverse/record; subdomain + record writes when a signer is set)"
             );
+            if cfg.writes_enabled() && std::env::var("COVENANT_SNS_KEYPAIR").is_err() {
+                tracing::warn!(
+                    "sns writes are configured but COVENANT_SNS_KEYPAIR is unset; \
+                     write tools will fail until the parent-domain keypair path is provided"
+                );
+            }
             server.with_sns(covenantd::sns::SnsState::new(cfg))
         } else {
             server

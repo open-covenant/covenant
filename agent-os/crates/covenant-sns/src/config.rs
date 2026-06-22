@@ -17,8 +17,21 @@ pub struct SnsConfig {
     /// Hosted SNS REST resolver base URL. Defaults to the public proxy.
     #[serde(default = "default_resolver")]
     pub resolver_url: String,
-    /// Tool allowlist by short slug (`resolve`, `reverse`, `record`). `None`
-    /// allows every enabled tool; `Some([])` allows none.
+    /// Solana RPC the signer sidecar submits writes to. Empty disables every
+    /// write tool.
+    #[serde(default)]
+    pub rpc_url: String,
+    /// Absolute path to the `covenant-sns-signer` binary that holds the parent
+    /// domain key. Empty disables every write tool; reads never need it.
+    #[serde(default)]
+    pub signer_binary: String,
+    /// Parent domain Covenant issues subdomains under (`covenant.sol`). Empty
+    /// disables subdomain issuance.
+    #[serde(default)]
+    pub parent_domain: String,
+    /// Tool allowlist by short slug (`resolve`, `reverse`, `record`,
+    /// `register_subdomain`, `set_record`). `None` allows every enabled tool;
+    /// `Some([])` allows none.
     #[serde(default)]
     pub allow: Option<Vec<String>>,
 }
@@ -32,6 +45,9 @@ impl Default for SnsConfig {
         Self {
             enabled: false,
             resolver_url: default_resolver(),
+            rpc_url: String::new(),
+            signer_binary: String::new(),
+            parent_domain: String::new(),
             allow: None,
         }
     }
@@ -53,6 +69,9 @@ impl SnsConfig {
                 .map(|v| truthy(&v))
                 .unwrap_or(false),
             resolver_url: env("COVENANT_SNS_RESOLVER_URL").unwrap_or_else(default_resolver),
+            rpc_url: env("COVENANT_SNS_RPC_URL").unwrap_or_default(),
+            signer_binary: env("COVENANT_SNS_SIGNER_BIN").unwrap_or_default(),
+            parent_domain: env("COVENANT_SNS_PARENT_DOMAIN").unwrap_or_default(),
             allow: env("COVENANT_SNS_ALLOW").map(|v| {
                 v.split(',')
                     .map(|s| s.trim().to_string())
@@ -65,6 +84,13 @@ impl SnsConfig {
     /// Read tools are advertised when the profile is on and a resolver is set.
     pub fn reads_enabled(&self) -> bool {
         self.enabled && !self.resolver_url.is_empty()
+    }
+
+    /// Write tools are advertised when the profile is on and both the signer
+    /// sidecar and an RPC are configured. Subdomain issuance additionally needs
+    /// `parent_domain`; record writes do not.
+    pub fn writes_enabled(&self) -> bool {
+        self.enabled && !self.signer_binary.is_empty() && !self.rpc_url.is_empty()
     }
 
     pub fn allows(&self, slug: &str) -> bool {
@@ -94,6 +120,19 @@ mod tests {
             ..Default::default()
         };
         assert!(c.reads_enabled());
+    }
+
+    #[test]
+    fn writes_need_signer_and_rpc() {
+        let mut c = SnsConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(!c.writes_enabled(), "no signer/rpc yet");
+        c.signer_binary = "/bin/covenant-sns-signer".into();
+        assert!(!c.writes_enabled(), "still no rpc");
+        c.rpc_url = "https://api.devnet.solana.com".into();
+        assert!(c.writes_enabled());
     }
 
     #[test]

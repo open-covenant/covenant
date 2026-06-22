@@ -11,10 +11,12 @@
 
 mod config;
 mod resolve;
+mod sign;
 mod tools;
 
 pub use config::SnsConfig;
 pub use resolve::{HttpSnsResolver, ResolvedDomain, SnsError, SnsResolver};
+pub use sign::{validate_label, SignerRequest, SignerResponse, SnsSigner};
 pub use tools::{sns_specs, sns_tool, TOOL_PREFIX};
 
 /// Default hosted SNS resolver (the public Bonfida sns-sdk proxy). Keyless

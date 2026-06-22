@@ -12,8 +12,8 @@ pub mod escrow;
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
-pub mod sns;
 pub mod reputation;
+pub mod sns;
 pub mod spend_authz;
 pub mod sse;
 pub mod stream_dispatch;
@@ -293,7 +293,9 @@ impl Default for MetaplexAttestConfig {
 /// a bad interval falls back to the default rather than refusing to boot.
 pub fn metaplex_attest_config_from_env() -> MetaplexAttestConfig {
     metaplex_attest_config_from_values(
-        std::env::var("COVENANT_METAPLEX_AUTO_ATTEST").ok().as_deref(),
+        std::env::var("COVENANT_METAPLEX_AUTO_ATTEST")
+            .ok()
+            .as_deref(),
         std::env::var("COVENANT_METAPLEX_ATTEST_INTERVAL_SECS")
             .ok()
             .as_deref(),
@@ -4187,11 +4189,7 @@ impl Server {
     /// [`Self::call_tool`]. Reads run a DAS query; writes are delegated
     /// to the `covenant-metaplex-signer` sidecar. The minting key never
     /// enters the daemon's address space.
-    async fn metaplex_tool_call(
-        &self,
-        name: String,
-        arguments: serde_json::Value,
-    ) -> Response {
+    async fn metaplex_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
         let Some(state) = self.metaplex.clone() else {
             return Response::Error {
                 message: "metaplex profile is not enabled on this daemon.".into(),
@@ -4225,10 +4223,14 @@ impl Server {
                 message: "sns profile is not enabled on this daemon.".into(),
             };
         };
-        let Some(tool) = covenant_sns::sns_tool(&state.config, &name, state.resolver.clone()) else {
+        let signer = state.signer();
+        let Some(tool) =
+            covenant_sns::sns_tool(&state.config, &name, state.resolver.clone(), signer)
+        else {
             return Response::Error {
                 message: format!(
-                    "unknown or disabled sns tool: {name} (enable with COVENANT_SNS_ENABLED=1)"
+                    "unknown or disabled sns tool: {name} (reads need COVENANT_SNS_ENABLED=1; \
+                     writes need the signer sidecar + RPC)"
                 ),
             };
         };

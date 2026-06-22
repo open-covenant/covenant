@@ -16392,6 +16392,30 @@ required = {caps:?}
         )
     }
 
+    // Mirrors server_with_memory_dyn but injects the Embedder, so a test can
+    // drive search_memory with a failing embedder and reach the `embed: {e}`
+    // bail arm (lib.rs:6460) the infallible MockEmbedder default can never hit.
+    fn server_with_embedder(embedder: Arc<dyn Embedder>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(covenant_memory::InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            embedder,
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     // Mirrors server_with_memory_dyn but injects the Settlement store, so a test
     // can drive recent_receipts / receipt_batches with a failing store and reach
     // the bail arm the infallible InMemorySettlement default can never hit.
@@ -59129,6 +59153,26 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// An [`Embedder`] double whose `embed` always fails, so [`Server::search_memory`]
+    /// reaches its `embed: {e}` bail arm (lib.rs:6460) while the rest of the daemon
+    /// behaves normally. Every production path and every existing test constructs
+    /// the Server with the infallible-by-construction `MockEmbedder`, so the
+    /// embedder Err arm is dead without this injection.
+    struct FailingEmbedder;
+
+    #[async_trait::async_trait]
+    impl Embedder for FailingEmbedder {
+        fn name(&self) -> &'static str {
+            "failing"
+        }
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, covenant_llm::ProviderError> {
+            Err(covenant_llm::ProviderError::Status {
+                status: 503,
+                body: "injected embedder failure".into(),
+            })
+        }
+    }
+
     #[tokio::test]
     async fn search_memory_surfaces_error_when_memory_store_search_fails() {
         // A vector-search read whose backing store fails must NOT be reported
@@ -59160,6 +59204,42 @@ budget_credits_per_hour = {credits}
                 );
             }
             other => panic!("expected Response::Error when search_similar() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn search_memory_surfaces_error_when_embedder_fails() {
+        // A vector-search read first embeds the query (lib.rs:6458) before it
+        // queries the store; an embedder outage (Ollama unreachable, model-load
+        // failure, response truncation) must NOT surface as an empty
+        // Response::Memories — the caller would see clean "no matches" recall
+        // indistinguishable from a store that genuinely holds nothing relevant,
+        // hiding a dependency fault behind a success. The operator grants itself
+        // memory.read so the cap + scope gates pass and the infallible
+        // InMemoryStore would otherwise return an empty Ok; only the injected
+        // FailingEmbedder stands between the request and that misleading page.
+        let server = server_with_embedder(Arc::new(FailingEmbedder));
+        grant_action(&server, "memory.read").await;
+        let resp = server
+            .op_respond(Request::SearchMemory {
+                query: "hello".into(),
+                tier: None,
+                limit: 10,
+                min_relevance: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("embed:"),
+                    "a search_memory read whose embedder fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected embedder failure"),
+                    "the surfaced error must carry the embedder's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when embed() fails, got {other:?}"),
         }
     }
 

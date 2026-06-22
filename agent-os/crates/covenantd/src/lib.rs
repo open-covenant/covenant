@@ -58711,6 +58711,43 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_a2a_sender_mismatch() {
+        // A2ASenderMismatch is a must-record kind: a peer presenting an A2A
+        // task whose sender is not the authenticated peer is a spoofing
+        // attempt that must land on the peer's own audit feed even when the
+        // audit store is degraded. If record_peer_event_required cannot
+        // persist the row, send_a2a_task must surface the generic
+        // "audit write failed; refusing to proceed" bail rather than the
+        // normal spoof rejection — otherwise the operator/peer answers a
+        // spoof with a clean refusal that leaves no durable trail. Drive it
+        // in-process with the FailingAuditLog double.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let peer = LocalIdentity::generate("peer@local").agent_id();
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: LocalIdentity::generate("spoof@local").agent_id(),
+            recipient: LocalIdentity::generate("recipient@local").agent_id(),
+            intent_text: String::new(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        assert_ne!(
+            task.sender.pubkey, peer.pubkey,
+            "fixture task.sender must not match the authenticated peer"
+        );
+        match s.send_a2a_task(task, &peer).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the a2a sender-mismatch path must surface as the generic bail, not the normal spoof rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
     /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
     /// `record` fails, for exercising the bail arm of
     /// [`Server::grant_capability`] when the capability row cannot persist.

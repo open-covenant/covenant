@@ -1,10 +1,10 @@
 {
-  "updatedAt": "2026-06-22T16:45:24.035Z",
+  "updatedAt": "2026-06-22T17:05:27.821Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10457,
+    "events": 10461,
     "tasks": 1232,
-    "integrated": 1234
+    "integrated": 1235
   },
   "throughput": {
     "last24h": 33,
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 14
+      "count": 15
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1234
+      "total": 1235
     }
   ],
   "states": {
-    "integrated": 1226,
+    "integrated": 1227,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "revoke-capability-signature-decode-err-live-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T16:39:45.652Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T16:49:42.615Z",
+      "task": "revoke-capability-signature-decode-err-live-coverage",
+      "note": "Shipped e410dae0 (pushed loop/main-track). 2 live tests pin both revoke_capability signature-decode Err arms; mutation-proven; lib.rs net-ze"
+    },
     {
       "at": "2026-06-22T16:30:59.433Z",
       "task": "sign-attestation-b58-decode-err-live-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T22:41:41.026Z",
       "task": "peers-register-write-failure-surfaced-unit-coverage",
       "note": "Committed 13c53bdc (lib.rs + README.md). FailingRegisterPeerRegistry + peers_write_failure_register pin the peers.register() write Err bail."
-    },
-    {
-      "at": "2026-06-21T22:21:45.378Z",
-      "task": "settlement-mark-batch-confirmed-write-failure-surfaced-unit-",
-      "note": "Committed ba403224 (lib.rs + README.md). FailingMarkBatchSettlement + settlement_write_failure_flush pin the mark_batch_confirmed write Err "
     }
   ]
 }

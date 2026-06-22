@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T10:23:31.947Z",
+  "updatedAt": "2026-06-22T10:43:35.889Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10399,
+    "events": 10400,
     "tasks": 1225,
-    "integrated": 1227
+    "integrated": 1228
   },
   "throughput": {
-    "last24h": 39,
-    "last7d": 136,
-    "velocity": 19.4
+    "last24h": 40,
+    "last7d": 137,
+    "velocity": 19.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1227
+      "total": 1228
     }
   ],
   "states": {
-    "integrated": 1219,
+    "integrated": 1220,
     "proposed": 1,
-    "blocked": 4,
-    "ready": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "submit-intent-ipc-v2-stream-live-coverage",
-    "state": "ready",
-    "since": "2026-06-22T10:22:29.706Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T10:24:14.393Z",
+      "task": "submit-intent-ipc-v2-stream-live-coverage",
+      "note": "Integrated as 057cf263. Commit = test file + README metrics only (autonomy/ loop-state gitignored). Push to origin/loop/main-track."
+    },
     {
       "at": "2026-06-22T05:58:56.479Z",
       "task": "memory-recent-ipc-stream-capability-gate-live-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T19:49:39.185Z",
       "task": "mailbox-compact-read-failure-surfaced-unit-coverage",
       "note": "Integrated: 78c451c9. Pushed to origin/loop/main-track. Slice 4/4 of a2a-mailbox-store-read-failure-coverage — epic now 4/4 COMPLETE."
-    },
-    {
-      "at": "2026-06-21T19:24:27.508Z",
-      "task": "mailbox-task-queue-read-failure-surfaced-unit-coverage",
-      "note": "Integrated: 090daf79. Pushed to origin/loop/main-track. Slice 3/4 of a2a-mailbox-store-read-failure-coverage."
     }
   ]
 }

@@ -54,6 +54,14 @@ pub struct SubprocessSnsSigner {
 impl SubprocessSnsSigner {
     pub fn from_config(config: &SnsConfig) -> Self {
         let mut env = vec![("COVENANT_SNS_RPC_URL".to_string(), config.rpc_url.clone())];
+        // Forward PATH/HOME (not secrets) so a script sidecar's interpreter
+        // shebang (`#!/usr/bin/env node`) resolves under the cleared env. The
+        // signer is otherwise isolated: only the SNS vars below reach it.
+        for k in ["PATH", "HOME"] {
+            if let Ok(v) = std::env::var(k) {
+                env.push((k.to_string(), v));
+            }
+        }
         if !config.parent_domain.is_empty() {
             env.push((
                 "COVENANT_SNS_PARENT_DOMAIN".to_string(),

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T00:21:14.812Z",
+  "updatedAt": "2026-06-22T00:41:18.536Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10347,
-    "tasks": 1220,
-    "integrated": 1222
+    "events": 10356,
+    "tasks": 1221,
+    "integrated": 1223
   },
   "throughput": {
-    "last24h": 39,
-    "last7d": 135,
-    "velocity": 19.3
+    "last24h": 40,
+    "last7d": 136,
+    "velocity": 19.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-22",
-      "total": 1222
+      "total": 1223
     }
   ],
   "states": {
-    "integrated": 1214,
+    "integrated": 1215,
     "proposed": 2,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T00:30:22.994Z",
+      "task": "a2a-recipient-rejected-audit-write-failure-surfaced-unit-cov",
+      "note": "Committed 6caf3c61. handler-audit-write-failure-coverage 6/7. Pushing."
+    },
     {
       "at": "2026-06-22T00:17:16.859Z",
       "task": "capability-revoke-cross-peer-audit-write-failure-surfaced-un",
@@ -310,11 +315,6 @@
       "at": "2026-06-21T17:37:47.991Z",
       "task": "peers-list-summaries-read-failure-surfaced-unit-coverage",
       "note": "integrated: list_peers peer-registry read-failure bail arm pinned + server_with_peers_dyn helper. Security: read-only test double, no securi"
-    },
-    {
-      "at": "2026-06-21T17:21:27.851Z",
-      "task": "budget-recent-debits-read-failure-surfaced-unit-coverage",
-      "note": "integrated: recent_debits budget read-failure bail arm pinned. Security: read-only test double, no security surface; cross_review skipped pe"
     }
   ]
 }

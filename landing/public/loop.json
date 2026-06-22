@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-22T18:05:56.599Z",
+  "updatedAt": "2026-06-22T18:26:15.883Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10473,
+    "events": 10474,
     "tasks": 1234,
     "integrated": 1236
   },
@@ -187,7 +187,7 @@
     "integrated": 1228,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "x402-signer-stdout-non-utf8-decode-failure-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T17:54:20.057Z"
+    "state": "self_review",
+    "since": "2026-06-22T18:25:25.769Z"
   },
   "recent": [
     {

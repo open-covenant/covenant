@@ -59243,6 +59243,59 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn submit_intent_survives_embedder_failure() {
+        // Intent dispatch must stay available during an embedder outage: the
+        // dispatcher warns and stores the record WITHOUT a vector (lib.rs:4782)
+        // rather than failing the intent. A regression that bailed on embed
+        // failure would break every intent whenever the embedder is unreachable.
+        // The mock embedder always succeeds, so this graceful path is dead
+        // without the injected FailingEmbedder. No agent card routes, so the
+        // phase-0 echo branch produces the output that gets stored.
+        let server = server_with_embedder(Arc::new(FailingEmbedder));
+        grant_action(&server, "memory.write").await;
+        let intent_id = match server
+            .op_respond(Request::SubmitIntent {
+                text: "ship the feature".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::IntentResult { intent_id, status, .. } => {
+                assert_eq!(
+                    status, "ok",
+                    "dispatch must succeed during an embedder outage, got status {status}",
+                );
+                intent_id
+            }
+            other => panic!("dispatch must survive an embedder outage, got {other:?}"),
+        };
+        // The record landed WITHOUT a vector — the precise "storing without
+        // vector" degradation, not merely "dispatch did not error".
+        grant_action(&server, "memory.read").await;
+        match server
+            .op_respond(Request::RecentMemory {
+                tier: None,
+                limit: 10,
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::Memories { records } => {
+                let record = records
+                    .iter()
+                    .find(|r| r.id == intent_id)
+                    .expect("the intent record must be stored even when embedding failed");
+                assert!(
+                    record.embedding.is_empty(),
+                    "the record must be stored WITHOUT a vector during an embedder outage, got {} dims",
+                    record.embedding.len(),
+                );
+            }
+            other => panic!("expected Memories read-back, got {other:?}"),
+        }
+    }
+
     /// A [`MemoryStore`] double whose `purge_older_than` WRITE fails, so
     /// [`Server::purge_memory`] reaches its `memory: {e}` bail arm while the
     /// other trait methods stay inert. The default in-memory + sqlite impls

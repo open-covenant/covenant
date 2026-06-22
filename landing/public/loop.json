@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T18:26:15.883Z",
+  "updatedAt": "2026-06-22T18:46:19.743Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10474,
-    "tasks": 1234,
-    "integrated": 1236
+    "events": 10485,
+    "tasks": 1235,
+    "integrated": 1238
   },
   "throughput": {
-    "last24h": 31,
-    "last7d": 140,
-    "velocity": 20
+    "last24h": 32,
+    "last7d": 141,
+    "velocity": 20.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 16
+      "count": 18
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1236
+      "total": 1238
     }
   ],
   "states": {
-    "integrated": 1228,
+    "integrated": 1230,
     "proposed": 1,
-    "blocked": 4,
-    "self_review": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "x402-signer-stdout-non-utf8-decode-failure-coverage",
-    "state": "self_review",
-    "since": "2026-06-22T18:25:25.769Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T18:38:07.424Z",
+      "task": "metaplex-signer-nonzero-exit-surfaced-coverage",
+      "note": "Integrating metaplex signer nonzero-exit coverage (x402 parity). Commit to follow."
+    },
+    {
+      "at": "2026-06-22T18:26:38.226Z",
+      "task": "x402-signer-stdout-non-utf8-decode-failure-coverage",
+      "note": "Integrating x402 signer stdout non-UTF-8 decode-failure coverage. Commit to follow."
+    },
     {
       "at": "2026-06-22T17:48:55.330Z",
       "task": "metaplex-signer-stdout-decode-failure-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-21T23:51:58.906Z",
       "task": "operator-peers-list-audit-write-failure-surfaced-unit-covera",
       "note": "Committed c8346ed2. audit_write_failure_operator_peers_list_rejected pins the list_peers record_daemon_event_required bail (lib.rs:3576). ha"
-    },
-    {
-      "at": "2026-06-21T23:41:10.780Z",
-      "task": "operator-token-rotation-audit-write-failure-surfaced-unit-co",
-      "note": "Committed c44e22db. audit_write_failure_operator_token_rotation_rejected pins the rotate_operator_token record_daemon_event_required bail (l"
-    },
-    {
-      "at": "2026-06-21T22:58:15.736Z",
-      "task": "budget-try-debit-write-failure-surfaced-unit-coverage",
-      "note": "Committed 5e8fee64. FailingDebitBudget + budget_write_failure_try_debit pin the try_debit non-NoCapacity Err bail. budget-store-write-failur"
     }
   ]
 }

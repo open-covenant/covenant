@@ -1,7 +1,7 @@
 {
   "id": "audit-kernel-fuel",
   "description": "Reduce wasmtime fuel of the covenant-audit-kernel EVOLVE block. Behavior frozen by unit tests, a vendored-reference differential suite, and a corpus report digest; diff confined to the EVOLVE region.",
-  "base": "fc5e697ad8c6d0b9f7cd54918b2059e3e3212204",
+  "base": "12327a635177e10b336df94986ef14e8af893837",
   "evolveFile": "agent-os/crates/covenant-audit-kernel/src/lib.rs",
   "allowedPaths": [
     "agent-os/crates/covenant-audit-kernel/src/lib.rs"

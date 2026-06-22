@@ -406,4 +406,48 @@ mod tests {
         assert_eq!(resp.cluster, "devnet");
         assert_eq!(resp.signature, "s");
     }
+
+    #[tokio::test]
+    async fn sign_with_limits_surfaces_malformed_json_signer_response() {
+        // The sidecar's stdout is untrusted; a response that is valid UTF-8
+        // but not a SignerResponse must surface the serde bail instead of
+        // falling through to the success path, which logs asset/signature as
+        // a confirmed on-chain write (metaplex.rs:153). Under a cap that does
+        // not breech, the JSON decode is the first thing to fail.
+        let (_dir, script) = fake_signer("printf 'not-json'");
+        let signer = SubprocessMetaplexSigner {
+            program: script,
+            env: vec![],
+        };
+        let err = signer
+            .sign_with_limits(sample_request(), 4096, std::time::Duration::from_secs(30))
+            .await
+            .expect_err("malformed stdout must surface, not decode-or-default");
+        assert!(
+            err.contains("decode signer response"),
+            "a non-JSON signer response must surface the decode bail: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_with_limits_surfaces_non_utf8_signer_stdout() {
+        // A sidecar fed by a hostile RPC could emit bytes that are not valid
+        // UTF-8. The from_utf8 bail must fire before the JSON decode so an
+        // operator can separate corrupt stdout from a corrupt-but-UTF-8 JSON
+        // payload during sidecar triage. A single 0xFF byte (printf '\377') is
+        // never valid UTF-8 and fits well under the cap.
+        let (_dir, script) = fake_signer("printf '\\377'");
+        let signer = SubprocessMetaplexSigner {
+            program: script,
+            env: vec![],
+        };
+        let err = signer
+            .sign_with_limits(sample_request(), 4096, std::time::Duration::from_secs(30))
+            .await
+            .expect_err("non-utf8 stdout must surface, not decode lossy");
+        assert!(
+            err.contains("signer stdout not utf-8"),
+            "a non-UTF-8 signer stdout must surface the from_utf8 bail: {err}"
+        );
+    }
 }

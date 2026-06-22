@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-22T14:44:51.122Z",
+  "updatedAt": "2026-06-22T15:04:54.942Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10427,
-    "tasks": 1228,
+    "events": 10431,
+    "tasks": 1229,
     "integrated": 1231
   },
   "throughput": {
-    "last24h": 35,
+    "last24h": 34,
     "last7d": 138,
     "velocity": 19.7
   },
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1223,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "secret-broker-backend-failure-coverage",
+    "state": "in_progress",
+    "since": "2026-06-22T14:49:52.044Z"
+  },
   "recent": [
     {
       "at": "2026-06-22T13:20:44.075Z",

@@ -2932,6 +2932,7 @@ t[19..83].try_into().ok()
 None
 }
 }
+#[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
 pub fn verify_chain(events_jsonl: &[u8], anchors_jsonl: &[u8]) -> ChainReport {
 let event_lines = split_lines(events_jsonl);
 let anchor_lines = split_lines(anchors_jsonl);

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-22T17:05:27.821Z",
+  "updatedAt": "2026-06-22T17:25:31.655Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10461,
-    "tasks": 1232,
+    "events": 10465,
+    "tasks": 1233,
     "integrated": 1235
   },
   "throughput": {
-    "last24h": 33,
+    "last24h": 32,
     "last7d": 140,
     "velocity": 20
   },
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1227,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "metaplex-signer-stdout-decode-failure-coverage",
+    "state": "in_progress",
+    "since": "2026-06-22T17:18:07.224Z"
+  },
   "recent": [
     {
       "at": "2026-06-22T16:49:42.615Z",

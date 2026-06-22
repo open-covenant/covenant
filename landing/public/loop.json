@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T13:04:31.664Z",
+  "updatedAt": "2026-06-22T13:24:35.505Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10422,
+    "events": 10427,
     "tasks": 1228,
-    "integrated": 1230
+    "integrated": 1231
   },
   "throughput": {
-    "last24h": 39,
-    "last7d": 138,
-    "velocity": 19.7
+    "last24h": 40,
+    "last7d": 139,
+    "velocity": 19.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 10
+      "count": 11
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1230
+      "total": 1231
     }
   ],
   "states": {
-    "integrated": 1222,
+    "integrated": 1223,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "runner-failure-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T12:46:19.101Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T13:20:44.075Z",
+      "task": "runner-failure-coverage",
+      "note": "Committed 2fb638d6 (test-only: FailingRunner double + server_with_runner seam + dispatch_intent_surfaces_error_when_runner_fails; README met"
+    },
     {
       "at": "2026-06-22T12:12:20.543Z",
       "task": "embedder-dispatch-graceful-degradation-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T20:51:04.231Z",
       "task": "memory-repair-write-failure-surfaced-unit-coverage",
       "note": "Integrated: dc39640f. Pushed to origin/loop/main-track. Slice 3/4 of memory-store-write-failure-coverage."
-    },
-    {
-      "at": "2026-06-21T20:33:41.666Z",
-      "task": "memory-compact-write-failure-surfaced-unit-coverage",
-      "note": "Integrated: 52bb6170. Pushed to origin/loop/main-track. Slice 2/4 of memory-store-write-failure-coverage."
     }
   ]
 }

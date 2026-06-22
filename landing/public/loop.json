@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T05:42:19.917Z",
+  "updatedAt": "2026-06-22T06:02:42.825Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10386,
+    "events": 10391,
     "tasks": 1224,
-    "integrated": 1226
+    "integrated": 1227
   },
   "throughput": {
-    "last24h": 38,
-    "last7d": 139,
-    "velocity": 19.9
+    "last24h": 39,
+    "last7d": 140,
+    "velocity": 20
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1226
+      "total": 1227
     }
   ],
   "states": {
-    "integrated": 1218,
+    "integrated": 1219,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "memory-recent-ipc-stream-capability-gate-live-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T04:49:24.845Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T05:58:56.479Z",
+      "task": "memory-recent-ipc-stream-capability-gate-live-coverage",
+      "note": "Committed a5c226e0 (test-only, +1 file agent-os/crates/covenantd/tests/live_ipc_memory_recent_stream.rs). Both live tests pass; mutation-pro"
+    },
     {
       "at": "2026-06-22T01:51:33.891Z",
       "task": "operator-token-insecure-mode-refusal-live-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T19:24:27.508Z",
       "task": "mailbox-task-queue-read-failure-surfaced-unit-coverage",
       "note": "Integrated: 090daf79. Pushed to origin/loop/main-track. Slice 3/4 of a2a-mailbox-store-read-failure-coverage."
-    },
-    {
-      "at": "2026-06-21T19:14:49.488Z",
-      "task": "mailbox-recent-results-read-failure-surfaced-unit-coverage",
-      "note": "Integrated: e5dada55. Pushed to origin/loop/main-track. Slice 2/4 of a2a-mailbox-store-read-failure-coverage."
     }
   ]
 }

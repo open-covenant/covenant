@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T00:01:11.146Z",
+  "updatedAt": "2026-06-22T00:21:14.812Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10329,
-    "tasks": 1218,
-    "integrated": 1220
+    "events": 10347,
+    "tasks": 1220,
+    "integrated": 1222
   },
   "throughput": {
-    "last24h": 37,
-    "last7d": 133,
-    "velocity": 19
+    "last24h": 39,
+    "last7d": 135,
+    "velocity": 19.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 0
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-22",
-      "total": 1220
+      "total": 1222
     }
   ],
   "states": {
-    "integrated": 1212,
+    "integrated": 1214,
     "proposed": 2,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T00:17:16.859Z",
+      "task": "capability-revoke-cross-peer-audit-write-failure-surfaced-un",
+      "note": "Committed 8c15a40d. handler-audit-write-failure-coverage 5/7. Pushing."
+    },
+    {
+      "at": "2026-06-22T00:08:48.534Z",
+      "task": "a2a-sender-mismatch-audit-write-failure-surfaced-unit-covera",
+      "note": "Committed f62c02f7. handler-audit-write-failure-coverage 4/7. Pushing."
+    },
     {
       "at": "2026-06-21T23:59:52.214Z",
       "task": "operator-peer-revoke-audit-write-failure-surfaced-unit-cover",
@@ -305,16 +315,6 @@
       "at": "2026-06-21T17:21:27.851Z",
       "task": "budget-recent-debits-read-failure-surfaced-unit-coverage",
       "note": "integrated: recent_debits budget read-failure bail arm pinned. Security: read-only test double, no security surface; cross_review skipped pe"
-    },
-    {
-      "at": "2026-06-21T17:04:09.737Z",
-      "task": "budget-verify-recent-read-failure-surfaced-unit-coverage",
-      "note": "integrated: verify_recent budget read-failure bail arm pinned. Security review: read-only test double in test module, no security surface; c"
-    },
-    {
-      "at": "2026-06-21T16:37:12.674Z",
-      "task": "settlement-receipt-batches-read-failure-surfaced-unit-covera",
-      "note": "Committed; pushing. Epic settlement-store-read-failure-coverage now 2/2."
     }
   ]
 }

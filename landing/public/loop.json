@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T12:03:53.360Z",
+  "updatedAt": "2026-06-22T12:24:23.654Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10413,
+    "events": 10418,
     "tasks": 1227,
-    "integrated": 1229
+    "integrated": 1230
   },
   "throughput": {
-    "last24h": 39,
-    "last7d": 138,
-    "velocity": 19.7
+    "last24h": 40,
+    "last7d": 139,
+    "velocity": 19.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 9
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1229
+      "total": 1230
     }
   ],
   "states": {
-    "integrated": 1221,
+    "integrated": 1222,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "embedder-dispatch-graceful-degradation-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T12:00:27.330Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T12:12:20.543Z",
+      "task": "embedder-dispatch-graceful-degradation-coverage",
+      "note": "Slice complete and validated; committing + pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-22T11:54:13.157Z",
       "task": "embedder-search-failure-surfaced-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-21T20:33:41.666Z",
       "task": "memory-compact-write-failure-surfaced-unit-coverage",
       "note": "Integrated: 52bb6170. Pushed to origin/loop/main-track. Slice 2/4 of memory-store-write-failure-coverage."
-    },
-    {
-      "at": "2026-06-21T20:16:40.347Z",
-      "task": "memory-purge-write-failure-surfaced-unit-coverage",
-      "note": "Integrated: 0267b377. Pushed to origin/loop/main-track. Slice 1/4 of memory-store-write-failure-coverage."
     }
   ]
 }

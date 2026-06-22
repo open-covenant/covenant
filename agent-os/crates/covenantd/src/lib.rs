@@ -58775,6 +58775,54 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_a2a_recipient_rejected() {
+        // A2ARecipientRejected (the catch-all arm: the recipient granted no
+        // a2a.recv at all) is a must-record kind: a sender pushing a task at
+        // a recipient that has not admitted it must land on the sender's own
+        // audit feed even when the audit store is degraded. If
+        // record_peer_event_required cannot persist the row, send_a2a_task
+        // must surface the generic "audit write failed; refusing to proceed"
+        // bail rather than the normal recipient-admission rejection —
+        // otherwise an unsolicited-task probe is answered with a clean
+        // refusal that leaves no durable trail.
+        //
+        // The sender is granted a2a.send.<recipient> first. That grant's
+        // CapabilityGranted row writes through the non-required
+        // record_peer_event (which only warns on failure), so the grant
+        // still lands in the in-memory store under FailingAuditLog and the
+        // send reaches the recipient gate. The recipient has no a2a.recv, so
+        // the catch-all arm emits A2ARecipientRejected via the required
+        // variant — the only audit write on this path — which bails.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let peer = s.identity.agent_id();
+        let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: foreign_recipient.clone(),
+            intent_text: "spam".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", foreign_recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the a2a recipient-rejected path must surface as the generic bail, not the normal recipient-admission rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
     /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
     /// `record` fails, for exercising the bail arm of
     /// [`Server::grant_capability`] when the capability row cannot persist.

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-22T16:05:16.224Z",
+  "updatedAt": "2026-06-22T16:25:20.115Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10445,
-    "tasks": 1230,
+    "events": 10449,
+    "tasks": 1231,
     "integrated": 1233
   },
   "throughput": {
-    "last24h": 35,
+    "last24h": 34,
     "last7d": 139,
     "velocity": 19.9
   },
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1225,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "sign-attestation-b58-decode-err-live-coverage",
+    "state": "in_progress",
+    "since": "2026-06-22T16:12:00.647Z"
+  },
   "recent": [
     {
       "at": "2026-06-22T15:47:04.412Z",

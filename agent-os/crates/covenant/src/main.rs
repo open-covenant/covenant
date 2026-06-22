@@ -9240,6 +9240,29 @@ mod tests {
         }
 
         #[test]
+        fn invalid_key_material_returns_invalid_variant() {
+            // 64 bytes whose pubkey half does not match the seed half are
+            // the silent-wrong-identity failure mode: the file parses, it is
+            // the right length, but Keypair::from_bytes rejects it because
+            // the recorded pubkey is not the one derived from the seed. The
+            // loader must surface InvalidKeyMaterial so an operator does not
+            // boot under a corrupt or tampered identity. A guaranteed
+            // mismatch is built by taking one keypair's bytes and
+            // overwriting its pubkey half with a second keypair's.
+            let dir = tempdir().expect("tempdir");
+            let mut bytes = Keypair::new().to_bytes();
+            let other = Keypair::new().to_bytes();
+            bytes[32..].copy_from_slice(&other[32..]);
+            let json = serde_json::to_vec(&bytes.to_vec()).expect("serialize mismatched bytes");
+            let path = write_bytes(dir.path(), "id.json", &json);
+            let err = load_operator_keypair(Some(path)).expect_err("must reject mismatched keypair");
+            match err {
+                KeypairLoadError::InvalidKeyMaterial { .. } => {}
+                other => panic!("expected InvalidKeyMaterial, got {other:?}"),
+            }
+        }
+
+        #[test]
         fn classify_read_error_distinguishes_missing_from_permission_denied() {
             // The two error classes must be distinct so an operator can
             // tell "the file is absent" from "the daemon process lacks

@@ -1,12 +1,13 @@
 //! Live integration test: spawns covenantd against a tempdir HOME and drives
 //! `Request::SignAttestation` over the raw IPC socket — pinning the success
 //! `Response::IdentityAttestation { signature_b58, pubkey_b58, ts }` receipt
-//! and the four rejection paths (missing capability, stale timestamp, empty
-//! and oversized message).
+//! and the five rejection paths (missing capability, stale timestamp, empty,
+//! oversized, and non-base58 message).
 //!
 //! `sign_attestation` (covenantd/src/lib.rs:4677) gates on the `identity.attest`
-//! capability, enforces a 120s timestamp-freshness window, bounds the bs58
-//! message to 1..=4096 bytes, then signs `b"covenant.identity.attest.v1\n"`
+//! capability, enforces a 120s timestamp-freshness window, rejects non-base58
+//! input, bounds the bs58 message to 1..=4096 bytes, then signs
+//! `b"covenant.identity.attest.v1\n"`
 //! concatenated with the message using the daemon's own ed25519 identity. The
 //! verb has in-lib unit coverage but is never exercised over the Unix socket
 //! the CLI is built on; this pins that wire contract.
@@ -308,6 +309,41 @@ async fn live_ipc_sign_attestation_rejects_empty_message() {
             );
         }
         other => panic!("expected Response::Error, got {other:?}"),
+    }
+
+    drop(stream);
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+#[tokio::test]
+#[ignore = "live: asserts Request::SignAttestation with a non-base58 message flattens onto Response::Error — the bs58::decode Err arm, distinct from the size-bound arms, which every sibling test bypasses by sending valid base58"]
+async fn live_ipc_sign_attestation_rejects_malformed_message_b58() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let mut child = spawn_daemon(home.path()).await;
+    let mut stream = authenticated_stream(home.path()).await;
+    grant_identity_attest(&mut stream).await;
+
+    // `-` and space sit outside every base58 alphabet, so bs58::decode Errs
+    // before the 1..=4096 size bound is ever consulted. Every other test sends
+    // valid base58, so the decode-Err arm is the one input-rejection path this
+    // file would otherwise never exercise.
+    match req(
+        &mut stream,
+        Request::SignAttestation {
+            message_b58: "not base58!".to_string(),
+            ts: now_ms(),
+        },
+    )
+    .await
+    {
+        Response::Error { message } => {
+            assert!(
+                message.contains("message_b58 invalid"),
+                "non-base58 message must hit the decode-Err bail, got: {message}"
+            );
+        }
+        other => panic!("expected Response::Error for malformed message_b58, got {other:?}"),
     }
 
     drop(stream);

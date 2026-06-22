@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T21:07:26.079Z",
+  "updatedAt": "2026-06-22T21:27:30.085Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10496,
+    "events": 10500,
     "tasks": 1237,
-    "integrated": 1239
+    "integrated": 1240
   },
   "throughput": {
-    "last24h": 26,
-    "last7d": 141,
-    "velocity": 20.1
+    "last24h": 27,
+    "last7d": 142,
+    "velocity": 20.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 19
+      "count": 20
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-22",
-      "total": 1239
+      "total": 1240
     }
   ],
   "states": {
-    "integrated": 1231,
+    "integrated": 1232,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "cli-operator-keypair-invalid-material-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T19:30:09.076Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-22T21:18:33.866Z",
+      "task": "cli-operator-keypair-invalid-material-coverage",
+      "note": "Committed 0675e19c on loop/main-track; InvalidKeyMaterial arm (main.rs:439) covered + mutation-proven. Push to follow."
+    },
     {
       "at": "2026-06-22T19:22:56.685Z",
       "task": "sap-bridge-worker-stdout-decode-failure-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-22T00:08:48.534Z",
       "task": "a2a-sender-mismatch-audit-write-failure-surfaced-unit-covera",
       "note": "Committed f62c02f7. handler-audit-write-failure-coverage 4/7. Pushing."
-    },
-    {
-      "at": "2026-06-21T23:59:52.214Z",
-      "task": "operator-peer-revoke-audit-write-failure-surfaced-unit-cover",
-      "note": "Committed 03c55281. handler-audit-write-failure-coverage 3/7. Pushing."
     }
   ]
 }

@@ -1,10 +1,10 @@
 {
-  "updatedAt": "2026-06-22T17:45:36.997Z",
+  "updatedAt": "2026-06-22T18:05:56.599Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10465,
-    "tasks": 1233,
-    "integrated": 1235
+    "events": 10473,
+    "tasks": 1234,
+    "integrated": 1236
   },
   "throughput": {
     "last24h": 31,
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 15
+      "count": 16
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-22",
-      "total": 1235
+      "total": 1236
     }
   ],
   "states": {
-    "integrated": 1227,
+    "integrated": 1228,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "metaplex-signer-stdout-decode-failure-coverage",
+    "task": "x402-signer-stdout-non-utf8-decode-failure-coverage",
     "state": "in_progress",
-    "since": "2026-06-22T17:18:07.224Z"
+    "since": "2026-06-22T17:54:20.057Z"
   },
   "recent": [
+    {
+      "at": "2026-06-22T17:48:55.330Z",
+      "task": "metaplex-signer-stdout-decode-failure-coverage",
+      "note": "Integrating metaplex signer stdout decode-failure coverage (2/2 arms). Commit to follow."
+    },
     {
       "at": "2026-06-22T16:49:42.615Z",
       "task": "revoke-capability-signature-decode-err-live-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-21T22:58:15.736Z",
       "task": "budget-try-debit-write-failure-surfaced-unit-coverage",
       "note": "Committed 5e8fee64. FailingDebitBudget + budget_write_failure_try_debit pin the try_debit non-NoCapacity Err bail. budget-store-write-failur"
-    },
-    {
-      "at": "2026-06-21T22:41:41.026Z",
-      "task": "peers-register-write-failure-surfaced-unit-coverage",
-      "note": "Committed 13c53bdc (lib.rs + README.md). FailingRegisterPeerRegistry + peers_write_failure_register pin the peers.register() write Err bail."
     }
   ]
 }

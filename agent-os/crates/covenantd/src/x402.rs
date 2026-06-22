@@ -678,6 +678,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_payment_surfaces_non_utf8_signer_stdout() {
+        // The sidecar is external (it talks to Solana RPC); its stdout is
+        // untrusted, so bytes that are not valid UTF-8 must surface the
+        // from_utf8 Sign error rather than fall through to the trim /
+        // empty-header check and return a garbage header. A single 0xFF byte
+        // (printf '\377') is never valid UTF-8.
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; printf '\\377'");
+        let err = signer
+            .build_payment(&requirement())
+            .await
+            .expect_err("non-utf8 stdout must surface, not fall through");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("signer stdout not utf-8")),
+            "a non-UTF-8 signer stdout must surface the from_utf8 Sign error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn build_payment_with_limits_rejects_oversized_signer_stdout() {
         // The signer sidecar is external (it talks to Solana RPC); a stdout
         // flood past the cap must surface a Sign error naming the cap instead

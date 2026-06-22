@@ -124,7 +124,9 @@ pub fn validate_registration_uri(s: &str) -> Result<(), String> {
     if !(s.starts_with("https://") || s.starts_with("ar://")) {
         return Err("registrationUri must start with https:// or ar://".to_string());
     }
-    if s.chars().any(|c| c.is_whitespace() || is_unsafe_onchain_char(c)) {
+    if s.chars()
+        .any(|c| c.is_whitespace() || is_unsafe_onchain_char(c))
+    {
         return Err(
             "registrationUri must not contain whitespace, control characters, or bidirectional/zero-width formatting".to_string(),
         );
@@ -315,11 +317,17 @@ mod tests {
         let wire = serde_json::to_value(&p).unwrap();
         assert_eq!(wire["subject"]["asset"], "Asset111");
         assert_eq!(wire["subject"]["registration"], "Pda111");
-        assert!(wire["subject"].get("agentId").is_none(), "unset subject fields omitted");
+        assert!(
+            wire["subject"].get("agentId").is_none(),
+            "unset subject fields omitted"
+        );
         let bare = AttestationPayload::new("c".repeat(64), "t", "s", "sc", 2);
         let bw = serde_json::to_value(&bare).unwrap();
         assert!(bw["subject"].get("asset").is_none());
-        assert_eq!(bw["validator"], "", "validator empty until the signer stamps it");
+        assert_eq!(
+            bw["validator"], "",
+            "validator empty until the signer stamps it"
+        );
     }
 
     #[test]
@@ -347,8 +355,11 @@ mod tests {
 
     #[test]
     fn onchain_pubkey_validation_is_base58_and_length_bounded() {
-        validate_onchain_pubkey("subject.asset", "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH")
-            .expect("real mainnet pubkey");
+        validate_onchain_pubkey(
+            "subject.asset",
+            "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH",
+        )
+        .expect("real mainnet pubkey");
         assert!(
             validate_onchain_pubkey("x", "deadbeef").is_err(),
             "too short"
@@ -384,7 +395,10 @@ mod tests {
         validate_root_hash_hex(&"a".repeat(64)).expect("64 lowercase hex");
         validate_root_hash_hex(&"abcdef0123456789".repeat(4)).expect("mixed lowercase hex");
         assert!(validate_root_hash_hex("deadbeef").is_err(), "too short");
-        assert!(validate_root_hash_hex(&"A".repeat(64)).is_err(), "uppercase");
+        assert!(
+            validate_root_hash_hex(&"A".repeat(64)).is_err(),
+            "uppercase"
+        );
         assert!(validate_root_hash_hex(&"g".repeat(64)).is_err(), "non-hex");
         assert!(validate_root_hash_hex(&"a".repeat(65)).is_err(), "too long");
     }
@@ -408,9 +422,18 @@ mod tests {
         validate_registration_uri("https://opencovenant.org/agents/covenant.json")
             .expect("https URI");
         validate_registration_uri("ar://abc123").expect("arweave URI");
-        assert!(validate_registration_uri("http://example.org/a.json").is_err(), "plain http");
-        assert!(validate_registration_uri("covenant://agent/abc").is_err(), "covenant scheme is the default, not an override");
-        assert!(validate_registration_uri("https://a.example/with space").is_err(), "whitespace");
+        assert!(
+            validate_registration_uri("http://example.org/a.json").is_err(),
+            "plain http"
+        );
+        assert!(
+            validate_registration_uri("covenant://agent/abc").is_err(),
+            "covenant scheme is the default, not an override"
+        );
+        assert!(
+            validate_registration_uri("https://a.example/with space").is_err(),
+            "whitespace"
+        );
         assert!(
             validate_registration_uri(&format!("https://a.example/{}", "x".repeat(200))).is_err(),
             "over length"

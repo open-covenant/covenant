@@ -90,7 +90,7 @@ Per-verb fields layer on top, asymmetrically:
 - `verb: "stake"` — adds `agent_key` (base58), `amount` (u64), `lock_until` (u64). Both values are echoed verbatim from the CLI arguments and serialize to the on-chain `stake` instruction.
 - `verb: "buy-credits"` — adds `owner` (base58 COVNT owner pubkey), `amount_covnt` (u64). The value is echoed verbatim from `--amount-covnt` and serializes to the on-chain `buy_credits` instruction.
 
-The verb-source-of-truth lives in the CLI emitters: `register_agent_confirmed_json` and `register_agent_timeout_json` at `agent-os/crates/covenant/src/main.rs:682` and `:699`, `stake_confirmed_json` and `stake_timeout_json` at `:882` and `:903`, `buy_credits_confirmed_json` and `buy_credits_timeout_json` at `:1190` and `:1209`. Six unit tests at `main.rs:10518`, `:10539`, `:10930`, `:10949`, `:11304`, `:11321` pin the kind strings, and six sibling `*_pins_top_level_schema` tests at `main.rs:10557`, `:10607`, `:10968`, `:11030`, `:11338`, `:11394` assert the full documented top-level key set so an undocumented field added to any helper fails review.
+The verb-source-of-truth lives in the CLI emitters: `register_agent_confirmed_json` and `register_agent_timeout_json` at `agent-os/crates/covenant/src/main.rs:682` and `:699`, `stake_confirmed_json` and `stake_timeout_json` at `:882` and `:903`, `buy_credits_confirmed_json` and `buy_credits_timeout_json` at `:1190` and `:1209`. Six unit tests at `main.rs:10552`, `:10573`, `:10964`, `:10983`, `:11338`, `:11355` pin the kind strings, and six sibling `*_pins_top_level_schema` tests at `main.rs:10591`, `:10641`, `:11002`, `:11064`, `:11372`, `:11428` assert the full documented top-level key set so an undocumented field added to any helper fails review.
 
 ## CLI Read Envelopes
 

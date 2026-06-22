@@ -10348,6 +10348,17 @@ mod tests {
         }
 
         #[test]
+        fn rejects_empty_hash() {
+            // An empty value (an unset env var in an operator script)
+            // must hit the Empty early-return, not fall through to
+            // WrongLength{actual:0}; the dedicated message tells the
+            // operator the value was empty rather than misdiagnosing a
+            // truncation.
+            let err = parse_hash32_arg("metadata-hash", "").expect_err("must error");
+            assert!(matches!(err, Hash32ArgError::Empty { flag: "metadata-hash" }));
+        }
+
+        #[test]
         fn rejects_hex_hash_with_non_hex_character() {
             let mut v = hex_32(0xab);
             v.replace_range(10..11, "g");

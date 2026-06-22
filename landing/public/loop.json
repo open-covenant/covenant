@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-22T22:28:20.048Z",
+  "updatedAt": "2026-06-22T22:48:34.947Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10504,
+    "events": 10506,
     "tasks": 1238,
     "integrated": 1240
   },
   "throughput": {
-    "last24h": 25,
+    "last24h": 24,
     "last7d": 142,
     "velocity": 20.3
   },
@@ -187,7 +187,7 @@
     "integrated": 1232,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "validation": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "cli-hash32-empty-arg-coverage",
-    "state": "in_progress",
-    "since": "2026-06-22T21:53:47.485Z"
+    "state": "validation",
+    "since": "2026-06-22T22:48:26.913Z"
   },
   "recent": [
     {

@@ -62702,6 +62702,64 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
+    async fn get_secret_surfaces_error_when_backend_fails() {
+        // Fail-closed guard: SecretSource::get's Err arm is reserved for a
+        // backend that itself failed (a remote store unreachable) so the broker
+        // fails closed to the caller and the chain instead of leaking which
+        // names exist. The production MapSecretSource never fails, so the arm
+        // is dead unless a failing double exercises it — a regression that
+        // collapsed the Err into the Ok(None) name-denial would turn a
+        // secret-store outage into a silent refusal indistinguishable from a
+        // name that genuinely does not exist.
+        struct FailingSecretSource;
+
+        #[async_trait::async_trait]
+        impl secret::SecretSource for FailingSecretSource {
+            async fn get(&self, _name: &str) -> Result<Option<String>, secret::SecretError> {
+                Err(secret::SecretError("injected secret backend failure".into()))
+            }
+        }
+
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone())
+            .with_secret_source(Arc::new(FailingSecretSource));
+        grant_scoped_action(&s, "secret.access", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("secret broker backend error"),
+                    "a failed secret backend must surface as a backend error: {message}"
+                );
+                assert!(
+                    message.contains("injected secret backend failure"),
+                    "the backend cause must reach the caller for triage: {message}"
+                );
+            }
+            other => panic!("expected a backend-error Error, got: {other:?}"),
+        }
+
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(
+                    &e.kind,
+                    AuditKind::SecretAccessDenied { secret_name, reason, .. }
+                        if secret_name == "openai-api-key"
+                            && reason.contains("injected secret backend failure")
+                )),
+            "a fail-closed backend refusal must record SecretAccessDenied naming the secret \
+             and the backend cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn write_frame_error_writes_generic_message_for_frame_too_large() {
         // Client-distinguishability guard: handle() used to close the
         // connection on FrameTooLarge with no payload, so the client

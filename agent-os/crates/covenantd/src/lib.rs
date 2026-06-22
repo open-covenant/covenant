@@ -53722,6 +53722,110 @@ required = {caps:?}
         }
     }
 
+    // Fails only lookup_task_sender. post_a2a_result resolves the task's
+    // sender before its capability gate, so a mailbox that cannot resolve the
+    // sender must surface the read failure rather than mask it as an
+    // unknown_task spoof. Every other read stays Ok so the double is focused
+    // on the lookup bail, not a blanket read failure like FailingMailboxReads.
+    struct FailingLookupTaskSenderMailbox;
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingLookupTaskSenderMailbox {
+        async fn send_task(
+            &self,
+            _task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_task_for(
+            &self,
+            _recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_result_for(
+            &self,
+            _peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn recent_tasks(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn task_queue(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn recent_results(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox lookup_task_sender read failure",
+            )))
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn post_a2a_result_surfaces_error_when_mailbox_lookup_fails() {
+        // The a2a.respond path resolves the task's sender via
+        // Mailbox::lookup_task_sender before its capability gate; an Err
+        // there bails with Response::Error { "a2a: {e}" } so a mailbox read
+        // failure surfaces to the poster instead of being masked as an
+        // Ok(None) unknown_task rejection — which the audit-correlation chain
+        // treats as a spoof signal. The arm is uncovered: FailingMailboxReads
+        // returns Ok(None) for lookup, so the 4 mailbox read-failure slices
+        // never reach this bail (and the recent_results sites DROP the Err).
+        let server = server_with_mailbox_dyn(Arc::new(FailingLookupTaskSenderMailbox));
+        let result = covenant_a2a::A2ATaskResult::ok(
+            Uuid::new_v4(),
+            vec![covenant_mcp::Content::text("ok-result")],
+        );
+        match server
+            .op_respond(Request::PostA2AResult { result })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("a2a:")
+                    && message.contains("injected mailbox lookup_task_sender read failure"),
+                "a lookup_task_sender read failure must surface with its cause: {message}"
+            ),
+            other => panic!("expected a surfaced lookup-failure Error, got: {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn mailbox_read_failure_recent_tasks() {
         // A recent_a2a_tasks read whose mailbox cannot read its queued/in-flight

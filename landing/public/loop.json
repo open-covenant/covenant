@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-22T19:26:28.284Z",
+  "updatedAt": "2026-06-22T19:46:32.264Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10493,
-    "tasks": 1236,
+    "events": 10496,
+    "tasks": 1237,
     "integrated": 1239
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1231,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "cli-operator-keypair-invalid-material-coverage",
+    "state": "in_progress",
+    "since": "2026-06-22T19:30:09.076Z"
+  },
   "recent": [
     {
       "at": "2026-06-22T19:22:56.685Z",

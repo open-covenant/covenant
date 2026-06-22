@@ -60067,6 +60067,122 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// Like [`FailingDebitBudget`] but `try_debit` returns
+    /// [`BudgetError::Exhausted`], exercising the BudgetExhausted audit arm
+    /// of `dispatch_intent_run` (lib.rs:4718) — a distinct bail from the
+    /// generic Io arm the Io-returning double reaches. All other methods
+    /// mirror [`FailingDebitBudget`]'s Ok defaults so the double never
+    /// masquerades as a working ledger.
+    struct FailingExhaustedBudget;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingExhaustedBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Exhausted {
+                tokens_remaining: 0,
+                refill_eta_ms: 1000,
+            })
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_dispatch_budget_exhausted() {
+        // BudgetExhausted is a must-record kind: a dispatch whose bucket is
+        // drained must land on the peer's audit feed even when the audit
+        // store is degraded. If record_peer_event_required cannot persist the
+        // row, dispatch_intent_run must surface the generic
+        // "audit write failed; refusing to proceed" bail rather than the
+        // normal budget-exhausted reply — otherwise the operator answers a
+        // drained bucket with a clean refusal that leaves no durable trail
+        // (the pause checkpoint saved just above would be the only signal).
+        // This Exhausted arm (lib.rs:4718) is distinct from the Io bail the
+        // FailingDebitBudget double reaches: Exhausted is a policy outcome
+        // the daemon is obligated to record before refusing. Setup mirrors
+        // budget_write_failure_try_debit (lib.rs:60028) with the budget
+        // swapped to the Exhausted double and the audit log swapped to
+        // FailingAuditLog; the seed grants' CapabilityGranted rows write
+        // through the non-required record_peer_event (swallowed under
+        // FailingAuditLog), so the grants still land.
+        let mut s = server_with(
+            vec![stub_card_with_budget("research", vec!["tool.web_search"], 10)],
+            "mocked summary",
+        );
+        s.budget = Arc::new(FailingExhaustedBudget);
+        s.audit = Arc::new(FailingAuditLog);
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the budget-exhausted path must surface as the generic bail, not the normal budget-exhausted reply",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn verify_recent_surfaces_error_when_budget_ledger_recent_debits_all_fails() {
         // A verify_recent drift check whose budget ledger cannot read its debit

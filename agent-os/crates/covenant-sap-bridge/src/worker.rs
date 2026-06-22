@@ -343,4 +343,86 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn invoke_with_limits_rejects_a_worker_that_produces_no_output() {
+        // A worker that exits successfully with no stdout yields an empty
+        // envelope line; invoke must surface a Worker error naming the exit
+        // status and stderr so an operator can tell a worker that crashed
+        // silently apart from one that emitted unparseable garbage. The fake
+        // worker drains stdin first so the payload write does not race a
+        // broken pipe, then prints nothing and exits 0.
+        let mut config = Config::disabled(Cluster::Devnet);
+        config.worker_command = vec![
+            "sh".into(),
+            "-c".into(),
+            "cat >/dev/null; true".into(),
+        ];
+        let err = invoke_with_limits::<serde_json::Value, serde_json::Value>(
+            &config,
+            "lookup",
+            &serde_json::json!({}),
+            4096,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, BridgeError::Worker(m)
+                if m.contains("produced no output") && m.contains("exit")),
+            "a worker that produces no output must surface a Worker error naming the exit status, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_with_limits_surfaces_a_malformed_envelope_line() {
+        // A worker whose last stdout line is not valid JSON (a stack trace,
+        // a stray log line) must surface a Decode error preserving the
+        // offending line, so the operator sees what the worker printed
+        // rather than an opaque parse failure.
+        let mut config = Config::disabled(Cluster::Devnet);
+        config.worker_command = vec![
+            "sh".into(),
+            "-c".into(),
+            "cat >/dev/null; printf 'not-json-garbage'".into(),
+        ];
+        let err = invoke_with_limits::<serde_json::Value, serde_json::Value>(
+            &config,
+            "lookup",
+            &serde_json::json!({}),
+            4096,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, BridgeError::Decode(m) if m.contains("not-json-garbage")),
+            "a non-JSON envelope line must surface a Decode error carrying the offending line, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_with_limits_surfaces_an_inner_data_type_mismatch() {
+        // A well-formed envelope whose `data` field will not deserialize
+        // into T (here a string where i64 is expected) must surface a Decode
+        // error rather than silently coercing — catching a worker/protocol
+        // schema drift at the boundary instead of letting a wrong-typed
+        // value propagate downstream.
+        let mut config = Config::disabled(Cluster::Devnet);
+        config.worker_command = vec![
+            "sh".into(),
+            "-c".into(),
+            "cat >/dev/null; printf '{\"ok\":true,\"data\":\"not-a-number\"}'".into(),
+        ];
+        let err = invoke_with_limits::<serde_json::Value, i64>(
+            &config,
+            "lookup",
+            &serde_json::json!({}),
+            4096,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, BridgeError::Decode(_)),
+            "a wrong-typed data field must surface a Decode error, got {err:?}"
+        );
+    }
 }

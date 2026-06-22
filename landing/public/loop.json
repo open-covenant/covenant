@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-22T16:25:20.115Z",
+  "updatedAt": "2026-06-22T16:45:24.035Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10449,
-    "tasks": 1231,
-    "integrated": 1233
+    "events": 10457,
+    "tasks": 1232,
+    "integrated": 1234
   },
   "throughput": {
-    "last24h": 34,
-    "last7d": 139,
-    "velocity": 19.9
+    "last24h": 33,
+    "last7d": 140,
+    "velocity": 20
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-22",
-      "count": 13
+      "count": 14
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-22",
-      "total": 1233
+      "total": 1234
     }
   ],
   "states": {
-    "integrated": 1225,
+    "integrated": 1226,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "sign-attestation-b58-decode-err-live-coverage",
+    "task": "revoke-capability-signature-decode-err-live-coverage",
     "state": "in_progress",
-    "since": "2026-06-22T16:12:00.647Z"
+    "since": "2026-06-22T16:39:45.652Z"
   },
   "recent": [
+    {
+      "at": "2026-06-22T16:30:59.433Z",
+      "task": "sign-attestation-b58-decode-err-live-coverage",
+      "note": "Shipped eb96ba2e (pushed loop/main-track). Test-only slice: live_ipc_sign_attestation_rejects_malformed_message_b58 pins the bs58::decode Er"
+    },
     {
       "at": "2026-06-22T15:47:04.412Z",
       "task": "mailbox-lookup-task-sender-read-failure-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-21T22:21:45.378Z",
       "task": "settlement-mark-batch-confirmed-write-failure-surfaced-unit-",
       "note": "Committed ba403224 (lib.rs + README.md). FailingMarkBatchSettlement + settlement_write_failure_flush pin the mark_batch_confirmed write Err "
-    },
-    {
-      "at": "2026-06-21T21:43:29.678Z",
-      "task": "settlement-backfill-write-failure-surfaced-unit-coverage",
-      "note": "Committed 18419c69 (lib.rs + README.md only; autonomy/ gitignored). FailingBackfillSettlement + settlement_write_failure_backfill pin the se"
     }
   ]
 }

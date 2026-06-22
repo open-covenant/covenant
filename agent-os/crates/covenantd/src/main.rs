@@ -400,6 +400,19 @@ async fn main() -> Result<()> {
         }
     };
 
+    let server = {
+        let cfg = covenant_sns::SnsConfig::from_env();
+        if cfg.reads_enabled() {
+            info!(
+                resolver = %cfg.resolver_url,
+                "sns profile enabled (sns.resolve / sns.reverse / sns.record)"
+            );
+            server.with_sns(covenantd::sns::SnsState::new(cfg))
+        } else {
+            server
+        }
+    };
+
     server
         .register_agent_budgets()
         .await

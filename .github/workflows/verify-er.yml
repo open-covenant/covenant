@@ -1,0 +1,40 @@
+name: verify-er
+
+# Reproducible build of the MagicBlock ER settlement program on a native amd64
+# runner (no qemu/rosetta), producing the verifiable .so to deploy + the
+# executable hash. Triggers when this file is pushed, or manually.
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/magicblock-er]
+    paths: ['.github/workflows/verify-er.yml']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install solana-verify
+        run: cargo install solana-verify --version 0.5.0
+
+      - name: Reproducible build (settlement-ephemeral)
+        working-directory: agent-os/programs
+        run: |
+          solana-verify build "$PWD" \
+            --workspace-path settlement-ephemeral \
+            --library-name covenant_settlement_program_er \
+            --base-image solanafoundation/solana-verifiable-build:3.1.14
+
+      - name: Executable hash
+        run: |
+          SO=agent-os/programs/settlement-ephemeral/target/deploy/covenant_settlement_program_er.so
+          ls -la "$SO"
+          solana-verify get-executable-hash "$SO" | tee erhash.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: covenant-settlement-program-er
+          path: |
+            agent-os/programs/settlement-ephemeral/target/deploy/covenant_settlement_program_er.so
+            erhash.txt

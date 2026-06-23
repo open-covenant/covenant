@@ -51,4 +51,22 @@ describe('attestation', () => {
   it('verify fails gracefully on garbage input', async () => {
     expect(await verify(payload, 'not-bs58!!', 'also-garbage!!')).toBe(false);
   });
+
+  it('hexToKey accepts a 0x prefix and yields the same bytes as the bare hex', () => {
+    const bare = hexToKey('ab'.repeat(32));
+    const prefixed = hexToKey('0x' + 'ab'.repeat(32));
+    expect(Array.from(prefixed)).toEqual(Array.from(bare));
+  });
+
+  it('hexToKey decodes each hex byte pair in base-16', () => {
+    const key = hexToKey('ab00ff' + '00'.repeat(29));
+    expect(key[0]).toBe(0xab);
+    expect(key[1]).toBe(0x00);
+    expect(key[2]).toBe(0xff);
+    expect(key[31]).toBe(0x00);
+  });
+
+  it('sign rejects a non-32-byte key with an explicit message', async () => {
+    await expect(sign(payload, new Uint8Array(31))).rejects.toThrow('broker key must be 32 bytes');
+  });
 });

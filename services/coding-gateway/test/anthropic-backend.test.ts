@@ -125,6 +125,19 @@ describe("execTool", () => {
     expect(await sandbox.readFile("a.txt")).toBe("xx bar yy");
     expect(emitted.find((e) => e.type === "file.written")).toMatchObject({ path: "a.txt", bytes: 9 });
   });
+
+  it("writes a file via write_file and reports byte length, not char length", async () => {
+    // write_file (anthropic.ts:225-231) emits file.written with Buffer.byteLength of
+    // the content; multi-byte content pins byte-count vs char-count, which the
+    // execTool block never drove. "héllo" is 5 chars but 6 UTF-8 bytes.
+    const content = "héllo";
+    const sandbox = memSandbox();
+    const emitted: GatewayEvent[] = [];
+    const out = await execTool(toolUse("write_file", { path: "a.txt", content }), sandbox, (e) => emitted.push(e));
+    expect(await sandbox.readFile("a.txt")).toBe(content);
+    expect(out).toBe(`wrote ${Buffer.byteLength(content)} bytes to a.txt`);
+    expect(emitted.find((e) => e.type === "file.written")).toMatchObject({ path: "a.txt", bytes: Buffer.byteLength(content) });
+  });
 });
 
 describe("previewOf", () => {

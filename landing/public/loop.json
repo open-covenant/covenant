@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T15:17:36.535Z",
+  "updatedAt": "2026-06-23T15:37:40.667Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10573,
-    "tasks": 1245,
-    "integrated": 1248
+    "events": 10596,
+    "tasks": 1247,
+    "integrated": 1251
   },
   "throughput": {
-    "last24h": 16,
-    "last7d": 138,
-    "velocity": 19.7
+    "last24h": 19,
+    "last7d": 141,
+    "velocity": 20.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 7
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-23",
-      "total": 1248
+      "total": 1251
     }
   ],
   "states": {
-    "integrated": 1240,
+    "integrated": 1243,
     "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,23 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "gateway-budget-model-cost-pricing-coverage",
-    "state": "in_progress",
-    "since": "2026-06-23T15:15:29.982Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T15:37:21.343Z",
+      "task": "gateway-ip-bucket-idle-ttl-derivation-coverage",
+      "note": "Committed; pushing to loop/main-track."
+    },
+    {
+      "at": "2026-06-23T15:29:57.919Z",
+      "task": "gateway-budget-ledger-non-enoent-load-error-coverage",
+      "note": "Committed d194232b (test-only). Pushing to loop/main-track."
+    },
+    {
+      "at": "2026-06-23T15:22:34.518Z",
+      "task": "gateway-budget-model-cost-pricing-coverage",
+      "note": "Committed 39cf18a7 (test-only). Pushing to loop/main-track."
+    },
     {
       "at": "2026-06-23T15:09:45.252Z",
       "task": "gateway-config-exempt-ip-set-parsing-coverage",
@@ -305,21 +315,6 @@
       "at": "2026-06-22T15:15:10.496Z",
       "task": "secret-broker-backend-failure-coverage",
       "note": "committed 7b1c0971; test-only slice pinning the secret-broker fail-closed Err arm; both bites mutation-proven; pushing to loop/main-track."
-    },
-    {
-      "at": "2026-06-22T13:20:44.075Z",
-      "task": "runner-failure-coverage",
-      "note": "Committed 2fb638d6 (test-only: FailingRunner double + server_with_runner seam + dispatch_intent_surfaces_error_when_runner_fails; README met"
-    },
-    {
-      "at": "2026-06-22T12:12:20.543Z",
-      "task": "embedder-dispatch-graceful-degradation-coverage",
-      "note": "Slice complete and validated; committing + pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-22T11:54:13.157Z",
-      "task": "embedder-search-failure-surfaced-coverage",
-      "note": "Test-only slice complete and validated; committing + pushing to origin/loop/main-track."
     }
   ]
 }

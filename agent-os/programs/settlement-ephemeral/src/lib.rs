@@ -1,6 +1,7 @@
-// ER build of the settlement program. The whole program lives in the sibling
-// crate's lib.rs; here we compile it verbatim with the `ephemeral` feature on so
-// the delegate/commit/undelegate instructions and the `#[ephemeral]` macro are
-// included. Keeping this a thin include means there is exactly one source of
-// truth for the program logic.
-include!("../../settlement/src/lib.rs");
+// ER build of the settlement program. `_shared.rs` is a verbatim copy of the
+// sibling `settlement/src/lib.rs` (the source of truth), kept here so this crate
+// is self-contained (no cross-crate include!). That self-containment is what lets
+// the reproducible / OtterSec build mount this crate directly. Regenerate after
+// any settlement change: `cp ../../settlement/src/lib.rs src/_shared.rs` — CI
+// diffs the two and fails if they drift.
+include!("_shared.rs");

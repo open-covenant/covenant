@@ -18,11 +18,13 @@ jobs:
       - name: Install solana-verify
         run: cargo install solana-verify --version 0.5.0
 
-      - name: Reproducible build (settlement-ephemeral)
-        working-directory: agent-os/programs
+      - name: Check _shared.rs matches settlement/src/lib.rs
+        run: diff agent-os/programs/settlement/src/lib.rs agent-os/programs/settlement-ephemeral/src/_shared.rs
+
+      - name: Reproducible build (settlement-ephemeral, self-contained)
+        working-directory: agent-os/programs/settlement-ephemeral
         run: |
           solana-verify build "$PWD" \
-            --workspace-path settlement-ephemeral \
             --library-name covenant_settlement_program_er \
             --base-image solanafoundation/solana-verifiable-build:3.1.14
 

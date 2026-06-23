@@ -294,6 +294,49 @@ describe("OpenaiBackend.run", () => {
       backend.run({ input: "x", sandbox: fakeSandbox(), signal: new AbortController().signal, emit: () => {} }),
     ).rejects.toThrow("openai stream ended without a completed response");
   });
+
+  it("reports an error to the model when edit_file old_string is not unique", async () => {
+    // "x" appears twice → the uniqueness guard throws, distinct from the
+    // not-found arm already pinned by the tool-error test.
+    const { client, calls } = fakeClient([
+      {
+        events: [
+          completed({ id: "r1", usage: null, output: [functionCall("c1", "edit_file", { path: "d.txt", old_string: "x", new_string: "y" })] }),
+        ],
+      },
+      { events: [completed({ id: "r2", usage: null, output: [messageItem("recovered")] })] },
+    ]);
+    const emitted: GatewayEvent[] = [];
+    const backend = new OpenaiBackend(client);
+    await backend.run({
+      input: "edit",
+      sandbox: fakeSandbox({ "d.txt": "x x" }),
+      signal: new AbortController().signal,
+      emit: (e) => emitted.push(e),
+    });
+    expect(emitted.find((e) => e.type === "tool.completed")).toMatchObject({ tool: "edit_file", error: true });
+    const secondInput = calls[1]!.params.input as Array<{ output: string }>;
+    expect(secondInput[0]!.output).toContain("not unique");
+  });
+
+  it("reports an error to the model for an unknown tool call", async () => {
+    // An unrecognized function name reaches the default case and throws
+    // "unknown tool: <name>" instead of being silently dropped.
+    const { client, calls } = fakeClient([
+      {
+        events: [
+          completed({ id: "r1", usage: null, output: [functionCall("c1", "delete_file", { path: "z" })] }),
+        ],
+      },
+      { events: [completed({ id: "r2", usage: null, output: [messageItem("recovered")] })] },
+    ]);
+    const emitted: GatewayEvent[] = [];
+    const backend = new OpenaiBackend(client);
+    await backend.run({ input: "x", sandbox: fakeSandbox(), signal: new AbortController().signal, emit: (e) => emitted.push(e) });
+    expect(emitted.find((e) => e.type === "tool.completed")).toMatchObject({ tool: "delete_file", error: true });
+    const secondInput = calls[1]!.params.input as Array<{ output: string }>;
+    expect(secondInput[0]!.output).toContain("unknown tool: delete_file");
+  });
 });
 
 describe("selectBackend", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { callDaemonTool } from '../daemon.js';
@@ -80,5 +80,63 @@ describe('daemon-backed MCP tools', () => {
     expect(result?.content[0]?.text).toContain('$HOME');
     expect(result?.content[0]?.text).not.toContain(token);
     expect(result?.content[0]?.text).not.toContain(home);
+  });
+
+  it('redacts a COVENANT_HOME directory value from daemon errors', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'covenant-home-'));
+    const token = 'secret-bearer-token';
+    const fetchImpl = fetchJson(() => ({
+      status: 500,
+      body: { error: `token ${token} under ${home} failed` },
+    }));
+
+    const result = await callDaemonTool('daemon_tools_list', {}, {
+      env: { COVENANT_AUTH_TOKEN: token, COVENANT_HOME: home },
+      fetchImpl,
+    });
+
+    expect(result?.isError).toBe(true);
+    expect(result?.content[0]?.text).toContain('<redacted-token>');
+    expect(result?.content[0]?.text).toContain('$HOME');
+    expect(result?.content[0]?.text).not.toContain(token);
+    expect(result?.content[0]?.text).not.toContain(home);
+  });
+
+  it('references the $COVENANT_HOME token label when COVENANT_HOME is set', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'covenant-home-'));
+    let called = false;
+    const fetchImpl = fetchJson(() => {
+      called = true;
+      return {};
+    });
+
+    const result = await callDaemonTool('daemon_tools_list', {}, {
+      env: { COVENANT_HOME: home },
+      fetchImpl,
+    });
+
+    expect(called).toBe(false);
+    expect(result?.isError).toBe(true);
+    expect(result?.content[0]?.text).toContain('$COVENANT_HOME/peers/operator.token');
+    expect(result?.content[0]?.text).not.toContain(home);
+  });
+
+  it('reads the operator token from COVENANT_HOME when set', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'covenant-home-'));
+    mkdirSync(path.join(home, 'peers'), { recursive: true });
+    writeFileSync(path.join(home, 'peers', 'operator.token'), 'on-disk-token');
+
+    const fetchImpl = fetchJson((_url, init) => {
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer on-disk-token' });
+      return { body: { tools: [{ name: 'echo' }] } };
+    });
+
+    const result = await callDaemonTool('daemon_tools_list', {}, {
+      env: { COVENANT_HOME: home },
+      fetchImpl,
+    });
+
+    expect(result?.isError).toBeUndefined();
+    expect(result?.content[0]?.text).toContain('"echo"');
   });
 });

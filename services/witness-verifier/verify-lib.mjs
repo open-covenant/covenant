@@ -44,3 +44,20 @@ export function scanRefutations(events) {
   const verdict = refutations.length ? "refute" : "pass";
   return { verdict, refutations };
 }
+
+// Build the skill-run manifest the /verify page renders. A context-injected
+// skill takes precedence over an installed one; the name falls back to
+// "covenant" and the digest to "" when neither is present. The digest is
+// published with a "sha256:" prefix only when non-empty.
+export function buildSkillManifest(events) {
+  const installed = events.find((e) => e.kind?.type === "skill_installed");
+  const injected = events.find((e) => e.kind?.type === "skill_context_injected");
+  const txSigned = events.find((e) => e.kind?.type === "skill_tx_signed");
+  const name = injected?.kind.skill_name || installed?.kind.name || "covenant";
+  const digestHex = injected?.kind.skill_digest_hex || installed?.kind.digest_hex || "";
+  return {
+    skill: { name, digest: digestHex ? `sha256:${digestHex}` : "" },
+    capabilities: [`skill.use.${name}`],
+    tx: txSigned ? { sig: txSigned.kind.signature_b58, cluster: "devnet", slot: null } : null,
+  };
+}

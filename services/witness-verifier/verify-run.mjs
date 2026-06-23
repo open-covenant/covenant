@@ -21,7 +21,7 @@ import {
 } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { recomputeRoot, scanRefutations } from "./verify-lib.mjs";
+import { recomputeRoot, scanRefutations, buildSkillManifest } from "./verify-lib.mjs";
 
 const argv = process.argv.slice(2);
 const arg = (name) => {
@@ -47,16 +47,7 @@ const root = recomputeRoot(lines);
 const events = lines.map((l) => JSON.parse(l));
 
 // Skill-run manifest, pulled from the run's own events.
-const installed = events.find((e) => e.kind?.type === "skill_installed");
-const injected = events.find((e) => e.kind?.type === "skill_context_injected");
-const txSigned = events.find((e) => e.kind?.type === "skill_tx_signed");
-const name = injected?.kind.skill_name || installed?.kind.name || "covenant";
-const digestHex = injected?.kind.skill_digest_hex || installed?.kind.digest_hex || "";
-const manifest = {
-  skill: { name, digest: digestHex ? `sha256:${digestHex}` : "" },
-  capabilities: [`skill.use.${name}`],
-  tx: txSigned ? { sig: txSigned.kind.signature_b58, cluster: "devnet", slot: null } : null,
-};
+const manifest = buildSkillManifest(events);
 
 // W011 refutation: a signed skill action that causally follows an untrusted
 // on-chain read, with no skill-context reset between them, is refutable.

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { recomputeRoot, scanRefutations, ZERO_CHAIN_HASH } from "./verify-lib.mjs";
+import {
+  recomputeRoot,
+  scanRefutations,
+  buildSkillManifest,
+  ZERO_CHAIN_HASH,
+} from "./verify-lib.mjs";
 
 // The exact roots below were precomputed with an independent hand-rolled
 // sha256 fold (not via recomputeRoot) and frozen, so any drift in the
@@ -82,5 +87,53 @@ describe("scanRefutations", () => {
         { signed_event: "s2", after_untrusted: "u1" },
       ],
     });
+  });
+});
+
+describe("buildSkillManifest", () => {
+  const installed = (name, digest) => ({
+    kind: { type: "skill_installed", name, digest_hex: digest },
+  });
+  const injected = (name, digest) => ({
+    kind: { type: "skill_context_injected", skill_name: name, skill_digest_hex: digest },
+  });
+  const txSigned = (sig) => ({
+    kind: { type: "skill_tx_signed", signature_b58: sig },
+  });
+
+  it("defaults to the covenant skill with no digest when no skill events are present", () => {
+    expect(buildSkillManifest([])).toEqual({
+      skill: { name: "covenant", digest: "" },
+      capabilities: ["skill.use.covenant"],
+      tx: null,
+    });
+  });
+
+  it("uses the installed skill when only a skill_installed event is present", () => {
+    expect(buildSkillManifest([installed("deploy", "abc")])).toEqual({
+      skill: { name: "deploy", digest: "sha256:abc" },
+      capabilities: ["skill.use.deploy"],
+      tx: null,
+    });
+  });
+
+  it("prefers the context-injected skill over the installed one", () => {
+    const m = buildSkillManifest([installed("deploy", "abc"), injected("audit", "def")]);
+    expect(m.skill).toEqual({ name: "audit", digest: "sha256:def" });
+    expect(m.capabilities).toEqual(["skill.use.audit"]);
+  });
+
+  it("drops the sha256: prefix when the digest is empty", () => {
+    expect(buildSkillManifest([injected("audit", "")]).skill.digest).toBe("");
+    expect(buildSkillManifest([installed("audit", "")]).skill.digest).toBe("");
+  });
+
+  it("emits the tx object only when a skill_tx_signed event is present", () => {
+    expect(buildSkillManifest([txSigned("sig42")]).tx).toEqual({
+      sig: "sig42",
+      cluster: "devnet",
+      slot: null,
+    });
+    expect(buildSkillManifest([]).tx).toBeNull();
   });
 });

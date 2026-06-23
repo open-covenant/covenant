@@ -106,4 +106,41 @@ describe('Hermes MCP bridge', () => {
     expect(result?.content[0]?.text).not.toContain('hermes-secret');
     expect(result?.content[0]?.text).not.toContain('127.0.0.1:9999');
   });
+
+  it('rejects a hermes run with neither input nor prompt', async () => {
+    const fetchImpl = fetchJson(() => ({ body: { run_id: 'should-not-happen' } }));
+    const result = await callHermesTool('hermes_run', {}, { env: {}, fetchImpl });
+
+    expect(result?.isError).toBe(true);
+    expect(result?.content[0]?.text).toContain('expected input or prompt');
+  });
+
+  it('normalizes a prompt into the run input and strips the prompt field', async () => {
+    let capturedBody: unknown;
+    const fetchImpl = fetchJson((_url, init) => {
+      capturedBody = JSON.parse(String(init.body));
+      return { body: { run_id: 'r1', status: 'queued' } };
+    });
+
+    await callHermesTool('hermes_run', { prompt: 'hello', session_id: 's1' }, { env: {}, fetchImpl });
+
+    expect(capturedBody).toMatchObject({ input: 'hello', session_id: 's1' });
+    expect(capturedBody).not.toHaveProperty('prompt');
+  });
+
+  it('prefers an explicit input over prompt when both are provided', async () => {
+    let capturedBody: unknown;
+    const fetchImpl = fetchJson((_url, init) => {
+      capturedBody = JSON.parse(String(init.body));
+      return { body: { run_id: 'r2', status: 'queued' } };
+    });
+
+    await callHermesTool(
+      'hermes_run',
+      { input: 'explicit-input', prompt: 'prompt-fallback' },
+      { env: {}, fetchImpl },
+    );
+
+    expect(capturedBody).toMatchObject({ input: 'explicit-input' });
+  });
 });

@@ -1,0 +1,21 @@
+[package]
+name = "covenant-oracle-program"
+version = "0.1.0"
+description = "Covenant Oracle — gates an MPL Core agent asset's lifecycle (transfer) on a live Covenant audit/policy check via the Core Oracle external plugin."
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "covenant_oracle_program"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.31.1"

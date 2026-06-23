@@ -1,0 +1,260 @@
+{
+  "address": "2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD",
+  "metadata": {
+    "name": "covenant_oracle_program",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Covenant Oracle — gates an MPL Core agent asset's lifecycle (transfer) on a live Covenant audit/policy check via the Core Oracle external plugin."
+  },
+  "instructions": [
+    {
+      "name": "init_oracle",
+      "docs": [
+        "Create the oracle account for `subject` (the agent's Core asset).",
+        "The signer becomes the authority allowed to flip the verdict.",
+        "Defaults to valid (transfer passes)."
+      ],
+      "discriminator": [
+        78,
+        100,
+        33,
+        183,
+        96,
+        207,
+        60,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  97,
+                  99,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "subject"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "subject",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_validation",
+      "docs": [
+        "Push the live audit/policy verdict. `valid = false` sets `transfer`",
+        "to `Rejected`, which makes MPL Core veto any transfer of the gated",
+        "asset until it flips back. Authority-only."
+      ],
+      "discriminator": [
+        118,
+        163,
+        250,
+        216,
+        185,
+        169,
+        217,
+        214
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "oracle"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "valid",
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "OracleState",
+      "discriminator": [
+        97,
+        156,
+        157,
+        189,
+        194,
+        73,
+        8,
+        15
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "ValidationSet",
+      "discriminator": [
+        229,
+        106,
+        126,
+        40,
+        82,
+        119,
+        142,
+        115
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "ExternalValidationResult",
+      "docs": [
+        "Byte-compatible with `mpl_core::types::ExternalValidationResult`."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Approved"
+          },
+          {
+            "name": "Rejected"
+          },
+          {
+            "name": "Pass"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleState",
+      "docs": [
+        "The oracle account. `validation` is first so that, with the asset's Oracle",
+        "plugin set to `ValidationResultsOffset::Anchor`, MPL Core reads it at byte",
+        "8 (right after the Anchor discriminator). Always written as `V1`, so the",
+        "trailing fields sit at fixed offsets."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "validation",
+            "type": {
+              "defined": {
+                "name": "OracleValidation"
+              }
+            }
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "subject",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleValidation",
+      "docs": [
+        "Byte-compatible with `mpl_core::types::OracleValidation`. MPL Core",
+        "deserializes this at the configured offset."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Uninitialized"
+          },
+          {
+            "name": "V1",
+            "fields": [
+              {
+                "name": "create",
+                "type": {
+                  "defined": {
+                    "name": "ExternalValidationResult"
+                  }
+                }
+              },
+              {
+                "name": "transfer",
+                "type": {
+                  "defined": {
+                    "name": "ExternalValidationResult"
+                  }
+                }
+              },
+              {
+                "name": "burn",
+                "type": {
+                  "defined": {
+                    "name": "ExternalValidationResult"
+                  }
+                }
+              },
+              {
+                "name": "update",
+                "type": {
+                  "defined": {
+                    "name": "ExternalValidationResult"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "ValidationSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "subject",
+            "type": "pubkey"
+          },
+          {
+            "name": "valid",
+            "type": "bool"
+          }
+        ]
+      }
+    }
+  ]
+}

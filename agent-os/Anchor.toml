@@ -8,15 +8,17 @@ skip-lint = false
 [programs.localnet]
 settlement = "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
 stake = "CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED"
+covenant_oracle = "2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD"
 
 [programs.devnet]
 settlement = "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y"
 stake = "CstkpU2q9RngbHh21WVAYeQjbN9UWgcH9pAiQcMaEcED"
+covenant_oracle = "2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD"
 
 [provider]
 cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [workspace]
-members = ["programs/settlement", "programs/stake"]
+members = ["programs/settlement", "programs/stake", "programs/covenant-oracle"]
 types = "target/types"

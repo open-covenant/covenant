@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T22:59:09.573Z",
+  "updatedAt": "2026-06-23T23:19:13.418Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10909,
-    "tasks": 1283,
+    "events": 10912,
+    "tasks": 1284,
     "integrated": 1287
   },
   "throughput": {
     "last24h": 46,
-    "last7d": 173,
-    "velocity": 24.7
+    "last7d": 172,
+    "velocity": 24.6
   },
   "daily": [
     {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1279,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "x402-untrusted-response-deserialize-failure-coverage",
+    "state": "in_progress",
+    "since": "2026-06-23T23:01:11.409Z"
+  },
   "recent": [
     {
       "at": "2026-06-23T22:45:41.619Z",

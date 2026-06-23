@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T00:29:31.464Z",
+  "updatedAt": "2026-06-23T00:49:35.357Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10512,
+    "events": 10517,
     "tasks": 1239,
-    "integrated": 1241
+    "integrated": 1242
   },
   "throughput": {
-    "last24h": 19,
-    "last7d": 142,
-    "velocity": 20.3
+    "last24h": 18,
+    "last7d": 143,
+    "velocity": 20.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-23",
-      "total": 1241
+      "total": 1242
     }
   ],
   "states": {
-    "integrated": 1233,
+    "integrated": 1234,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "verify-memory-receipt-mismatch-drift-coverage",
-    "state": "in_progress",
-    "since": "2026-06-23T00:23:51.526Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T00:42:00.928Z",
+      "task": "verify-memory-receipt-mismatch-drift-coverage",
+      "note": "Committed c15f672f on loop/main-track; memory_receipt_mismatch per-owner count-reconciliation arm (lib.rs:7782) covered + mutation-proven; p"
+    },
     {
       "at": "2026-06-22T22:49:44.482Z",
       "task": "cli-hash32-empty-arg-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-22T00:30:22.994Z",
       "task": "a2a-recipient-rejected-audit-write-failure-surfaced-unit-cov",
       "note": "Committed 6caf3c61. handler-audit-write-failure-coverage 6/7. Pushing."
-    },
-    {
-      "at": "2026-06-22T00:17:16.859Z",
-      "task": "capability-revoke-cross-peer-audit-write-failure-surfaced-un",
-      "note": "Committed 8c15a40d. handler-audit-write-failure-coverage 5/7. Pushing."
     }
   ]
 }

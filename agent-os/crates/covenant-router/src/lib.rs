@@ -793,6 +793,30 @@ required = ["tool.web_search"]
     }
 
     #[test]
+    fn load_agents_from_dir_surfaces_malformed_manifest_with_its_path() {
+        // load_agents_from_dir wraps a malformed package agent.toml parse as
+        // RouterError::Manifest carrying the offending path (lib.rs:262). The
+        // variant's Display/source formatting is pinned elsewhere by direct
+        // construction; this drives the production code path — a broken
+        // package must surface the error (not panic, not be silently skipped)
+        // and bind the real manifest path.
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = dir.path().join("broken");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let manifest_path = pkg.join("agent.toml");
+        // Unterminated basic string is invalid TOML under any parser.
+        std::fs::write(&manifest_path, "name = \"unterminated").unwrap();
+        match load_agents_from_dir(dir.path()) {
+            Err(RouterError::Manifest { path, source: _ }) => {
+                assert_eq!(path, manifest_path, "must bind the offending agent.toml path");
+            }
+            other => panic!(
+                "malformed agent.toml must surface as RouterError::Manifest, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
     fn load_agents_from_dir_sorts_multiple_packages_by_manifest_id() {
         // load_agents_from_dir line 174:
         //   cards.sort_by(|a, b| a.id.cmp(&b.id));

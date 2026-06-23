@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T22:39:05.935Z",
+  "updatedAt": "2026-06-23T22:59:09.573Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10898,
-    "tasks": 1282,
-    "integrated": 1285
+    "events": 10909,
+    "tasks": 1283,
+    "integrated": 1287
   },
   "throughput": {
-    "last24h": 45,
-    "last7d": 172,
-    "velocity": 24.6
+    "last24h": 46,
+    "last7d": 173,
+    "velocity": 24.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 44
+      "count": 46
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-23",
-      "total": 1285
+      "total": 1287
     }
   ],
   "states": {
-    "integrated": 1277,
+    "integrated": 1279,
     "proposed": 1,
-    "blocked": 3,
-    "validation": 1
+    "blocked": 3
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "search-provider-http-error-surfacing-coverage",
-    "state": "validation",
-    "since": "2026-06-23T22:38:43.762Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T22:45:41.619Z",
+      "task": "x402-signer-decode-payment-requirement-coverage",
+      "note": "sidecar decode-bail now covered via behavior-preserving decode_requirement extract; test + README metrics in one slice commit on loop/main-t"
+    },
+    {
+      "at": "2026-06-23T22:39:34.773Z",
+      "task": "search-provider-http-error-surfacing-coverage",
+      "note": "Brave/SerpApi Status + Brave Empty production paths now covered; tests + README metrics in one slice commit on loop/main-track"
+    },
     {
       "at": "2026-06-23T22:20:14.397Z",
       "task": "router-load-agents-malformed-manifest-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-23T18:48:00.040Z",
       "task": "compute-broker-attestation-key-parsing-coverage",
       "note": "test-only coverage slice integrated; commit pending"
-    },
-    {
-      "at": "2026-06-23T18:37:16.459Z",
-      "task": "mcp-bridge-auth-token-cache-ttl-coverage",
-      "note": "test-only coverage slice integrated; commit pending"
-    },
-    {
-      "at": "2026-06-23T18:18:22.539Z",
-      "task": "telegram-bot-allowlist-coverage",
-      "note": "integrated: committed, seventh fresh-surface services/* TS slice"
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T16:57:56.009Z",
+  "updatedAt": "2026-06-23T17:17:59.710Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10668,
-    "tasks": 1255,
-    "integrated": 1259
+    "events": 10677,
+    "tasks": 1256,
+    "integrated": 1260
   },
   "throughput": {
-    "last24h": 24,
-    "last7d": 148,
-    "velocity": 21.1
+    "last24h": 25,
+    "last7d": 149,
+    "velocity": 21.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 18
+      "count": 19
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1259
+      "total": 1260
     }
   ],
   "states": {
-    "integrated": 1251,
+    "integrated": 1252,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T17:14:04.725Z",
+      "task": "hatcher-connector-config-env-parsing-coverage",
+      "note": "integrated: committed 82de1cf5, test-only slice on a fresh behavior surface (hatcher-connector), breaking prior exhaustion"
+    },
     {
       "at": "2026-06-23T16:49:57.582Z",
       "task": "gateway-anthropic-write-file-success-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-22T22:49:44.482Z",
       "task": "cli-hash32-empty-arg-coverage",
       "note": "Committed 575aefa5 on loop/main-track; Hash32ArgError Empty arm (parse_hash32_arg main.rs 529) covered + mutation-proven, chain-tx line refs"
-    },
-    {
-      "at": "2026-06-22T21:18:33.866Z",
-      "task": "cli-operator-keypair-invalid-material-coverage",
-      "note": "Committed 0675e19c on loop/main-track; InvalidKeyMaterial arm (main.rs:439) covered + mutation-proven. Push to follow."
     }
   ]
 }

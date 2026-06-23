@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T18:38:15.094Z",
+  "updatedAt": "2026-06-23T18:58:18.747Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10739,
-    "tasks": 1263,
-    "integrated": 1267
+    "events": 10755,
+    "tasks": 1265,
+    "integrated": 1269
   },
   "throughput": {
-    "last24h": 29,
-    "last7d": 155,
-    "velocity": 22.1
+    "last24h": 31,
+    "last7d": 157,
+    "velocity": 22.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 26
+      "count": 28
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1267
+      "total": 1269
     }
   ],
   "states": {
-    "integrated": 1259,
+    "integrated": 1261,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T18:56:45.437Z",
+      "task": "fairscale-bridge-daemon-client-classifier-coverage",
+      "note": "test-only coverage slice integrated; commit pending"
+    },
+    {
+      "at": "2026-06-23T18:48:00.040Z",
+      "task": "compute-broker-attestation-key-parsing-coverage",
+      "note": "test-only coverage slice integrated; commit pending"
+    },
     {
       "at": "2026-06-23T18:37:16.459Z",
       "task": "mcp-bridge-auth-token-cache-ttl-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-23T15:29:57.919Z",
       "task": "gateway-budget-ledger-non-enoent-load-error-coverage",
       "note": "Committed d194232b (test-only). Pushing to loop/main-track."
-    },
-    {
-      "at": "2026-06-23T15:22:34.518Z",
-      "task": "gateway-budget-model-cost-pricing-coverage",
-      "note": "Committed 39cf18a7 (test-only). Pushing to loop/main-track."
-    },
-    {
-      "at": "2026-06-23T15:09:45.252Z",
-      "task": "gateway-config-exempt-ip-set-parsing-coverage",
-      "note": "Committed 7348e63a (test-only) and pushed eac76487..7348e63a to loop/main-track. Backlog was exhausted; refilled 1 epic+template off the cod"
     }
   ]
 }

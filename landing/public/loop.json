@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T21:38:49.775Z",
+  "updatedAt": "2026-06-23T21:58:58.374Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10873,
-    "tasks": 1279,
-    "integrated": 1283
+    "events": 10882,
+    "tasks": 1280,
+    "integrated": 1284
   },
   "throughput": {
-    "last24h": 43,
-    "last7d": 170,
-    "velocity": 24.3
+    "last24h": 44,
+    "last7d": 171,
+    "velocity": 24.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 42
+      "count": 43
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1283
+      "total": 1284
     }
   ],
   "states": {
-    "integrated": 1275,
+    "integrated": 1276,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T21:57:37.840Z",
+      "task": "research-agent-llm-failure-fallback-coverage",
+      "note": "LLM-Err fallback arm now covered; test + README metrics in one slice commit on loop/main-track"
+    },
     {
       "at": "2026-06-23T21:31:42.820Z",
       "task": "demo-agent-quota-guardrail-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-23T18:11:36.426Z",
       "task": "hermes-mcp-bridge-run-schema-coverage",
       "note": "integrated: committed, sixth fresh-surface services/* TS slice"
-    },
-    {
-      "at": "2026-06-23T18:02:45.429Z",
-      "task": "mcp-bridge-covenant-home-redaction-coverage",
-      "note": "integrated: committed, fifth fresh-surface services/* TS slice"
     }
   ]
 }

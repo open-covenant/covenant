@@ -1026,19 +1026,71 @@ schedm!(w14, w15, w7, w12);
 schedm!(w15, w0, w8, w13);
 emit!(60, w12, w13, w14, w15);
 }
-#[target_feature(enable = "simd128")]
-pub(super) fn link_hex_mid(
-previous: &[u8; 64],
-mid_wk: &[u8; 256],
-last: u8,
-tail: &[[u32; 64]; 16],
-) -> [u8; 64] {
-let mut state = H0;
-compress_block(&mut state, previous);
-super::compress_tail_b(&mut state, mid_wk);
-super::compress_tail(&mut state, &tail[super::tail_idx(last)]);
-hex_state(&state)
-}
+    #[target_feature(enable = "simd128")]
+    pub(super) fn link_hex_mid(
+    previous: &[u8; 64],
+    mid_wk: &[u8; 256],
+    last: u8,
+    tail: &[[u32; 64]; 16],
+    ) -> [u8; 64] {
+    let mut state = H0;
+    compress_block(&mut state, previous);
+    {
+    let wk = mid_wk;
+    let mut a = state[0];
+    let mut b = state[1];
+    let mut c = state[2];
+    let mut d = state[3];
+    let mut e = state[4];
+    let mut f = state[5];
+    let mut g = state[6];
+    let mut h = state[7];
+    octtb!(a, b, c, d, e, f, g, h, wk, 0);
+    octtb!(a, b, c, d, e, f, g, h, wk, 8);
+    octtb!(a, b, c, d, e, f, g, h, wk, 16);
+    octtb!(a, b, c, d, e, f, g, h, wk, 24);
+    octtb!(a, b, c, d, e, f, g, h, wk, 32);
+    octtb!(a, b, c, d, e, f, g, h, wk, 40);
+    octtb!(a, b, c, d, e, f, g, h, wk, 48);
+    octtb!(a, b, c, d, e, f, g, h, wk, 56);
+    state[0] = state[0].wrapping_add(a);
+    state[1] = state[1].wrapping_add(b);
+    state[2] = state[2].wrapping_add(c);
+    state[3] = state[3].wrapping_add(d);
+    state[4] = state[4].wrapping_add(e);
+    state[5] = state[5].wrapping_add(f);
+    state[6] = state[6].wrapping_add(g);
+    state[7] = state[7].wrapping_add(h);
+    }
+    {
+    let wk = &tail[super::tail_idx(last)];
+    let mut a = state[0];
+    let mut b = state[1];
+    let mut c = state[2];
+    let mut d = state[3];
+    let mut e = state[4];
+    let mut f = state[5];
+    let mut g = state[6];
+    let mut h = state[7];
+    octt!(a, b, c, d, e, f, g, h, wk, 0);
+    octt!(a, b, c, d, e, f, g, h, wk, 8);
+    octt!(a, b, c, d, e, f, g, h, wk, 16);
+    octt!(a, b, c, d, e, f, g, h, wk, 24);
+    octt!(a, b, c, d, e, f, g, h, wk, 32);
+    octt!(a, b, c, d, e, f, g, h, wk, 40);
+    octt!(a, b, c, d, e, f, g, h, wk, 48);
+    octt!(a, b, c, d, e, f, g, h, wk, 56);
+    state[0] = state[0].wrapping_add(a);
+    state[1] = state[1].wrapping_add(b);
+    state[2] = state[2].wrapping_add(c);
+    state[3] = state[3].wrapping_add(d);
+    state[4] = state[4].wrapping_add(e);
+    state[5] = state[5].wrapping_add(f);
+    state[6] = state[6].wrapping_add(g);
+    state[7] = state[7].wrapping_add(h);
+    }
+    hex_state(&state)
+    }
 #[target_feature(enable = "simd128")]
 fn digest4(lines: [&[u8]; 4], blocks: usize) -> [[u8; 64]; 4] {
 let mut tails = [[0u8; 128]; 4];

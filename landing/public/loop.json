@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-23T20:18:33.652Z",
+  "updatedAt": "2026-06-23T20:37:26.227Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10825,
-    "tasks": 1273,
-    "integrated": 1277
+    "events": 10837,
+    "tasks": 1275,
+    "integrated": 1278
   },
   "throughput": {
-    "last24h": 38,
+    "last24h": 39,
     "last7d": 165,
     "velocity": 23.6
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 36
+      "count": 37
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-23",
-      "total": 1277
+      "total": 1278
     }
   ],
   "states": {
-    "integrated": 1269,
+    "integrated": 1270,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "indexer-api-http-handler-coverage",
+    "state": "in_progress",
+    "since": "2026-06-23T20:34:19.696Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-23T20:31:08.812Z",
+      "task": "indexer-model-base58-normalize-arms-coverage",
+      "note": "Committed 63b6e0eb: 7 new test cases covering normalize_event length/charset reject arms + trim + seed_events, mutation-proved. Test-only, n"
+    },
     {
       "at": "2026-06-23T20:06:22.625Z",
       "task": "settlement-publisher-dispatch-selection-ordering-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-23T16:49:57.582Z",
       "task": "gateway-anthropic-write-file-success-coverage",
       "note": "e59618e2 committed; pushing"
-    },
-    {
-      "at": "2026-06-23T16:46:31.380Z",
-      "task": "gateway-anthropic-exectool-success-arms-coverage",
-      "note": "e79976c5 committed; pushing"
     }
   ]
 }

@@ -390,6 +390,26 @@ describe("OpenaiBackend.run", () => {
     await backend.run({ input: "x", sandbox: fakeSandbox(), signal: new AbortController().signal, emit: (e) => emitted.push(e) });
     expect(emitted.find((e) => e.type === "tool.started")).toMatchObject({ type: "tool.started", preview: longCmd.slice(0, 120) });
   });
+
+  it("applies an edit_file call by splicing old_string for new_string once and writing the result", async () => {
+    // The edit_file success path (openai.ts:264-267) — the slice/concat that
+    // produces the edited file — is untested; only the not-found / not-unique
+    // error arms are pinned, so a slice-math regression would corrupt the file
+    // with every existing test green.
+    const { client, calls } = fakeClient([
+      { events: [completed({ id: "r1", usage: null, output: [functionCall("c1", "edit_file", { path: "a.txt", old_string: "foo", new_string: "bar" })] })] },
+      { events: [completed({ id: "r2", usage: null, output: [messageItem("done")] })] },
+    ]);
+    const sandbox = fakeSandbox({ "a.txt": "xx foo yy" });
+    const emitted: GatewayEvent[] = [];
+    const backend = new OpenaiBackend(client);
+    await backend.run({ input: "edit", sandbox, signal: new AbortController().signal, emit: (e) => emitted.push(e) });
+
+    expect(sandbox.written["a.txt"]).toBe("xx bar yy");
+    expect(emitted.find((e) => e.type === "file.written")).toMatchObject({ path: "a.txt", bytes: Buffer.byteLength("xx bar yy") });
+    const fedBack = calls[1]!.params.input as Array<{ output: string }>;
+    expect(fedBack[0]!.output).toBe("edited a.txt");
+  });
 });
 
 describe("selectBackend", () => {

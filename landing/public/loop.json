@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T20:38:37.359Z",
+  "updatedAt": "2026-06-23T20:58:41.099Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10837,
-    "tasks": 1275,
-    "integrated": 1278
+    "events": 10869,
+    "tasks": 1279,
+    "integrated": 1282
   },
   "throughput": {
-    "last24h": 39,
-    "last7d": 165,
-    "velocity": 23.6
+    "last24h": 43,
+    "last7d": 169,
+    "velocity": 24.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 37
+      "count": 41
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1278
+      "total": 1282
     }
   ],
   "states": {
-    "integrated": 1270,
+    "integrated": 1274,
     "proposed": 1,
     "blocked": 3,
     "in_progress": 1
@@ -216,11 +216,31 @@
     }
   ],
   "inFlight": {
-    "task": "indexer-api-http-handler-coverage",
+    "task": "demo-agent-quota-guardrail-coverage",
     "state": "in_progress",
-    "since": "2026-06-23T20:34:19.696Z"
+    "since": "2026-06-23T20:57:29.389Z"
   },
   "recent": [
+    {
+      "at": "2026-06-23T20:54:53.474Z",
+      "task": "indexer-x402-paid-summary-handler-coverage",
+      "note": "Committed; closes indexer paid_summary 503/402/200+header coverage."
+    },
+    {
+      "at": "2026-06-23T20:49:51.753Z",
+      "task": "indexer-x402-config-from-env-coverage",
+      "note": "Committed; test-only slice closing x402 from_env coverage."
+    },
+    {
+      "at": "2026-06-23T20:45:36.383Z",
+      "task": "indexer-config-from-env-coverage",
+      "note": "Committed 814c188c: sequential from_env test (defaults + confirmations parse-fallback + numeric override + per-var overrides), mutation-prov"
+    },
+    {
+      "at": "2026-06-23T20:40:08.493Z",
+      "task": "indexer-api-http-handler-coverage",
+      "note": "Committing handler tests + tower/http-body-util dev-deps."
+    },
     {
       "at": "2026-06-23T20:31:08.812Z",
       "task": "indexer-model-base58-normalize-arms-coverage",
@@ -300,26 +320,6 @@
       "at": "2026-06-23T17:33:15.076Z",
       "task": "compute-broker-config-env-schema-coverage",
       "note": "integrated: committed, fourth fresh-surface TS slice"
-    },
-    {
-      "at": "2026-06-23T17:27:57.904Z",
-      "task": "proof-gen-rate-limit-interpretation-coverage",
-      "note": "integrated: committed, third fresh-surface TS slice"
-    },
-    {
-      "at": "2026-06-23T17:22:31.597Z",
-      "task": "proof-gen-schema-boundary-coverage",
-      "note": "integrated: committed ea6e1b1c, second fresh-surface TS slice"
-    },
-    {
-      "at": "2026-06-23T17:14:04.725Z",
-      "task": "hatcher-connector-config-env-parsing-coverage",
-      "note": "integrated: committed 82de1cf5, test-only slice on a fresh behavior surface (hatcher-connector), breaking prior exhaustion"
-    },
-    {
-      "at": "2026-06-23T16:49:57.582Z",
-      "task": "gateway-anthropic-write-file-success-coverage",
-      "note": "e59618e2 committed; pushing"
     }
   ]
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type OpenAI from "openai";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
-import { OpenaiBackend } from "../src/backends/openai.js";
+import { OpenaiBackend, reasoningEffort } from "../src/backends/openai.js";
 import { selectBackend } from "../src/backends/index.js";
 import type { GatewayEvent, Sandbox } from "../src/types.js";
 
@@ -426,5 +426,15 @@ describe("selectBackend", () => {
 
   it("still selects anthropic explicitly", () => {
     expect(selectBackend("anthropic").id).toBe("anthropic");
+  });
+});
+
+describe("reasoningEffort", () => {
+  it("clamps the Claude-tier max alias down to OpenAI xhigh and passes other tiers through", () => {
+    // reasoningEffort (openai.ts:226) maps the gateway effort dial onto OpenAI
+    // reasoning effort; "max" is a Claude-tier alias with no OpenAI equivalent and
+    // must clamp to "xhigh" or the API rejects it. Every other value passes through.
+    expect(reasoningEffort("max")).toBe("xhigh");
+    expect(reasoningEffort("medium")).toBe("medium");
   });
 });

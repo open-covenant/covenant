@@ -223,7 +223,7 @@ export class OpenaiBackend implements CodingBackend {
 
 // The shared gateway effort dial maps straight onto OpenAI's reasoning effort;
 // only "max" (a Claude-tier alias) has no OpenAI equivalent and is clamped down.
-function reasoningEffort(effort: string): ReasoningEffort {
+export function reasoningEffort(effort: string): ReasoningEffort {
   if (effort === "max") return "xhigh";
   return effort as ReasoningEffort;
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T17:17:59.710Z",
+  "updatedAt": "2026-06-23T17:38:03.650Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10677,
-    "tasks": 1256,
-    "integrated": 1260
+    "events": 10704,
+    "tasks": 1259,
+    "integrated": 1263
   },
   "throughput": {
-    "last24h": 25,
-    "last7d": 149,
-    "velocity": 21.3
+    "last24h": 28,
+    "last7d": 151,
+    "velocity": 21.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 19
+      "count": 22
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1260
+      "total": 1263
     }
   ],
   "states": {
-    "integrated": 1252,
+    "integrated": 1255,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T17:33:15.076Z",
+      "task": "compute-broker-config-env-schema-coverage",
+      "note": "integrated: committed, fourth fresh-surface TS slice"
+    },
+    {
+      "at": "2026-06-23T17:27:57.904Z",
+      "task": "proof-gen-rate-limit-interpretation-coverage",
+      "note": "integrated: committed, third fresh-surface TS slice"
+    },
+    {
+      "at": "2026-06-23T17:22:31.597Z",
+      "task": "proof-gen-schema-boundary-coverage",
+      "note": "integrated: committed ea6e1b1c, second fresh-surface TS slice"
+    },
     {
       "at": "2026-06-23T17:14:04.725Z",
       "task": "hatcher-connector-config-env-parsing-coverage",
@@ -300,21 +315,6 @@
       "at": "2026-06-23T14:23:21.283Z",
       "task": "gateway-openai-response-terminal-failure-coverage",
       "note": "committing test-only slice to loop/main-track"
-    },
-    {
-      "at": "2026-06-23T13:49:35.612Z",
-      "task": "coder-05-gateway-openai-adapter",
-      "note": "Integrated on loop/main-track: OpenAI coding backend behind CodingBackend, selectable per run, mock-verified parity."
-    },
-    {
-      "at": "2026-06-23T00:42:00.928Z",
-      "task": "verify-memory-receipt-mismatch-drift-coverage",
-      "note": "Committed c15f672f on loop/main-track; memory_receipt_mismatch per-owner count-reconciliation arm (lib.rs:7782) covered + mutation-proven; p"
-    },
-    {
-      "at": "2026-06-22T22:49:44.482Z",
-      "task": "cli-hash32-empty-arg-coverage",
-      "note": "Committed 575aefa5 on loop/main-track; Hash32ArgError Empty arm (parse_hash32_arg main.rs 529) covered + mutation-proven, chain-tx line refs"
     }
   ]
 }

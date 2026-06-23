@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T15:37:40.667Z",
+  "updatedAt": "2026-06-23T15:57:44.425Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10596,
-    "tasks": 1247,
-    "integrated": 1251
+    "events": 10623,
+    "tasks": 1250,
+    "integrated": 1254
   },
   "throughput": {
-    "last24h": 19,
-    "last7d": 141,
-    "velocity": 20.1
+    "last24h": 21,
+    "last7d": 144,
+    "velocity": 20.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 10
+      "count": 13
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1251
+      "total": 1254
     }
   ],
   "states": {
-    "integrated": 1243,
+    "integrated": 1246,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T15:55:15.387Z",
+      "task": "gateway-anthropic-tool-preview-coverage",
+      "note": "Committed; pushing to loop/main-track."
+    },
+    {
+      "at": "2026-06-23T15:50:14.572Z",
+      "task": "gateway-anthropic-tool-execution-error-coverage",
+      "note": "Committed; pushing to loop/main-track."
+    },
+    {
+      "at": "2026-06-23T15:43:56.848Z",
+      "task": "gateway-budget-commit-duplicate-no-underflow-coverage",
+      "note": "Committed; pushing to loop/main-track."
+    },
     {
       "at": "2026-06-23T15:37:21.343Z",
       "task": "gateway-ip-bucket-idle-ttl-derivation-coverage",
@@ -300,21 +315,6 @@
       "at": "2026-06-22T16:49:42.615Z",
       "task": "revoke-capability-signature-decode-err-live-coverage",
       "note": "Shipped e410dae0 (pushed loop/main-track). 2 live tests pin both revoke_capability signature-decode Err arms; mutation-proven; lib.rs net-ze"
-    },
-    {
-      "at": "2026-06-22T16:30:59.433Z",
-      "task": "sign-attestation-b58-decode-err-live-coverage",
-      "note": "Shipped eb96ba2e (pushed loop/main-track). Test-only slice: live_ipc_sign_attestation_rejects_malformed_message_b58 pins the bs58::decode Er"
-    },
-    {
-      "at": "2026-06-22T15:47:04.412Z",
-      "task": "mailbox-lookup-task-sender-read-failure-coverage",
-      "note": "committed e516ae29; test-only slice completing Mailbox trait read-failure coverage (lookup_task_sender was the 5th uncovered method); both b"
-    },
-    {
-      "at": "2026-06-22T15:15:10.496Z",
-      "task": "secret-broker-backend-failure-coverage",
-      "note": "committed 7b1c0971; test-only slice pinning the secret-broker fail-closed Err arm; both bites mutation-proven; pushing to loop/main-track."
     }
   ]
 }

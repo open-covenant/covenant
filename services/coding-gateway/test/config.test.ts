@@ -4,6 +4,7 @@ const ENV_KEYS = [
   "CODER_IP_MAX_PER_IP",
   "CODER_IP_REFILL_MS",
   "TRUSTED_PROXY_HOPS",
+  "CODER_EXEMPT_IPS",
 ] as const;
 
 const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
@@ -57,5 +58,41 @@ describe("config env validation", () => {
     process.env["CODER_IP_MAX_PER_IP"] = "";
     const c = await loadConfig();
     expect(c.ipMaxPerIp).toBe(1);
+  });
+
+  describe("exemptIps (CODER_EXEMPT_IPS) parsing", () => {
+    it("parses a comma-separated exempt list into a Set", async () => {
+      process.env["CODER_EXEMPT_IPS"] = "10.0.0.1,10.0.0.2";
+      const c = await loadConfig();
+      expect(c.exemptIps.size).toBe(2);
+      expect(c.exemptIps.has("10.0.0.1")).toBe(true);
+      expect(c.exemptIps.has("10.0.0.2")).toBe(true);
+    });
+
+    it("tolerates whitespace around entries so a hand-edited list still matches clean IPs", async () => {
+      // Operators editing the env var won't be byte-perfect; trim() keeps
+      // "10.0.0.1, 10.0.0.2 " usable. Drop trim and the leading space on the
+      // second entry survives into the Set, so has("10.0.0.2") misses it and
+      // that operator IP is silently blocked by the daily cap it was meant
+      // to bypass.
+      process.env["CODER_EXEMPT_IPS"] = "10.0.0.1, 10.0.0.2 ";
+      const c = await loadConfig();
+      expect(c.exemptIps.has("10.0.0.1")).toBe(true);
+      expect(c.exemptIps.has("10.0.0.2")).toBe(true);
+    });
+
+    it("drops empty entries from trailing commas", async () => {
+      process.env["CODER_EXEMPT_IPS"] = "10.0.0.1,,";
+      const c = await loadConfig();
+      expect(c.exemptIps.size).toBe(1);
+      expect(c.exemptIps.has("10.0.0.1")).toBe(true);
+      expect(c.exemptIps.has("")).toBe(false);
+    });
+
+    it("unset env yields an empty exempt set", async () => {
+      delete process.env["CODER_EXEMPT_IPS"];
+      const c = await loadConfig();
+      expect(c.exemptIps.size).toBe(0);
+    });
   });
 });

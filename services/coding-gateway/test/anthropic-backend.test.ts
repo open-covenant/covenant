@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
 import { execTool, previewOf, withTurnCache } from "../src/backends/anthropic.js";
-import type { Sandbox } from "../src/types.js";
+import type { GatewayEvent, Sandbox } from "../src/types.js";
 
 // The Anthropic backend's run() loop builds its own client with no injection
 // seam, so it can't be driven without a live key. The novel logic lives in
@@ -9,8 +9,12 @@ import type { Sandbox } from "../src/types.js";
 // pure over a message array) and execTool (tool dispatch, takes an injected
 // sandbox so it is mock-drivable with no key). Both are pinned directly.
 
-function memSandbox(files: Record<string, string> = {}): Sandbox {
+function memSandbox(
+  files: Record<string, string> = {},
+  execResult: { stdout: string; stderr: string; exitCode: number } = { stdout: "", stderr: "", exitCode: 0 },
+): Sandbox & { execs: string[] } {
   const store = { ...files };
+  const execs: string[] = [];
   return {
     readFile: async (p) => {
       if (!(p in store)) throw new Error(`ENOENT: ${p}`);
@@ -19,10 +23,14 @@ function memSandbox(files: Record<string, string> = {}): Sandbox {
     writeFile: async (p, c) => {
       store[p] = c;
     },
-    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    exec: async (cmd) => {
+      execs.push(cmd);
+      return execResult;
+    },
     previewUrl: async () => "",
     destroy: async () => {},
-  };
+    execs,
+  } as Sandbox & { execs: string[] };
 }
 
 function toolUse(name: string, input: Record<string, unknown>): Anthropic.ToolUseBlock {
@@ -91,6 +99,31 @@ describe("execTool", () => {
   it("throws for an unknown tool", async () => {
     const call = execTool(toolUse("delete_file", { path: "a.txt" }), memSandbox(), () => {});
     await expect(call).rejects.toThrow(/unknown tool: delete_file/);
+  });
+
+  it("runs a bash tool call through sandbox.exec and formats exit/stdout/stderr", async () => {
+    // The bash arm (anthropic.ts:247-250) is the agent's command tool; the execTool
+    // block pinned only error arms, so dropping this case routes bash to unknown-tool.
+    const sandbox = memSandbox({}, { stdout: "file.txt", stderr: "warn", exitCode: 7 });
+    const out = await execTool(toolUse("bash", { command: "ls" }), sandbox, () => {});
+    expect(sandbox.execs).toContain("ls");
+    expect(out).toBe("exit=7\n--- stdout ---\nfile.txt\n--- stderr ---\nwarn");
+  });
+
+  it("splices old_string for new_string once on a successful edit_file", async () => {
+    // The edit_file success path (anthropic.ts:242-245) was untested; only the
+    // not-found / not-unique error arms are pinned, so a splice-math regression
+    // would corrupt the file with every existing test green.
+    const sandbox = memSandbox({ "a.txt": "xx foo yy" });
+    const emitted: GatewayEvent[] = [];
+    const out = await execTool(
+      toolUse("edit_file", { path: "a.txt", old_string: "foo", new_string: "bar" }),
+      sandbox,
+      (e) => emitted.push(e),
+    );
+    expect(out).toBe("edited a.txt");
+    expect(await sandbox.readFile("a.txt")).toBe("xx bar yy");
+    expect(emitted.find((e) => e.type === "file.written")).toMatchObject({ path: "a.txt", bytes: 9 });
   });
 });
 

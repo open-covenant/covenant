@@ -125,6 +125,35 @@ export const PARTNERS: Integration[] = [
       "Covenant agents resolve and verify .sol names through read-only Solana Name Service tools.",
     status: "live",
   },
+  {
+    slug: "acedata",
+    name: "Ace Data Cloud",
+    blurb:
+      "One capability-gated gateway to Ace Data Cloud's image, video, music, and search models, with provenance on every call.",
+    status: "live",
+    href: "https://acedata.cloud",
+  },
+  {
+    slug: "xona",
+    name: "Xona Agent",
+    blurb:
+      "Xona Agent's creative generation endpoints reach agents as capability-scoped, x402-billed tools.",
+    status: "live",
+  },
+  {
+    slug: "wurk",
+    name: "Wurk",
+    blurb:
+      "Wurk's agent-to-human microjobs run as capability-scoped, x402-billed tools, with Covenant attesting the work.",
+    status: "live",
+  },
+  {
+    slug: "orbserv",
+    name: "Orbserv",
+    blurb:
+      "Covenant acts as the spend-authorization policy layer for Orbserv's agent wallets.",
+    status: "live",
+  },
 
   // In development — active build on a feature line, not yet on the main line.
   {
@@ -134,13 +163,6 @@ export const PARTNERS: Integration[] = [
       "Covenant verifies ClawVille's AI-to-AI bounties with capability-scoped grants, hash-chained action logs, and signed verdicts.",
     status: "building",
     href: "https://clawville.world",
-  },
-  {
-    slug: "orbserv",
-    name: "Orbserv",
-    blurb:
-      "Covenant acts as the spend-authorization policy layer for Orbserv's agent wallets.",
-    status: "building",
   },
   {
     slug: "zkmedusa",
@@ -164,26 +186,11 @@ export const PARTNERS: Integration[] = [
     status: "building",
   },
   {
-    slug: "wurk",
-    name: "Wurk",
-    blurb:
-      "Wurk's agent-to-human microjobs run as capability-scoped, x402-billed tools, with Covenant attesting the work.",
-    status: "building",
-  },
-  {
     slug: "percolator",
     name: "Percolator",
     blurb:
       "Covenant-governed keeper agents run Percolator's perpetuals liveness under stake-backed, slashable bonds.",
     status: "building",
-  },
-  {
-    slug: "acedata",
-    name: "Ace Data Cloud",
-    blurb:
-      "One capability-gated gateway to Ace Data Cloud's image, video, music, and search models, with provenance on every call.",
-    status: "building",
-    href: "https://acedata.cloud",
   },
   {
     slug: "magicblock",
@@ -199,13 +206,6 @@ export const PARTNERS: Integration[] = [
       "Agents push cryptographically attested commits to Gitlawb's decentralized git nodes.",
     status: "building",
     href: "https://github.com/Gitlawb",
-  },
-  {
-    slug: "xona",
-    name: "Xona Agent",
-    blurb:
-      "Xona Agent's creative generation endpoints reach agents as capability-scoped, x402-billed tools.",
-    status: "building",
   },
 ];
 

@@ -149,4 +149,36 @@ mod tests {
         // Sources come from the (mock) search hits.
         assert_eq!(r.sources.len(), 1);
     }
+
+    #[tokio::test]
+    async fn falls_back_to_canned_when_llm_fails() {
+        // A non-"mock" provider whose completion always errors: `run` takes
+        // the live path and must surface the failure as a canned fallback
+        // rather than panic or emit empty output during a provider outage.
+        struct FailingLive;
+        #[async_trait::async_trait]
+        impl Provider for FailingLive {
+            fn name(&self) -> &'static str {
+                "failing-live"
+            }
+            async fn complete(
+                &self,
+                _messages: &[ChatMessage],
+            ) -> Result<String, covenant_llm::ProviderError> {
+                Err(covenant_llm::ProviderError::Empty)
+            }
+        }
+        let search = MockSearch::stub();
+        let r = run("what is x?", &FailingLive, &search).await;
+        assert!(
+            r.text.contains("fell back to canned response"),
+            "expected fallback marker, got: {}",
+            r.text
+        );
+        // The failing provider's name and the original question are surfaced.
+        assert!(r.text.contains("failing-live"), "missing provider name: {}", r.text);
+        assert!(r.text.contains("what is x?"), "missing original question: {}", r.text);
+        // Sources still flow from the search hits so the caller isn't left empty.
+        assert_eq!(r.sources.len(), 1, "expected the stub search hit as a source");
+    }
 }

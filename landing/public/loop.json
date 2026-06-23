@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-23T14:37:28.501Z",
+  "updatedAt": "2026-06-23T14:57:32.577Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10551,
-    "tasks": 1242,
-    "integrated": 1246
+    "events": 10560,
+    "tasks": 1243,
+    "integrated": 1247
   },
   "throughput": {
-    "last24h": 15,
+    "last24h": 16,
     "last7d": 137,
     "velocity": 19.6
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1246
+      "total": 1247
     }
   ],
   "states": {
-    "integrated": 1238,
+    "integrated": 1239,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T14:43:35.134Z",
+      "task": "gateway-anthropic-turn-cache-breakpoint-coverage",
+      "note": "committing to loop/main-track"
+    },
     {
       "at": "2026-06-23T14:31:33.508Z",
       "task": "gateway-openai-max-turns-exhaustion-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-22T10:24:14.393Z",
       "task": "submit-intent-ipc-v2-stream-live-coverage",
       "note": "Integrated as 057cf263. Commit = test file + README metrics only (autonomy/ loop-state gitignored). Push to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-22T05:58:56.479Z",
-      "task": "memory-recent-ipc-stream-capability-gate-live-coverage",
-      "note": "Committed a5c226e0 (test-only, +1 file agent-os/crates/covenantd/tests/live_ipc_memory_recent_stream.rs). Both live tests pass; mutation-pro"
     }
   ]
 }

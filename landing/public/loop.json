@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T19:38:26.179Z",
+  "updatedAt": "2026-06-23T19:58:29.978Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10789,
-    "tasks": 1269,
-    "integrated": 1273
+    "events": 10807,
+    "tasks": 1271,
+    "integrated": 1275
   },
   "throughput": {
-    "last24h": 34,
-    "last7d": 161,
-    "velocity": 23
+    "last24h": 36,
+    "last7d": 163,
+    "velocity": 23.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 32
+      "count": 34
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1273
+      "total": 1275
     }
   ],
   "states": {
-    "integrated": 1265,
+    "integrated": 1267,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T19:57:56.602Z",
+      "task": "witness-verifier-skill-manifest-fallback-coverage",
+      "note": "manifest extraction + 5 mutation-proven tests; vitest 22/22, scripts EXIT=0"
+    },
+    {
+      "at": "2026-06-23T19:48:43.238Z",
+      "task": "settlement-publisher-operator-keypair-env-validation-coverag",
+      "note": "commit d8f50581: extracted keypair.mjs + 7 mutation-proven tests + vitest harness; vitest 7/7, validate.sh --scripts EXIT=0"
+    },
     {
       "at": "2026-06-23T19:36:51.749Z",
       "task": "witness-verifier-anchor-settlement-instruction-data-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-23T16:35:59.317Z",
       "task": "gateway-openai-edit-file-success-coverage",
       "note": "708cb51f committed; pushing to loop/main-track"
-    },
-    {
-      "at": "2026-06-23T16:32:42.037Z",
-      "task": "gateway-openai-bash-tool-execution-coverage",
-      "note": "cdf72de3 committed; pushing to loop/main-track"
-    },
-    {
-      "at": "2026-06-23T15:55:15.387Z",
-      "task": "gateway-anthropic-tool-preview-coverage",
-      "note": "Committed; pushing to loop/main-track."
     }
   ]
 }

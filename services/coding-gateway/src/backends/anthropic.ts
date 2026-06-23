@@ -206,7 +206,7 @@ export function withTurnCache(messages: Anthropic.MessageParam[]): Anthropic.Mes
   return out;
 }
 
-function previewOf(tu: Anthropic.ToolUseBlock): string {
+export function previewOf(tu: Anthropic.ToolUseBlock): string {
   const input = tu.input as Record<string, unknown>;
   if (tu.name === "bash") return String(input.command ?? "").slice(0, 120);
   if (typeof input.path === "string") return input.path;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import { execTool, withTurnCache } from "../src/backends/anthropic.js";
+import { execTool, previewOf, withTurnCache } from "../src/backends/anthropic.js";
 import type { Sandbox } from "../src/types.js";
 
 // The Anthropic backend's run() loop builds its own client with no injection
@@ -91,5 +91,21 @@ describe("execTool", () => {
   it("throws for an unknown tool", async () => {
     const call = execTool(toolUse("delete_file", { path: "a.txt" }), memSandbox(), () => {});
     await expect(call).rejects.toThrow(/unknown tool: delete_file/);
+  });
+});
+
+describe("previewOf", () => {
+  it("truncates a bash command to 120 chars for the event preview", () => {
+    const preview = previewOf(toolUse("bash", { command: "x".repeat(200) }));
+    expect(preview).toHaveLength(120);
+    expect(preview).toBe("x".repeat(120));
+  });
+
+  it("returns the path for a path-bearing tool", () => {
+    expect(previewOf(toolUse("read_file", { path: "src/app.ts" }))).toBe("src/app.ts");
+  });
+
+  it("returns empty for a tool with neither a command nor a path", () => {
+    expect(previewOf(toolUse("custom", {}))).toBe("");
   });
 });

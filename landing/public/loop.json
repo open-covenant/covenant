@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T14:57:32.577Z",
+  "updatedAt": "2026-06-23T15:17:36.535Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10560,
-    "tasks": 1243,
-    "integrated": 1247
+    "events": 10573,
+    "tasks": 1245,
+    "integrated": 1248
   },
   "throughput": {
     "last24h": 16,
-    "last7d": 137,
-    "velocity": 19.6
+    "last7d": 138,
+    "velocity": 19.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-23",
-      "total": 1247
+      "total": 1248
     }
   ],
   "states": {
-    "integrated": 1239,
+    "integrated": 1240,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "gateway-budget-model-cost-pricing-coverage",
+    "state": "in_progress",
+    "since": "2026-06-23T15:15:29.982Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-23T15:09:45.252Z",
+      "task": "gateway-config-exempt-ip-set-parsing-coverage",
+      "note": "Committed 7348e63a (test-only) and pushed eac76487..7348e63a to loop/main-track. Backlog was exhausted; refilled 1 epic+template off the cod"
+    },
     {
       "at": "2026-06-23T14:43:35.134Z",
       "task": "gateway-anthropic-turn-cache-breakpoint-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-22T11:54:13.157Z",
       "task": "embedder-search-failure-surfaced-coverage",
       "note": "Test-only slice complete and validated; committing + pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-22T10:24:14.393Z",
-      "task": "submit-intent-ipc-v2-stream-live-coverage",
-      "note": "Integrated as 057cf263. Commit = test file + README metrics only (autonomy/ loop-state gitignored). Push to origin/loop/main-track."
     }
   ]
 }

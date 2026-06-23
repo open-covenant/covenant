@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T19:18:22.361Z",
+  "updatedAt": "2026-06-23T19:38:26.179Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10771,
-    "tasks": 1267,
-    "integrated": 1271
+    "events": 10789,
+    "tasks": 1269,
+    "integrated": 1273
   },
   "throughput": {
-    "last24h": 33,
-    "last7d": 159,
-    "velocity": 22.7
+    "last24h": 34,
+    "last7d": 161,
+    "velocity": 23
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 30
+      "count": 32
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1271
+      "total": 1273
     }
   ],
   "states": {
-    "integrated": 1263,
+    "integrated": 1265,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T19:36:51.749Z",
+      "task": "witness-verifier-anchor-settlement-instruction-data-coverage",
+      "note": "commit 2a352bde: extracted anchor-lib.mjs + 8 mutation-proven tests; vitest 17/17, validate.sh --scripts EXIT=0"
+    },
+    {
+      "at": "2026-06-23T19:30:26.306Z",
+      "task": "witness-verifier-pure-logic-extraction-coverage",
+      "note": "commit 636f7298: extracted verify-lib.mjs + 9 mutation-proven tests + vitest harness; vitest 9/9, validate.sh --scripts EXIT=0. backlog seed"
+    },
     {
       "at": "2026-06-23T19:08:21.907Z",
       "task": "fairscale-bridge-resolve-cursor-coverage",
@@ -304,16 +314,6 @@
     {
       "at": "2026-06-23T15:55:15.387Z",
       "task": "gateway-anthropic-tool-preview-coverage",
-      "note": "Committed; pushing to loop/main-track."
-    },
-    {
-      "at": "2026-06-23T15:50:14.572Z",
-      "task": "gateway-anthropic-tool-execution-error-coverage",
-      "note": "Committed; pushing to loop/main-track."
-    },
-    {
-      "at": "2026-06-23T15:43:56.848Z",
-      "task": "gateway-budget-commit-duplicate-no-underflow-coverage",
       "note": "Committed; pushing to loop/main-track."
     }
   ]

@@ -61,3 +61,34 @@ describe('HttpDaemonClient response classification', () => {
     await expect(client().verify()).rejects.toThrow('daemon verify returned no report');
   });
 });
+
+describe('HttpDaemonClient retry policy', () => {
+  it('retries a 5xx daemon error', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const c = new HttpDaemonClient('http://daemon.local', 'operator-token', 1000, 1);
+
+    await expect(c.recentAudit({ limit: 5 })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a 4xx daemon error', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const c = new HttpDaemonClient('http://daemon.local', 'operator-token', 1000, 1);
+
+    await expect(c.recentAudit({ limit: 5 })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a transient network error', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      throw new TypeError('network');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const c = new HttpDaemonClient('http://daemon.local', 'operator-token', 1000, 1);
+
+    await expect(c.recentAudit({ limit: 5 })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});

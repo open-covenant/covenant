@@ -337,6 +337,22 @@ describe("OpenaiBackend.run", () => {
     const secondInput = calls[1]!.params.input as Array<{ output: string }>;
     expect(secondInput[0]!.output).toContain("unknown tool: delete_file");
   });
+
+  it("emits run.failed and returns partial output when the model never stops calling tools", async () => {
+    // A single tool-call turn repeated for all 60 loop iterations exits the cap
+    // without run.completed, so the run emits a terminal run.failed rather than
+    // hanging or silently completing.
+    const { client } = fakeClient([
+      { events: [completed({ id: "r", usage: null, output: [functionCall("c", "read_file", { path: "f" })] })] },
+    ]);
+    const emitted: GatewayEvent[] = [];
+    const backend = new OpenaiBackend(client);
+    const result = await backend.run({ input: "loop", sandbox: fakeSandbox(), signal: new AbortController().signal, emit: (e) => emitted.push(e) });
+    const last = emitted[emitted.length - 1]!;
+    expect(last).toMatchObject({ type: "run.failed" });
+    if (last.type === "run.failed") expect(last.error).toContain("exceeded");
+    expect(result.output).toBe("");
+  });
 });
 
 describe("selectBackend", () => {

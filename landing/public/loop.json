@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T18:18:11.079Z",
+  "updatedAt": "2026-06-23T18:38:15.094Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10723,
-    "tasks": 1262,
-    "integrated": 1265
+    "events": 10739,
+    "tasks": 1263,
+    "integrated": 1267
   },
   "throughput": {
     "last24h": 29,
-    "last7d": 153,
-    "velocity": 21.9
+    "last7d": 155,
+    "velocity": 22.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 24
+      "count": 26
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-23",
-      "total": 1265
+      "total": 1267
     }
   ],
   "states": {
-    "integrated": 1257,
-    "proposed": 2,
+    "integrated": 1259,
+    "proposed": 1,
     "blocked": 3
   },
   "areas": [
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T18:37:16.459Z",
+      "task": "mcp-bridge-auth-token-cache-ttl-coverage",
+      "note": "test-only coverage slice integrated; commit pending"
+    },
+    {
+      "at": "2026-06-23T18:18:22.539Z",
+      "task": "telegram-bot-allowlist-coverage",
+      "note": "integrated: committed, seventh fresh-surface services/* TS slice"
+    },
     {
       "at": "2026-06-23T18:11:36.426Z",
       "task": "hermes-mcp-bridge-run-schema-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-23T15:09:45.252Z",
       "task": "gateway-config-exempt-ip-set-parsing-coverage",
       "note": "Committed 7348e63a (test-only) and pushed eac76487..7348e63a to loop/main-track. Backlog was exhausted; refilled 1 epic+template off the cod"
-    },
-    {
-      "at": "2026-06-23T14:43:35.134Z",
-      "task": "gateway-anthropic-turn-cache-breakpoint-coverage",
-      "note": "committing to loop/main-track"
-    },
-    {
-      "at": "2026-06-23T14:31:33.508Z",
-      "task": "gateway-openai-max-turns-exhaustion-coverage",
-      "note": "committing to loop/main-track"
     }
   ]
 }

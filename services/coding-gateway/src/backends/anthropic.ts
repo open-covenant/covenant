@@ -185,7 +185,7 @@ export class AnthropicBackend implements CodingBackend {
  * frozen system block carries the other breakpoint (which also caches tools,
  * since tools render before system).
  */
-function withTurnCache(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+export function withTurnCache(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
   if (messages.length === 0) return messages;
   const out = messages.slice();
   const last = out[out.length - 1]!;

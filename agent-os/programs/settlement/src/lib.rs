@@ -184,6 +184,7 @@ pub mod settlement {
         position.agent_key = ctx.accounts.agent.agent_key;
         position.owner = ctx.accounts.owner.key();
         position.amount = amount;
+        position.vault = ctx.accounts.stake_vault.key();
         position.lock_until = lock_until;
         position.active = true;
         position.bump = ctx.bumps.position;
@@ -238,7 +239,12 @@ pub mod settlement {
             ctx.accounts.covnt_mint.decimals,
         )?;
 
-        ctx.accounts.agent.stake = ctx.accounts.agent.stake.saturating_sub(amount);
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_sub(amount)
+            .ok_or(CovenantError::InsufficientStake)?;
 
         emit!(StakeWithdrawn {
             agent_key,
@@ -275,7 +281,12 @@ pub mod settlement {
         )?;
 
         ctx.accounts.position.amount -= amount;
-        ctx.accounts.agent.stake = ctx.accounts.agent.stake.saturating_sub(amount);
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_sub(amount)
+            .ok_or(CovenantError::InsufficientStake)?;
         if ctx.accounts.position.amount == 0 {
             ctx.accounts.position.active = false;
         }
@@ -573,11 +584,18 @@ pub mod settlement {
     #[cfg(feature = "ephemeral")]
     pub fn delegate_credits(ctx: Context<DelegateCredits>) -> Result<()> {
         let owner = ctx.accounts.payer.key();
+        let (expected, _) = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &crate::ID);
+        require_keys_eq!(ctx.accounts.pda.key(), expected, CovenantError::Unauthorized);
+        let validator = ctx
+            .remaining_accounts
+            .first()
+            .ok_or(CovenantError::ValidatorRequired)?
+            .key();
         ctx.accounts.delegate_pda(
             &ctx.accounts.payer,
             &[b"credits".as_ref(), owner.as_ref()],
             DelegateConfig {
-                validator: ctx.remaining_accounts.first().map(|acc| acc.key()),
+                validator: Some(validator),
                 ..Default::default()
             },
         )?;
@@ -842,6 +860,7 @@ pub struct Unstake<'info> {
     pub owner: Signer<'info>,
     #[account(
         mut,
+        constraint = stake_vault.key() == position.vault @ CovenantError::Unauthorized,
         constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
         constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
@@ -895,11 +914,16 @@ pub struct SlashStake<'info> {
     pub position: Account<'info, StakePosition>,
     #[account(
         mut,
+        constraint = stake_vault.key() == position.vault @ CovenantError::Unauthorized,
         constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
         constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
     pub stake_vault: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut, constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint)]
+    #[account(
+        mut,
+        constraint = slash_vault.key() == config.treasury @ CovenantError::Unauthorized,
+        constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
     pub slash_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
     pub covnt_mint: InterfaceAccount<'info, Mint>,
@@ -1285,6 +1309,7 @@ pub struct StakePosition {
     pub owner: Pubkey,
     pub amount: u64,
     pub lock_until: u64,
+    pub vault: Pubkey,
     pub active: bool,
     pub bump: u8,
 }
@@ -1512,4 +1537,6 @@ pub enum CovenantError {
     LockTooShort,
     #[msg("task escrow is disabled in this build")]
     TasksDisabled,
+    #[msg("an explicit ER validator account is required to delegate")]
+    ValidatorRequired,
 }

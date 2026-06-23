@@ -23,7 +23,7 @@ task-escrow = []
 anchor-lang = "0.31.1"
 anchor-spl = { version = "0.31.1", features = ["token_2022"] }
 solana-security-txt = "1.1"
-ephemeral-rollups-sdk = { version = "0.15.4", features = ["anchor-compat"] }
+ephemeral-rollups-sdk = { version = "0.15.5", features = ["anchor-compat"] }
 
 [lints.rust]
 deprecated = "allow"

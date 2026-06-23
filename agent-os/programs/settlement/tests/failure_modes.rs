@@ -44,12 +44,7 @@ fn slash_more_than_staked_rejected() {
     let mut env = boot();
     register_agent(&mut env, &AGENT);
     let (position, stake_vault, _) = stake_locked(&mut env, &AGENT, 500, 0);
-    let slash_vault = create_token_account(
-        &mut env.svm,
-        &env.payer.insecure_clone(),
-        &env.mint,
-        &env.payer.pubkey(),
-    );
+    let slash_vault = env.treasury;
     let err = slash_stake(&mut env, &AGENT, &position, &stake_vault, &slash_vault, 600)
         .expect_err("cannot slash beyond the position");
     assert_eq!(custom_error(&err), Some(E_INSUFFICIENT_STAKE));

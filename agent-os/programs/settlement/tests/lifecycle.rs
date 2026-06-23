@@ -52,12 +52,7 @@ fn full_slash_then_close_then_restake() {
     let mut env = boot();
     register_agent(&mut env, &AGENT);
     let (position, stake_vault, _) = stake_locked(&mut env, &AGENT, 1_000, 0);
-    let slash_vault = create_token_account(
-        &mut env.svm,
-        &env.payer.insecure_clone(),
-        &env.mint,
-        &env.payer.pubkey(),
-    );
+    let slash_vault = env.treasury;
 
     slash_stake(
         &mut env,

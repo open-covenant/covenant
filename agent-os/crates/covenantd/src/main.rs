@@ -821,14 +821,20 @@ fn escrow_config_from_env() -> Option<covenantd::escrow::EscrowConfig> {
 }
 
 /// Build the AceData provider (client + config) from env, or None when
-/// the operator hasn't opted in. AceData is a Bearer-token generative
-/// provider — the key is a billing credential, not a funding key.
+/// the operator hasn't opted in. Two billing modes: an API key (credit
+/// billing) or, with no key, keyless x402 pay-per-call over the funding
+/// signer. The API key takes precedence when both are set.
 ///
 /// - `COVENANT_ACEDATA_ENABLED` truthy (`1`, `true`, `yes`)
-/// - `COVENANT_ACEDATA_API_KEY` — Bearer billing token (required)
+/// - `COVENANT_ACEDATA_API_KEY` — Bearer billing token (credit mode)
 /// - `COVENANT_ACEDATA_BASE_URL` — override the API host (optional)
 /// - `COVENANT_ACEDATA_ALLOW` — comma-separated tool-name allowlist (optional)
 /// - `COVENANT_ACEDATA_IMAGE_MODEL` / `COVENANT_ACEDATA_MUSIC_MODEL` — default models (optional)
+/// - `COVENANT_ACEDATA_X402_MAX_ATOMIC` — per-call USDC cap for x402 mode (optional; default 1 USDC)
+///
+/// Keyless x402 mode additionally needs the x402 signer sidecar:
+/// `COVENANT_X402_ENABLED` + `COVENANT_X402_SIGNER_BINARY` +
+/// `COVENANT_X402_FUNDING_KEYPAIR` (+ `COVENANT_X402_RPC_URL`).
 fn acedata_from_env() -> Option<(
     covenant_acedata::AceDataClient,
     covenant_acedata::AceDataConfig,
@@ -839,15 +845,6 @@ fn acedata_from_env() -> Option<(
     if !enabled {
         return None;
     }
-    let api_key = match std::env::var("COVENANT_ACEDATA_API_KEY") {
-        Ok(k) if !k.trim().is_empty() => k,
-        _ => {
-            tracing::warn!(
-                "COVENANT_ACEDATA_ENABLED set but COVENANT_ACEDATA_API_KEY missing; acedata disabled"
-            );
-            return None;
-        }
-    };
     let mut cfg = covenant_acedata::AceDataConfig {
         enabled: true,
         ..Default::default()
@@ -875,8 +872,46 @@ fn acedata_from_env() -> Option<(
             cfg.music_model = m;
         }
     }
-    let client = covenant_acedata::AceDataClient::new(cfg.base_url.clone(), api_key);
-    Some((client, cfg))
+    // Two billing modes. An API key takes precedence (credit billing).
+    // With no key, fall back to keyless x402 pay-per-call when the x402
+    // signer sidecar is configured (COVENANT_X402_*): each call pays USDC
+    // on Solana through the funding key, no AceData credential at all.
+    match std::env::var("COVENANT_ACEDATA_API_KEY") {
+        Ok(k) if !k.trim().is_empty() => {
+            let client = covenant_acedata::AceDataClient::new(cfg.base_url.clone(), k);
+            Some((client, cfg))
+        }
+        _ => match x402_dispatch_config_from_env() {
+            Some(x402) => {
+                let mut signer = covenantd::x402::SubprocessSigner::new(&x402.signer_binary);
+                for (key, value) in &x402.signer_env {
+                    signer = signer.env(key, value);
+                }
+                let max_atomic = std::env::var("COVENANT_ACEDATA_X402_MAX_ATOMIC")
+                    .ok()
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                let payer = covenant_acedata::X402Payer::new(std::sync::Arc::new(signer))
+                    .with_max_atomic(max_atomic);
+                info!(
+                    base_url = %cfg.base_url,
+                    signer = %x402.signer_binary.display(),
+                    "acedata enabled in keyless x402 pay-per-call mode (no API key)"
+                );
+                let client =
+                    covenant_acedata::AceDataClient::with_x402(cfg.base_url.clone(), payer);
+                Some((client, cfg))
+            }
+            None => {
+                tracing::warn!(
+                    "COVENANT_ACEDATA_ENABLED set but neither COVENANT_ACEDATA_API_KEY nor the \
+                     x402 signer (COVENANT_X402_ENABLED + COVENANT_X402_SIGNER_BINARY) is \
+                     configured; acedata disabled"
+                );
+                None
+            }
+        },
+    }
 }
 
 /// Build the Hyre provider config from env, or None when the operator

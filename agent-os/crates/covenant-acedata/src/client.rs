@@ -1,32 +1,50 @@
-//! Thin Bearer-token client over the AceData REST API.
+//! Client over the AceData REST API, with two billing modes.
 //!
-//! One method — [`AceDataClient::post`] — sends a JSON body to a path
-//! and returns the parsed JSON, mapping AceData's `{success:false,
-//! error:{code,message}}` envelope onto [`AceDataError::Api`]. The
-//! generation endpoints (Flux, Suno) answer synchronously with the
-//! finished asset under `data`, so there is no polling loop to own.
+//! [`AceDataClient::post`] sends a JSON body to a path and returns the
+//! parsed JSON, mapping AceData's `{success:false, error:{code,message}}`
+//! envelope onto [`AceDataError::Api`]. The generation endpoints (Flux,
+//! Suno) answer synchronously with the finished asset under `data`, so
+//! there is no polling loop to own.
+//!
+//! Two auth modes, chosen at construction:
+//! - [`AceDataClient::new`] — **Bearer** billing with an API key (a credit
+//!   credential, held here and never serialized).
+//! - [`AceDataClient::with_x402`] — **keyless** crypto pay-per-call: no API
+//!   key, each call walks AceData's 402 challenge and pays USDC on Solana
+//!   through the funding-key signer (see [`crate::x402`]).
+//!
+//! The tools call `post` identically either way; the mode is transparent.
+
+use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::x402::X402Payer;
 use crate::{AceDataError, Result};
 
-/// HTTP client carrying the API host and the Bearer token. The token is
-/// a billing credential, not a signing key; it is held here and never
-/// serialized.
+#[derive(Clone)]
+enum Auth {
+    /// Bearer billing credential (API key).
+    Bearer(String),
+    /// Keyless x402 pay-per-call over the funding-key signer.
+    X402(Arc<X402Payer>),
+}
+
+/// HTTP client carrying the API host and the chosen billing mode.
 #[derive(Clone)]
 pub struct AceDataClient {
     http: reqwest::Client,
     base_url: String,
-    api_key: String,
+    auth: Auth,
 }
 
 impl AceDataClient {
-    /// New client against `base_url` authenticating with `api_key`.
+    /// New Bearer-billed client against `base_url` authenticating with `api_key`.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self::with_client(reqwest::Client::new(), base_url, api_key)
     }
 
-    /// New client over a caller-supplied [`reqwest::Client`] (for custom
+    /// Bearer client over a caller-supplied [`reqwest::Client`] (custom
     /// timeouts or a proxy).
     pub fn with_client(
         http: reqwest::Client,
@@ -36,42 +54,61 @@ impl AceDataClient {
         Self {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
-            api_key: api_key.into(),
+            auth: Auth::Bearer(api_key.into()),
         }
     }
 
+    /// New **keyless** client that pays per call via x402 USDC on Solana,
+    /// using `payer` (a funding-key signer + per-call cap). No API key.
+    pub fn with_x402(base_url: impl Into<String>, payer: X402Payer) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            auth: Auth::X402(Arc::new(payer)),
+        }
+    }
+
+    /// True when this client pays per call over x402 (no API key).
+    pub fn is_x402(&self) -> bool {
+        matches!(self.auth, Auth::X402(_))
+    }
+
     /// POST `body` to `path` (e.g. `/serp/google`) and return the parsed
-    /// JSON response.
+    /// JSON response. In Bearer mode the API key authenticates; in x402
+    /// mode the call walks the 402 challenge and pays USDC.
     ///
     /// A transport failure maps to [`AceDataError::Http`]; an AceData
     /// `{success:false, error}` envelope maps to [`AceDataError::Api`].
-    /// Endpoints that answer without the envelope (e.g. search) pass
-    /// their body straight through.
     pub async fn post(&self, path: &str, body: Value) -> Result<Value> {
         let url = format!("{}/{}", self.base_url, path.trim_start_matches('/'));
-        let resp = self
-            .http
-            .post(url)
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await?;
-        let value: Value = resp.json().await?;
-        if value.get("success").and_then(Value::as_bool) == Some(false) {
-            let err = value.get("error");
-            let code = err
-                .and_then(|e| e.get("code"))
-                .and_then(Value::as_str)
-                .unwrap_or("error")
-                .to_string();
-            let message = err
-                .and_then(|e| e.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error")
-                .to_string();
-            return Err(AceDataError::Api { code, message });
+        match &self.auth {
+            Auth::X402(payer) => payer.pay_and_post(&self.http, &url, body).await,
+            Auth::Bearer(key) => {
+                let resp = self
+                    .http
+                    .post(url)
+                    .bearer_auth(key)
+                    .json(&body)
+                    .send()
+                    .await?;
+                let value: Value = resp.json().await?;
+                if value.get("success").and_then(Value::as_bool) == Some(false) {
+                    let err = value.get("error");
+                    let code = err
+                        .and_then(|e| e.get("code"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("error")
+                        .to_string();
+                    let message = err
+                        .and_then(|e| e.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown error")
+                        .to_string();
+                    return Err(AceDataError::Api { code, message });
+                }
+                Ok(value)
+            }
         }
-        Ok(value)
     }
 }
 

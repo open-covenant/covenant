@@ -9,6 +9,7 @@ description = "AceData generative-capability provider for Covenant — Bearer-to
 
 [dependencies]
 covenant-mcp = { path = "../covenant-mcp" }
+covenant-x402 = { path = "../covenant-x402" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,7 +18,9 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
+base64 = "0.22"
 
 [dev-dependencies]
+async-trait = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"

@@ -13,9 +13,12 @@
 //! asset references, provider task id — the anchor a verifiable
 //! generation is later proven against.
 //!
-//! Payment is orthogonal: this profile uses AceData's Bearer billing
-//! and never touches a funding key. Optional crypto pay-per-call is a
-//! later phase that reuses the existing x402 gateway.
+//! Payment has two modes (see [`client`]): AceData's Bearer billing with
+//! an API key, or — with no key at all — keyless crypto pay-per-call,
+//! where each call walks AceData's x402 402 challenge and pays USDC on
+//! Solana through the funding-key signer ([`x402`]). The tools are
+//! identical either way; the daemon picks the mode from the operator's
+//! config.
 
 #![deny(unsafe_code)]
 
@@ -23,11 +26,13 @@ pub mod client;
 pub mod config;
 pub mod provenance;
 pub mod tools;
+pub mod x402;
 
 pub use client::AceDataClient;
 pub use config::AceDataConfig;
 pub use provenance::Provenance;
 pub use tools::{acedata_tools, IMAGE_TOOL, MUSIC_TOOL, PROVIDER, SEARCH_TOOL};
+pub use x402::X402Payer;
 
 /// Errors surfaced by the AceData client.
 #[derive(Debug, thiserror::Error)]

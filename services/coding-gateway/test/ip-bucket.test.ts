@@ -108,6 +108,36 @@ describe("IpBucket", () => {
     expect(b.size()).toBe(2);
   });
 
+  it("derives a long idleTtlMs from a long refillMs (refillMs*10 wins over the default)", () => {
+    // No idleTtlMs pinned → the constructor derives max(600_000 default,
+    // refillMs*10). A 100_000ms refill window extends idleTtlMs to 1_000_000,
+    // so an entry idle past the 600_000 default but before 1_000_000 survives.
+    const clock = fixedClock(0);
+    const b = new IpBucket({ refillMs: 100_000 }, clock.now);
+
+    b.take("long.window");
+    b.release("long.window");
+    clock.advance(800_000); // past the 600_000 default, before the derived 1_000_000
+
+    expect(b.prune()).toBe(0);
+    expect(b.size()).toBe(1);
+  });
+
+  it("floors a short refillMs at the default idleTtlMs (max wins)", () => {
+    // A 1_000ms refill window must not collapse idleTtlMs to 10_000 — the
+    // max() floor keeps it at the 600_000 default, so an entry idle 500_000ms
+    // (past 10_000, before 600_000) still survives.
+    const clock = fixedClock(0);
+    const b = new IpBucket({ refillMs: 1_000 }, clock.now);
+
+    b.take("short.window");
+    b.release("short.window");
+    clock.advance(500_000); // past refillMs*10 (10_000), before the 600_000 floor
+
+    expect(b.prune()).toBe(0);
+    expect(b.size()).toBe(1);
+  });
+
   it("triggers auto-prune every `pruneEvery` admissions", () => {
     const clock = fixedClock(0);
     // pruneEvery counts every take (including the seed). With

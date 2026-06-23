@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T16:17:48.191Z",
+  "updatedAt": "2026-06-23T16:37:52.160Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10623,
-    "tasks": 1250,
-    "integrated": 1254
+    "events": 10641,
+    "tasks": 1252,
+    "integrated": 1256
   },
   "throughput": {
-    "last24h": 21,
-    "last7d": 144,
-    "velocity": 20.6
+    "last24h": 22,
+    "last7d": 145,
+    "velocity": 20.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 13
+      "count": 15
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1254
+      "total": 1256
     }
   ],
   "states": {
-    "integrated": 1246,
+    "integrated": 1248,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T16:35:59.317Z",
+      "task": "gateway-openai-edit-file-success-coverage",
+      "note": "708cb51f committed; pushing to loop/main-track"
+    },
+    {
+      "at": "2026-06-23T16:32:42.037Z",
+      "task": "gateway-openai-bash-tool-execution-coverage",
+      "note": "cdf72de3 committed; pushing to loop/main-track"
+    },
     {
       "at": "2026-06-23T15:55:15.387Z",
       "task": "gateway-anthropic-tool-preview-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-22T18:26:38.226Z",
       "task": "x402-signer-stdout-non-utf8-decode-failure-coverage",
       "note": "Integrating x402 signer stdout non-UTF-8 decode-failure coverage. Commit to follow."
-    },
-    {
-      "at": "2026-06-22T17:48:55.330Z",
-      "task": "metaplex-signer-stdout-decode-failure-coverage",
-      "note": "Integrating metaplex signer stdout decode-failure coverage (2/2 arms). Commit to follow."
-    },
-    {
-      "at": "2026-06-22T16:49:42.615Z",
-      "task": "revoke-capability-signature-decode-err-live-coverage",
-      "note": "Shipped e410dae0 (pushed loop/main-track). 2 live tests pin both revoke_capability signature-decode Err arms; mutation-proven; lib.rs net-ze"
     }
   ]
 }

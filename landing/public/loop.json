@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T17:58:07.254Z",
+  "updatedAt": "2026-06-23T18:18:11.079Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10704,
-    "tasks": 1259,
-    "integrated": 1263
+    "events": 10723,
+    "tasks": 1262,
+    "integrated": 1265
   },
   "throughput": {
-    "last24h": 27,
-    "last7d": 151,
-    "velocity": 21.6
+    "last24h": 29,
+    "last7d": 153,
+    "velocity": 21.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 22
+      "count": 24
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-23",
-      "total": 1263
+      "total": 1265
     }
   ],
   "states": {
-    "integrated": 1255,
-    "proposed": 1,
+    "integrated": 1257,
+    "proposed": 2,
     "blocked": 3
   },
   "areas": [
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T18:11:36.426Z",
+      "task": "hermes-mcp-bridge-run-schema-coverage",
+      "note": "integrated: committed, sixth fresh-surface services/* TS slice"
+    },
+    {
+      "at": "2026-06-23T18:02:45.429Z",
+      "task": "mcp-bridge-covenant-home-redaction-coverage",
+      "note": "integrated: committed, fifth fresh-surface services/* TS slice"
+    },
     {
       "at": "2026-06-23T17:33:15.076Z",
       "task": "compute-broker-config-env-schema-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-23T14:31:33.508Z",
       "task": "gateway-openai-max-turns-exhaustion-coverage",
       "note": "committing to loop/main-track"
-    },
-    {
-      "at": "2026-06-23T14:27:27.547Z",
-      "task": "gateway-openai-tool-execution-error-coverage",
-      "note": "committing to loop/main-track"
-    },
-    {
-      "at": "2026-06-23T14:23:21.283Z",
-      "task": "gateway-openai-response-terminal-failure-coverage",
-      "note": "committing test-only slice to loop/main-track"
     }
   ]
 }

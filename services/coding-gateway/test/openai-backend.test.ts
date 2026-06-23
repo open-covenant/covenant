@@ -263,6 +263,37 @@ describe("OpenaiBackend.run", () => {
     const secondInput = calls[1]!.params.input as Array<{ output: string }>;
     expect(secondInput[0]!.output).toContain("error:");
   });
+
+  it("throws the generic fallback when a failed response carries no error detail", async () => {
+    // error:null → responseErrorMessage returns undefined → the `?? "openai
+    // response failed"` fallback is the only signal when the API fails without a
+    // structured error.
+    const { client } = fakeClient([{ events: [failed({ id: "r", error: null })] }]);
+    const backend = new OpenaiBackend(client);
+    await expect(
+      backend.run({ input: "x", sandbox: fakeSandbox(), signal: new AbortController().signal, emit: () => {} }),
+    ).rejects.toThrow("openai response failed");
+  });
+
+  it("surfaces just the message when a failed response has no error code", async () => {
+    // error present, code absent → responseErrorMessage returns err.message
+    // alone, not the "code: message" shape the rate_limit_exceeded test pins.
+    const { client } = fakeClient([{ events: [failed({ id: "r", error: { message: "server error" } })] }]);
+    const backend = new OpenaiBackend(client);
+    await expect(
+      backend.run({ input: "x", sandbox: fakeSandbox(), signal: new AbortController().signal, emit: () => {} }),
+    ).rejects.toThrow(/^server error$/);
+  });
+
+  it("throws when the stream ends without a completed response", async () => {
+    // No response.completed/response.failed leaves `response` undefined; the
+    // guard surfaces a diagnostic instead of crashing on response.usage.
+    const { client } = fakeClient([{ events: [textDelta("partial...")] }]);
+    const backend = new OpenaiBackend(client);
+    await expect(
+      backend.run({ input: "x", sandbox: fakeSandbox(), signal: new AbortController().signal, emit: () => {} }),
+    ).rejects.toThrow("openai stream ended without a completed response");
+  });
 });
 
 describe("selectBackend", () => {

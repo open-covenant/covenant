@@ -12,3 +12,4 @@ packages:
   - services/coding-gateway
   - services/telegram-bot
   - services/fairscale-bridge
+  - services/witness-verifier

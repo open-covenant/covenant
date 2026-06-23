@@ -14,7 +14,6 @@
 // same root. Then check the signature against the published verifier pubkey.
 
 import {
-  createHash,
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
@@ -22,6 +21,7 @@ import {
 } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { recomputeRoot, scanRefutations } from "./verify-lib.mjs";
 
 const argv = process.argv.slice(2);
 const arg = (name) => {
@@ -36,8 +36,6 @@ if (!home || !sha || !repo) {
   process.exit(2);
 }
 
-const sha256hex = (buf) => createHash("sha256").update(buf).digest("hex");
-const ZERO = "0".repeat(64);
 const DOMAIN = "covenant.witness.v1";
 
 const lines = readFileSync(join(home, "audit", "events.jsonl"), "utf8")
@@ -45,12 +43,7 @@ const lines = readFileSync(join(home, "audit", "events.jsonl"), "utf8")
   .filter((l) => l.length > 0);
 
 // Recompute the chain root from the raw lines, exactly as the daemon does.
-let prev = ZERO;
-for (const line of lines) {
-  const eventHash = sha256hex(Buffer.from(line, "utf8"));
-  prev = sha256hex(Buffer.from(`${prev}\n${eventHash}`, "utf8"));
-}
-const root = prev;
+const root = recomputeRoot(lines);
 const events = lines.map((l) => JSON.parse(l));
 
 // Skill-run manifest, pulled from the run's own events.
@@ -67,18 +60,7 @@ const manifest = {
 
 // W011 refutation: a signed skill action that causally follows an untrusted
 // on-chain read, with no skill-context reset between them, is refutable.
-const pending = new Map();
-const refutations = [];
-for (const e of events) {
-  const issuer = e.issuer?.pubkey;
-  const t = e.kind?.type;
-  if (t === "skill_context_injected") pending.delete(issuer);
-  else if (t === "untrusted_input_observed") pending.set(issuer, e.id);
-  else if (t === "skill_tx_signed" && pending.has(issuer)) {
-    refutations.push({ signed_event: e.id, after_untrusted: pending.get(issuer) });
-  }
-}
-const verdict = refutations.length ? "refute" : "pass";
+const { verdict, refutations } = scanRefutations(events);
 
 // Verifier identity: an ed25519 key the daemon does not hold. Stored as a PEM
 // private key; the raw public key is published (base64url) for anyone to check.

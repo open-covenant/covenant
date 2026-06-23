@@ -13,7 +13,7 @@ const QuerySchema = z.object({
   limit: z.coerce.number().int().positive().optional(),
 });
 
-function resolveCursor(q: { since?: string; cursor?: string }): Cursor {
+export function resolveCursor(q: { since?: string; cursor?: string }): Cursor {
   if (q.cursor) return decodeCursor(q.cursor);
   if (q.since) {
     if (/^\d+$/.test(q.since)) return { ms: Number(q.since), id: '' };

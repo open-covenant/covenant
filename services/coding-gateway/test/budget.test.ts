@@ -40,6 +40,24 @@ describe("SpendLedger", () => {
     expect(snap.active).toBe(0);
   });
 
+  it("clamps active and reserved at zero on a duplicate commit (no underflow)", () => {
+    // A double-dispatched completion (retry, missed splice) calls commit twice
+    // on the same id. The Math.max(0, ...) floors keep active/reserved from
+    // going negative — an underflowed active would silently inflate the
+    // concurrency gate's headroom (reserve checks active >= maxConcurrent).
+    // Parity with ip-bucket's "release is idempotent on double-release".
+    const l = new SpendLedger(caps);
+    const r = l.reserve();
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      l.commit(r.id, r.max, 0.1, "completed");
+      l.commit(r.id, r.max, 0.1, "completed"); // duplicate
+    }
+    const snap = l.snapshot();
+    expect(snap.active).toBe(0);
+    expect(snap.reserved).toBe(0);
+  });
+
   it("enforces the concurrency cap independent of spend", () => {
     const l = new SpendLedger({ ...caps, maxConcurrent: 2, dailyUsd: 1000 });
     expect(l.reserve().ok).toBe(true);

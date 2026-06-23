@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T19:58:29.978Z",
+  "updatedAt": "2026-06-23T20:18:33.652Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10807,
-    "tasks": 1271,
-    "integrated": 1275
+    "events": 10825,
+    "tasks": 1273,
+    "integrated": 1277
   },
   "throughput": {
-    "last24h": 36,
-    "last7d": 163,
-    "velocity": 23.3
+    "last24h": 38,
+    "last7d": 165,
+    "velocity": 23.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 34
+      "count": 36
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1275
+      "total": 1277
     }
   ],
   "states": {
-    "integrated": 1267,
+    "integrated": 1269,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T20:06:22.625Z",
+      "task": "settlement-publisher-dispatch-selection-ordering-coverage",
+      "note": "dispatch-select extraction + 5 mutation-proven tests; vitest 20/20, scripts EXIT=0"
+    },
+    {
+      "at": "2026-06-23T20:01:50.178Z",
+      "task": "settlement-publisher-sigs-replay-restore-coverage",
+      "note": "sigs-replay extraction + 8 mutation-proven tests; vitest 15/15, scripts EXIT=0"
+    },
     {
       "at": "2026-06-23T19:57:56.602Z",
       "task": "witness-verifier-skill-manifest-fallback-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-23T16:46:31.380Z",
       "task": "gateway-anthropic-exectool-success-arms-coverage",
       "note": "e79976c5 committed; pushing"
-    },
-    {
-      "at": "2026-06-23T16:40:20.088Z",
-      "task": "gateway-openai-reasoning-effort-clamp-coverage",
-      "note": "2e318865 committed; pushing"
-    },
-    {
-      "at": "2026-06-23T16:35:59.317Z",
-      "task": "gateway-openai-edit-file-success-coverage",
-      "note": "708cb51f committed; pushing to loop/main-track"
     }
   ]
 }

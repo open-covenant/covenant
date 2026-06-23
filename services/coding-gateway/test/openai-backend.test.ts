@@ -92,7 +92,10 @@ function functionCall(callId: string, name: string, args: Record<string, unknown
 }
 
 /** A recording in-memory sandbox. */
-function fakeSandbox(files: Record<string, string> = {}): Sandbox & {
+function fakeSandbox(
+  files: Record<string, string> = {},
+  execResult: { stdout: string; stderr: string; exitCode: number } = { stdout: "ok", stderr: "", exitCode: 0 },
+): Sandbox & {
   written: Record<string, string>;
   execs: string[];
 } {
@@ -107,7 +110,7 @@ function fakeSandbox(files: Record<string, string> = {}): Sandbox & {
     },
     exec: async (cmd) => {
       execs.push(cmd);
-      return { stdout: "ok", stderr: "", exitCode: 0 };
+      return execResult;
     },
     previewUrl: async () => "https://preview.test",
     destroy: async () => {},
@@ -352,6 +355,40 @@ describe("OpenaiBackend.run", () => {
     expect(last).toMatchObject({ type: "run.failed" });
     if (last.type === "run.failed") expect(last.error).toContain("exceeded");
     expect(result.output).toBe("");
+  });
+
+  it("routes a bash tool call through sandbox.exec and formats exit/stdout/stderr back to the model", async () => {
+    // The bash arm of execTool (openai.ts:269-272) is the agent's command tool and
+    // has no test driving it; deleting the case falls through to the unknown-tool
+    // default and every existing test stays green.
+    const { client, calls } = fakeClient([
+      { events: [completed({ id: "r1", usage: null, output: [functionCall("c1", "bash", { command: "ls" })] })] },
+      { events: [completed({ id: "r2", usage: null, output: [messageItem("done")] })] },
+    ]);
+    const sandbox = fakeSandbox({}, { stdout: "file.txt", stderr: "warn", exitCode: 7 });
+    const emitted: GatewayEvent[] = [];
+    const backend = new OpenaiBackend(client);
+    await backend.run({ input: "list", sandbox, signal: new AbortController().signal, emit: (e) => emitted.push(e) });
+
+    expect(sandbox.execs).toContain("ls");
+    expect(emitted.find((e) => e.type === "tool.started")).toMatchObject({ tool: "bash", preview: "ls" });
+    expect(emitted.find((e) => e.type === "tool.completed")).toMatchObject({ tool: "bash", error: false });
+    const fedBack = calls[1]!.params.input as Array<{ output: string }>;
+    expect(fedBack[0]!.output).toBe("exit=7\n--- stdout ---\nfile.txt\n--- stderr ---\nwarn");
+  });
+
+  it("bounds the bash command preview at 120 characters", async () => {
+    // previewOf slices the bash command (openai.ts:233) so a runaway command
+    // cannot flood the event stream; the bound is otherwise untested.
+    const longCmd = "x".repeat(200);
+    const { client } = fakeClient([
+      { events: [completed({ id: "r1", usage: null, output: [functionCall("c1", "bash", { command: longCmd })] })] },
+      { events: [completed({ id: "r2", usage: null, output: [messageItem("done")] })] },
+    ]);
+    const emitted: GatewayEvent[] = [];
+    const backend = new OpenaiBackend(client);
+    await backend.run({ input: "x", sandbox: fakeSandbox(), signal: new AbortController().signal, emit: (e) => emitted.push(e) });
+    expect(emitted.find((e) => e.type === "tool.started")).toMatchObject({ type: "tool.started", preview: longCmd.slice(0, 120) });
   });
 });
 

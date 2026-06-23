@@ -504,4 +504,48 @@ mod tests {
             Gated::Challenge(_)
         ));
     }
+
+    // The COVENANT_X402_* namespace is disjoint from AppConfig's vars and is read
+    // nowhere else in the crate's tests, so a single sequential test owns it safely.
+    const X402_KEYS: [&str; 8] = [
+        "COVENANT_X402_PAY_TO",
+        "COVENANT_X402_FEE_PAYER",
+        "COVENANT_X402_FACILITATOR",
+        "COVENANT_X402_NETWORK",
+        "COVENANT_X402_ASSET",
+        "COVENANT_X402_PRICE_ATOMIC",
+        "COVENANT_X402_RESOURCE_BASE_URL",
+        "COVENANT_X402_DESCRIPTION",
+    ];
+
+    #[test]
+    fn from_env_none_without_pay_to_then_defaults_and_overrides() {
+        for key in X402_KEYS {
+            std::env::remove_var(key);
+        }
+
+        // No payTo -> the paid route must not register (None).
+        assert!(X402Config::from_env().is_none());
+
+        std::env::set_var("COVENANT_X402_PAY_TO", "9covntsTreasuryAddressForTestingPurposesOnly");
+        let cfg = X402Config::from_env().expect("pay_to set -> Some config");
+        assert_eq!(cfg.pay_to, "9covntsTreasuryAddressForTestingPurposesOnly");
+        assert_eq!(cfg.fee_payer, PAYAI_FEE_PAYER);
+        assert_eq!(cfg.facilitator, PAYAI_FACILITATOR);
+        assert_eq!(cfg.network, SOLANA_NETWORK);
+        assert_eq!(cfg.asset, USDC_MINT);
+        assert_eq!(cfg.price_atomic, "50000");
+        assert_eq!(cfg.resource_base_url, "http://localhost:8080");
+        assert_eq!(cfg.description, "Covenant indexer stats summary.");
+
+        std::env::set_var("COVENANT_X402_NETWORK", "solana:devnet");
+        std::env::set_var("COVENANT_X402_PRICE_ATOMIC", "250000");
+        let cfg = X402Config::from_env().unwrap();
+        assert_eq!(cfg.network, "solana:devnet");
+        assert_eq!(cfg.price_atomic, "250000");
+
+        for key in X402_KEYS {
+            std::env::remove_var(key);
+        }
+    }
 }

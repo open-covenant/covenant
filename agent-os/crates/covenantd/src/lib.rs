@@ -17195,6 +17195,103 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn verify_reports_memory_receipt_mismatch_drift() {
+        // The "memory . receipts" check reconciles the per-owner total of
+        // memory records against the per-owner total of memory receipts: an
+        // owner whose record and receipt counts disagree emits a
+        // memory_receipt_mismatch drift keyed by the owner pubkey. The
+        // per-record arms (memory_without_receipt, memory_receipt_duplicate,
+        // receipt_without_memory_record) catch gaps and duplicates at the
+        // record level but never the owner-level total, so this is the sole
+        // detector of an accounting imbalance (unbilled memory or phantom
+        // billing). Two records owned by one agent with a single matching
+        // receipt leaves that owner one receipt short, so the totals disagree
+        // and the arm fires.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let owner_b58 = me.pubkey_base58();
+        let r1 = Uuid::new_v4();
+        let r2 = Uuid::new_v4();
+        for (id, body) in [(r1, "first owner memory"), (r2, "second owner memory")] {
+            s.memory
+                .put(MemoryRecord {
+                    id,
+                    tier: MemoryTier::Working,
+                    owner: me.clone(),
+                    text: body.into(),
+                    embedding: vec![],
+                    metadata: serde_json::json!({}),
+                    created_at: epoch_ms(),
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: me.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id: id,
+                        intent_text: body.into(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(body.as_bytes()),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        // Only r1 is settled; r2 has no receipt, so the owner holds two
+        // records but one memory receipt.
+        s.settlement
+            .record(SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: me.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(r1),
+                credits_consumed: 1,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport { checks, drift, .. } => {
+                assert!(
+                    checks
+                        .iter()
+                        .any(|check| !check.passed && check.name == "memory ↔ receipts"),
+                    "memory-receipts check should fail on the owner mismatch: {checks:?}"
+                );
+                let item = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_receipt_mismatch"
+                            && item.id.as_deref() == Some(&owner_b58)
+                    })
+                    .unwrap_or_else(|| panic!("expected owner mismatch drift: {drift:?}"));
+                assert!(
+                    item.message
+                        .contains("2 memory record(s) vs 1 memory receipt(s)"),
+                    "drift message should report the divergent totals: {:?}",
+                    item.message
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn memory_repair_rejects_without_capability() {
         let s = server_with(vec![], "");
         let id = Uuid::new_v4();

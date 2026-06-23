@@ -29,6 +29,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseOperatorKeypairBytes } from "./keypair.mjs";
 import { restoreSigs } from "./sigs-replay.mjs";
+import { selectDispatches } from "./dispatch-select.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -174,9 +175,7 @@ async function pollOnce() {
 
   // Walk oldest -> newest so the order on-chain mirrors the order
   // tasks actually fired in the sandbox.
-  const dispatches = events
-    .filter((e) => e?.kind?.type === "intent_dispatched")
-    .sort((a, b) => (a.timestamp_ms ?? 0) - (b.timestamp_ms ?? 0));
+  const dispatches = selectDispatches(events);
 
   let published = 0;
   for (const e of dispatches) {

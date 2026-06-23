@@ -13,7 +13,7 @@ let botRunning = false;
 // Telegram numeric user-ids permitted to invoke any bot command. Empty set
 // means deny-all — commands silently log + drop, no reply to the caller so
 // an attacker probing the bot can't enumerate allowed accounts.
-function parseAllowlist(raw: string | undefined): Set<number> {
+export function parseAllowlist(raw: string | undefined): Set<number> {
   if (!raw) return new Set();
   return new Set(
     raw

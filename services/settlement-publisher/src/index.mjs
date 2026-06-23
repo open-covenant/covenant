@@ -28,6 +28,7 @@ import { readFileSync, mkdirSync, appendFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseOperatorKeypairBytes } from "./keypair.mjs";
+import { restoreSigs } from "./sigs-replay.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -79,17 +80,10 @@ const sigByIntent = new Map(); // intent_id -> { tx_sig, slot, settled_at_ms, in
 const processedIntents = new Set();
 
 if (existsSync(SIGS_PATH)) {
-  for (const line of readFileSync(SIGS_PATH, "utf8").split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const row = JSON.parse(line);
-      if (row.intent_id && row.tx_sig) {
-        sigByIntent.set(row.intent_id, row);
-        processedIntents.add(row.intent_id);
-      }
-    } catch {
-      // skip malformed lines
-    }
+  const restored = restoreSigs(readFileSync(SIGS_PATH, "utf8"));
+  for (const [intentId, row] of restored) {
+    sigByIntent.set(intentId, row);
+    processedIntents.add(intentId);
   }
   console.log(`[init] restored ${sigByIntent.size} sigs from disk`);
 }

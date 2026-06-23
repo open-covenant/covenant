@@ -314,7 +314,9 @@ pub async fn paid_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::State;
     use axum::http::HeaderName;
+    use http_body_util::BodyExt;
 
     fn cfg() -> X402Config {
         X402Config {
@@ -547,5 +549,78 @@ mod tests {
         for key in X402_KEYS {
             std::env::remove_var(key);
         }
+    }
+
+    fn app_state(gate: Option<X402Gate>) -> crate::api::AppState {
+        crate::api::AppState {
+            cluster: "devnet".into(),
+            rpc_url: "https://rpc.example".into(),
+            confirmations: 32,
+            events: Arc::new(crate::model::seed_events("devnet", &"1".repeat(44))),
+            x402: gate,
+        }
+    }
+
+    async fn body_value(resp: Response) -> serde_json::Value {
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn paid_summary_refuses_with_503_when_no_gate_configured() {
+        let resp = paid_summary(State(app_state(None)), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn paid_summary_returns_402_challenge_without_payment_header() {
+        let gate = X402Gate::new(cfg());
+        let resp = paid_summary(State(app_state(Some(gate))), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::PAYMENT_REQUIRED);
+        let v = body_value(resp).await;
+        assert_eq!(v["x402Version"], 1);
+        assert_eq!(v["accepts"][0]["scheme"], "exact");
+    }
+
+    #[tokio::test]
+    async fn paid_summary_returns_200_snapshot_with_settle_header_when_settled() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/verify"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"isValid": true})),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/settle"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"success": true, "transaction": "5sigSettleSignature1111111111111111111111111111111"}),
+            ))
+            .mount(&server)
+            .await;
+
+        let mut c = cfg();
+        c.facilitator = server.uri();
+        let gate = X402Gate::new(c);
+
+        let payload =
+            serde_json::json!({"x402Version":1,"scheme":"exact","network":SOLANA_NETWORK,"payload":{"transaction":"X"}});
+        let b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-payment"),
+            HeaderValue::from_str(&b64).unwrap(),
+        );
+
+        let resp = paid_summary(State(app_state(Some(gate))), headers).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("x-payment-response").unwrap(),
+            "5sigSettleSignature1111111111111111111111111111111"
+        );
+        let v = body_value(resp).await;
+        assert_eq!(v["mode"], "fixture");
+        assert_eq!(v["chain"], "solana");
     }
 }

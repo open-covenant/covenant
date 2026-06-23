@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T16:37:52.160Z",
+  "updatedAt": "2026-06-23T16:57:56.009Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10641,
-    "tasks": 1252,
-    "integrated": 1256
+    "events": 10668,
+    "tasks": 1255,
+    "integrated": 1259
   },
   "throughput": {
-    "last24h": 22,
-    "last7d": 145,
-    "velocity": 20.7
+    "last24h": 24,
+    "last7d": 148,
+    "velocity": 21.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 15
+      "count": 18
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1256
+      "total": 1259
     }
   ],
   "states": {
-    "integrated": 1248,
+    "integrated": 1251,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T16:49:57.582Z",
+      "task": "gateway-anthropic-write-file-success-coverage",
+      "note": "e59618e2 committed; pushing"
+    },
+    {
+      "at": "2026-06-23T16:46:31.380Z",
+      "task": "gateway-anthropic-exectool-success-arms-coverage",
+      "note": "e79976c5 committed; pushing"
+    },
+    {
+      "at": "2026-06-23T16:40:20.088Z",
+      "task": "gateway-openai-reasoning-effort-clamp-coverage",
+      "note": "2e318865 committed; pushing"
+    },
     {
       "at": "2026-06-23T16:35:59.317Z",
       "task": "gateway-openai-edit-file-success-coverage",
@@ -300,21 +315,6 @@
       "at": "2026-06-22T21:18:33.866Z",
       "task": "cli-operator-keypair-invalid-material-coverage",
       "note": "Committed 0675e19c on loop/main-track; InvalidKeyMaterial arm (main.rs:439) covered + mutation-proven. Push to follow."
-    },
-    {
-      "at": "2026-06-22T19:22:56.685Z",
-      "task": "sap-bridge-worker-stdout-decode-failure-coverage",
-      "note": "Committed bf4368e6 on loop/main-track; 3 decode arms covered and mutation-proven"
-    },
-    {
-      "at": "2026-06-22T18:38:07.424Z",
-      "task": "metaplex-signer-nonzero-exit-surfaced-coverage",
-      "note": "Integrating metaplex signer nonzero-exit coverage (x402 parity). Commit to follow."
-    },
-    {
-      "at": "2026-06-22T18:26:38.226Z",
-      "task": "x402-signer-stdout-non-utf8-decode-failure-coverage",
-      "note": "Integrating x402 signer stdout non-UTF-8 decode-failure coverage. Commit to follow."
     }
   ]
 }

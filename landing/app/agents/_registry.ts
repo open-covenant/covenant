@@ -17,7 +17,7 @@ export const COVENANT_COLLECTION = "Duqs6dq1wXPcRqJVUCgSZxrkLRdg3oBfZ3ViER1kt6gC
 
 // The registered production agent + a known attestation, featured on /agents.
 export const FEATURED_AGENT_ASSET = "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc";
-export const FEATURED_ATTESTATION_ASSET = "7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH";
+export const FEATURED_ATTESTATION_ASSET = "4A2fdNqmPiQrv3iYv6WY2mQ9eSQuBERhdeg4vk7G8vGG";
 
 // Attestation payload schema written into AppData by covenantd's signer.
 export const ATTESTATION_SCHEMA = "covenant.audit-root.appdata.v1";

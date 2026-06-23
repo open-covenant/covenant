@@ -140,6 +140,31 @@ describe("SpendLedger", () => {
     expect(cost).toBeCloseTo(4.5);
   });
 
+  it("falls back to Sonnet pricing for a model absent from the PRICING table", () => {
+    // model flows in from config.model = CODER_MODEL, an operator-settable
+    // string. A model not yet priced (new release, typo, comparison tier)
+    // must bill as Sonnet rather than throw on undefined.input or silently
+    // bill zero.
+    const usage = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const cost = modelCostUsd("claude-future-9", usage);
+    expect(cost).toBeCloseTo(modelCostUsd("claude-sonnet-4-6", usage));
+    expect(cost).toBeGreaterThan(0);
+  });
+
+  it("prices cache reads and creations at their distinct multipliers", () => {
+    // Sonnet: cacheRead $0.3/M, cacheWrite $3.75/M (a 12.5x spread). Cached
+    // turns dominate a long agent loop, so the two multipliers must stay
+    // distinct — transposing them, or dropping either term, mis-accounts the
+    // spend the ledger caps. 2M read + 1M write = $0.6 + $3.75 = $4.35.
+    const cost = modelCostUsd("claude-sonnet-4-6", {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 2_000_000,
+      cacheCreationTokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(4.35);
+  });
+
   it("first-boot ENOENT loads silently — missing path is normal", () => {
     const path = join(tmpdir(), `covenant-ledger-missing-${Date.now()}.json`);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});

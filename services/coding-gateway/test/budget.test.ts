@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SpendLedger, modelCostUsd, type BudgetCaps } from "../src/budget.js";
@@ -174,6 +174,24 @@ describe("SpendLedger", () => {
       expect(err).not.toHaveBeenCalled();
     } finally {
       err.mockRestore();
+    }
+  });
+
+  it("surfaces a non-ENOENT ledger read error instead of silently resetting the cap", () => {
+    // EACCES/EIO/a-vanished-tmpfs is operator misconfiguration; the read catch
+    // must log it rather than swallow it as if the file were simply missing,
+    // otherwise a bad LEDGER_PATH silently zeroes the daily tally. A directory
+    // path makes readFileSync throw EISDIR — a code other than ENOENT.
+    const dir = mkdtempSync(join(tmpdir(), "covenant-ledger-dir-"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const l = new SpendLedger(caps, dir);
+      expect(l.snapshot().dailyUsd).toBe(0);
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(err.mock.calls[0]![0]).toMatch(/ledger load failed/);
+    } finally {
+      err.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T14:17:24.656Z",
+  "updatedAt": "2026-06-23T14:37:28.501Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10525,
-    "tasks": 1240,
-    "integrated": 1243
+    "events": 10551,
+    "tasks": 1242,
+    "integrated": 1246
   },
   "throughput": {
-    "last24h": 12,
-    "last7d": 135,
-    "velocity": 19.3
+    "last24h": 15,
+    "last7d": 137,
+    "velocity": 19.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 2
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-23",
-      "total": 1243
+      "total": 1246
     }
   ],
   "states": {
-    "integrated": 1235,
-    "proposed": 2,
+    "integrated": 1238,
+    "proposed": 1,
     "blocked": 3
   },
   "areas": [
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T14:31:33.508Z",
+      "task": "gateway-openai-max-turns-exhaustion-coverage",
+      "note": "committing to loop/main-track"
+    },
+    {
+      "at": "2026-06-23T14:27:27.547Z",
+      "task": "gateway-openai-tool-execution-error-coverage",
+      "note": "committing to loop/main-track"
+    },
+    {
+      "at": "2026-06-23T14:23:21.283Z",
+      "task": "gateway-openai-response-terminal-failure-coverage",
+      "note": "committing test-only slice to loop/main-track"
+    },
     {
       "at": "2026-06-23T13:49:35.612Z",
       "task": "coder-05-gateway-openai-adapter",
@@ -300,21 +315,6 @@
       "at": "2026-06-22T05:58:56.479Z",
       "task": "memory-recent-ipc-stream-capability-gate-live-coverage",
       "note": "Committed a5c226e0 (test-only, +1 file agent-os/crates/covenantd/tests/live_ipc_memory_recent_stream.rs). Both live tests pass; mutation-pro"
-    },
-    {
-      "at": "2026-06-22T01:51:33.891Z",
-      "task": "operator-token-insecure-mode-refusal-live-coverage",
-      "note": "Slice complete: test + README committed."
-    },
-    {
-      "at": "2026-06-22T01:38:06.940Z",
-      "task": "peer-self-revoke-force-recovery-live-coverage",
-      "note": "Slice complete: test + README metrics committed; live-coverage matrix + task records local."
-    },
-    {
-      "at": "2026-06-22T00:42:26.252Z",
-      "task": "dispatch-budget-exhausted-audit-write-failure-surfaced-unit-",
-      "note": "Committed 9ca67b2b. handler-audit-write-failure-coverage 7/7 COMPLETE. Pushing."
     }
   ]
 }

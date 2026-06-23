@@ -213,7 +213,7 @@ function previewOf(tu: Anthropic.ToolUseBlock): string {
   return "";
 }
 
-async function execTool(
+export async function execTool(
   tu: Anthropic.ToolUseBlock,
   sandbox: Sandbox,
   emit: (e: GatewayEvent) => void,

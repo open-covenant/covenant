@@ -1,11 +1,33 @@
 import { describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import { withTurnCache } from "../src/backends/anthropic.js";
+import { execTool, withTurnCache } from "../src/backends/anthropic.js";
+import type { Sandbox } from "../src/types.js";
 
 // The Anthropic backend's run() loop builds its own client with no injection
-// seam, so it can't be driven without a live key. withTurnCache is the one
-// piece of novel logic — the prompt-cache breakpoint strategy — and it is pure
-// over a message array, so it is pinned directly.
+// seam, so it can't be driven without a live key. The novel logic lives in
+// pure / injectable helpers: withTurnCache (prompt-cache breakpoint strategy,
+// pure over a message array) and execTool (tool dispatch, takes an injected
+// sandbox so it is mock-drivable with no key). Both are pinned directly.
+
+function memSandbox(files: Record<string, string> = {}): Sandbox {
+  const store = { ...files };
+  return {
+    readFile: async (p) => {
+      if (!(p in store)) throw new Error(`ENOENT: ${p}`);
+      return store[p]!;
+    },
+    writeFile: async (p, c) => {
+      store[p] = c;
+    },
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    previewUrl: async () => "",
+    destroy: async () => {},
+  };
+}
+
+function toolUse(name: string, input: Record<string, unknown>): Anthropic.ToolUseBlock {
+  return { id: "toolu_1", name, input } as Anthropic.ToolUseBlock;
+}
 
 type Block = Anthropic.ContentBlockParam;
 
@@ -42,5 +64,32 @@ describe("withTurnCache", () => {
 
   it("passes an empty message list through without throwing", () => {
     expect(withTurnCache([])).toEqual([]);
+  });
+});
+
+describe("execTool", () => {
+  it("throws when edit_file old_string is not found", async () => {
+    const sandbox = memSandbox({ "a.txt": "hello world" });
+    const call = execTool(
+      toolUse("edit_file", { path: "a.txt", old_string: "missing", new_string: "x" }),
+      sandbox,
+      () => {},
+    );
+    await expect(call).rejects.toThrow(/not found in a\.txt/);
+  });
+
+  it("throws when edit_file old_string is not unique", async () => {
+    const sandbox = memSandbox({ "a.txt": "x x" });
+    const call = execTool(
+      toolUse("edit_file", { path: "a.txt", old_string: "x", new_string: "y" }),
+      sandbox,
+      () => {},
+    );
+    await expect(call).rejects.toThrow(/not unique in a\.txt/);
+  });
+
+  it("throws for an unknown tool", async () => {
+    const call = execTool(toolUse("delete_file", { path: "a.txt" }), memSandbox(), () => {});
+    await expect(call).rejects.toThrow(/unknown tool: delete_file/);
   });
 });

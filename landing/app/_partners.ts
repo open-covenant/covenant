@@ -154,6 +154,13 @@ export const PARTNERS: Integration[] = [
       "Covenant acts as the spend-authorization policy layer for Orbserv's agent wallets.",
     status: "live",
   },
+  {
+    slug: "magicblock",
+    name: "MagicBlock",
+    blurb:
+      "Agent resource metering on a MagicBlock ephemeral rollup, committed periodically back to Solana.",
+    status: "live",
+  },
 
   // In development — active build on a feature line, not yet on the main line.
   {
@@ -190,13 +197,6 @@ export const PARTNERS: Integration[] = [
     name: "Percolator",
     blurb:
       "Covenant-governed keeper agents run Percolator's perpetuals liveness under stake-backed, slashable bonds.",
-    status: "building",
-  },
-  {
-    slug: "magicblock",
-    name: "MagicBlock",
-    blurb:
-      "Agent resource metering on a MagicBlock ephemeral rollup, committed periodically back to Solana.",
     status: "building",
   },
   {

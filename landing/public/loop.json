@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-23T18:58:18.747Z",
+  "updatedAt": "2026-06-23T19:18:22.361Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10755,
-    "tasks": 1265,
-    "integrated": 1269
+    "events": 10771,
+    "tasks": 1267,
+    "integrated": 1271
   },
   "throughput": {
-    "last24h": 31,
-    "last7d": 157,
-    "velocity": 22.4
+    "last24h": 33,
+    "last7d": 159,
+    "velocity": 22.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 28
+      "count": 30
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-23",
-      "total": 1269
+      "total": 1271
     }
   ],
   "states": {
-    "integrated": 1261,
+    "integrated": 1263,
     "proposed": 1,
     "blocked": 3
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T19:08:21.907Z",
+      "task": "fairscale-bridge-resolve-cursor-coverage",
+      "note": "coverage slice integrated; commit pending"
+    },
+    {
+      "at": "2026-06-23T19:02:23.090Z",
+      "task": "fairscale-bridge-daemon-client-retry-policy-coverage",
+      "note": "test-only coverage slice integrated; commit pending"
+    },
     {
       "at": "2026-06-23T18:56:45.437Z",
       "task": "fairscale-bridge-daemon-client-classifier-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-23T15:43:56.848Z",
       "task": "gateway-budget-commit-duplicate-no-underflow-coverage",
       "note": "Committed; pushing to loop/main-track."
-    },
-    {
-      "at": "2026-06-23T15:37:21.343Z",
-      "task": "gateway-ip-bucket-idle-ttl-derivation-coverage",
-      "note": "Committed; pushing to loop/main-track."
-    },
-    {
-      "at": "2026-06-23T15:29:57.919Z",
-      "task": "gateway-budget-ledger-non-enoent-load-error-coverage",
-      "note": "Committed d194232b (test-only). Pushing to loop/main-track."
     }
   ]
 }

@@ -189,6 +189,48 @@ pub fn tool_call_scope_allows(
     }
 }
 
+/// Scope check for an AceData generative tool call, layered on top of the
+/// generic [`tool_call_scope_allows`] gate. An operator can pin the
+/// permitted models on a `tool.call.<name>` grant with a
+/// `{"models": ["flux-pro", ...]}` scope; the daemon resolves the call's
+/// model (explicit arg or configured default) and passes it here.
+///
+/// An empty scope allows any model. A `models` list rejects any model not
+/// in it. `model` is empty for tools that select no model (search), which
+/// always pass the model gate. A `tool` field, when present, must match
+/// `tool_name`, matching [`tool_call_scope_allows`]'s shape.
+pub fn acedata_generate_scope_allows(
+    action: &str,
+    scope: &Value,
+    tool_name: &str,
+    model: &str,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != format!("tool.call.{tool_name}") {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    if let Some(tool) = obj.get("tool").and_then(Value::as_str) {
+        if tool != tool_name {
+            return Ok(false);
+        }
+    }
+    match obj.get("models").and_then(Value::as_array) {
+        None => Ok(true),
+        Some(models) => {
+            if model.is_empty() {
+                return Ok(true);
+            }
+            Ok(models.iter().any(|m| m.as_str() == Some(model)))
+        }
+    }
+}
+
 pub fn audit_purge_scope_allows(
     action: &str,
     scope: &Value,
@@ -2216,6 +2258,61 @@ mod tests {
             ),
             Err(PermissionError::InvalidScope(_))
         ));
+    }
+
+    #[test]
+    fn acedata_scope_empty_allows_any_model() {
+        assert!(acedata_generate_scope_allows(
+            "tool.call.acedata.image.generate",
+            &serde_json::json!({}),
+            "acedata.image.generate",
+            "flux-pro"
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn acedata_scope_models_allowlist_filters() {
+        let scope = serde_json::json!({ "version": 1, "models": ["flux-pro", "flux-dev"] });
+        assert!(acedata_generate_scope_allows(
+            "tool.call.acedata.image.generate",
+            &scope,
+            "acedata.image.generate",
+            "flux-pro"
+        )
+        .unwrap());
+        assert!(!acedata_generate_scope_allows(
+            "tool.call.acedata.image.generate",
+            &scope,
+            "acedata.image.generate",
+            "flux-2-max"
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn acedata_scope_empty_model_bypasses_model_gate() {
+        // Search resolves to no model and must pass even under a models
+        // list — the gate only constrains tools that select a model.
+        let scope = serde_json::json!({ "version": 1, "models": ["flux-pro"] });
+        assert!(acedata_generate_scope_allows(
+            "tool.call.acedata.search",
+            &scope,
+            "acedata.search",
+            ""
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn acedata_scope_rejects_action_tool_mismatch() {
+        assert!(!acedata_generate_scope_allows(
+            "tool.call.acedata.search",
+            &serde_json::json!({}),
+            "acedata.image.generate",
+            "flux-pro"
+        )
+        .unwrap());
     }
 
     #[test]

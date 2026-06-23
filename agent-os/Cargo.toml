@@ -22,6 +22,7 @@ members = [
     "crates/covenant-zauth",
     "crates/covenant-metaplex",
     "crates/covenant-sns",
+    "crates/covenant-acedata",
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenantd",

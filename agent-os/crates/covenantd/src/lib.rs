@@ -39,6 +39,7 @@ use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 use covenant_permissions::verify_with_clock;
 use covenant_permissions::{
     a2a_scope_allows as permission_a2a_scope_allows,
+    acedata_generate_scope_allows as permission_acedata_generate_scope_allows,
     audit_purge_scope_allows as permission_audit_purge_scope_allows,
     capabilities_purge_scope_allows as permission_capabilities_purge_scope_allows,
     chain_scope_allows as permission_chain_scope_allows,
@@ -1226,6 +1227,13 @@ pub struct Server {
     /// when the operator has not enabled SNS; in that state no `sns.*` tool
     /// is advertised or callable.
     sns: Option<Arc<sns::SnsState>>,
+    /// Opt-in AceData provider config. `None` when the operator has not
+    /// enabled AceData; `Some` carries the default models the call gate
+    /// resolves against. The `acedata.*` tools themselves live in the
+    /// tool registry (holding the API client); this config is read only
+    /// to resolve a call's model for the per-call capability gate and
+    /// the provenance audit row.
+    acedata: Option<covenant_acedata::AceDataConfig>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1281,6 +1289,7 @@ impl Server {
             hyre: None,
             metaplex: None,
             sns: None,
+            acedata: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1402,6 +1411,18 @@ impl Server {
     /// tools over the hosted resolver; no key and no spend.
     pub fn with_sns(mut self, state: sns::SnsState) -> Self {
         self.sns = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable AceData provenance + governance for the registered
+    /// `acedata.*` tools. The tools are registered into the tool
+    /// registry separately (in `main`); this config lets the daemon
+    /// resolve a call's model for the per-call capability gate and emit
+    /// the [`AuditKind::AceDataGeneration`] provenance row + settlement
+    /// receipt. Without it the `acedata.*` tools still run, but as
+    /// plain registry tools with no AceData-specific governance.
+    pub fn with_acedata(mut self, config: covenant_acedata::AceDataConfig) -> Self {
+        self.acedata = Some(config);
         self
     }
 
@@ -2542,6 +2563,9 @@ impl Server {
                 prefer_stream: _,
             } => self.recent_audit(limit, since_ms, peer).await,
             Request::VerifyAuditIntegrity => self.verify_audit_integrity(peer).await,
+            Request::ProveAuditInclusion { event_id } => {
+                self.prove_audit_inclusion(event_id, peer).await
+            }
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::PurgeCapabilities { before_ms } => {
                 self.purge_capabilities(before_ms, peer).await
@@ -4124,6 +4148,25 @@ impl Server {
         }
     }
 
+    /// Build a chain-inclusion proof for one audit event (e.g. an
+    /// `AceDataGeneration` row) so it can be verified offline against the
+    /// audit root the SAP bridge anchors on-chain. Operator-only, matching
+    /// [`Self::verify_audit_integrity`]: the proof discloses the event's
+    /// full serialized line, which is the operator's own audit trail.
+    async fn prove_audit_inclusion(&self, event_id: Uuid, peer: &AgentId) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "audit inclusion proof requires the operator identity".into(),
+            };
+        }
+        match self.audit.prove_inclusion(event_id).await {
+            Ok(proof) => Response::AuditInclusion { proof },
+            Err(e) => Response::Error {
+                message: format!("audit: {e}"),
+            },
+        }
+    }
+
     async fn purge_capabilities(&self, before_ms: u64, peer: &AgentId) -> Response {
         let required = vec!["capabilities.purge".to_string()];
         let check = self
@@ -4264,6 +4307,9 @@ impl Server {
         if name.starts_with("sns.") {
             return self.sns_tool_call(name, arguments).await;
         }
+        if name.starts_with("acedata.") {
+            return self.acedata_tool_call(name, arguments, peer).await;
+        }
 
         match self.tools.call(&name, arguments).await {
             Ok(r) => Response::ToolResult {
@@ -4273,6 +4319,169 @@ impl Server {
             Err(e) => Response::Error {
                 message: format!("tool: {e}"),
             },
+        }
+    }
+
+    /// Execute an AceData tool, adding the provider's governance on top of
+    /// the generic `tool.call.<name>` capability already enforced by
+    /// [`Self::call_tool`]: a per-call model gate (a capability may pin a
+    /// `{"models": [...]}` allowlist), then — on success — a
+    /// [`AuditKind::AceDataGeneration`] provenance row and a
+    /// `ResourceKind::Tool` settlement receipt, both bound to the calling
+    /// agent. The tool itself (holding the API client) runs through the
+    /// shared registry; this method only wraps it with accounting.
+    async fn acedata_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
+        let action = format!("tool.call.{name}");
+        // Resolve the call's model from the args + configured defaults so
+        // the gate sees what will actually run. With no AceData config the
+        // model is unknown ("") and the gate degrades to the generic
+        // tool.call check already passed above.
+        let model = self
+            .acedata
+            .as_ref()
+            .map(|cfg| cfg.model_for(&name, &arguments))
+            .unwrap_or_default();
+        match self
+            .acedata_scope_allows(&action, &name, &model, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason = format!("model {model:?} not in capability allowlist");
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: format!("tool:{name}"),
+                        action: action.clone(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("tool {name} rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityScopeRejected {
+                        agent_id: format!("tool:{name}"),
+                        action: action.clone(),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("tool {name} rejected by invalid capability scope: {reason}"),
+                };
+            }
+        }
+
+        match self.tools.call(&name, arguments).await {
+            Ok(r) => {
+                if !r.is_error {
+                    if let Some(prov) = extract_acedata_provenance(&r.content) {
+                        let event = AuditEvent {
+                            id: Uuid::new_v4(),
+                            timestamp_ms: epoch_ms(),
+                            issuer: peer.clone(),
+                            kind: AuditKind::AceDataGeneration {
+                                agent_id: format!("tool:{name}"),
+                                tool: prov.tool,
+                                model: prov.model,
+                                prompt_sha256: prov.prompt_sha256,
+                                output_sha256: prov.output_sha256,
+                                assets: prov.assets,
+                                task_id: prov.task_id,
+                            },
+                        };
+                        self.record_peer_event(peer, event).await;
+                        // Ties the generation into the settlement ledger.
+                        // Cost is 0 until AceData returns per-call cost
+                        // (a partner ask); the receipt still records who
+                        // generated and when for the ledger view.
+                        let receipt = SettlementReceipt {
+                            id: Uuid::new_v4(),
+                            payer: peer.clone(),
+                            resource: ResourceKind::Tool,
+                            memory_record_id: None,
+                            credits_consumed: 0,
+                            settled_at: epoch_ms(),
+                            chain: None,
+                            cluster: None,
+                            batch_id: None,
+                            merkle_root: None,
+                            tx_sig: None,
+                            slot: None,
+                            confirmed_at: None,
+                            onchain_sig: None,
+                        };
+                        if let Err(e) = self.settlement.record(receipt).await {
+                            warn!(error = %e, "acedata settlement record failed");
+                        }
+                    }
+                }
+                Response::ToolResult {
+                    content: r.content,
+                    is_error: r.is_error,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Scan the caller's capabilities for one that grants `action` and
+    /// whose scope permits `model` under
+    /// [`permission_acedata_generate_scope_allows`]. Mirrors
+    /// [`Self::tool_call_scope_allows`]: `Ok(true)` on the first match,
+    /// `Ok(false)` when none match, `Err` carrying the first invalid-scope
+    /// reason when a candidate cap had a malformed scope.
+    async fn acedata_scope_allows(
+        &self,
+        action: &str,
+        name: &str,
+        model: &str,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
+            match permission_acedata_generate_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                name,
+                model,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        match invalid_scope {
+            Some(reason) => Err(reason),
+            None => Ok(false),
         }
     }
 
@@ -15222,6 +15431,27 @@ fn epoch_ms() -> u64 {
 /// produce a rejection response indistinguishable from a normal rejection.
 /// Callers of these kinds must use `record_*_event_required` and fall back
 /// to `audit_failure_response` on error.
+/// Pull the AceData provenance object out of a tool result's content
+/// blocks, where `covenant_acedata::acedata_tools` placed it as a
+/// `{ "provenance": { ... } }` JSON block. Returns `None` if no block
+/// carries it or it doesn't deserialize — the daemon then records no
+/// provenance row rather than a malformed one.
+fn extract_acedata_provenance(
+    content: &[covenant_mcp::Content],
+) -> Option<covenant_acedata::Provenance> {
+    for block in content {
+        if let covenant_mcp::Content::Json { value } = block {
+            if let Some(prov) = value.get("provenance") {
+                if let Ok(p) = serde_json::from_value::<covenant_acedata::Provenance>(prov.clone())
+                {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
     matches!(
         kind,
@@ -15467,6 +15697,40 @@ mod tests {
     use covenant_router::AgentCard;
     use covenant_runtime::MockRunner;
     use covenant_settlement::InMemorySettlement;
+
+    #[test]
+    fn extract_acedata_provenance_reads_provenance_block() {
+        // The seam between covenant_acedata's two-block tool result and
+        // the daemon's AceDataGeneration audit row: the daemon lifts the
+        // provenance object verbatim out of the second content block.
+        let content = vec![
+            covenant_mcp::Content::json(
+                serde_json::json!({ "data": [{ "image_url": "https://cdn/x.png" }] }),
+            ),
+            covenant_mcp::Content::json(serde_json::json!({
+                "provenance": {
+                    "provider": "acedata",
+                    "tool": "acedata.image.generate",
+                    "model": "flux-pro",
+                    "prompt_sha256": "a".repeat(64),
+                    "output_sha256": "b".repeat(64),
+                    "assets": ["https://cdn/x.png"],
+                    "task_id": "t-1"
+                }
+            })),
+        ];
+        let prov = extract_acedata_provenance(&content).expect("provenance present");
+        assert_eq!(prov.tool, "acedata.image.generate");
+        assert_eq!(prov.model, "flux-pro");
+        assert_eq!(prov.assets, vec!["https://cdn/x.png".to_string()]);
+        assert_eq!(prov.task_id.as_deref(), Some("t-1"));
+    }
+
+    #[test]
+    fn extract_acedata_provenance_none_without_block() {
+        let content = vec![covenant_mcp::Content::text("no provenance here")];
+        assert!(extract_acedata_provenance(&content).is_none());
+    }
 
     fn stub_card(id: &str, capabilities: Vec<&str>) -> AgentCard {
         let toml = format!(

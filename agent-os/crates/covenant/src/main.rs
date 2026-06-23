@@ -2111,6 +2111,7 @@ fn print_usage() {
     eprintln!("  covenant ignore check [--json] <text>   test text against .covenantignore rules");
     eprintln!("  covenant tools list [--json]            list registered tools");
     eprintln!("  covenant tools call <name> [--args <json>] [--json]   invoke a registered tool");
+    eprintln!("  covenant resolve <name.sol> [--record KEY] [--json]   resolve a .sol name to its owner wallet (keyless)");
     eprintln!(
         "  covenant audit recent [-n N] [--since-ms <epoch_ms>] [--json] [--stream]   list recent audit events as JSONL or one JSON envelope; --since-ms drops events older than the given epoch ms before --limit is applied; --stream opts into v2 streaming response framing"
     );
@@ -2479,12 +2480,106 @@ fn chain_verb_needs_daemon(verb: &str) -> bool {
     matches!(verb, "status" | "flush-receipts" | "receipt-batches")
 }
 
+use covenant_sns::SnsResolver as _;
+
+/// Resolve a single `.sol` name to its owner wallet (base58) via SNS, keyless.
+/// Non-`.sol` input passes straight through, so this is safe to apply to any
+/// argument: it only does network work for actual names.
+async fn resolve_sol(value: &str) -> Result<String> {
+    if !value.ends_with(covenant_sns::SOL_TLD) {
+        return Ok(value.to_string());
+    }
+    let resolver_url = std::env::var("COVENANT_SNS_RESOLVER_URL")
+        .unwrap_or_else(|_| covenant_sns::DEFAULT_RESOLVER_URL.to_string());
+    let owner = covenant_sns::HttpSnsResolver::new(resolver_url)
+        .resolve(value)
+        .await
+        .with_context(|| format!("resolve SNS name {value}"))?;
+    eprintln!("resolved {value} -> {owner}");
+    Ok(owner)
+}
+
+/// Replace any bare `.sol` token in an argument list with its resolved wallet,
+/// so a `.sol` name works anywhere a pubkey is taken. Flags (`--x`) and
+/// non-name values are left untouched.
+async fn resolve_sol_args(args: &[String]) -> Result<Vec<String>> {
+    let mut out = Vec::with_capacity(args.len());
+    for a in args {
+        if !a.starts_with("--") && a.ends_with(covenant_sns::SOL_TLD) {
+            out.push(resolve_sol(a).await?);
+        } else {
+            out.push(a.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// `covenant resolve <name.sol> [--record KEY] [--json]` — keyless SNS lookup
+/// of a name's owner wallet, plus an optional typed record. Daemon-free.
+async fn run_resolve(args: &[String]) -> Result<()> {
+    let mut name: Option<String> = None;
+    let mut record: Option<String> = None;
+    let mut as_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--record" => {
+                i += 1;
+                record = Some(args.get(i).context("--record needs a value")?.clone());
+            }
+            "--json" => as_json = true,
+            other if !other.starts_with("--") && name.is_none() => name = Some(other.to_string()),
+            other => bail!("unexpected argument '{other}'"),
+        }
+        i += 1;
+    }
+    let name = name.context("usage: covenant resolve <name.sol> [--record KEY] [--json]")?;
+    let resolver_url = std::env::var("COVENANT_SNS_RESOLVER_URL")
+        .unwrap_or_else(|_| covenant_sns::DEFAULT_RESOLVER_URL.to_string());
+    let resolver = covenant_sns::HttpSnsResolver::new(resolver_url);
+
+    let owner = resolver
+        .resolve(&name)
+        .await
+        .with_context(|| format!("resolve {name}"))?;
+    let record_value = match &record {
+        Some(key) => Some(
+            resolver
+                .record(&name, key)
+                .await
+                .with_context(|| format!("record {name}/{key}"))?,
+        ),
+        None => None,
+    };
+
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "name": name,
+                "owner": owner,
+                "record_key": record,
+                "record_value": record_value,
+            }))?
+        );
+    } else {
+        println!("{name} -> {owner}");
+        if let (Some(key), Some(val)) = (&record, &record_value) {
+            println!("{key}: {val}");
+        }
+    }
+    Ok(())
+}
+
 /// Dispatch the daemon-free `chain` subcommand family. Mirrors the
 /// non-IPC arms inside [`main`]'s `"chain" =>` block but reached BEFORE
 /// `UnixStream::connect` so a signing machine never needs covenantd.
 /// Returns `bail!` on any unrecognised subcommand so a typo still gets
 /// the same error as the daemon-attached path.
 async fn dispatch_daemon_free_chain(args: &[String]) -> Result<()> {
+    // Accept `.sol` names anywhere a pubkey is taken: resolve them once up
+    // front, before any subcommand parses its flags.
+    let args = resolve_sol_args(args).await?;
     let sub = args.get(1).map(String::as_str).unwrap_or("");
     let rest = &args[2..];
     match sub {
@@ -2547,9 +2642,10 @@ impl covenant_x402::Signer for SubprocessSigner {
                 ))
             })?;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(&body).await.map_err(|e| {
-                covenant_x402::X402Error::Sign(format!("write sidecar stdin: {e}"))
-            })?;
+            stdin
+                .write_all(&body)
+                .await
+                .map_err(|e| covenant_x402::X402Error::Sign(format!("write sidecar stdin: {e}")))?;
         }
         let out = child
             .wait_with_output()
@@ -2808,8 +2904,8 @@ async fn run_zauth_scan(args: &[String]) -> Result<()> {
             }
         }
     }
-    let repo_url = repo_url
-        .ok_or_else(|| anyhow::anyhow!("covenant zauth scan: missing <repo-url>"))?;
+    let repo_url =
+        repo_url.ok_or_else(|| anyhow::anyhow!("covenant zauth scan: missing <repo-url>"))?;
 
     let resolved_keypair_path = resolve_operator_keypair_path(keypair_path)?;
     check_keypair_mode(&resolved_keypair_path)?;
@@ -2834,10 +2930,7 @@ async fn run_zauth_scan(args: &[String]) -> Result<()> {
     };
 
     let client = covenant_zauth::RepoScanClient::new(reqwest::Client::new());
-    let result = client
-        .scan(&req, &signer)
-        .await
-        .context("zauth reposcan")?;
+    let result = client.scan(&req, &signer).await.context("zauth reposcan")?;
 
     if as_json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -2889,6 +2982,12 @@ async fn main() -> Result<()> {
     // Neither needs covenantd.
     if args[0] == "zauth" {
         return run_zauth(&args[1..]).await;
+    }
+
+    // Daemon-free SNS resolution: a keyless `.sol` name lookup over the hosted
+    // resolver. No covenantd needed.
+    if args[0] == "resolve" {
+        return run_resolve(&args[1..]).await;
     }
 
     let home = covenant_home()?;
@@ -5369,9 +5468,10 @@ async fn main() -> Result<()> {
                         match args[i].as_str() {
                             "--agent-pda" => {
                                 i += 1;
-                                agent_pda = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--agent-pda needs a value")
-                                })?);
+                                agent_pda =
+                                    Some(args.get(i).cloned().ok_or_else(|| {
+                                        anyhow::anyhow!("--agent-pda needs a value")
+                                    })?);
                             }
                             "--root" => {
                                 i += 1;
@@ -5381,9 +5481,11 @@ async fn main() -> Result<()> {
                             }
                             "--type" => {
                                 i += 1;
-                                attestation_type = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--type needs a value")
-                                })?);
+                                attestation_type = Some(
+                                    args.get(i)
+                                        .cloned()
+                                        .ok_or_else(|| anyhow::anyhow!("--type needs a value"))?,
+                                );
                             }
                             "--expires" => {
                                 i += 1;
@@ -6088,6 +6190,30 @@ mod tests {
     use super::*;
     use covenant_a2a::{A2ATask, A2ATaskQueueState};
     use covenant_types::{AgentId, Capability};
+
+    #[tokio::test]
+    async fn resolve_sol_passes_non_names_through_without_network() {
+        assert_eq!(resolve_sol("NotASolName").await.unwrap(), "NotASolName");
+        assert_eq!(
+            resolve_sol("Fw1ETanDZafof7xEULsnq9UY6o71Tpds89tNwPkWLb1v")
+                .await
+                .unwrap(),
+            "Fw1ETanDZafof7xEULsnq9UY6o71Tpds89tNwPkWLb1v"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_sol_args_leaves_flags_and_non_names_untouched() {
+        let args = vec![
+            "stake".to_string(),
+            "--agent-key".to_string(),
+            "Fw1ETanDZafof7xEULsnq9UY6o71Tpds89tNwPkWLb1v".to_string(),
+            "--amount".to_string(),
+            "100".to_string(),
+        ];
+        let out = resolve_sol_args(&args).await.unwrap();
+        assert_eq!(out, args, "no .sol token means no rewrite (and no network)");
+    }
 
     #[test]
     fn chain_verb_needs_daemon_classifies_ipc_and_signing_paths() {

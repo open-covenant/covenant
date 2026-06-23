@@ -13,6 +13,7 @@ pub mod http;
 pub mod hyre;
 pub mod metaplex;
 pub mod reputation;
+pub mod sns;
 pub mod spend_authz;
 pub mod sse;
 pub mod stream_dispatch;
@@ -292,7 +293,9 @@ impl Default for MetaplexAttestConfig {
 /// a bad interval falls back to the default rather than refusing to boot.
 pub fn metaplex_attest_config_from_env() -> MetaplexAttestConfig {
     metaplex_attest_config_from_values(
-        std::env::var("COVENANT_METAPLEX_AUTO_ATTEST").ok().as_deref(),
+        std::env::var("COVENANT_METAPLEX_AUTO_ATTEST")
+            .ok()
+            .as_deref(),
         std::env::var("COVENANT_METAPLEX_ATTEST_INTERVAL_SECS")
             .ok()
             .as_deref(),
@@ -1219,6 +1222,10 @@ pub struct Server {
     /// the operator has not enabled Metaplex; in that state no
     /// `metaplex.*` tool is advertised or callable.
     metaplex: Option<Arc<metaplex::MetaplexState>>,
+    /// Opt-in SNS profile: config + a keyless `.sol` resolver client. None
+    /// when the operator has not enabled SNS; in that state no `sns.*` tool
+    /// is advertised or callable.
+    sns: Option<Arc<sns::SnsState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1273,6 +1280,7 @@ impl Server {
             escrow: None,
             hyre: None,
             metaplex: None,
+            sns: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1387,6 +1395,13 @@ impl Server {
     /// sidecar, which holds the minting key out of the daemon.
     pub fn with_metaplex(mut self, state: metaplex::MetaplexState) -> Self {
         self.metaplex = Some(Arc::new(state));
+        self
+    }
+
+    /// Enable the SNS profile. Advertises the read-only `sns.*` resolve
+    /// tools over the hosted resolver; no key and no spend.
+    pub fn with_sns(mut self, state: sns::SnsState) -> Self {
+        self.sns = Some(Arc::new(state));
         self
     }
 
@@ -4175,6 +4190,9 @@ impl Server {
         if let Some(state) = &self.metaplex {
             tools.extend(covenant_metaplex::metaplex_specs(&state.config));
         }
+        if let Some(state) = &self.sns {
+            tools.extend(covenant_sns::sns_specs(&state.config));
+        }
         Response::ToolList { tools }
     }
 
@@ -4243,6 +4261,9 @@ impl Server {
         if name.starts_with("metaplex.") {
             return self.metaplex_tool_call(name, arguments).await;
         }
+        if name.starts_with("sns.") {
+            return self.sns_tool_call(name, arguments).await;
+        }
 
         match self.tools.call(&name, arguments).await {
             Ok(r) => Response::ToolResult {
@@ -4309,11 +4330,7 @@ impl Server {
     /// [`Self::call_tool`]. Reads run a DAS query; writes are delegated
     /// to the `covenant-metaplex-signer` sidecar. The minting key never
     /// enters the daemon's address space.
-    async fn metaplex_tool_call(
-        &self,
-        name: String,
-        arguments: serde_json::Value,
-    ) -> Response {
+    async fn metaplex_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
         let Some(state) = self.metaplex.clone() else {
             return Response::Error {
                 message: "metaplex profile is not enabled on this daemon.".into(),
@@ -4327,6 +4344,34 @@ impl Server {
                 message: format!(
                     "unknown or disabled metaplex tool: {name} (reads need \
                      COVENANT_METAPLEX_DAS_URL; writes need the signer sidecar + RPC)"
+                ),
+            };
+        };
+        match tool.call(arguments).await {
+            Ok(r) => Response::ToolResult {
+                content: r.content,
+                is_error: r.is_error,
+            },
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    async fn sns_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
+        let Some(state) = self.sns.clone() else {
+            return Response::Error {
+                message: "sns profile is not enabled on this daemon.".into(),
+            };
+        };
+        let signer = state.signer();
+        let Some(tool) =
+            covenant_sns::sns_tool(&state.config, &name, state.resolver.clone(), signer)
+        else {
+            return Response::Error {
+                message: format!(
+                    "unknown or disabled sns tool: {name} (reads need COVENANT_SNS_ENABLED=1; \
+                     writes need the signer sidecar + RPC)"
                 ),
             };
         };

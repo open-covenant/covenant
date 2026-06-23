@@ -1133,6 +1133,7 @@ dependencies = [
  "covenant-memory",
  "covenant-peer-auth",
  "covenant-permissions",
+ "covenant-sns",
  "covenant-types",
  "covenant-x402",
  "covenant-zauth",
@@ -1417,6 +1418,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-sns"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "covenant-mcp",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-stake-keeper"
 version = "0.1.0"
 dependencies = [
@@ -1566,6 +1583,7 @@ dependencies = [
  "covenant-runtime",
  "covenant-sap-bridge",
  "covenant-settlement",
+ "covenant-sns",
  "covenant-types",
  "covenant-x402",
  "dotenvy",

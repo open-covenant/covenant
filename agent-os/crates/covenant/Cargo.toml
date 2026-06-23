@@ -23,6 +23,7 @@ covenant-peer-auth = { path = "../covenant-peer-auth" }
 covenant-permissions = { path = "../covenant-permissions" }
 covenant-x402 = { path = "../covenant-x402" }
 covenant-zauth = { path = "../covenant-zauth" }
+covenant-sns = { path = "../covenant-sns" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 borsh = { workspace = true }

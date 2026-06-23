@@ -1,0 +1,13 @@
+{
+  "name": "covenant-sns-signer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Covenant SNS signer sidecar: builds, signs, and submits .sol subdomain + record writes via the Bonfida SDK. The parent-domain key lives only here, never in covenantd.",
+  "bin": { "covenant-sns-signer": "index.mjs" },
+  "scripts": { "start": "node index.mjs" },
+  "dependencies": {
+    "@bonfida/spl-name-service": "3.0.23",
+    "@solana/web3.js": "^1.95.0"
+  }
+}

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-23T13:37:16.840Z",
+  "updatedAt": "2026-06-23T13:57:20.768Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10517,
+    "events": 10524,
     "tasks": 1239,
-    "integrated": 1242
+    "integrated": 1243
   },
   "throughput": {
-    "last24h": 11,
+    "last24h": 12,
     "last7d": 136,
     "velocity": 19.4
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-23",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,13 +180,13 @@
     },
     {
       "date": "06-23",
-      "total": 1242
+      "total": 1243
     }
   ],
   "states": {
-    "integrated": 1234,
+    "integrated": 1235,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 3
   },
   "areas": [
     {
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-23T13:49:35.612Z",
+      "task": "coder-05-gateway-openai-adapter",
+      "note": "Integrated on loop/main-track: OpenAI coding backend behind CodingBackend, selectable per run, mock-verified parity."
+    },
     {
       "at": "2026-06-23T00:42:00.928Z",
       "task": "verify-memory-receipt-mismatch-drift-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-22T00:42:26.252Z",
       "task": "dispatch-budget-exhausted-audit-write-failure-surfaced-unit-",
       "note": "Committed 9ca67b2b. handler-audit-write-failure-coverage 7/7 COMPLETE. Pushing."
-    },
-    {
-      "at": "2026-06-22T00:30:22.994Z",
-      "task": "a2a-recipient-rejected-audit-write-failure-surfaced-unit-cov",
-      "note": "Committed 6caf3c61. handler-audit-write-failure-coverage 6/7. Pushing."
     }
   ]
 }

@@ -145,3 +145,54 @@ fn emit(text: &str) -> std::io::Result<()> {
     stdout.write_all(b"\n")?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{today_key, try_charge_quota};
+    use std::{fs, path::PathBuf};
+
+    // pid-named temp home so re-runs (and any future parallel case) don't collide.
+    fn fresh_home() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("covenant-demo-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn seed(home: &PathBuf, day: u64, count: u64) {
+        let body = serde_json::json!({ "day": day, "count": count }).to_string();
+        fs::write(home.join("demo-quota.json"), body).unwrap();
+    }
+
+    #[test]
+    fn quota_persists_caps_resets_and_parses_env_cap() {
+        // No file -> Ok, persists today + count 1.
+        std::env::remove_var("COVENANT_DEMO_DAILY_REQUESTS");
+        let home = fresh_home();
+        std::env::set_var("COVENANT_HOME", &home);
+
+        assert!(try_charge_quota().is_ok());
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(home.join("demo-quota.json")).unwrap()).unwrap();
+        assert_eq!(written["day"], today_key());
+        assert_eq!(written["count"], 1);
+
+        // count == cap -> Err (cap boundary is inclusive).
+        std::env::set_var("COVENANT_DEMO_DAILY_REQUESTS", "2");
+        seed(&home, today_key(), 2);
+        assert!(try_charge_quota().is_err());
+
+        // Stale day (yesterday) with an over-cap count -> Ok (day boundary resets to 0).
+        seed(&home, today_key() - 1, 999);
+        assert!(try_charge_quota().is_ok());
+
+        // Non-numeric cap -> default 500; a sub-cap count is still Ok.
+        std::env::set_var("COVENANT_DEMO_DAILY_REQUESTS", "garbage");
+        seed(&home, today_key(), 10);
+        assert!(try_charge_quota().is_ok());
+
+        std::env::remove_var("COVENANT_HOME");
+        std::env::remove_var("COVENANT_DEMO_DAILY_REQUESTS");
+        let _ = fs::remove_dir_all(&home);
+    }
+}

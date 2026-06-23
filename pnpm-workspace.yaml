@@ -13,3 +13,4 @@ packages:
   - services/telegram-bot
   - services/fairscale-bridge
   - services/witness-verifier
+  - services/settlement-publisher

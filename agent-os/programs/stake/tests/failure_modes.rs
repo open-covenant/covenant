@@ -69,17 +69,6 @@ fn increase_amount_rejected_after_lock_expiry() {
 }
 
 #[test]
-fn close_position_rejected_before_lock_expiry() {
-    let mut env = boot();
-    let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
-    let err = close_position(&mut env, &owner, &ata, 1)
-        .expect_err("cannot close before lock_end");
-    assert_eq!(custom_error(&err), Some(E_LOCK_NOT_EXPIRED));
-}
-
-#[test]
 fn claim_rejects_when_nothing_to_claim() {
     let mut env = boot();
     let (owner, ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);

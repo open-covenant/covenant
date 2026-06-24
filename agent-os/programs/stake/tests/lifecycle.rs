@@ -78,19 +78,15 @@ fn deposit_fees_distributes_to_single_locker_and_claim_pays_out() {
 }
 
 #[test]
-fn close_position_returns_principal_after_lock_expires() {
+fn close_position_returns_principal_regardless_of_lock() {
     let mut env = boot();
     let amount = MIN_LOCK_AMOUNT;
     let (owner, ata) = funded_owner(&mut env, amount);
     create_position(&mut env, &owner, &ata, 1, amount, TIER_30D_BPS)
         .expect("create_position");
 
-    let err = close_position(&mut env, &owner, &ata, 1)
-        .expect_err("close before lock_end should fail");
-    assert_eq!(custom_error(&err), Some(E_LOCK_NOT_EXPIRED));
-
-    advance_clock(&mut env, TIER_30D_SECS + 1);
-    close_position(&mut env, &owner, &ata, 1).expect("close after lock_end");
+    // Sunset: principal is withdrawable immediately, before lock_end.
+    close_position(&mut env, &owner, &ata, 1).expect("close before lock_end (sunset)");
 
     assert_eq!(token_balance(&env, &ata), amount);
     assert_eq!(token_balance(&env, &env.locked_cvnt_vault), 0);

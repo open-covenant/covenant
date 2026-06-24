@@ -456,12 +456,10 @@ pub mod stake {
     }
 
     pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
-        // No pause gate: principal is the user's right after lock_end.
+        // Sunset: principal and accrued rewards are withdrawable at any time,
+        // regardless of the original lock tier. The program is being wound down
+        // in favor of a Streamflow-controlled vault, so locks are no longer enforced.
         let now = Clock::get()?.unix_timestamp;
-        require!(
-            ctx.accounts.position.lock_end <= now,
-            CovenantStakeError::LockNotExpired
-        );
         internal_accrue(&mut ctx.accounts.config, now)?;
 
         let position = &mut ctx.accounts.position;

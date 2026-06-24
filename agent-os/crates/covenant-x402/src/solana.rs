@@ -702,6 +702,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_blockhash_rejects_non_json_body() {
+        // A 2xx RPC body that is not valid JSON — an HTML error page from a
+        // misbehaving proxy, a truncated stream — must fail closed at the
+        // serde_json::from_str boundary, never panic or be mis-parsed into a
+        // fabricated blockhash that would build an unlandable transaction.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>not json</html>"))
+            .mount(&server)
+            .await;
+        let err = SolanaSigner::new(Keypair::new(), server.uri())
+            .latest_blockhash()
+            .await
+            .expect_err("non-json body");
+        assert!(
+            matches!(err, X402Error::Sign(ref msg) if msg.contains("decode rpc response")),
+            "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn resolve_decimals_rejects_oversized_rpc_body() {
         // The Solana RPC is untrusted: a compromised or malicious node returning
         // a body past the cap must fail closed as a Sign error rather than buffer

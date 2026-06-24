@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-06-23T20:37:26.110Z",
+  "updatedAt": "2026-06-24T06:38:30.161Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
@@ -11,7 +11,7 @@
     "Grok": 1,
     "Codex": 5,
     "GLM": 1,
-    "rejectedRounds": 9
+    "rejectedRounds": 10
   },
   "curve": [
     {
@@ -163,6 +163,24 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k40",
+      "display": "Round 31",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude-opus-4-8",
+          "scalar": 6.621,
+          "incumbent": 6.621,
+          "gain": 0,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0 < margin 0.002"
+        }
+      ]
+    },
     {
       "round": "k39",
       "display": "Round 30",

@@ -1026,127 +1026,127 @@ schedm!(w14, w15, w7, w12);
 schedm!(w15, w0, w8, w13);
 emit!(60, w12, w13, w14, w15);
 }
-    #[target_feature(enable = "simd128")]
-    pub(super) fn link_hex_mid(
-    previous: &[u8; 64],
-    mid_wk: &[u8; 256],
-    last: u8,
-    tail: &[[u32; 64]; 16],
-    ) -> [u8; 64] {
-    let x0 = load_be::<0>(previous);
-    let x1 = load_be::<16>(previous);
-    let x2 = load_be::<32>(previous);
-    let x3 = load_be::<48>(previous);
-    let x4 = sched4(x0, x1, x2, x3);
-    let x5 = sched4(x1, x2, x3, x4);
-    let x6 = sched4(x2, x3, x4, x5);
-    let x7 = sched4(x3, x4, x5, x6);
-    let x8 = sched4(x4, x5, x6, x7);
-    let x9 = sched4(x5, x6, x7, x8);
-    let x10 = sched4(x6, x7, x8, x9);
-    let x11 = sched4(x7, x8, x9, x10);
-    let x12 = sched4(x8, x9, x10, x11);
-    let x13 = sched4(x9, x10, x11, x12);
-    let x14 = sched4(x10, x11, x12, x13);
-    let x15 = sched4(x11, x12, x13, x14);
-    let wk0 = u32x4_add(x0, u32x4(0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5));
-    let wk1 = u32x4_add(x1, u32x4(0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5));
-    let wk2 = u32x4_add(x2, u32x4(0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3));
-    let wk3 = u32x4_add(x3, u32x4(0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174));
-    let wk4 = u32x4_add(x4, u32x4(0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc));
-    let wk5 = u32x4_add(x5, u32x4(0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da));
-    let wk6 = u32x4_add(x6, u32x4(0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7));
-    let wk7 = u32x4_add(x7, u32x4(0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967));
-    let wk8 = u32x4_add(x8, u32x4(0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13));
-    let wk9 = u32x4_add(x9, u32x4(0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85));
-    let wk10 = u32x4_add(x10, u32x4(0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3));
-    let wk11 = u32x4_add(x11, u32x4(0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070));
-    let wk12 = u32x4_add(x12, u32x4(0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5));
-    let wk13 = u32x4_add(x13, u32x4(0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3));
-    let wk14 = u32x4_add(x14, u32x4(0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208));
-    let wk15 = u32x4_add(x15, u32x4(0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2));
-    let mut a = H0[0];
-    let mut b = H0[1];
-    let mut c = H0[2];
-    let mut d = H0[3];
-    let mut e = H0[4];
-    let mut f = H0[5];
-    let mut g = H0[6];
-    let mut h = H0[7];
-    oct!(a, b, c, d, e, f, g, h, wk0, wk1);
-    oct!(a, b, c, d, e, f, g, h, wk2, wk3);
-    oct!(a, b, c, d, e, f, g, h, wk4, wk5);
-    oct!(a, b, c, d, e, f, g, h, wk6, wk7);
-    oct!(a, b, c, d, e, f, g, h, wk8, wk9);
-    oct!(a, b, c, d, e, f, g, h, wk10, wk11);
-    oct!(a, b, c, d, e, f, g, h, wk12, wk13);
-    oct!(a, b, c, d, e, f, g, h, wk14, wk15);
-    let s0 = H0[0].wrapping_add(a);
-    let s1 = H0[1].wrapping_add(b);
-    let s2 = H0[2].wrapping_add(c);
-    let s3 = H0[3].wrapping_add(d);
-    let s4 = H0[4].wrapping_add(e);
-    let s5 = H0[5].wrapping_add(f);
-    let s6 = H0[6].wrapping_add(g);
-    let s7 = H0[7].wrapping_add(h);
-    let mut a = s0;
-    let mut b = s1;
-    let mut c = s2;
-    let mut d = s3;
-    let mut e = s4;
-    let mut f = s5;
-    let mut g = s6;
-    let mut h = s7;
-    {
-    let wk = mid_wk;
-    octtb!(a, b, c, d, e, f, g, h, wk, 0);
-    octtb!(a, b, c, d, e, f, g, h, wk, 8);
-    octtb!(a, b, c, d, e, f, g, h, wk, 16);
-    octtb!(a, b, c, d, e, f, g, h, wk, 24);
-    octtb!(a, b, c, d, e, f, g, h, wk, 32);
-    octtb!(a, b, c, d, e, f, g, h, wk, 40);
-    octtb!(a, b, c, d, e, f, g, h, wk, 48);
-    octtb!(a, b, c, d, e, f, g, h, wk, 56);
-    }
-    let t0 = s0.wrapping_add(a);
-    let t1 = s1.wrapping_add(b);
-    let t2 = s2.wrapping_add(c);
-    let t3 = s3.wrapping_add(d);
-    let t4 = s4.wrapping_add(e);
-    let t5 = s5.wrapping_add(f);
-    let t6 = s6.wrapping_add(g);
-    let t7 = s7.wrapping_add(h);
-    let mut a = t0;
-    let mut b = t1;
-    let mut c = t2;
-    let mut d = t3;
-    let mut e = t4;
-    let mut f = t5;
-    let mut g = t6;
-    let mut h = t7;
-    {
-    let wk = &tail[super::tail_idx(last)];
-    octt!(a, b, c, d, e, f, g, h, wk, 0);
-    octt!(a, b, c, d, e, f, g, h, wk, 8);
-    octt!(a, b, c, d, e, f, g, h, wk, 16);
-    octt!(a, b, c, d, e, f, g, h, wk, 24);
-    octt!(a, b, c, d, e, f, g, h, wk, 32);
-    octt!(a, b, c, d, e, f, g, h, wk, 40);
-    octt!(a, b, c, d, e, f, g, h, wk, 48);
-    octt!(a, b, c, d, e, f, g, h, wk, 56);
-    }
-    let state = [
-    t0.wrapping_add(a),
-    t1.wrapping_add(b),
-    t2.wrapping_add(c),
-    t3.wrapping_add(d),
-    t4.wrapping_add(e),
-    t5.wrapping_add(f),
-    t6.wrapping_add(g),
-    t7.wrapping_add(h),
-    ];
-    hex_state(&state)
-    }
+#[target_feature(enable = "simd128")]
+pub(super) fn link_hex_mid(
+previous: &[u8; 64],
+mid_wk: &[u8; 256],
+last: u8,
+tail: &[[u32; 64]; 16],
+) -> [u8; 64] {
+let x0 = load_be::<0>(previous);
+let x1 = load_be::<16>(previous);
+let x2 = load_be::<32>(previous);
+let x3 = load_be::<48>(previous);
+let x4 = sched4(x0, x1, x2, x3);
+let x5 = sched4(x1, x2, x3, x4);
+let x6 = sched4(x2, x3, x4, x5);
+let x7 = sched4(x3, x4, x5, x6);
+let x8 = sched4(x4, x5, x6, x7);
+let x9 = sched4(x5, x6, x7, x8);
+let x10 = sched4(x6, x7, x8, x9);
+let x11 = sched4(x7, x8, x9, x10);
+let x12 = sched4(x8, x9, x10, x11);
+let x13 = sched4(x9, x10, x11, x12);
+let x14 = sched4(x10, x11, x12, x13);
+let x15 = sched4(x11, x12, x13, x14);
+let wk0 = u32x4_add(x0, u32x4(0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5));
+let wk1 = u32x4_add(x1, u32x4(0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5));
+let wk2 = u32x4_add(x2, u32x4(0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3));
+let wk3 = u32x4_add(x3, u32x4(0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174));
+let wk4 = u32x4_add(x4, u32x4(0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc));
+let wk5 = u32x4_add(x5, u32x4(0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da));
+let wk6 = u32x4_add(x6, u32x4(0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7));
+let wk7 = u32x4_add(x7, u32x4(0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967));
+let wk8 = u32x4_add(x8, u32x4(0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13));
+let wk9 = u32x4_add(x9, u32x4(0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85));
+let wk10 = u32x4_add(x10, u32x4(0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3));
+let wk11 = u32x4_add(x11, u32x4(0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070));
+let wk12 = u32x4_add(x12, u32x4(0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5));
+let wk13 = u32x4_add(x13, u32x4(0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3));
+let wk14 = u32x4_add(x14, u32x4(0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208));
+let wk15 = u32x4_add(x15, u32x4(0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2));
+let mut a = H0[0];
+let mut b = H0[1];
+let mut c = H0[2];
+let mut d = H0[3];
+let mut e = H0[4];
+let mut f = H0[5];
+let mut g = H0[6];
+let mut h = H0[7];
+oct!(a, b, c, d, e, f, g, h, wk0, wk1);
+oct!(a, b, c, d, e, f, g, h, wk2, wk3);
+oct!(a, b, c, d, e, f, g, h, wk4, wk5);
+oct!(a, b, c, d, e, f, g, h, wk6, wk7);
+oct!(a, b, c, d, e, f, g, h, wk8, wk9);
+oct!(a, b, c, d, e, f, g, h, wk10, wk11);
+oct!(a, b, c, d, e, f, g, h, wk12, wk13);
+oct!(a, b, c, d, e, f, g, h, wk14, wk15);
+let s0 = H0[0].wrapping_add(a);
+let s1 = H0[1].wrapping_add(b);
+let s2 = H0[2].wrapping_add(c);
+let s3 = H0[3].wrapping_add(d);
+let s4 = H0[4].wrapping_add(e);
+let s5 = H0[5].wrapping_add(f);
+let s6 = H0[6].wrapping_add(g);
+let s7 = H0[7].wrapping_add(h);
+let mut a = s0;
+let mut b = s1;
+let mut c = s2;
+let mut d = s3;
+let mut e = s4;
+let mut f = s5;
+let mut g = s6;
+let mut h = s7;
+{
+let wk = mid_wk;
+octtb!(a, b, c, d, e, f, g, h, wk, 0);
+octtb!(a, b, c, d, e, f, g, h, wk, 8);
+octtb!(a, b, c, d, e, f, g, h, wk, 16);
+octtb!(a, b, c, d, e, f, g, h, wk, 24);
+octtb!(a, b, c, d, e, f, g, h, wk, 32);
+octtb!(a, b, c, d, e, f, g, h, wk, 40);
+octtb!(a, b, c, d, e, f, g, h, wk, 48);
+octtb!(a, b, c, d, e, f, g, h, wk, 56);
+}
+let t0 = s0.wrapping_add(a);
+let t1 = s1.wrapping_add(b);
+let t2 = s2.wrapping_add(c);
+let t3 = s3.wrapping_add(d);
+let t4 = s4.wrapping_add(e);
+let t5 = s5.wrapping_add(f);
+let t6 = s6.wrapping_add(g);
+let t7 = s7.wrapping_add(h);
+let mut a = t0;
+let mut b = t1;
+let mut c = t2;
+let mut d = t3;
+let mut e = t4;
+let mut f = t5;
+let mut g = t6;
+let mut h = t7;
+{
+let wk = &tail[super::tail_idx(last)];
+octt!(a, b, c, d, e, f, g, h, wk, 0);
+octt!(a, b, c, d, e, f, g, h, wk, 8);
+octt!(a, b, c, d, e, f, g, h, wk, 16);
+octt!(a, b, c, d, e, f, g, h, wk, 24);
+octt!(a, b, c, d, e, f, g, h, wk, 32);
+octt!(a, b, c, d, e, f, g, h, wk, 40);
+octt!(a, b, c, d, e, f, g, h, wk, 48);
+octt!(a, b, c, d, e, f, g, h, wk, 56);
+}
+let state = [
+t0.wrapping_add(a),
+t1.wrapping_add(b),
+t2.wrapping_add(c),
+t3.wrapping_add(d),
+t4.wrapping_add(e),
+t5.wrapping_add(f),
+t6.wrapping_add(g),
+t7.wrapping_add(h),
+];
+hex_state(&state)
+}
 #[target_feature(enable = "simd128")]
 fn digest4(lines: [&[u8]; 4], blocks: usize) -> [[u8; 64]; 4] {
 let mut tails = [[0u8; 128]; 4];
@@ -3013,9 +3013,11 @@ pre[..9].copy_from_slice(b"{\"index\":");
 pre[9] = b'0';
 pre[10..23].copy_from_slice(IDX_LIT);
 let mut il = 1usize;
+let mut lastpos = 9usize;
+let mut endpos = 23usize;
 for (index, line) in event_lines.iter().enumerate() {
 if index > 0 {
-let mut p = 8 + il;
+let mut p = lastpos;
 loop {
 if pre[p] < b'9' {
 pre[p] += 1;
@@ -3024,6 +3026,8 @@ break;
 pre[p] = b'0';
 if p == 9 {
 il += 1;
+lastpos += 1;
+endpos += 1;
 pre[9] = b'1';
 let mut z = 10;
 while z < 9 + il {
@@ -3108,7 +3112,7 @@ if tail_ok {
 let (id, ts) = event_spans(line, packed);
 if !anchor_line_matches(
 aline,
-&pre[..22 + il],
+&pre[..endpos],
 id,
 ts,
 event_hex,

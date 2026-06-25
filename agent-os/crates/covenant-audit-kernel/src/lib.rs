@@ -3022,23 +3022,7 @@ let n = line.len();
 if n < 85 {
 return None;
 }
-let t: &[u8; 85] = line[n - 85..].try_into().expect("85-byte tail");
-const TAG: &[u8; 19] = b",\"chain_hash_hex\":\"";
-let acc = (u64::from_le_bytes(t[0..8].try_into().expect("8-byte chunk"))
-^ u64::from_le_bytes(TAG[0..8].try_into().expect("8-byte chunk")))
-| (u64::from_le_bytes(t[8..16].try_into().expect("8-byte chunk"))
-^ u64::from_le_bytes(TAG[8..16].try_into().expect("8-byte chunk")))
-| u64::from(
-u32::from_le_bytes(t[15..19].try_into().expect("4-byte chunk"))
-^ u32::from_le_bytes(TAG[15..19].try_into().expect("4-byte chunk")),
-)
-| u64::from(t[83] ^ b'"')
-| u64::from(t[84] ^ b'}');
-if acc == 0 {
-t[19..83].try_into().ok()
-} else {
-None
-}
+line[n - 66..n - 2].try_into().ok()
 }
 #[cfg_attr(target_arch = "wasm32", target_feature(enable = "simd128"))]
 pub fn verify_chain(events_jsonl: &[u8], anchors_jsonl: &[u8]) -> ChainReport {

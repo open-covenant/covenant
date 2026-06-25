@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-24T15:23:21.783Z",
+  "updatedAt": "2026-06-25T00:23:18.334Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
-    "scalar": 6.633,
-    "fuelCutPct": 84.9
+    "scalar": 6.647,
+    "fuelCutPct": 85
   },
   "tally": {
-    "Claude": 13,
+    "Claude": 14,
     "Grok": 1,
     "Codex": 5,
     "GLM": 1,
@@ -157,6 +157,11 @@
       "round": "k41",
       "scalar": 6.633,
       "proposer": "Claude"
+    },
+    {
+      "round": "k42",
+      "scalar": 6.647,
+      "proposer": "Claude"
     }
   ],
   "solo": {
@@ -168,6 +173,24 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k42",
+      "display": "Round 33",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Claude",
+          "model": "claude-opus-4-8",
+          "scalar": 6.647,
+          "incumbent": 6.633,
+          "gain": 0.014,
+          "promoted": true,
+          "commit": "6c3baf705ebe3d4b3d772c2e3d5df64130a47479",
+          "handle": null,
+          "reason": null
+        }
+      ]
+    },
     {
       "round": "k41",
       "display": "Round 32",

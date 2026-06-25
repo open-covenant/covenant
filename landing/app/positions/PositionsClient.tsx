@@ -193,13 +193,13 @@ export function PositionsClient() {
               />
               <Step
                 index="02"
-                title="Withdraw principal at lock end"
-                body="Once the lock period elapses, close the position to return the locked CVNT to your wallet. Any pending SOL is paid out in the same transaction."
+                title="Withdraw principal anytime"
+                body="The staking program is being wound down, so lock periods are no longer enforced. Close any position to return your CVNT immediately, regardless of the original commitment. Any pending SOL is paid out in the same transaction."
               />
               <Step
                 index="03"
                 title="Pause does not trap principal"
-                body="If the protocol is paused, claims and new positions are blocked. Principal withdrawal after lock expiry remains available."
+                body="If the protocol is paused, claims and new positions are blocked. Principal withdrawal remains available at any time."
               />
             </ol>
           </Panel>
@@ -368,7 +368,7 @@ function PositionCard({
 
       <div className="mt-4 grid grid-cols-2 gap-4 border-t border-neutral-900 pt-4 text-[11px] sm:grid-cols-4">
         <Metric label="Unlock date" value={lockEndDate(position.lockEnd)} />
-        <Metric label="Status" value={expired ? "Unlocked" : relativeFromNow(position.lockEnd)} highlight={expired ? "ok" : undefined} />
+        <Metric label="Status" value={expired ? "Unlocked" : "Withdrawable"} highlight="ok" />
         <Metric label="Multiplier" value={tierMultiplier(position.multiplierBps)} />
         <Metric
           label="Position"
@@ -389,8 +389,8 @@ function PositionCard({
         <button
           type="button"
           onClick={onClose}
-          disabled={busy || !expired}
-          title={expired ? "Withdraw principal and any pending rewards" : "Available when the lock period ends"}
+          disabled={busy}
+          title="Withdraw principal and any pending rewards (lock waived — program sunsetting)"
           className="flex-1 rounded-sm border border-neutral-700 px-4 py-2.5 text-[11px] uppercase tracking-[0.22em] text-neutral-100 transition-colors hover:border-neutral-300 hover:text-neutral-50 disabled:cursor-not-allowed disabled:border-neutral-900 disabled:text-neutral-700 sm:flex-none sm:px-6"
         >
           {busy && busyAction === "close" ? "Closing…" : "Withdraw principal"}

@@ -2916,58 +2916,16 @@ acc = v128_or(acc, v128_xor(ld(line, pl - 16), ld(prefix, pl - 16)));
 acc = v128_or(acc, v128_xor(ld(line, pl), ld(id, 0)));
 acc = v128_or(acc, v128_xor(ld(line, pl + 16), ld(id, 16)));
 acc = v128_or(acc, v128_xor(ld(line, pl + 20), ld(id, 20)));
-acc = v128_or(
-acc,
-v128_xor(
-ld(line, pl + 36),
-u8x16(b'"', b',', b'"', b't', b'i', b'm', b'e', b's', b't', b'a', b'm', b'p', b'_', b'm', b's', b'"'),
-),
-);
-acc = v128_or(
-acc,
-v128_xor(
-ld(line, pl + 37),
-u8x16(b',', b'"', b't', b'i', b'm', b'e', b's', b't', b'a', b'm', b'p', b'_', b'm', b's', b'"', b':'),
-),
-);
 let p_ts = pl + 53;
 let mut acc64 = lu(line, p_ts) ^ lu(ts_digits, 0);
 acc64 |= lu(line, p_ts + tl - 8) ^ lu(ts_digits, tl - 8);
 let p = p_ts + tl;
-acc = v128_or(
-acc,
-v128_xor(
-ld(line, p),
-u8x16(b',', b'"', b'e', b'v', b'e', b'n', b't', b'_', b'h', b'a', b's', b'h', b'_', b'h', b'e', b'x'),
-),
-);
-acc = v128_or(
-acc,
-v128_xor(
-ld(line, p + 3),
-u8x16(b'v', b'e', b'n', b't', b'_', b'h', b'a', b's', b'h', b'_', b'h', b'e', b'x', b'"', b':', b'"'),
-),
-);
 let p_ev = p + 19;
 acc = v128_or(acc, v128_xor(ld(line, p_ev), ld(event_hex, 0)));
 acc = v128_or(acc, v128_xor(ld(line, p_ev + 16), ld(event_hex, 16)));
 acc = v128_or(acc, v128_xor(ld(line, p_ev + 32), ld(event_hex, 32)));
 acc = v128_or(acc, v128_xor(ld(line, p_ev + 48), ld(event_hex, 48)));
 let q = p_ev + 64;
-acc = v128_or(
-acc,
-v128_xor(
-ld(line, q),
-u8x16(b'"', b',', b'"', b'p', b'r', b'e', b'v', b'i', b'o', b'u', b's', b'_', b'h', b'a', b's', b'h'),
-),
-);
-acc = v128_or(
-acc,
-v128_xor(
-ld(line, q + 7),
-u8x16(b'i', b'o', b'u', b's', b'_', b'h', b'a', b's', b'h', b'_', b'h', b'e', b'x', b'"', b':', b'"'),
-),
-);
 let p_pr = q + 23;
 acc = v128_or(acc, v128_xor(ld(line, p_pr), ld(previous, 0)));
 acc = v128_or(acc, v128_xor(ld(line, p_pr + 16), ld(previous, 16)));

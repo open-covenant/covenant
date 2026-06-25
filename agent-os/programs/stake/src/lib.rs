@@ -617,6 +617,33 @@ pub mod stake {
         });
         Ok(())
     }
+
+    /// Sunset: the config authority sweeps CVNT out of the buylock vault, which
+    /// had no withdraw path in v1. Lets the buy-and-lock supply migrate as the
+    /// program is wound down for the Streamflow-controlled vault.
+    pub fn withdraw_buylock(ctx: Context<WithdrawBuylock>, amount: u64) -> Result<()> {
+        require!(amount > 0, CovenantStakeError::ZeroAmount);
+        let bump = ctx.accounts.config.buylock_vault_authority_bump;
+        let seeds: &[&[u8]] = &[b"buylock_auth", &[bump]];
+        let signer: &[&[&[u8]]] = &[seeds];
+        let cpi = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.buylock_cvnt_vault.to_account_info(),
+                mint: ctx.accounts.covnt_mint.to_account_info(),
+                to: ctx.accounts.destination_cvnt_ata.to_account_info(),
+                authority: ctx.accounts.buylock_vault_authority.to_account_info(),
+            },
+            signer,
+        );
+        token_interface::transfer_checked(cpi, amount, ctx.accounts.covnt_mint.decimals)?;
+        emit!(BuyLockWithdrawn {
+            authority: ctx.accounts.authority.key(),
+            amount,
+            destination: ctx.accounts.destination_cvnt_ata.key(),
+        });
+        Ok(())
+    }
 }
 
 
@@ -1093,6 +1120,31 @@ pub struct DepositBuyLockCvnt<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+#[derive(Accounts)]
+pub struct WithdrawBuylock<'info> {
+    #[account(
+        seeds = [b"stake_config"],
+        bump = config.bump,
+        has_one = authority @ CovenantStakeError::UnauthorizedAuthority,
+        constraint = config.covnt_mint == covnt_mint.key() @ CovenantStakeError::InvalidMint,
+    )]
+    pub config: Account<'info, Config>,
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    /// CHECK: seeds-validated PDA, authority for the buylock vault ATA.
+    #[account(seeds = [b"buylock_auth"], bump = config.buylock_vault_authority_bump)]
+    pub buylock_vault_authority: UncheckedAccount<'info>,
+    #[account(
+        mut,
+        token::mint = covnt_mint,
+        token::authority = buylock_vault_authority,
+    )]
+    pub buylock_cvnt_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, token::mint = covnt_mint)]
+    pub destination_cvnt_ata: InterfaceAccount<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
 
 #[event]
 pub struct ProgramInitialized {
@@ -1180,6 +1232,13 @@ pub struct BuyLockDeposited {
     pub depositor: Pubkey,
     pub amount: u64,
     pub cumulative_buylock_cvnt: u64,
+}
+
+#[event]
+pub struct BuyLockWithdrawn {
+    pub authority: Pubkey,
+    pub amount: u64,
+    pub destination: Pubkey,
 }
 
 #[event]

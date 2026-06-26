@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-26T22:24:42.814Z",
+  "updatedAt": "2026-06-26T22:44:46.468Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10981,
-    "tasks": 1293,
-    "integrated": 1295
+    "events": 10985,
+    "tasks": 1294,
+    "integrated": 1296
   },
   "throughput": {
-    "last24h": 7,
-    "last7d": 120,
-    "velocity": 17.1
+    "last24h": 8,
+    "last7d": 121,
+    "velocity": 17.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-26",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-26",
-      "total": 1295
+      "total": 1296
     }
   ],
   "states": {
-    "integrated": 1287,
-    "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "integrated": 1288,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multi-host-a2a-cross-host-inbound-route",
-    "state": "cross_review",
-    "since": "2026-06-26T21:42:03.573Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-26T22:35:57.799Z",
+      "task": "multi-host-a2a-cross-host-inbound-route",
+      "note": "Integrated as f32392dc, pushed 5b261659..f32392dc to origin/loop/main-track. 4b-2b complete: bearer-exempt POST /a2a/peer-tasks fronting the"
+    },
     {
       "at": "2026-06-26T20:53:04.152Z",
       "task": "multi-host-a2a-cross-host-inbound-verify",
@@ -315,11 +315,6 @@
       "at": "2026-06-23T20:06:22.625Z",
       "task": "settlement-publisher-dispatch-selection-ordering-coverage",
       "note": "dispatch-select extraction + 5 mutation-proven tests; vitest 20/20, scripts EXIT=0"
-    },
-    {
-      "at": "2026-06-23T20:01:50.178Z",
-      "task": "settlement-publisher-sigs-replay-restore-coverage",
-      "note": "sigs-replay extraction + 8 mutation-proven tests; vitest 15/15, scripts EXIT=0"
     }
   ]
 }

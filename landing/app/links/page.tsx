@@ -43,7 +43,7 @@ const GROUPS: { title: string; items: LinkItem[] }[] = [
   {
     title: "$CVNT",
     items: [
-      { label: "Buy $CVNT", href: "/token", note: "How and where to acquire the token" },
+      { label: "$CVNT", href: "/token", note: "Buy $CVNT, supply, and token details" },
       { label: "Stake $CVNT", href: "/stake", note: "Lock for a share of protocol revenue in SOL" },
       { label: "Treasury", href: "/treasury", note: "Read-only on-chain metrics" },
     ],

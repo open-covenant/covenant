@@ -2720,6 +2720,26 @@ impl Server {
                 };
             }
         }
+        // Cross-host routing (slice 4a): once the send is authorized, a
+        // recipient on a configured remote host must not be queued to the LOCAL
+        // mailbox. Known-hosts membership is the sole definition of "remote" — a
+        // host absent from the registry is local and falls through unchanged.
+        // Placed after the capability gate so an unauthorized caller learns
+        // nothing about the registry, and before the recv-admission gate so a
+        // remote recipient is never evaluated against — and never probes —
+        // local recv grants it can never hold. The authenticated cross-host
+        // transport is a later slice; until it lands, refuse rather than
+        // misdeliver. (A malformed recipient display cannot reach here: AgentId
+        // deserialization rejects it via validate_agent_id_display.)
+        if self.known_hosts().resolve_agent(&task.recipient).is_ok() {
+            return Response::Error {
+                message: format!(
+                    "a2a send to {} targets a configured remote host; \
+                     cross-host transport is not yet available",
+                    task.recipient.display
+                ),
+            };
+        }
         // Recipient admission gate: when sender ≠ recipient (cross-peer
         // send), the recipient peer must have granted `a2a.recv.<sender>`
         // to themselves. v0 single-peer is loopback (peer == recipient),
@@ -48558,6 +48578,103 @@ required = {caps:?}
         assert!(
             matches!(drained, Response::A2ATaskOpt { task: None }),
             "rejected task must not enqueue: {drained:?}"
+        );
+    }
+
+    fn known_hosts_with_remote() -> KnownHosts {
+        KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://remote:7777".into(),
+                pubkey: [9u8; 32],
+            },
+        )
+    }
+
+    fn a2a_task_to(s: &Server, recipient_display: &str) -> covenant_a2a::A2ATask {
+        covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: s.identity.agent_id(),
+            recipient: AgentId::new(recipient_display, [4u8; 32]),
+            intent_text: "cross-host".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_configured_remote_host_is_refused_not_queued_locally() {
+        // A recipient on a host in the known-hosts registry is REMOTE; until
+        // cross-host transport lands it must be refused, never queued to the
+        // LOCAL mailbox — the misdelivery the registry exists to prevent. The
+        // refusal stands even with the a2a.send capability granted.
+        let s = server_with(vec![], "").with_known_hosts(known_hosts_with_remote());
+        let task = a2a_task_to(&s, "bob@remote");
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.bob@remote".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => {
+                assert!(message.contains("remote host"), "got: {message}");
+                assert!(message.contains("not yet available"), "got: {message}");
+            }
+            other => panic!("a remote recipient must be refused: {other:?}"),
+        }
+        let drained = s.op_respond(Request::TryRecvA2ATask).await;
+        assert!(
+            matches!(drained, Response::A2ATaskOpt { task: None }),
+            "a remote recipient must never enqueue locally: {drained:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_remote_host_without_grant_reveals_no_registry_membership() {
+        // Authorize-before-reveal: a caller without the a2a.send capability is
+        // refused by the capability gate with "requires capability" and learns
+        // nothing about whether the recipient host is a configured remote peer.
+        // The remote classification runs only after authorization.
+        let s = server_with(vec![], "").with_known_hosts(known_hosts_with_remote());
+        let task = a2a_task_to(&s, "bob@remote");
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => {
+                assert!(message.contains("requires capability"), "got: {message}");
+                assert!(
+                    !message.contains("remote host"),
+                    "an unauthorized caller must not learn registry membership: {message}"
+                );
+            }
+            other => {
+                panic!("an ungranted send must be refused by the capability gate: {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_local_host_still_queues_with_nonempty_known_hosts() {
+        // No regression: a recipient whose host is absent from known-hosts is
+        // local and queues exactly as before, even with a remote host loaded.
+        let s = server_with(vec![], "").with_known_hosts(known_hosts_with_remote());
+        let peer = s.identity.agent_id();
+        let task = loopback_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", peer.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task: task.clone() }).await {
+            Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("a local recipient must still queue: {other:?}"),
+        }
+        let recv = s.op_respond(Request::TryRecvA2ATask).await;
+        assert!(
+            matches!(recv, Response::A2ATaskOpt { task: Some(ref t) } if t.id == task.id),
+            "the local task must be drained from the mailbox: {recv:?}"
         );
     }
 

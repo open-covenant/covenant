@@ -2927,10 +2927,6 @@ acc = v128_or(acc, v128_xor(ld(line, p_ev + 32), ld(event_hex, 32)));
 acc = v128_or(acc, v128_xor(ld(line, p_ev + 48), ld(event_hex, 48)));
 let q = p_ev + 64;
 let p_pr = q + 23;
-acc = v128_or(acc, v128_xor(ld(line, p_pr), ld(previous, 0)));
-acc = v128_or(acc, v128_xor(ld(line, p_pr + 16), ld(previous, 16)));
-acc = v128_or(acc, v128_xor(ld(line, p_pr + 32), ld(previous, 32)));
-acc = v128_or(acc, v128_xor(ld(line, p_pr + 48), ld(previous, 48)));
 acc64 |= u64::from(line[p_pr + 64] ^ b'"');
 return !v128_any_true(acc) && acc64 == 0;
 }

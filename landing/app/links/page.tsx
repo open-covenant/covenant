@@ -41,14 +41,6 @@ const PRIMARY: LinkItem[] = [
 
 const GROUPS: { title: string; items: LinkItem[] }[] = [
   {
-    title: "$CVNT",
-    items: [
-      { label: "$CVNT", href: "/token", note: "Buy $CVNT, supply, and token details" },
-      { label: "Stake $CVNT", href: "/stake", note: "Lock for a share of protocol revenue in SOL" },
-      { label: "Treasury", href: "/treasury", note: "Read-only on-chain metrics" },
-    ],
-  },
-  {
     title: "Learn",
     items: [
       { label: "Whitepaper", href: "https://doi.org/10.5281/zenodo.20134416", note: "The design, peer-citable" },
@@ -63,6 +55,14 @@ const GROUPS: { title: string; items: LinkItem[] }[] = [
       { label: "X / @OpenCovenant", href: X_URL },
       { label: "Partners", href: "/partners" },
       { label: "Contact", href: "/contact" },
+    ],
+  },
+  {
+    title: "$CVNT",
+    items: [
+      { label: "$CVNT", href: "/token", note: "Buy $CVNT, supply, and token details" },
+      { label: "Stake $CVNT", href: "/stake", note: "Lock for a share of protocol revenue in SOL" },
+      { label: "Treasury", href: "/treasury", note: "Read-only on-chain metrics" },
     ],
   },
 ];

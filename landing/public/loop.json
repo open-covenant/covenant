@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-26T15:42:42.955Z",
+  "updatedAt": "2026-06-26T16:02:46.825Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10943,
-    "tasks": 1289,
-    "integrated": 1291
+    "events": 10952,
+    "tasks": 1290,
+    "integrated": 1292
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 117,
-    "velocity": 16.7
+    "last24h": 4,
+    "last7d": 118,
+    "velocity": 16.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-26",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-26",
-      "total": 1291
+      "total": 1292
     }
   ],
   "states": {
-    "integrated": 1283,
+    "integrated": 1284,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "multi-host-daemon-known-hosts-config-wiring",
+    "task": "multi-host-a2a-remote-recipient-refuse-not-silent-local",
     "state": "in_progress",
-    "since": "2026-06-26T15:04:21.285Z"
+    "since": "2026-06-26T15:55:43.327Z"
   },
   "recent": [
+    {
+      "at": "2026-06-26T15:47:13.750Z",
+      "task": "multi-host-daemon-known-hosts-config-wiring",
+      "note": "Integrated as aac7bcb4, pushed to origin/loop/main-track. covenantd loads+holds known-hosts registry fail-closed; slice 4 (A2A dispatch cons"
+    },
     {
       "at": "2026-06-26T14:54:32.607Z",
       "task": "multi-host-known-hosts-file-load",
@@ -315,11 +320,6 @@
       "at": "2026-06-23T19:36:51.749Z",
       "task": "witness-verifier-anchor-settlement-instruction-data-coverage",
       "note": "commit 2a352bde: extracted anchor-lib.mjs + 8 mutation-proven tests; vitest 17/17, validate.sh --scripts EXIT=0"
-    },
-    {
-      "at": "2026-06-23T19:30:26.306Z",
-      "task": "witness-verifier-pure-logic-extraction-coverage",
-      "note": "commit 636f7298: extracted verify-lib.mjs + 9 mutation-proven tests + vitest harness; vitest 9/9, validate.sh --scripts EXIT=0. backlog seed"
     }
   ]
 }

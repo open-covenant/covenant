@@ -8,7 +8,7 @@ import { PositionsClient } from "./PositionsClient";
 export const metadata: Metadata = {
   title: "Positions: Covenant Stake",
   description:
-    "Manage your locked $CVNT positions, claim accrued SOL, and withdraw principal once the lock period elapses.",
+    "Manage your $CVNT positions, claim accrued SOL, and withdraw principal at any time as the program winds down.",
   alternates: { canonical: "/positions" },
   robots: { index: false, follow: false },
   openGraph: {
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
     url: "https://opencovenant.org/positions",
     title: "Positions: Covenant Stake",
     description:
-      "Manage your locked $CVNT positions, claim accrued SOL, and withdraw principal once the lock period elapses.",
+      "Manage your $CVNT positions, claim accrued SOL, and withdraw principal at any time as the program winds down.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
@@ -25,7 +25,7 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Positions: Covenant Stake",
     description:
-      "Manage your locked $CVNT positions, claim accrued SOL, and withdraw principal once the lock period elapses.",
+      "Manage your $CVNT positions, claim accrued SOL, and withdraw principal at any time as the program winds down.",
     images: "/twitter-image.jpg",
   },
 };

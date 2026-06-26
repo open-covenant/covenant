@@ -1165,6 +1165,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-acedata"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "covenant-mcp",
+ "covenant-x402",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-audit"
 version = "0.1.0"
 dependencies = [
@@ -1574,6 +1593,7 @@ dependencies = [
  "base64 0.22.1",
  "bs58",
  "covenant-a2a",
+ "covenant-acedata",
  "covenant-audit",
  "covenant-budget",
  "covenant-hyre",

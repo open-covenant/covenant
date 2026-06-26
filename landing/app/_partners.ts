@@ -63,12 +63,21 @@ export const PROTOCOLS: Integration[] = [
 // Named products that integrate with Covenant. `live` = shipped and running;
 // `building` = integration in active development, not yet on the main line.
 export const PARTNERS: Integration[] = [
+  // Live — shipped on the main line.
   {
     slug: "synapse",
     name: "Synapse Agent Protocol",
     blurb:
       "Covenant publishes signed audit-root attestations to Synapse on Solana for cross-party agent identity.",
     status: "live",
+  },
+  {
+    slug: "metaplex",
+    name: "Metaplex",
+    blurb:
+      "Agent audit-roots and provenance written into Metaplex Core asset data on Solana.",
+    status: "live",
+    href: "https://www.metaplex.com",
   },
   {
     slug: "hyre",
@@ -96,26 +105,98 @@ export const PARTNERS: Integration[] = [
     href: "https://github.com/NousResearch/hermes-agent",
   },
   {
+    slug: "hatcherlabs",
+    name: "HatcherLabs",
+    blurb:
+      "Covenant joins HatcherLabs' agent mesh as a local-first connector, running coding agents under sandbox-gated, capability-scoped permissions.",
+    status: "live",
+  },
+  {
+    slug: "zauth",
+    name: "Zauth",
+    blurb:
+      "Covenant queries Zauth's agent-attestation directory and runs one-shot RepoScan verification, billed over x402.",
+    status: "live",
+  },
+  {
+    slug: "sns",
+    name: "Solana Name Service",
+    blurb:
+      "Covenant agents resolve and verify .sol names through read-only Solana Name Service tools.",
+    status: "live",
+  },
+  {
     slug: "acedata",
     name: "Ace Data Cloud",
     blurb:
       "One capability-gated gateway to Ace Data Cloud's image, video, music, and search models, with provenance on every call.",
-    status: "building",
+    status: "live",
     href: "https://acedata.cloud",
   },
   {
-    slug: "metaplex",
-    name: "Metaplex",
+    slug: "xona",
+    name: "Xona Agent",
     blurb:
-      "Agent audit-roots and provenance written into Metaplex Core asset data on Solana.",
-    status: "building",
-    href: "https://www.metaplex.com",
+      "Xona Agent's creative generation endpoints reach agents as capability-scoped, x402-billed tools.",
+    status: "live",
+  },
+  {
+    slug: "wurk",
+    name: "Wurk",
+    blurb:
+      "Wurk's agent-to-human microjobs run as capability-scoped, x402-billed tools, with Covenant attesting the work.",
+    status: "live",
+  },
+  {
+    slug: "orbserv",
+    name: "Orbserv",
+    blurb:
+      "Covenant acts as the spend-authorization policy layer for Orbserv's agent wallets.",
+    status: "live",
   },
   {
     slug: "magicblock",
     name: "MagicBlock",
     blurb:
       "Agent resource metering on a MagicBlock ephemeral rollup, committed periodically back to Solana.",
+    status: "live",
+  },
+
+  // In development — active build on a feature line, not yet on the main line.
+  {
+    slug: "clawville",
+    name: "ClawVille",
+    blurb:
+      "Covenant verifies ClawVille's AI-to-AI bounties with capability-scoped grants, hash-chained action logs, and signed verdicts.",
+    status: "building",
+    href: "https://clawville.world",
+  },
+  {
+    slug: "zkmedusa",
+    name: "zkMedusa",
+    blurb:
+      "Covenant issues a reputation passport bound to its audit-derived reputation, and verifies external Medusa passports.",
+    status: "building",
+  },
+  {
+    slug: "syra",
+    name: "Syra",
+    blurb:
+      "Syra's market-intelligence endpoints (signal, news, sentiment, smart-money) reach agents as capability-scoped, x402-billed tools.",
+    status: "building",
+  },
+  {
+    slug: "earnfi",
+    name: "EarnFi",
+    blurb:
+      "EarnFi's human-task endpoints reach agents as capability-scoped, x402-billed tools for real human work.",
+    status: "building",
+  },
+  {
+    slug: "percolator",
+    name: "Percolator",
+    blurb:
+      "Covenant-governed keeper agents run Percolator's perpetuals liveness under stake-backed, slashable bonds.",
     status: "building",
   },
   {
@@ -126,18 +207,34 @@ export const PARTNERS: Integration[] = [
     status: "building",
     href: "https://github.com/Gitlawb",
   },
-  {
-    slug: "xona",
-    name: "Xona Agent",
-    blurb:
-      "Xona Agent's creative generation endpoints reach agents as capability-scoped, x402-billed tools.",
-    status: "building",
-  },
-  {
-    slug: "orbserv",
-    name: "Orbserv",
-    blurb:
-      "Covenant acts as the spend-authorization policy layer for Orbserv's agent wallets.",
-    status: "building",
-  },
 ];
+
+// Partner avatars (X profile images) committed at public/partners/<slug>.jpg.
+// Listed here so a mark only renders once its file actually exists; add a slug
+// when you drop a file in (or set `logo` on the entry directly to override).
+const LOGO_SLUGS = new Set<string>([
+  "solana",
+  "synapse",
+  "metaplex",
+  "hyre",
+  "fairscale",
+  "hermes",
+  "sns",
+  "magicblock",
+  "gitlawb",
+  "xona",
+  "wurk",
+  "acedata",
+  "hatcherlabs",
+  "zauth",
+  "clawville",
+  "orbserv",
+  "zkmedusa",
+  "syra",
+  "earnfi",
+  "percolator",
+]);
+
+export function logoFor(slug: string): string | undefined {
+  return LOGO_SLUGS.has(slug) ? `/partners/${slug}.jpg` : undefined;
+}

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 const DOCS_HOST = /^docs\./i;
+const STAKE_HOST = /^stake\./i;
 
 export function middleware(req: NextRequest) {
   const host = req.headers.get("host") ?? "";
@@ -20,6 +21,12 @@ export function middleware(req: NextRequest) {
     }
     const rewritten = url.clone();
     rewritten.pathname = path === "/" ? "/docs" : `/docs${path}`;
+    return NextResponse.rewrite(rewritten);
+  }
+
+  if (STAKE_HOST.test(host) && path === "/") {
+    const rewritten = url.clone();
+    rewritten.pathname = "/stake";
     return NextResponse.rewrite(rewritten);
   }
 

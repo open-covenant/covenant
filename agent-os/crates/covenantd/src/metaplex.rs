@@ -40,7 +40,10 @@ impl MetaplexState {
         if !self.config.writes_enabled() {
             return None;
         }
-        Some(Arc::new(SubprocessMetaplexSigner::from_config(&self.config)) as Arc<dyn MetaplexSigner>)
+        Some(
+            Arc::new(SubprocessMetaplexSigner::from_config(&self.config))
+                as Arc<dyn MetaplexSigner>,
+        )
     }
 }
 
@@ -57,8 +60,14 @@ pub struct SubprocessMetaplexSigner {
 impl SubprocessMetaplexSigner {
     pub fn from_config(config: &MetaplexConfig) -> Self {
         let mut env = vec![
-            ("COVENANT_METAPLEX_RPC_URL".to_string(), config.rpc_url.clone()),
-            ("COVENANT_METAPLEX_CLUSTER".to_string(), config.cluster.clone()),
+            (
+                "COVENANT_METAPLEX_RPC_URL".to_string(),
+                config.rpc_url.clone(),
+            ),
+            (
+                "COVENANT_METAPLEX_CLUSTER".to_string(),
+                config.cluster.clone(),
+            ),
         ];
         if !config.collection.is_empty() {
             env.push((
@@ -88,8 +97,7 @@ impl SubprocessMetaplexSigner {
 #[async_trait::async_trait]
 impl MetaplexSigner for SubprocessMetaplexSigner {
     async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String> {
-        let payload =
-            serde_json::to_vec(&request).map_err(|e| format!("encode request: {e}"))?;
+        let payload = serde_json::to_vec(&request).map_err(|e| format!("encode request: {e}"))?;
 
         let mut child = Command::new(&self.program)
             .env_clear()
@@ -164,7 +172,10 @@ mod tests {
             das_url: "https://das.example".into(),
             ..Default::default()
         });
-        assert!(state.signer().is_none(), "reads-only config exposes no signer");
+        assert!(
+            state.signer().is_none(),
+            "reads-only config exposes no signer"
+        );
     }
 
     #[tokio::test]

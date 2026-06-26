@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-26T12:20:56.354Z",
+  "updatedAt": "2026-06-26T12:41:00.160Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10916,
-    "tasks": 1284,
+    "events": 10917,
+    "tasks": 1285,
     "integrated": 1288
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1280,
     "proposed": 1,
-    "blocked": 3
+    "blocked": 3,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "unified-model-provider-fallback-router",
+    "state": "in_progress",
+    "since": "2026-06-26T12:40:40.081Z"
+  },
   "recent": [
     {
       "at": "2026-06-24T00:06:44.341Z",

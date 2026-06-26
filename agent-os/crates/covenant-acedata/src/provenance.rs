@@ -47,15 +47,31 @@ pub struct Provenance {
     pub cost: Option<Cost>,
 }
 
-/// The cost AceData reports for a billed call. `amount` is in
-/// `currency` units: `"credit"` for API-key/credit billing (apply a
-/// credit→USD rate at the ledger layer), or `"usdc"` for an x402
-/// pay-per-call, where the response also carries `settlement` (e.g.
-/// `"authorized"`) and the amount is the exact USDC charged.
+/// USD per Ace credit. AceData's best-tier (large-amount) credit unit price,
+/// and the fixed rate x402 settles at, so credit-billed and x402 costs land
+/// in the same unit. Source: platform.acedata.cloud/documents/x402-pricing.
+pub const CREDIT_USD_RATE: f64 = 0.095215;
+
+/// The cost AceData reports for a billed call. `amount` is in `currency`
+/// units: `"credit"` for API-key/credit billing, or `"usdc"` for an x402
+/// pay-per-call (where the response also carries `settlement`, e.g.
+/// `"authorized"`, and the amount is the exact USDC charged). Use [`Cost::usd`]
+/// to read both on the same scale.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Cost {
     pub amount: f64,
     pub currency: String,
+}
+
+impl Cost {
+    /// Cost in USD. `usdc` is already USD; `credit` converts at
+    /// [`CREDIT_USD_RATE`]. An unrecognized currency returns the raw amount.
+    pub fn usd(&self) -> f64 {
+        match self.currency.as_str() {
+            "credit" => self.amount * CREDIT_USD_RATE,
+            _ => self.amount,
+        }
+    }
 }
 
 /// Lowercase hex of a SHA-256 digest.
@@ -224,5 +240,21 @@ mod tests {
         let c = p4.cost.unwrap();
         assert_eq!(c.currency, "usdc");
         assert!((c.amount - 0.000952).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cost_usd_converts_credits_and_passes_usdc_through() {
+        // 0.01 credit serp call → the doc's 952 atomic ($0.000952).
+        let credit = Cost {
+            amount: 0.01,
+            currency: "credit".into(),
+        };
+        assert!((credit.usd() - 0.00095215).abs() < 1e-9);
+        // x402 usdc is already USD.
+        let usdc = Cost {
+            amount: 0.000952,
+            currency: "usdc".into(),
+        };
+        assert_eq!(usdc.usd(), 0.000952);
     }
 }

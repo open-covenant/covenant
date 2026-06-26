@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use covenant_a2a::{A2AEnvelopeError, SignedA2ATask};
 use covenant_audit::{AuditError, AuditEvent, AuditKind};
@@ -33,7 +34,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-use crate::{A2aScopeCheck, Server};
+use crate::{A2aScopeCheck, Response, Server};
 
 /// How far an envelope's signed `issued_at_ms` may trail "now" before it is
 /// refused as stale. Bounds the replay window: a captured envelope is only
@@ -48,6 +49,25 @@ pub const CROSS_HOST_MAX_AGE_MS: u64 = 5 * 60 * 1000;
 /// ahead; an envelope dated far in the future would otherwise dodge the staleness
 /// floor indefinitely.
 pub const CROSS_HOST_MAX_SKEW_MS: u64 = 60 * 1000;
+
+/// Default ceiling on one outbound cross-host delivery, overridable via
+/// `COVENANT_A2A_DELIVER_TIMEOUT_MS`. A delivery is a single POST the remote
+/// answers as soon as its admission pipeline (open → gates → enqueue) runs, so
+/// seconds are ample; the bound exists so an unresponsive or silent remote
+/// cannot stall the sender's dispatch indefinitely.
+const A2A_DELIVER_TIMEOUT_MS_DEFAULT: u64 = 10_000;
+
+/// Resolve the delivery timeout from a raw env value, falling back to the
+/// default on absence, a non-numeric value, or zero (which would disable the
+/// bound). Pure over its input so the parse is unit-testable without mutating
+/// process-global env.
+fn deliver_timeout_from(raw: Option<&str>) -> Duration {
+    let ms = raw
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(A2A_DELIVER_TIMEOUT_MS_DEFAULT);
+    Duration::from_millis(ms)
+}
 
 /// The payload-identity tuple a cross-host envelope is deduplicated on.
 ///
@@ -468,6 +488,228 @@ impl Server {
             self.cross_host_event(now_ms, sender_pubkey_b58, recipient_display, outcome, reason);
         self.record_daemon_event_required(event).await
     }
+
+    /// Deliver a cross-host A2A task to a known-host peer's inbound route, or
+    /// surface why it could not be. The caller ([`Server::send_a2a_task`]) has
+    /// already classified the recipient as remote by resolving its host in the
+    /// known-hosts registry and authorized the send through the `a2a.send` gate;
+    /// this method owns the identity binding, sealing, the bounded POST, and the
+    /// outcome→`Response` mapping. It opens an outbound connection only to the
+    /// already-resolved `endpoint.url` and never changes the daemon's own bind.
+    pub(crate) async fn deliver_cross_host(
+        &self,
+        task: covenant_a2a::A2ATask,
+        endpoint: covenant_peer_auth::PeerEndpoint,
+    ) -> Response {
+        let timeout = deliver_timeout_from(
+            std::env::var("COVENANT_A2A_DELIVER_TIMEOUT_MS")
+                .ok()
+                .as_deref(),
+        );
+        self.deliver_cross_host_with_timeout(task, endpoint, timeout)
+            .await
+    }
+
+    /// The delivery body with an explicit timeout, so a test can bound a stalled
+    /// remote without waiting the production default.
+    pub(crate) async fn deliver_cross_host_with_timeout(
+        &self,
+        task: covenant_a2a::A2ATask,
+        endpoint: covenant_peer_auth::PeerEndpoint,
+        timeout: Duration,
+    ) -> Response {
+        let now_ms = crate::epoch_ms();
+        let recipient_b58 = task.recipient.pubkey_base58();
+        let recipient_display = task.recipient.display.clone();
+
+        // The daemon seals every cross-host envelope under its OWN identity, so
+        // the wire sender is provably this daemon. A task whose logical sender is
+        // a different local peer cannot be faithfully sealed — signing it as
+        // ourselves would attribute that peer's task to this daemon on the
+        // remote's feed. Refuse rather than vouch. (`send_a2a_task` binds
+        // `task.sender` to the authenticated peer, so in v0 this also means only
+        // the daemon's own identity may originate a cross-host send.)
+        if task.sender.pubkey != self.identity.agent_id().pubkey {
+            self.audit_cross_host_delivery(
+                now_ms,
+                &recipient_b58,
+                &recipient_display,
+                "refused",
+                "sender_not_self",
+            )
+            .await;
+            return Response::Error {
+                message: format!(
+                    "a2a send to {recipient_display} refused: cross-host delivery must \
+                     originate from this daemon's own identity"
+                ),
+            };
+        }
+
+        // Identity binding: the addressed recipient key MUST be the pubkey the
+        // known-hosts registry binds to its host — the `verify_remote_identity`
+        // binding, checked against the endpoint already resolved for routing. A
+        // mismatch is a wrong-identity delivery: refuse before a sealed envelope
+        // ever reaches the wire, never trusting an endpoint that answers at the
+        // right url under a key the operator did not bind to this recipient.
+        if endpoint.pubkey != task.recipient.pubkey {
+            self.audit_cross_host_delivery(
+                now_ms,
+                &recipient_b58,
+                &recipient_display,
+                "refused",
+                "identity_mismatch",
+            )
+            .await;
+            return Response::Error {
+                message: format!(
+                    "a2a send to {recipient_display} refused: the recipient's key does \
+                     not match the known-hosts binding for its host"
+                ),
+            };
+        }
+
+        // Build the bounded client first: if it cannot be constructed (a TLS
+        // backend init fault — an operator/environment condition, never
+        // remote-induced) treat the delivery as unreachable rather than fall back
+        // to an UNTIMED client that could hang dispatch. The timeout bound must
+        // hold unconditionally.
+        let client = match reqwest::Client::builder().timeout(timeout).build() {
+            Ok(client) => client,
+            Err(_) => {
+                self.audit_cross_host_delivery(
+                    now_ms,
+                    &recipient_b58,
+                    &recipient_display,
+                    "unreachable",
+                    "transport",
+                )
+                .await;
+                return Response::Error {
+                    message: format!(
+                        "a2a send to {recipient_display} failed: the remote host was unreachable"
+                    ),
+                };
+            }
+        };
+
+        let task_id = task.id;
+        let envelope = SignedA2ATask::seal(&task, now_ms, &self.identity);
+        let url = format!("{}/a2a/peer-tasks", endpoint.url);
+
+        match client.post(&url).json(&envelope).send().await {
+            Ok(resp) if resp.status() == reqwest::StatusCode::ACCEPTED => {
+                self.audit_cross_host_delivery(
+                    now_ms,
+                    &recipient_b58,
+                    &recipient_display,
+                    "delivered",
+                    "",
+                )
+                .await;
+                Response::A2ATaskQueued { task_id }
+            }
+            Ok(resp) if resp.status() == reqwest::StatusCode::FORBIDDEN => {
+                // The remote ran the admission pipeline and refused. Its coarse
+                // 403 hides the stage from us exactly as it hides it from a
+                // prober; the sender only learns the delivery did not land.
+                self.audit_cross_host_delivery(
+                    now_ms,
+                    &recipient_b58,
+                    &recipient_display,
+                    "refused",
+                    "remote_refused",
+                )
+                .await;
+                Response::Error {
+                    message: format!(
+                        "a2a send to {recipient_display} was refused by the remote host"
+                    ),
+                }
+            }
+            Ok(_) => {
+                self.audit_cross_host_delivery(
+                    now_ms,
+                    &recipient_b58,
+                    &recipient_display,
+                    "refused",
+                    "remote_error",
+                )
+                .await;
+                Response::Error {
+                    message: format!(
+                        "a2a send to {recipient_display} failed: the remote host returned \
+                         an unexpected status"
+                    ),
+                }
+            }
+            Err(e) => {
+                // A timeout (silent/slow remote) and a connection failure both
+                // mean the task did not reach the mailbox; the bounded client
+                // guarantees this returns rather than hangs.
+                let reason = if e.is_timeout() { "timeout" } else { "transport" };
+                self.audit_cross_host_delivery(
+                    now_ms,
+                    &recipient_b58,
+                    &recipient_display,
+                    "unreachable",
+                    reason,
+                )
+                .await;
+                Response::Error {
+                    message: format!(
+                        "a2a send to {recipient_display} failed: the remote host was unreachable"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Build a sender-side cross-host delivery audit event. Daemon-authored
+    /// (`issuer = self.identity`, the cross-host sender); the remote it addressed
+    /// lives in `recipient_pubkey_b58`/`recipient_display`.
+    fn cross_host_delivery_event(
+        &self,
+        now_ms: u64,
+        recipient_pubkey_b58: &str,
+        recipient_display: &str,
+        outcome: &str,
+        reason: &str,
+    ) -> AuditEvent {
+        AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: now_ms,
+            issuer: self.identity.agent_id(),
+            kind: AuditKind::CrossHostA2ADelivery {
+                recipient_pubkey_b58: recipient_pubkey_b58.to_string(),
+                recipient_display: recipient_display.to_string(),
+                outcome: outcome.to_string(),
+                reason: reason.to_string(),
+            },
+        }
+    }
+
+    /// Record a cross-host delivery outcome best-effort. A delivered task is
+    /// already durable on the receiver, so a lost row must not invert a real
+    /// delivery into a reported failure; the receiver's fail-closed admission row
+    /// is the accountability anchor.
+    async fn audit_cross_host_delivery(
+        &self,
+        now_ms: u64,
+        recipient_pubkey_b58: &str,
+        recipient_display: &str,
+        outcome: &str,
+        reason: &str,
+    ) {
+        let event = self.cross_host_delivery_event(
+            now_ms,
+            recipient_pubkey_b58,
+            recipient_display,
+            outcome,
+            reason,
+        );
+        self.record_daemon_event(event).await;
+    }
 }
 
 #[cfg(test)]
@@ -480,6 +722,22 @@ mod tests {
             task_id: Uuid::from_u128(task_id),
             issued_at_ms,
         }
+    }
+
+    #[test]
+    fn deliver_timeout_falls_back_on_absent_zero_or_garbage() {
+        let default = Duration::from_millis(A2A_DELIVER_TIMEOUT_MS_DEFAULT);
+        // A present positive value wins (surrounding whitespace tolerated).
+        assert_eq!(deliver_timeout_from(Some("250")), Duration::from_millis(250));
+        assert_eq!(
+            deliver_timeout_from(Some("  500  ")),
+            Duration::from_millis(500)
+        );
+        // Absent, zero, and non-numeric all fall back to the bounded default — a
+        // zero must never disable the timeout into an unbounded wait.
+        assert_eq!(deliver_timeout_from(None), default);
+        assert_eq!(deliver_timeout_from(Some("0")), default);
+        assert_eq!(deliver_timeout_from(Some("soon")), default);
     }
 
     #[tokio::test]

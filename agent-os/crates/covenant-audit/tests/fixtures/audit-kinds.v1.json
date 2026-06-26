@@ -200,6 +200,11 @@
       "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000028\",\"timestamp_ms\":1700000000040,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"cross_host_a2_a_admission\",\"sender_pubkey_b58\":\"3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ\",\"recipient_display\":\"bob@host2\",\"outcome\":\"rejected\",\"reason\":\"unknown_principal\"}}",
       "event_hash_hex": "78d8d08a02ecae8bb4b242e8884fd739ecf8771051b6e62cf70ecb8582b7e503",
       "name": "cross_host_a2_a_admission"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000029\",\"timestamp_ms\":1700000000041,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"cross_host_a2_a_delivery\",\"recipient_pubkey_b58\":\"3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ\",\"recipient_display\":\"bob@host2\",\"outcome\":\"delivered\",\"reason\":\"\"}}",
+      "event_hash_hex": "506ebba16f2ea8ce96ab08579ca5f87e23476e4d74b3427bfcf2812defedddf5",
+      "name": "cross_host_a2_a_delivery"
     }
   ]
 }

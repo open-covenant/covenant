@@ -2743,25 +2743,21 @@ impl Server {
                 };
             }
         }
-        // Cross-host routing (slice 4a): once the send is authorized, a
-        // recipient on a configured remote host must not be queued to the LOCAL
-        // mailbox. Known-hosts membership is the sole definition of "remote" — a
-        // host absent from the registry is local and falls through unchanged.
-        // Placed after the capability gate so an unauthorized caller learns
-        // nothing about the registry, and before the recv-admission gate so a
-        // remote recipient is never evaluated against — and never probes —
-        // local recv grants it can never hold. The authenticated cross-host
-        // transport is a later slice; until it lands, refuse rather than
-        // misdeliver. (A malformed recipient display cannot reach here: AgentId
-        // deserialization rejects it via validate_agent_id_display.)
-        if self.known_hosts().resolve_agent(&task.recipient).is_ok() {
-            return Response::Error {
-                message: format!(
-                    "a2a send to {} targets a configured remote host; \
-                     cross-host transport is not yet available",
-                    task.recipient.display
-                ),
-            };
+        // Cross-host routing (slice 4b-3): once the send is authorized, a
+        // recipient on a configured remote host is delivered over the network,
+        // not queued to the LOCAL mailbox. Known-hosts membership is the sole
+        // definition of "remote" — a host absent from the registry is local and
+        // falls through unchanged. Placed after the capability gate so an
+        // unauthorized caller learns nothing about the registry, and before the
+        // recv-admission gate so a remote recipient is never evaluated against —
+        // and never probes — local recv grants it can never hold. `deliver_cross_host`
+        // owns the identity binding, sealing under this daemon's identity, the
+        // bounded POST, and the outcome mapping. (A malformed recipient display
+        // cannot reach here: AgentId deserialization rejects it via
+        // validate_agent_id_display.)
+        if let Ok(endpoint) = self.known_hosts().resolve_agent(&task.recipient) {
+            let endpoint = endpoint.clone();
+            return self.deliver_cross_host(task, endpoint).await;
         }
         // Recipient admission gate: when sender ≠ recipient (cross-peer
         // send), the recipient peer must have granted `a2a.recv.<sender>`
@@ -48998,14 +48994,114 @@ required = {caps:?}
         );
     }
 
+    /// A cross-host task whose sender is this daemon (the v0 cross-host
+    /// principal) and whose recipient carries `pubkey` — set equal to the
+    /// known-hosts binding to clear the identity check, or different to trip it.
+    fn remote_a2a_task(
+        s: &Server,
+        recipient_display: &str,
+        pubkey: [u8; 32],
+    ) -> covenant_a2a::A2ATask {
+        covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: s.identity.agent_id(),
+            recipient: AgentId::new(recipient_display, pubkey),
+            intent_text: "ship the receipt batch".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        }
+    }
+
+    async fn cross_host_delivery_outcomes(s: &Server) -> Vec<(String, String)> {
+        s.audit
+            .recent(usize::MAX)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| match e.kind {
+                AuditKind::CrossHostA2ADelivery {
+                    outcome, reason, ..
+                } => Some((outcome, reason)),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[tokio::test]
-    async fn a2a_send_to_configured_remote_host_is_refused_not_queued_locally() {
-        // A recipient on a host in the known-hosts registry is REMOTE; until
-        // cross-host transport lands it must be refused, never queued to the
-        // LOCAL mailbox — the misdelivery the registry exists to prevent. The
-        // refusal stands even with the a2a.send capability granted.
-        let s = server_with(vec![], "").with_known_hosts(known_hosts_with_remote());
-        let task = a2a_task_to(&s, "bob@remote");
+    async fn a2a_send_to_remote_host_delivers_over_http_when_the_remote_admits() {
+        // Slice-4b-3 happy path: an authorized send to a known-host recipient is
+        // sealed and POSTed to the remote's /a2a/peer-tasks; a 202 ack maps to
+        // A2ATaskQueued and nothing is enqueued on the LOCAL mailbox.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(
+                ResponseTemplate::new(202).set_body_json(serde_json::json!({ "kind": "accepted" })),
+            )
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let s = server_with(vec![], "").with_known_hosts(KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: remote.uri(),
+                pubkey: key,
+            },
+        ));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.bob@remote".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::A2ATaskQueued { .. } => {}
+            other => panic!("a delivered cross-host send must report queued: {other:?}"),
+        }
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a delivered cross-host task must never enqueue on the local mailbox"
+        );
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("delivered".to_string(), String::new())),
+            "a delivered cross-host send must leave a 'delivered' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_remote_refusal_surfaces_as_error_never_as_queued() {
+        // A remote that runs its admission pipeline and refuses (403) reaches the
+        // caller as a distinct Response::Error plus a 'remote_refused' audit row —
+        // never reported as a successful queue, and never enqueued locally.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_json(serde_json::json!({ "kind": "rejected" })),
+            )
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let s = server_with(vec![], "").with_known_hosts(KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: remote.uri(),
+                pubkey: key,
+            },
+        ));
+        let task = remote_a2a_task(&s, "bob@remote", key);
         s.op_respond(Request::GrantCapability {
             action: "a2a.send.bob@remote".into(),
             scope: None,
@@ -49014,15 +49110,148 @@ required = {caps:?}
         .await;
         match s.op_respond(Request::SendA2ATask { task }).await {
             Response::Error { message } => {
-                assert!(message.contains("remote host"), "got: {message}");
-                assert!(message.contains("not yet available"), "got: {message}");
+                assert!(message.contains("refused by the remote"), "got: {message}");
             }
-            other => panic!("a remote recipient must be refused: {other:?}"),
+            other => panic!("a remote refusal must surface as an error, not a queue: {other:?}"),
         }
-        let drained = s.op_respond(Request::TryRecvA2ATask).await;
         assert!(
-            matches!(drained, Response::A2ATaskOpt { task: None }),
-            "a remote recipient must never enqueue locally: {drained:?}"
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a remotely-refused task must never enqueue locally"
+        );
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("refused".to_string(), "remote_refused".to_string())),
+            "a remote refusal must leave a 'remote_refused' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_remote_with_mismatched_key_is_refused_before_any_post() {
+        // MITM guard: a recipient whose key is NOT the known-hosts binding for its
+        // host is refused by the identity check before a sealed envelope reaches
+        // the wire — the mock's expect(0) verifies on drop that no POST was made.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&remote)
+            .await;
+        let s = server_with(vec![], "").with_known_hosts(KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: remote.uri(),
+                pubkey: [1u8; 32],
+            },
+        ));
+        // Recipient key [2u8; 32] differs from the registry binding [1u8; 32].
+        let task = remote_a2a_task(&s, "bob@remote", [2u8; 32]);
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.bob@remote".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("does not match the known-hosts binding"),
+                    "got: {message}"
+                );
+            }
+            other => panic!("a key mismatch must be refused, not delivered: {other:?}"),
+        }
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("refused".to_string(), "identity_mismatch".to_string())),
+            "a key mismatch must leave an 'identity_mismatch' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_unreachable_remote_returns_a_bounded_error() {
+        // Dead-remote guard: a remote that never answers must not hang dispatch.
+        // A tiny explicit timeout against a stub that delays far longer proves the
+        // bound fires and the outcome is 'unreachable'/'timeout'.
+        use std::time::Duration;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(ResponseTemplate::new(202).set_delay(Duration::from_secs(30)))
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let endpoint = covenant_peer_auth::PeerEndpoint {
+            url: remote.uri(),
+            pubkey: key,
+        };
+        let s = server_with(vec![], "")
+            .with_known_hosts(KnownHosts::new().with_host("remote", endpoint.clone()));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        match s
+            .deliver_cross_host_with_timeout(task, endpoint, Duration::from_millis(150))
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("unreachable"), "got: {message}");
+            }
+            other => panic!("an unreachable remote must return a bounded error: {other:?}"),
+        }
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("unreachable".to_string(), "timeout".to_string())),
+            "a timed-out delivery must leave an 'unreachable'/'timeout' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_cross_host_refuses_a_sender_that_is_not_this_daemon() {
+        // The daemon seals cross-host envelopes under its own identity, so it must
+        // not vouch-seal a task whose sender is a different local peer. Such a task
+        // is refused before any POST (expect(0) verifies no envelope was sent).
+        use std::time::Duration;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let endpoint = covenant_peer_auth::PeerEndpoint {
+            url: remote.uri(),
+            pubkey: key,
+        };
+        let s = server_with(vec![], "")
+            .with_known_hosts(KnownHosts::new().with_host("remote", endpoint.clone()));
+        let mut task = remote_a2a_task(&s, "bob@remote", key);
+        task.sender = AgentId::new("someone@local", [8u8; 32]);
+        match s
+            .deliver_cross_host_with_timeout(task, endpoint, Duration::from_millis(150))
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("own identity"), "got: {message}");
+            }
+            other => panic!("a non-daemon sender must be refused, not vouch-sealed: {other:?}"),
+        }
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("refused".to_string(), "sender_not_self".to_string())),
+            "a non-daemon sender must leave a 'sender_not_self' audit row"
         );
     }
 

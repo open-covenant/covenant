@@ -305,6 +305,26 @@ pub enum AuditKind {
         outcome: String,
         reason: String,
     },
+    /// Logged by the *sending* daemon for every cross-host A2A delivery attempt
+    /// (multi-host slice 4b-3): this daemon seals a local task under its own
+    /// identity and POSTs it to a known-host peer's inbound route. The mirror of
+    /// [`CrossHostA2AAdmission`] from the sender's side — daemon-authored
+    /// (`issuer = self.identity`, the cross-host sender), with the remote it
+    /// addressed in `recipient_pubkey_b58`/`recipient_display`. `outcome` is
+    /// `"delivered"` (the remote acknowledged admission), `"refused"` (rejected
+    /// before the wire by the identity binding, or refused by the remote), or
+    /// `"unreachable"` (the remote timed out or the connection failed); `reason`
+    /// carries the specific stage (`"identity_mismatch"`, `"sender_not_self"`,
+    /// `"remote_refused"`, `"remote_error"`, `"timeout"`, `"transport"`). This
+    /// row is best-effort: a delivered task is already durable on the receiver,
+    /// so a lost sender-side row must not invert a real delivery into a failure —
+    /// the receiver's fail-closed admission row is the accountability anchor.
+    CrossHostA2ADelivery {
+        recipient_pubkey_b58: String,
+        recipient_display: String,
+        outcome: String,
+        reason: String,
+    },
     /// Logged when an operator completes a memory repair request. The
     /// full before/after record shape is returned to the caller through
     /// the repair response; the audit row keeps the durable who/what/why

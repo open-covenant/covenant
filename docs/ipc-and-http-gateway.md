@@ -80,6 +80,21 @@ Two accountability/authorization properties are enforced in the admission core a
 
 The daemon stays loopback-bound; reaching a remote sender requires an operator-gated bind change that is out of scope here. Per-route rate-limiting is deferred to the ingress/reverse-proxy layer that terminates external connections rather than an in-process limiter (which, on loopback, would key on the proxy socket and be ineffective); the residual response-timing side-channel is tracked for the bind-change slice.
 
+## Cross-host A2A Delivery
+
+`POST /a2a/peer-tasks` (above) is the *receiving* daemon's surface; the *sending* daemon reaches it from `Server::send_a2a_task` (multi-host slice 4b-3). Once an A2A send clears the `a2a.send` capability gate, the recipient's host is resolved in the known-hosts registry: a host absent from the registry is local and queues to the local mailbox unchanged, while a host present in it is **remote** and is delivered over the network by `Server::deliver_cross_host` rather than queued locally. That check sits after the capability gate (an unauthorized caller learns nothing about registry membership) and before the recv-admission gate (a remote recipient is never evaluated against local recv grants it cannot hold).
+
+Delivery is daemon-to-daemon. The sending daemon seals the task into a `SignedA2ATask` (slice 4b-1) under **its own** ed25519 identity, so the wire sender is provably this daemon — the principal the receiver's known-hosts registry binds to this host. A task whose logical sender is a different local peer is refused rather than vouch-sealed (`sender_not_self`), since signing it as the daemon would misattribute it on the remote's feed; in v0 a cross-host send therefore originates from the daemon's own identity. Before sealing, the recipient's key is checked byte-exact against the known-hosts binding for its host (the `verify_remote_identity` binding, against the endpoint already resolved for routing): a recipient key that is not the bound identity is refused (`identity_mismatch`) before any envelope reaches the wire, so the daemon never delivers to an endpoint answering under a key the operator did not bind.
+
+The sealed envelope is POSTed to `<endpoint.url>/a2a/peer-tasks` with a per-call client bounded by a request timeout, so a silent or dead remote cannot stall dispatch. Outcomes map to a `Response` and a best-effort `AuditKind::CrossHostA2ADelivery` row (issuer = the sending daemon):
+
+- **202** → `Response::A2ATaskQueued` (the remote acknowledged admission), audit `outcome="delivered"`. The task is on the remote mailbox, never the local one.
+- **403** → `Response::Error` ("refused by the remote host"), audit `outcome="refused", reason="remote_refused"` — a remote rejection is surfaced as a distinct error, never reported as a successful queue.
+- any other status → `Response::Error`, audit `reason="remote_error"`.
+- timeout or connection failure → `Response::Error` ("unreachable"), audit `outcome="unreachable", reason="timeout"|"transport"`.
+
+The delivery row is best-effort, unlike the receiver's fail-closed admission row: a delivered task is already durable on the receiver, so a lost sender-side row must not invert a real delivery into a reported failure — the receiver's admission row is the accountability anchor. The timeout defaults to 10s, overridable via `COVENANT_A2A_DELIVER_TIMEOUT_MS` (a zero or non-numeric value falls back to the default rather than disabling the bound). The daemon opens an outbound connection only to a known-host endpoint and never changes its own local bind; reaching a non-loopback remote is an operator-gated bind change out of scope here.
+
 ## Chain Transaction Envelopes
 
 The operator-keypair-signed chain verbs (`covenant chain register-agent`, `covenant chain stake`, `covenant chain buy-credits`) emit two stable JSON envelopes when invoked with `--json`. Both envelopes share a transport-level core and differ in `kind` plus a per-state field:
@@ -279,7 +294,7 @@ Because the trace is published live with no backfill, a client follows a specifi
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, see `main.rs:3710`). Pinned at the type level by the schema test (`main.rs:7365-7368`) — JSON consumers must never receive a string here.
 - `capabilities` (array of `SignedCapability`): the filtered live capabilities. Each element has shape `{capability: Capability, signature: <base58>}` where `Capability` is defined at `agent-os/crates/covenant-types/src/lib.rs:224` (fields: `subject`, `action`, `scope`, `granted_by`, `expires_at`) and `SignedCapability` is defined at `agent-os/crates/covenant-permissions/src/lib.rs:58`. The `signature` field is the base58 encoding of the 64-byte ed25519 signature (per the `sig_b58` serde module at `lib.rs:64-84`), never the raw byte array. Pinned as an array by `main.rs:7369-7372` — never null or a string.
 
-The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:14958-14974`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
+The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:14954-14970`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:7348` (`capability_list_json_pins_top_level_schema`), which exercises both a populated single-capability case and an empty list.
 
@@ -659,7 +674,7 @@ Top-level keys are pinned by three tests at `agent-os/crates/covenant/src/main.r
 
 The envelope source-of-truth lives at `intents_resume_ok_json` (`main.rs:6053`) and `intents_resume_error_json` (`main.rs:6073`), with the slug classifier at `intents_resume_error_code` (`main.rs:6036`). The CLI verb is wired at `main.rs:5014-5124`; without `--json`, the success branch prints the result `text` at `main.rs:4407` followed by an optional `sources:` block, and the error branches bail with the human-readable diagnostic — there is no envelope rendering, so JSON consumers must use `--json` to get the kind-discriminated envelope.
 
-`covenant settlement backfill-receipts [--dry-run] [--json]` emits a versioned-schema envelope describing the legacy settlement-receipt repair pass. **Schema-suffix convention**, not the unversioned `kind` convention every other envelope in this section uses — consumers route on `schema` rather than `kind`. The asymmetry is consistent with the section preamble (line 111): post-`covenant.<area>.<verb>.v<n>` envelopes land with the suffix; only the older read-side envelopes carry the bare `kind` literal.
+`covenant settlement backfill-receipts [--dry-run] [--json]` emits a versioned-schema envelope describing the legacy settlement-receipt repair pass. **Schema-suffix convention**, not the unversioned `kind` convention every other envelope in this section uses — consumers route on `schema` rather than `kind`. The asymmetry is consistent with the section preamble (line 126): post-`covenant.<area>.<verb>.v<n>` envelopes land with the suffix; only the older read-side envelopes carry the bare `kind` literal.
 
 Envelope shape:
 

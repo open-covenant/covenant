@@ -106,6 +106,7 @@ Covenant includes:
 - MCP adapter, native tool integration, and A2A mailbox primitives.
 - Budget ledger primitives with daemon-backed pause checkpoint storage for budget exhaustion, shutdown drains, and single-use resume handoff.
 - Local settlement receipts for resource accounting.
+- Agent-to-service payments over HTTP 402 (x402): the daemon can pay for metered resources outbound, and Covenant operates live x402 seller, facilitator, and escrow services that settle in USDC on Solana (paid Covenant-Verified attestations, on-chain identity passports, and reputation reads).
 - Commit-scoped provenance envelopes that bind task records, changed Git blobs, transition events, and validation evidence.
 - Unsigned or locally signed audit-root attestations for local integrity reports, with release-target binding to release-subject and release-scope manifests so a single attestation covers the audit log, the release artifact set, and the in-scope task set.
 - Opt-in live tests for daemon, CLI, runtime, and selected backend boundaries.

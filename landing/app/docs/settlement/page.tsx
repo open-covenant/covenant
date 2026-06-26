@@ -179,6 +179,19 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
 {"schema":"covenant.settlement.backfill.v1","row_count":12,"rollback_path":null,"dry_run":true}`}</code>
       </pre>
 
+      <h2>x402 payment rail</h2>
+      <p>
+        Distinct from the internal receipt flush above, the agent-to-service
+        payment rail over HTTP 402 (x402) is live. The daemon can pay for
+        metered x402 resources outbound, and Covenant operates deployed x402
+        seller, facilitator, and escrow services that settle in USDC on
+        Solana &mdash; selling Covenant-Verified attestations, on-chain
+        identity passports, and reputation reads, with the seller&rsquo;s
+        signing key published at <code>/.well-known/x402</code>. This is a
+        separate concern from anchoring internal resource receipts: the
+        payment rail being live does not make the receipt flush production.
+      </p>
+
       <h2>Release</h2>
       <p>
         Local receipts and recent-receipt reads are implemented. On-chain

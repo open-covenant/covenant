@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-26T14:22:27.907Z",
+  "updatedAt": "2026-06-26T14:42:31.585Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10924,
-    "tasks": 1286,
-    "integrated": 1289
+    "events": 10931,
+    "tasks": 1288,
+    "integrated": 1290
   },
   "throughput": {
-    "last24h": 1,
+    "last24h": 2,
     "last7d": 116,
     "velocity": 16.6
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-26",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-26",
-      "total": 1289
+      "total": 1290
     }
   ],
   "states": {
-    "integrated": 1281,
-    "proposed": 1,
-    "blocked": 3,
-    "in_progress": 1
+    "integrated": 1282,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multi-host-peer-endpoint-resolution",
-    "state": "in_progress",
-    "since": "2026-06-26T13:23:11.475Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-26T14:33:01.051Z",
+      "task": "multi-host-peer-endpoint-resolution",
+      "note": "integrated at e76ea99a (peer-auth lib.rs + README metrics; autonomy records gitignored). Slice 1 of multi-host-networking complete: KnownHos"
+    },
     {
       "at": "2026-06-26T13:18:40.947Z",
       "task": "unified-model-provider-fallback-router",
@@ -315,11 +315,6 @@
       "at": "2026-06-23T19:08:21.907Z",
       "task": "fairscale-bridge-resolve-cursor-coverage",
       "note": "coverage slice integrated; commit pending"
-    },
-    {
-      "at": "2026-06-23T19:02:23.090Z",
-      "task": "fairscale-bridge-daemon-client-retry-policy-coverage",
-      "note": "test-only coverage slice integrated; commit pending"
     }
   ]
 }

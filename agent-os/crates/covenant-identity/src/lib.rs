@@ -181,6 +181,18 @@ pub fn verify_with_pubkey(
     Ok(())
 }
 
+/// Verify a detached signature carried as raw bytes, so callers holding a
+/// 64-byte signature off the wire need not name `ed25519_dalek::Signature`.
+/// The byte array is the fixed 64-byte ed25519 form; length is enforced by the
+/// `&[u8; 32]`/`&[u8; 64]` types at the call site, not here.
+pub fn verify_with_pubkey_bytes(
+    pubkey: [u8; 32],
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Result<(), IdentityError> {
+    verify_with_pubkey(pubkey, message, &Signature::from_bytes(signature))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +211,21 @@ mod tests {
         let id = LocalIdentity::generate("user@local");
         let sig = id.sign(b"original");
         assert!(verify_with_pubkey(id.pubkey_bytes(), b"tampered", &sig).is_err());
+    }
+
+    #[test]
+    fn verify_with_pubkey_bytes_accepts_a_faithful_signature_and_rejects_a_tampered_one() {
+        let id = LocalIdentity::generate("user@local");
+        let msg = b"covenant cross-host envelope";
+        let sig = id.sign(msg).to_bytes();
+        verify_with_pubkey_bytes(id.pubkey_bytes(), msg, &sig)
+            .expect("a faithful 64-byte signature must verify");
+        let mut tampered = sig;
+        tampered[0] ^= 0xff;
+        assert!(
+            verify_with_pubkey_bytes(id.pubkey_bytes(), msg, &tampered).is_err(),
+            "a tampered signature must not verify through the bytes helper"
+        );
     }
 
     #[test]

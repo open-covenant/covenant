@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+covenant-identity = { path = "../covenant-identity" }
 covenant-mcp = { path = "../covenant-mcp" }
 covenant-types = { path = "../covenant-types" }
 parking_lot = { workspace = true }

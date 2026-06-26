@@ -37,6 +37,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 use uuid::Uuid;
 
+mod signed;
+pub use signed::{A2AEnvelopeError, SignedA2ATask};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum A2ATaskStatus {

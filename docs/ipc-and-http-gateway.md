@@ -454,20 +454,20 @@ The envelope source-of-truth lives at `memory_read_json` in `agent-os/crates/cov
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, per `main.rs:4496`). Pinned as u64 by the schema test (`main.rs:8850-8853`).
 - `min_lease_age_ms` (u64 or null): the threshold echoed from `--min-lease-age-ms`, or `null` when the flag was omitted. Always emitted (as `null` when inactive) — never omitted from the envelope. Pinned as u64-or-null by the schema test (`main.rs:8854-8857`).
 - `deadline_within_ms` (u64 or null): the threshold echoed from `--deadline-within-ms`, or `null` when the flag was omitted. Same always-emitted-as-null contract as `min_lease_age_ms`. Pinned as u64-or-null by the schema test (`main.rs:8858-8861`).
-- `state_filter` (string or null): the `A2ATaskQueueState` slug echoed from `--state` — exactly `"queued"` or `"in_flight"` (snake_case, per `A2ATaskQueueState`'s `#[serde(rename_all = "snake_case")]` at `covenant-a2a/src/lib.rs:124-129`), or `null` when the flag was omitted. Pinned as string-or-null by the schema test (`main.rs:8862-8865`) — never an integer or array. Consumers must route on the lowercase wire form, **not** the Rust TitleCase names (`"Queued"`, `"InFlight"`).
+- `state_filter` (string or null): the `A2ATaskQueueState` slug echoed from `--state` — exactly `"queued"` or `"in_flight"` (snake_case, per `A2ATaskQueueState`'s `#[serde(rename_all = "snake_case")]` at `covenant-a2a/src/lib.rs:127-132`), or `null` when the flag was omitted. Pinned as string-or-null by the schema test (`main.rs:8862-8865`) — never an integer or array. Consumers must route on the lowercase wire form, **not** the Rust TitleCase names (`"Queued"`, `"InFlight"`).
 - `tasks` (array of `A2ATaskQueueEntry`): the matched queue entries in the order returned by the daemon. The array may be empty. Pinned as an array by `main.rs:8866` — never null or a string blob.
 - `results` (array of `A2ATaskResult`): pending results not yet acknowledged. The array may be empty; the unsuffixed CLI prints `(a2a queue empty)` at `main.rs:4561` when both `tasks` and `results` are empty. Pinned as an array by `main.rs:8867-8870` — never null or a string.
 
-The inner `A2ATaskQueueEntry` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:132`:
+The inner `A2ATaskQueueEntry` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:135`:
 
 - `state` (string) — `A2ATaskQueueState` slug, exactly `"queued"` or `"in_flight"` (same enumeration as the top-level `state_filter`). The canonical signal for queue-state branching — **not** lease-field presence.
 - `task` (object) — nested `A2ATask` (see below).
-- `lease_id` (string, omitted when null) — UUID of the active lease. Carries `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-a2a/src/lib.rs:135-136`, so the key is **absent** when the entry is not leased.
+- `lease_id` (string, omitted when null) — UUID of the active lease. Carries `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-a2a/src/lib.rs:138-139`, so the key is **absent** when the entry is not leased.
 - `leased_to` (object, omitted when null) — `AgentId` of the leaseholder. Same skip-when-absent contract.
 - `leased_at_ms` (u64, omitted when null) — Unix-epoch milliseconds when the lease was taken. Same skip-when-absent contract.
-- `attempt` (u32) — delivery attempt counter (always emitted; `0` for a fresh queue entry per `#[serde(default)]` at `covenant-a2a/src/lib.rs:141-142`).
+- `attempt` (u32) — delivery attempt counter (always emitted; `0` for a fresh queue entry per `#[serde(default)]` at `covenant-a2a/src/lib.rs:144-145`).
 
-The nested `A2ATask` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:109`:
+The nested `A2ATask` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:112`:
 
 - `id` (string) — task UUID.
 - `sender` (object) — `AgentId` `{display, pubkey}` per the form documented in the `peer_list` block.
@@ -476,14 +476,14 @@ The nested `A2ATask` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:
 - `task_kind` (string, omitted when null) — optional task-kind label; `skip_serializing_if = "Option::is_none"`.
 - `parent` (string, omitted when null) — optional parent task UUID; same skip contract.
 - `deadline_ms` (u64, omitted when null) — optional deadline (Unix-epoch ms); same skip contract.
-- `idempotency` (object, omitted when null) — optional `A2AIdempotency` `{duplicate_safety: "unsafe"|"idempotent", key: string}` (defined at `covenant-a2a/src/lib.rs:55-59`); same skip contract.
+- `idempotency` (object, omitted when null) — optional `A2AIdempotency` `{duplicate_safety: "unsafe"|"idempotent", key: string}` (defined at `covenant-a2a/src/lib.rs:58-62`); same skip contract.
 
-The inner `A2ATaskResult` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:387`:
+The inner `A2ATaskResult` shape, defined at `agent-os/crates/covenant-a2a/src/lib.rs:390`:
 
 - `task_id` (string) — the task UUID this result binds to.
-- `status` (string) — `A2ATaskStatus` slug, exactly one of `"ok"`, `"error"`, `"partial"` (snake_case per `covenant-a2a/src/lib.rs:40-46`). Consumers must route on the lowercase wire form, **not** the Rust TitleCase names.
-- `content` (array of `Content`) — the same tagged-enum `Content` shape (`{type: "text", text: <string>}` or `{type: "json", value: <JSON>}`) already documented in the `tool_result` block above; empty for `error` results per `A2ATaskResult::error` at `covenant-a2a/src/lib.rs:406-413`.
-- `error_message` (string, omitted when null) — diagnostic message for `error` results; `skip_serializing_if = "Option::is_none"` per `covenant-a2a/src/lib.rs:392-393`. Absent on `ok` and `partial` results.
+- `status` (string) — `A2ATaskStatus` slug, exactly one of `"ok"`, `"error"`, `"partial"` (snake_case per `covenant-a2a/src/lib.rs:43-49`). Consumers must route on the lowercase wire form, **not** the Rust TitleCase names.
+- `content` (array of `Content`) — the same tagged-enum `Content` shape (`{type: "text", text: <string>}` or `{type: "json", value: <JSON>}`) already documented in the `tool_result` block above; empty for `error` results per `A2ATaskResult::error` at `covenant-a2a/src/lib.rs:409-416`.
+- `error_message` (string, omitted when null) — diagnostic message for `error` results; `skip_serializing_if = "Option::is_none"` per `covenant-a2a/src/lib.rs:395-396`. Absent on `ok` and `partial` results.
 
 Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:8825` (`a2a_status_json_pins_top_level_schema`), exercised against both a populated-filters case and an all-null-filters case.
 
@@ -492,18 +492,18 @@ The envelope source-of-truth lives at `a2a_status_json` in `agent-os/crates/cove
 `covenant a2a retry-stale [--enable] [--min-lease-age-ms <N>] [--max-attempts <N>] [--max-requeues <N>] [--scan-limit <N>] --json` emits a per-call report describing what the auto-retry scan considered, requeued, and skipped. Envelope shape:
 
 - `kind`: literal string `"a2a_auto_retry"`. Pinned at the value level by `main.rs:7726` (asserts `value["kind"].as_str() == Some("a2a_auto_retry")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
-- `report` (object): a structured `A2AAutoRetryReport` (defined at `agent-os/crates/covenant-a2a/src/lib.rs:288`), never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:7727-7730` to be a JSON object.
+- `report` (object): a structured `A2AAutoRetryReport` (defined at `agent-os/crates/covenant-a2a/src/lib.rs:291`), never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:7727-7730` to be a JSON object.
 
-**Dry-run by default**: `A2AAutoRetryPolicy.enabled` defaults to `false` (per `Default for A2AAutoRetryPolicy` at `covenant-a2a/src/lib.rs:228-238`), and the CLI's `--enable` flag is the only path that flips it (`main.rs:4006`). On a `--json` call without `--enable`, every queue entry will appear under `skipped[]` with `reason: "disabled"` and the registry will not be mutated — a `requeued=0` result there is **not** a "nothing to retry" signal. Consumers analysing the report must read `report.policy.enabled` before drawing conclusions about whether `considered` minus `requeued.len()` indicates real skip pressure or a dry-run preview.
+**Dry-run by default**: `A2AAutoRetryPolicy.enabled` defaults to `false` (per `Default for A2AAutoRetryPolicy` at `covenant-a2a/src/lib.rs:231-241`), and the CLI's `--enable` flag is the only path that flips it (`main.rs:4006`). On a `--json` call without `--enable`, every queue entry will appear under `skipped[]` with `reason: "disabled"` and the registry will not be mutated — a `requeued=0` result there is **not** a "nothing to retry" signal. Consumers analysing the report must read `report.policy.enabled` before drawing conclusions about whether `considered` minus `requeued.len()` indicates real skip pressure or a dry-run preview.
 
 The inner `A2AAutoRetryReport` shape:
 
 - `policy` (object) — the `A2AAutoRetryPolicy` echoed from the request (see below).
 - `considered` (u64) — number of in-flight queue entries the scan evaluated. Bounded by `policy.scan_limit`.
-- `requeued` (array of `A2AAutoRetryRequeued`) — entries the scan successfully requeued under the policy. Empty when the policy is disabled or when no candidate met the requeue criteria. Carries `#[serde(default)]` on the deserialization side (`covenant-a2a/src/lib.rs:291-292`); the serializer always writes the array.
+- `requeued` (array of `A2AAutoRetryRequeued`) — entries the scan successfully requeued under the policy. Empty when the policy is disabled or when no candidate met the requeue criteria. Carries `#[serde(default)]` on the deserialization side (`covenant-a2a/src/lib.rs:294-295`); the serializer always writes the array.
 - `skipped` (array of `A2AAutoRetrySkipped`) — entries the scan considered but did not requeue, each with a typed skip reason. Same `#[serde(default)]` contract.
 
-The inner `A2AAutoRetryPolicy` shape, defined at `covenant-a2a/src/lib.rs:215`:
+The inner `A2AAutoRetryPolicy` shape, defined at `covenant-a2a/src/lib.rs:218`:
 
 - `enabled` (bool) — see the dry-run note above.
 - `min_lease_age_ms` (u64) — minimum lease age before an in-flight entry is eligible for auto-requeue.
@@ -511,21 +511,21 @@ The inner `A2AAutoRetryPolicy` shape, defined at `covenant-a2a/src/lib.rs:215`:
 - `max_requeues` (u64) — per-call requeue ceiling (`usize` on the Rust side; serialized as a JSON integer).
 - `scan_limit` (u64) — per-call scan size cap (`usize` on the Rust side).
 
-The inner `A2AAutoRetryRequeued` shape, defined at `covenant-a2a/src/lib.rs:280`:
+The inner `A2AAutoRetryRequeued` shape, defined at `covenant-a2a/src/lib.rs:283`:
 
 - `task_id` (string) — task UUID.
 - `lease_id` (string) — the lease UUID that was preempted by the requeue.
 - `attempt` (u32) — the attempt counter before the requeue (the requeued entry will resurface with `attempt+1`).
 - `idempotency_key` (string) — the idempotency key that bound this task's delivery — present because `unsafe_duplicate_safety` is one of the documented skip reasons, so only safely-bound tasks reach `requeued[]`.
 
-The inner `A2AAutoRetrySkipped` shape, defined at `covenant-a2a/src/lib.rs:271`:
+The inner `A2AAutoRetrySkipped` shape, defined at `covenant-a2a/src/lib.rs:274`:
 
 - `task_id` (string) — task UUID.
 - `reason` (string) — `A2AAutoRetrySkipReason` slug (see enumeration below).
 - `attempt` (u32) — the entry's current attempt counter.
-- `lease_age_ms` (u64, omitted when null) — observed lease age in milliseconds. Carries `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-a2a/src/lib.rs:275-276`, so the key is **absent** when the skip happened before any lease age was meaningful (e.g. `reason: "disabled"` or `reason: "not_in_flight"`). JSON consumers must read it with key-existence, not null-vs-value.
+- `lease_age_ms` (u64, omitted when null) — observed lease age in milliseconds. Carries `#[serde(default, skip_serializing_if = "Option::is_none")]` at `covenant-a2a/src/lib.rs:278-279`, so the key is **absent** when the skip happened before any lease age was meaningful (e.g. `reason: "disabled"` or `reason: "not_in_flight"`). JSON consumers must read it with key-existence, not null-vs-value.
 
-`A2AAutoRetrySkipReason` enumerates exactly these nine snake_case slugs (per `covenant-a2a/src/lib.rs:240-252`):
+`A2AAutoRetrySkipReason` enumerates exactly these nine snake_case slugs (per `covenant-a2a/src/lib.rs:243-255`):
 
 - `"disabled"` — `policy.enabled = false`; emitted for every considered entry on a dry-run call.
 - `"not_in_flight"` — entry is queued rather than leased.

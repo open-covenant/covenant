@@ -1152,6 +1152,7 @@ name = "covenant-a2a"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "covenant-identity",
  "covenant-mcp",
  "covenant-types",
  "parking_lot",

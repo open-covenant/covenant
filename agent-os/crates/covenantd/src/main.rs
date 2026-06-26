@@ -262,6 +262,25 @@ async fn main() -> Result<()> {
     );
     info!(path = %peers_path.display(), "peer registry open");
 
+    // Cross-host registry (slice 3): load-and-hold only — no dispatch, no
+    // socket. A missing file is local-only (empty); a malformed or unreadable
+    // one fails closed here so the daemon never boots believing peering is
+    // configured when it is not.
+    let known_hosts_path = covenantd::known_hosts_path(&home);
+    let known_hosts = covenant_peer_auth::KnownHosts::load_from_path(known_hosts_path.clone())
+        .await
+        .with_context(|| {
+            format!(
+                "load known-hosts registry at {}",
+                known_hosts_path.display()
+            )
+        })?;
+    info!(
+        path = %known_hosts_path.display(),
+        hosts = known_hosts.len(),
+        "known-hosts registry loaded"
+    );
+
     bootstrap_operator_token(&home, &peers, &identity).await?;
 
     let budget_path = home.join("budget").join("ledger.jsonl");
@@ -315,6 +334,7 @@ async fn main() -> Result<()> {
         budget,
     )
     .with_home(home.clone())
+    .with_known_hosts(known_hosts)
     .with_budget_checkpoints(budget_checkpoints)
     .with_subprocess_tracker(subprocess_tracker)
     .with_sap_bridge(sap_bridge);

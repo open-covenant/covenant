@@ -34,7 +34,7 @@ use covenant_ipc::{
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{memory_receipt_backfill_correlations, IgnoreSet, MemoryStore};
-use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
+use covenant_peer_auth::{KnownHosts, PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 #[cfg(test)]
 use covenant_permissions::verify_with_clock;
 use covenant_permissions::{
@@ -82,6 +82,14 @@ pub fn covenant_home() -> Result<PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".covenant"))
+}
+
+/// Conventional on-disk location of the operator's known-hosts registry,
+/// `<home>/peers/known-hosts.json`, alongside the local peer registry and
+/// operator token. A missing file is local-only operation (empty registry);
+/// [`KnownHosts::load_from_path`] fails closed on a malformed or unreadable one.
+pub fn known_hosts_path(home: &Path) -> PathBuf {
+    home.join("peers").join("known-hosts.json")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1237,6 +1245,17 @@ pub struct Server {
     tools: Arc<ToolRegistry>,
     mailbox: Arc<dyn Mailbox>,
     pub peers: Arc<dyn PeerRegistry>,
+    /// Operator-provided cross-host registry: `host -> endpoint` bound to the
+    /// pubkey each remote daemon must prove. Distinct from [`Self::peers`],
+    /// which is local token auth; this is the static map of remote hosts an
+    /// A2A `name@host` can route to. Loaded fail-closed at startup from
+    /// `<home>/peers/known-hosts.json` via [`known_hosts_path`]: a missing file
+    /// is the default empty registry (local-only — every host resolves
+    /// [`covenant_peer_auth::PeerError::UnknownHost`]), a malformed one refuses
+    /// daemon startup. Held here so slice 4 can have A2A dispatch consult
+    /// [`KnownHosts::resolve_agent`] and run the authenticated remote handshake;
+    /// this slice neither dispatches nor opens any socket.
+    known_hosts: Arc<KnownHosts>,
     budget: Arc<dyn BudgetLedger>,
     budget_checkpoints: Option<Arc<JsonlPauseCheckpointStore>>,
     active_budget_pauses: Arc<Mutex<BTreeMap<Uuid, BudgetPauseCheckpoint>>>,
@@ -1326,6 +1345,7 @@ impl Server {
             tools,
             mailbox,
             peers,
+            known_hosts: Arc::new(KnownHosts::default()),
             budget,
             budget_checkpoints: None,
             active_budget_pauses: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1400,6 +1420,24 @@ impl Server {
     pub fn with_home(mut self, home: PathBuf) -> Self {
         self.home = Some(home);
         self
+    }
+
+    /// Wire the operator's known-hosts registry. Daemon `main` calls this once
+    /// at boot with the registry loaded from [`known_hosts_path`]. Without it
+    /// the daemon keeps the default empty registry and operates local-only —
+    /// every cross-host route is [`covenant_peer_auth::PeerError::UnknownHost`].
+    /// Replacing the registry never touches [`Self::peers`]; the two stay
+    /// distinct (local token auth vs remote host endpoints).
+    pub fn with_known_hosts(mut self, known_hosts: KnownHosts) -> Self {
+        self.known_hosts = Arc::new(known_hosts);
+        self
+    }
+
+    /// The loaded cross-host registry. Empty when the operator has not
+    /// configured peering. Slice 4's A2A dispatch reads this to resolve a
+    /// `name@host` route and verify the remote's bound identity.
+    pub fn known_hosts(&self) -> &KnownHosts {
+        &self.known_hosts
     }
 
     /// Wire the outbound x402 dispatch config. Without this, every
@@ -54805,6 +54843,146 @@ budget_credits_per_hour = {credits}
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
         }
+    }
+
+    #[test]
+    fn known_hosts_path_is_under_home_peers() {
+        // The cross-host registry lives beside the local peer registry and the
+        // operator token, so an operator manages all peering state in one dir.
+        assert_eq!(
+            known_hosts_path(Path::new("/srv/covenant")),
+            PathBuf::from("/srv/covenant/peers/known-hosts.json"),
+        );
+    }
+
+    #[tokio::test]
+    async fn known_hosts_missing_under_home_loads_empty_local_only() {
+        // Missing file is the default: no cross-host peering configured, so the
+        // daemon's conventional path loads an empty registry and operates
+        // local-only — never a panic, never a silent default-to-local.
+        let home = tempfile::tempdir().unwrap();
+        let hosts = KnownHosts::load_from_path(known_hosts_path(home.path()))
+            .await
+            .expect("a missing known-hosts file under home is local-only, not a boot failure");
+        assert!(hosts.is_empty());
+        let server = server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
+            .with_known_hosts(hosts);
+        assert!(server.known_hosts().is_empty());
+        assert!(
+            matches!(
+                server.known_hosts().resolve_host("anyhost"),
+                Err(covenant_peer_auth::PeerError::UnknownHost(_))
+            ),
+            "local-only daemon resolves every host to UnknownHost",
+        );
+    }
+
+    #[tokio::test]
+    async fn known_hosts_at_conventional_path_is_loaded() {
+        // A registry written at the daemon's conventional path is honored —
+        // proves main.rs consults known_hosts_path, not the empty default.
+        let home = tempfile::tempdir().unwrap();
+        let path = known_hosts_path(home.path());
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        let registry = KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://remote:7777".into(),
+                pubkey: [9u8; 32],
+            },
+        );
+        tokio::fs::write(&path, serde_json::to_vec(&registry).unwrap())
+            .await
+            .unwrap();
+
+        let loaded = KnownHosts::load_from_path(path).await.unwrap();
+        let server = server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
+            .with_known_hosts(loaded);
+        let endpoint = server
+            .known_hosts()
+            .resolve_host("remote")
+            .expect("the configured host must resolve");
+        assert_eq!(endpoint.url, "http://remote:7777");
+        assert_eq!(endpoint.pubkey, [9u8; 32]);
+    }
+
+    #[tokio::test]
+    async fn malformed_known_hosts_at_conventional_path_fails_closed() {
+        // A corrupt registry at the conventional path must surface as an error
+        // the daemon's `?` turns into a refused startup — never an empty
+        // registry the operator mistakes for "peering configured".
+        let home = tempfile::tempdir().unwrap();
+        let path = known_hosts_path(home.path());
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&path, b"{not valid json").await.unwrap();
+        let err = KnownHosts::load_from_path(path)
+            .await
+            .expect_err("a malformed known-hosts file must fail closed, not load empty");
+        assert!(
+            matches!(err, covenant_peer_auth::PeerError::Serde(_)),
+            "malformed registry must surface as a serde error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn server_defaults_to_empty_known_hosts() {
+        // A daemon constructed without with_known_hosts holds an empty registry
+        // (the local-only default), so cross-host routing is off until wired.
+        let server =
+            server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()));
+        assert!(server.known_hosts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn loading_known_hosts_does_not_change_local_peer_auth() {
+        // The two registries stay distinct: holding a remote-host registry must
+        // not alter local token auth, and a local peer must not leak into the
+        // host namespace. Cross-scope isolation (slice-3 failure mode 4).
+        let hosts = KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://remote:7777".into(),
+                pubkey: [9u8; 32],
+            },
+        );
+        let server =
+            server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
+                .with_known_hosts(hosts);
+
+        let token = PeerToken::from_bytes([7u8; 32]);
+        server
+            .peers
+            .register(PeerEntry {
+                token,
+                agent_id: AgentId::new("alice@local", [3u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+
+        let resolved = server
+            .peers
+            .resolve(&token)
+            .await
+            .unwrap()
+            .expect("local token auth is unaffected by loading a known-hosts registry");
+        assert_eq!(resolved.display, "alice@local");
+
+        assert!(
+            server.known_hosts().resolve_host("remote").is_ok(),
+            "the configured remote host resolves",
+        );
+        assert!(
+            matches!(
+                server.known_hosts().resolve_host("local"),
+                Err(covenant_peer_auth::PeerError::UnknownHost(_))
+            ),
+            "a registered local peer must never appear in the known-hosts namespace",
+        );
     }
 
     #[test]

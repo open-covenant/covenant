@@ -285,6 +285,26 @@ pub enum AuditKind {
         scan_limit: u64,
         error: Option<String>,
     },
+    /// Logged by the receiving daemon for every cross-host A2A admission
+    /// decision (multi-host slice 4b-2): a `SignedA2ATask` arriving from a
+    /// remote host is opened, authorized against the known-hosts registry,
+    /// checked for recipient-self and freshness, deduplicated, and run
+    /// through the recipient recv-gate before it reaches the local mailbox.
+    /// This row is daemon-authored (`issuer = self.identity`) because the
+    /// remote sender holds no local peer token — its identity is the proven
+    /// `sender_pubkey_b58`, not the audit issuer. `outcome` is `"admitted"`,
+    /// `"duplicate"`, or `"rejected"`; `reason` carries the internal decision
+    /// stage (`"signature_invalid"`, `"unknown_principal"`,
+    /// `"recipient_mismatch"`, `"stale"`, `"future_skew"`,
+    /// `"recv_not_granted"`, …) for the operator's `/audit` feed only — the
+    /// stage is never echoed to the remote caller, so the audit row is the
+    /// sole place the failure stage is observable.
+    CrossHostA2AAdmission {
+        sender_pubkey_b58: String,
+        recipient_display: String,
+        outcome: String,
+        reason: String,
+    },
     /// Logged when an operator completes a memory repair request. The
     /// full before/after record shape is returned to the caller through
     /// the repair response; the audit row keeps the durable who/what/why

@@ -195,6 +195,11 @@
       "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000027\",\"timestamp_ms\":1700000000039,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_budget_exhausted\",\"signature_b58\":\"3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ\",\"action\":\"tool.call.echo\",\"max_uses\":5,\"used\":5}}",
       "event_hash_hex": "f112246e6ea118bf9e8b8bfe7ce8c69cd1b9f8b0de1f462334994dabac44be38",
       "name": "capability_budget_exhausted"
+    },
+    {
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000028\",\"timestamp_ms\":1700000000040,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"cross_host_a2_a_admission\",\"sender_pubkey_b58\":\"3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ\",\"recipient_display\":\"bob@host2\",\"outcome\":\"rejected\",\"reason\":\"unknown_principal\"}}",
+      "event_hash_hex": "78d8d08a02ecae8bb4b242e8884fd739ecf8771051b6e62cf70ecb8582b7e503",
+      "name": "cross_host_a2_a_admission"
     }
   ]
 }

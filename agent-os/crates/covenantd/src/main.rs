@@ -254,6 +254,23 @@ async fn main() -> Result<()> {
     );
     info!(path = %mailbox_path.display(), "a2a mailbox open");
 
+    // Cross-host A2A replay cache (slice 4b-2): restart-durable anti-replay
+    // store for inbound envelopes admitted by `Server::admit_remote_a2a_task`.
+    // A missing file is an empty cache; a corrupt one fails closed so the daemon
+    // never boots having forgotten which envelopes it already admitted.
+    let cross_host_dedup_path = home.join("a2a").join("cross-host-dedup.jsonl");
+    let cross_host_dedup = Arc::new(
+        covenantd::cross_host::JsonlCrossHostDedup::open(cross_host_dedup_path.clone())
+            .await
+            .with_context(|| {
+                format!(
+                    "open cross-host A2A dedup log at {}",
+                    cross_host_dedup_path.display()
+                )
+            })?,
+    );
+    info!(path = %cross_host_dedup_path.display(), "cross-host a2a dedup log open");
+
     let peers_path = home.join("peers").join("registry.jsonl");
     let peers: Arc<dyn covenant_peer_auth::PeerRegistry> = Arc::new(
         covenant_peer_auth::JsonlPeerRegistry::open(peers_path.clone())
@@ -335,6 +352,7 @@ async fn main() -> Result<()> {
     )
     .with_home(home.clone())
     .with_known_hosts(known_hosts)
+    .with_cross_host_dedup(cross_host_dedup)
     .with_budget_checkpoints(budget_checkpoints)
     .with_subprocess_tracker(subprocess_tracker)
     .with_sap_bridge(sap_bridge);

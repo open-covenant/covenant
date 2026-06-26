@@ -8,6 +8,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod cross_host;
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
@@ -1256,6 +1257,14 @@ pub struct Server {
     /// [`KnownHosts::resolve_agent`] and run the authenticated remote handshake;
     /// this slice neither dispatches nor opens any socket.
     known_hosts: Arc<KnownHosts>,
+    /// Restart-durable anti-replay cache for admitted cross-host A2A envelopes
+    /// (multi-host slice 4b-2). `None` until the daemon's `main` wires the
+    /// JSONL store from `<home>/a2a/cross-host-dedup.jsonl` via
+    /// [`Server::with_cross_host_dedup`]; when absent,
+    /// [`Server::admit_remote_a2a_task`] fails closed rather than admit an
+    /// unrecorded envelope. Keyed on the payload-identity tuple, not the
+    /// signature bytes (ed25519 verify is malleable).
+    cross_host_dedup: Option<Arc<cross_host::JsonlCrossHostDedup>>,
     budget: Arc<dyn BudgetLedger>,
     budget_checkpoints: Option<Arc<JsonlPauseCheckpointStore>>,
     active_budget_pauses: Arc<Mutex<BTreeMap<Uuid, BudgetPauseCheckpoint>>>,
@@ -1346,6 +1355,7 @@ impl Server {
             mailbox,
             peers,
             known_hosts: Arc::new(KnownHosts::default()),
+            cross_host_dedup: None,
             budget,
             budget_checkpoints: None,
             active_budget_pauses: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1438,6 +1448,19 @@ impl Server {
     /// `name@host` route and verify the remote's bound identity.
     pub fn known_hosts(&self) -> &KnownHosts {
         &self.known_hosts
+    }
+
+    /// Wire the restart-durable cross-host A2A replay cache. Daemon `main` calls
+    /// this once at boot with the store opened from
+    /// `<home>/a2a/cross-host-dedup.jsonl`. Without it,
+    /// [`Server::admit_remote_a2a_task`] refuses every cross-host envelope
+    /// (fail-closed: no durable claim, no admission).
+    pub fn with_cross_host_dedup(
+        mut self,
+        dedup: Arc<cross_host::JsonlCrossHostDedup>,
+    ) -> Self {
+        self.cross_host_dedup = Some(dedup);
+        self
     }
 
     /// Wire the outbound x402 dispatch config. Without this, every
@@ -48602,6 +48625,375 @@ required = {caps:?}
             deadline_ms: None,
             idempotency: None,
         }
+    }
+
+    // --- Cross-host inbound admission (multi-host slice 4b-2) -------------------
+
+    /// A daemon that knows `alice@host1` as a cross-host peer bound to `sender`'s
+    /// key and has a fresh restart-durable dedup log under `dir`.
+    async fn cross_host_server(dir: &std::path::Path, sender: &LocalIdentity) -> Server {
+        cross_host_server_with_identity(dir, sender, Arc::new(LocalIdentity::generate("user@local")))
+            .await
+    }
+
+    /// Same, but with an explicit daemon identity so two instances can share one
+    /// identity (and dedup path) to model a restart.
+    async fn cross_host_server_with_identity(
+        dir: &std::path::Path,
+        sender: &LocalIdentity,
+        identity: Arc<LocalIdentity>,
+    ) -> Server {
+        let known_hosts = KnownHosts::new().with_host(
+            "host1",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://host1:7777".into(),
+                pubkey: sender.pubkey_bytes(),
+            },
+        );
+        let dedup = Arc::new(
+            cross_host::JsonlCrossHostDedup::open(dir.join("cross-host-dedup.jsonl"))
+                .await
+                .expect("open cross-host dedup"),
+        );
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity,
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_known_hosts(known_hosts)
+        .with_cross_host_dedup(dedup)
+    }
+
+    async fn grant_recv(s: &Server, sender_display: &str) {
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.recv.{sender_display}"),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+    }
+
+    /// Seal a cross-host envelope from `sender` addressed to `recipient`.
+    fn sealed_envelope(
+        sender: &LocalIdentity,
+        recipient: AgentId,
+        id: u128,
+        issued_at_ms: u64,
+    ) -> covenant_a2a::SignedA2ATask {
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::from_u128(id),
+            sender: sender.agent_id(),
+            recipient,
+            intent_text: "ship the receipt batch".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        covenant_a2a::SignedA2ATask::seal(&task, issued_at_ms, sender)
+    }
+
+    /// (outcome, reason, sender_pubkey_b58) for every cross-host admission row.
+    async fn cross_host_rows(s: &Server) -> Vec<(String, String, String)> {
+        s.audit
+            .recent(usize::MAX)
+            .await
+            .expect("audit recent")
+            .into_iter()
+            .filter_map(|e| match e.kind {
+                AuditKind::CrossHostA2AAdmission {
+                    outcome,
+                    reason,
+                    sender_pubkey_b58,
+                    ..
+                } => Some((outcome, reason, sender_pubkey_b58)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn admit_enqueues_a_verified_authorized_fresh_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, "alice@host1").await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0001, now);
+        let id = envelope.open().unwrap().id;
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id }
+        );
+        let drained = s.op_respond(Request::TryRecvA2ATask).await;
+        assert!(
+            matches!(drained, Response::A2ATaskOpt { task: Some(ref t) } if t.id == id),
+            "the admitted task must reach the local mailbox: {drained:?}"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, _, sender_b58)| outcome == "admitted"
+                && *sender_b58 == alice.agent_id().pubkey_base58()),
+            "an admitted row attributing the remote sender must be on the audit feed: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_an_envelope_whose_signature_does_not_verify() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let mallory = LocalIdentity::generate("mallory@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, "alice@host1").await;
+        let now = 10_000_000;
+        // The payload claims alice as sender; mallory holds the pen.
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::from_u128(0x4b2a_0002),
+            sender: alice.agent_id(),
+            recipient: s.identity.agent_id(),
+            intent_text: "drain the treasury".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let envelope = covenant_a2a::SignedA2ATask::seal(&task, now, &mallory);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a forged envelope must never enqueue"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                && reason == "signature_invalid"
+                && sender_b58.is_empty()),
+            "the open-stage reason is recorded internally with no proven sender: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_validly_signed_envelope_from_an_unregistered_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        // carol is a real keyholder, validly signs her own envelope, but her host
+        // is not in the registry — authenticity is not admission.
+        let carol = LocalIdentity::generate("carol@elsewhere");
+        grant_recv(&s, "carol@elsewhere").await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&carol, s.identity.agent_id(), 0x4b2a_0003, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(matches!(
+            s.op_respond(Request::TryRecvA2ATask).await,
+            Response::A2ATaskOpt { task: None }
+        ));
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "unknown_principal"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_known_host_envelope_signed_by_the_wrong_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1"); // host1 -> alice's key
+        let s = cross_host_server(dir.path(), &alice).await;
+        // eve shares the host but holds a different key. open() succeeds (eve
+        // signs as eve), but the registry binds host1 to alice's key.
+        let eve = LocalIdentity::generate("eve@host1");
+        grant_recv(&s, "eve@host1").await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&eve, s.identity.agent_id(), 0x4b2a_0004, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected,
+            "a valid signature is not enough: the host's registry-bound key must be the signer"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "unknown_principal"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_an_envelope_addressed_to_a_different_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, "alice@host1").await;
+        let now = 10_000_000;
+        // A verified envelope whose recipient is not this daemon still opens.
+        let envelope =
+            sealed_envelope(&alice, AgentId::new("bob@host2", [5u8; 32]), 0x4b2a_0005, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(matches!(
+            s.op_respond(Request::TryRecvA2ATask).await,
+            Response::A2ATaskOpt { task: None }
+        ));
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "recipient_mismatch"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_stale_envelope_outside_the_freshness_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, "alice@host1").await;
+        let now = 10_000_000;
+        let issued = now - cross_host::CROSS_HOST_MAX_AGE_MS - 1;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0006, issued);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(matches!(
+            s.op_respond(Request::TryRecvA2ATask).await,
+            Response::A2ATaskOpt { task: None }
+        ));
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "stale"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_future_dated_envelope_beyond_the_skew_allowance() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, "alice@host1").await;
+        let now = 10_000_000;
+        let issued = now + cross_host::CROSS_HOST_MAX_SKEW_MS + 1;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0007, issued);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "future_skew"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_when_the_recipient_has_not_granted_recv() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        // No grant_recv: the recipient never admitted a2a.recv.alice@host1.
+        let s = cross_host_server(dir.path(), &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0008, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(matches!(
+            s.op_respond(Request::TryRecvA2ATask).await,
+            Response::A2ATaskOpt { task: None }
+        ));
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "recv_not_granted"));
+    }
+
+    #[tokio::test]
+    async fn admit_absorbs_a_replayed_envelope_within_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, "alice@host1").await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0009, now);
+        let id = envelope.open().unwrap().id;
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope.clone(), now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id }
+        );
+        // The captured envelope, re-sent within the window, is absorbed.
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now + 1).await,
+            cross_host::RemoteAdmission::Duplicate { task_id: id }
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: Some(ref t) } if t.id == id
+            ),
+            "the first copy is enqueued"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "the replay must not enqueue a second copy"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "duplicate" && reason == "duplicate"));
+    }
+
+    #[tokio::test]
+    async fn admit_absorbs_a_replay_after_a_daemon_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        // A stable daemon identity shared across the two instances so the same
+        // envelope is recipient-valid before and after the "restart".
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, identity.agent_id(), 0x4b2a_000a, now);
+        let id = envelope.open().unwrap().id;
+        {
+            let s = cross_host_server_with_identity(dir.path(), &alice, identity.clone()).await;
+            grant_recv(&s, "alice@host1").await;
+            assert_eq!(
+                s.admit_remote_a2a_task(envelope.clone(), now).await,
+                cross_host::RemoteAdmission::Admitted { task_id: id }
+            );
+        }
+        // A fresh daemon over the SAME dedup log still recognizes the replay.
+        let restarted =
+            cross_host_server_with_identity(dir.path(), &alice, identity.clone()).await;
+        grant_recv(&restarted, "alice@host1").await;
+        assert_eq!(
+            restarted.admit_remote_a2a_task(envelope, now + 1).await,
+            cross_host::RemoteAdmission::Duplicate { task_id: id }
+        );
+        assert!(
+            matches!(
+                restarted.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "the replay must not enqueue on the restarted daemon"
+        );
     }
 
     #[tokio::test]

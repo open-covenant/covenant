@@ -80,6 +80,7 @@ const EXPECTED_KINDS: &[&str] = &[
     "a2_a_recipient_rejected",
     "a2_a_repair_applied",
     "a2_a_auto_retry_scheduler_scan",
+    "cross_host_a2_a_admission",
     "memory_repair_applied",
     "memory_compaction_applied",
     "capability_revoked",
@@ -128,6 +129,7 @@ fn audit_kind_slug(kind: &AuditKind) -> &'static str {
         AuditKind::A2ARecipientRejected { .. } => "a2_a_recipient_rejected",
         AuditKind::A2ARepairApplied { .. } => "a2_a_repair_applied",
         AuditKind::A2AAutoRetrySchedulerScan { .. } => "a2_a_auto_retry_scheduler_scan",
+        AuditKind::CrossHostA2AAdmission { .. } => "cross_host_a2_a_admission",
         AuditKind::MemoryRepairApplied { .. } => "memory_repair_applied",
         AuditKind::MemoryCompactionApplied { .. } => "memory_compaction_applied",
         AuditKind::CapabilityRevoked { .. } => "capability_revoked",
@@ -512,6 +514,15 @@ fn golden_audit_kind_records() -> Vec<AuditEvent> {
                 action: "tool.call.echo".into(),
                 max_uses: 5,
                 used: 5,
+            },
+        ),
+        event(
+            40,
+            AuditKind::CrossHostA2AAdmission {
+                sender_pubkey_b58: "3yZe7d8mUS517G5965aydkZ46HS38QLi7UQiSojurfbQ".into(),
+                recipient_display: "bob@host2".into(),
+                outcome: "rejected".into(),
+                reason: "unknown_principal".into(),
             },
         ),
     ]

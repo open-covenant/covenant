@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-26T22:44:46.468Z",
+  "updatedAt": "2026-06-26T23:04:50.110Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10985,
+    "events": 10988,
     "tasks": 1294,
     "integrated": 1296
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1288,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "multi-host-a2a-cross-host-outbound-deliver",
+    "state": "in_progress",
+    "since": "2026-06-26T22:51:37.274Z"
+  },
   "recent": [
     {
       "at": "2026-06-26T22:35:57.799Z",

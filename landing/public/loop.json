@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-26T16:22:50.867Z",
+  "updatedAt": "2026-06-26T16:42:56.123Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10952,
+    "events": 10957,
     "tasks": 1290,
-    "integrated": 1292
+    "integrated": 1293
   },
   "throughput": {
-    "last24h": 4,
-    "last7d": 118,
-    "velocity": 16.9
+    "last24h": 5,
+    "last7d": 119,
+    "velocity": 17
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-26",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-26",
-      "total": 1292
+      "total": 1293
     }
   ],
   "states": {
-    "integrated": 1284,
+    "integrated": 1285,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multi-host-a2a-remote-recipient-refuse-not-silent-local",
-    "state": "in_progress",
-    "since": "2026-06-26T15:55:43.327Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-26T16:35:58.518Z",
+      "task": "multi-host-a2a-remote-recipient-refuse-not-silent-local",
+      "note": "Integrated as 74126358, pushed to origin/loop/main-track. A2A send now refuses configured-remote recipients (no silent local misdelivery); k"
+    },
     {
       "at": "2026-06-26T15:47:13.750Z",
       "task": "multi-host-daemon-known-hosts-config-wiring",
@@ -315,11 +315,6 @@
       "at": "2026-06-23T19:48:43.238Z",
       "task": "settlement-publisher-operator-keypair-env-validation-coverag",
       "note": "commit d8f50581: extracted keypair.mjs + 7 mutation-proven tests + vitest harness; vitest 7/7, validate.sh --scripts EXIT=0"
-    },
-    {
-      "at": "2026-06-23T19:36:51.749Z",
-      "task": "witness-verifier-anchor-settlement-instruction-data-coverage",
-      "note": "commit 2a352bde: extracted anchor-lib.mjs + 8 mutation-proven tests; vitest 17/17, validate.sh --scripts EXIT=0"
     }
   ]
 }

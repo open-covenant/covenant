@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-26T14:42:31.585Z",
+  "updatedAt": "2026-06-26T15:02:35.433Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10931,
-    "tasks": 1288,
-    "integrated": 1290
+    "events": 10940,
+    "tasks": 1289,
+    "integrated": 1291
   },
   "throughput": {
-    "last24h": 2,
-    "last7d": 116,
-    "velocity": 16.6
+    "last24h": 3,
+    "last7d": 117,
+    "velocity": 16.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-26",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-26",
-      "total": 1290
+      "total": 1291
     }
   ],
   "states": {
-    "integrated": 1282,
+    "integrated": 1283,
     "proposed": 2,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-26T14:54:32.607Z",
+      "task": "multi-host-known-hosts-file-load",
+      "note": "integrated at 41aeb9dd (peer-auth lib.rs + README metrics). Slice 2 of multi-host-networking complete: KnownHosts::load_from_path with fail-"
+    },
     {
       "at": "2026-06-26T14:33:01.051Z",
       "task": "multi-host-peer-endpoint-resolution",
@@ -310,11 +315,6 @@
       "at": "2026-06-23T19:30:26.306Z",
       "task": "witness-verifier-pure-logic-extraction-coverage",
       "note": "commit 636f7298: extracted verify-lib.mjs + 9 mutation-proven tests + vitest harness; vitest 9/9, validate.sh --scripts EXIT=0. backlog seed"
-    },
-    {
-      "at": "2026-06-23T19:08:21.907Z",
-      "task": "fairscale-bridge-resolve-cursor-coverage",
-      "note": "coverage slice integrated; commit pending"
     }
   ]
 }

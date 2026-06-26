@@ -47,6 +47,24 @@ pub enum PeerError {
     Serde(#[from] serde_json::Error),
     #[error("invalid token base58: {0}")]
     BadTokenB58(String),
+    /// A `name@host` was routed to a host absent from the operator's
+    /// known-hosts registry. Surfaced explicitly so the caller fails loudly
+    /// instead of defaulting the unknown host to the local daemon.
+    #[error("unknown host: {0}")]
+    UnknownHost(String),
+    /// The remote daemon presented an identity that does not match the pubkey
+    /// the registry binds to that host — a registry-poisoning or MITM endpoint.
+    /// The connection must be dropped.
+    #[error("peer identity mismatch for host {host}: registry expected {expected}, remote presented {presented}")]
+    PeerIdentityMismatch {
+        host: String,
+        expected: String,
+        presented: String,
+    },
+    /// An identity string was not the expected `name@host` form, so no host
+    /// component could be routed.
+    #[error("malformed agent id (expected name@host): {0}")]
+    MalformedAgentId(String),
 }
 
 /// 32-byte opaque peer token. Equality is constant-time via
@@ -835,6 +853,153 @@ fn epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// A reachable network endpoint for a remote Covenant daemon, bound to the
+/// ed25519 pubkey that daemon MUST present during the authenticated handshake.
+/// The pubkey is the trust anchor: an endpoint that answers at `url` but proves
+/// a different identity is rejected by [`KnownHosts::verify_remote_identity`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerEndpoint {
+    /// Transport address of the remote daemon's gateway (e.g. `http://10.0.0.4:7777`).
+    pub url: String,
+    /// The remote's expected ed25519 identity, base58-encoded on the wire and
+    /// decoded to 32 bytes on load — the same key form as [`AgentId::pubkey`].
+    #[serde(with = "pubkey_b58")]
+    pub pubkey: [u8; 32],
+}
+
+/// A static, operator-provided `host -> endpoint` map: the known-hosts registry
+/// for cross-host peering. Resolution is *explicit only* — a host absent from
+/// the map is an [`PeerError::UnknownHost`], never a DNS/DHT lookup and never a
+/// silent default to the local daemon. Each host is bound to the pubkey its
+/// remote daemon must prove, so a poisoned or man-in-the-middle endpoint that
+/// answers at the right url with the wrong key is refused at the handshake.
+///
+/// This type carries no network code: it resolves and verifies identity bindings
+/// only. The transport handshake (proof-of-possession of the bound key, request
+/// timeouts) is layered on top by the daemon and does not change the local bind.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KnownHosts {
+    hosts: HashMap<String, PeerEndpoint>,
+}
+
+impl KnownHosts {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_entries(entries: impl IntoIterator<Item = (String, PeerEndpoint)>) -> Self {
+        Self {
+            hosts: entries.into_iter().collect(),
+        }
+    }
+
+    /// Builder-style insert; a repeated host overwrites the earlier entry so the
+    /// operator's last word for a host wins.
+    pub fn with_host(mut self, host: impl Into<String>, endpoint: PeerEndpoint) -> Self {
+        self.hosts.insert(host.into(), endpoint);
+        self
+    }
+
+    pub fn len(&self) -> usize {
+        self.hosts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hosts.is_empty()
+    }
+
+    /// Resolve a bare host component to its endpoint, or [`PeerError::UnknownHost`].
+    /// Hosts match byte-exact — no case-folding, no trailing-dot normalization — so
+    /// the operator must spell a registry key exactly as the `name@host` host
+    /// segment that routes to it. Byte-exact keeps this slice single-pathed; a
+    /// transport follow-up that derives a host from SNI, a URL authority, or DNS
+    /// (all case-insensitive) MUST normalize both the registry key and the
+    /// presented host identically, or it reopens a host-confusion gap.
+    pub fn resolve_host(&self, host: &str) -> Result<&PeerEndpoint, PeerError> {
+        self.hosts
+            .get(host)
+            .ok_or_else(|| PeerError::UnknownHost(host.to_owned()))
+    }
+
+    /// Resolve a full `name@host` agent to its remote endpoint by the host part.
+    /// Only the host selects the route; the [`AgentId`] stays the full principal,
+    /// so `alice@host1` and `alice@host2` resolve to different endpoints and can
+    /// never collapse onto one another's grants.
+    pub fn resolve_agent(&self, agent: &AgentId) -> Result<&PeerEndpoint, PeerError> {
+        self.resolve_host(host_component(&agent.display)?)
+    }
+
+    /// The authenticated-handshake binding check: the pubkey the remote daemon
+    /// presents MUST equal the pubkey the registry binds to `host`. Returns the
+    /// endpoint on a match so the caller proceeds; a mismatch is a
+    /// [`PeerError::PeerIdentityMismatch`] and the caller MUST drop the
+    /// connection. This verifies the *binding* (presented identity is the one the
+    /// operator trusts for this host); cryptographic proof that the remote holds
+    /// the matching private key is the transport handshake's job, layered on top.
+    pub fn verify_remote_identity(
+        &self,
+        host: &str,
+        presented: &[u8; 32],
+    ) -> Result<&PeerEndpoint, PeerError> {
+        let endpoint = self.resolve_host(host)?;
+        if &endpoint.pubkey != presented {
+            return Err(PeerError::PeerIdentityMismatch {
+                host: host.to_owned(),
+                expected: bs58::encode(endpoint.pubkey).into_string(),
+                presented: bs58::encode(presented).into_string(),
+            });
+        }
+        Ok(endpoint)
+    }
+}
+
+/// Host component of a `name@host` display string. Gates on the canonical
+/// [`covenant_types::validate_agent_id_display`] grammar (exactly one `@`,
+/// non-empty `local` and `host`, host limited to `[A-Za-z0-9_.-]`) as the single
+/// source of truth, then returns the host segment. Sharing that one validator
+/// keeps host routing from ever diverging from how an [`AgentId`] is validated on
+/// the wire, so a multi-`@` or odd-character display is rejected as
+/// [`PeerError::MalformedAgentId`] instead of silently routing to an
+/// attacker-chosen segment.
+fn host_component(display: &str) -> Result<&str, PeerError> {
+    covenant_types::validate_agent_id_display(display)
+        .map_err(|_| PeerError::MalformedAgentId(display.to_owned()))?;
+    // The validator already proved a single '@' with a non-empty host, so this
+    // split mirrors it and always matches. The error arm is unreachable
+    // defense-in-depth — kept (not unwrapped) so a future validator change can't
+    // turn a parse gap into a panic on the dispatch path.
+    display
+        .split_once('@')
+        .map(|(_, host)| host)
+        .ok_or_else(|| PeerError::MalformedAgentId(display.to_owned()))
+}
+
+/// serde adapter for the 32-byte pubkey: base58 string on the wire, validated to
+/// 32 bytes on load — mirrors [`AgentId`]'s own pubkey encoding.
+mod pubkey_b58 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(pubkey: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&bs58::encode(pubkey).into_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+        let s = String::deserialize(d)?;
+        let bytes = bs58::decode(&s)
+            .into_vec()
+            .map_err(serde::de::Error::custom)?;
+        if bytes.len() != 32 {
+            return Err(serde::de::Error::custom(format!(
+                "pubkey must decode to 32 bytes, got {}",
+                bytes.len()
+            )));
+        }
+        let mut pubkey = [0u8; 32];
+        pubkey.copy_from_slice(&bytes);
+        Ok(pubkey)
+    }
 }
 
 #[cfg(test)]
@@ -3440,5 +3605,163 @@ mod tests {
             source.downcast_ref::<serde_json::Error>().is_some(),
             "covenant_peer_auth::PeerError::Serde source() must downcast_ref to serde_json::Error so daemon-side peer-registry diagnostics can call serde_json::Error::line/column/classify for malformed-peer-row identification; a refactor that wrapped the inner in a project-local newtype (e.g., PeerSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies peers.jsonl parse faults (concrete-source-type downcast regression class)"
         );
+    }
+
+    // ---------- KnownHosts endpoint resolution ----------
+
+    fn endpoint(url: &str, pubkey: [u8; 32]) -> PeerEndpoint {
+        PeerEndpoint {
+            url: url.to_owned(),
+            pubkey,
+        }
+    }
+
+    #[test]
+    fn resolve_agent_routes_by_host_and_keeps_principals_distinct() {
+        let key1 = [1u8; 32];
+        let key2 = [2u8; 32];
+        let hosts = KnownHosts::new()
+            .with_host("host1", endpoint("http://host1:7777", key1))
+            .with_host("host2", endpoint("http://host2:7777", key2));
+
+        // Same local-part, different host: distinct principals (display differs),
+        // so a remote alice cannot inherit the local alice's grants.
+        let local = AgentId::new("alice@host1", key1);
+        let remote = AgentId::new("alice@host2", key2);
+        assert_ne!(
+            local, remote,
+            "alice@host1 and alice@host2 must be distinct principals, not collapsed by local-part",
+        );
+
+        assert_eq!(
+            hosts.resolve_agent(&local).unwrap().url,
+            "http://host1:7777"
+        );
+        assert_eq!(
+            hosts.resolve_agent(&remote).unwrap().url,
+            "http://host2:7777",
+        );
+        assert_ne!(
+            hosts.resolve_agent(&local).unwrap(),
+            hosts.resolve_agent(&remote).unwrap(),
+            "each host must route to its own endpoint",
+        );
+    }
+
+    #[test]
+    fn resolve_host_unknown_is_explicit_error_not_default() {
+        let hosts = KnownHosts::new().with_host("known", endpoint("http://known:7777", [9u8; 32]));
+
+        match hosts.resolve_host("ghost") {
+            Err(PeerError::UnknownHost(h)) => assert_eq!(h, "ghost"),
+            other => panic!("an unknown host must be an explicit UnknownHost error, got {other:?}"),
+        }
+        // The agent path surfaces the same explicit error, never a default-to-local.
+        match hosts.resolve_agent(&AgentId::new("bob@ghost", [0u8; 32])) {
+            Err(PeerError::UnknownHost(h)) => assert_eq!(h, "ghost"),
+            other => panic!("resolve_agent of an unknown host must fail loudly, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_remote_identity_refuses_pubkey_mismatch() {
+        let bound = [3u8; 32];
+        let impostor = [4u8; 32];
+        let hosts = KnownHosts::new().with_host("host2", endpoint("http://host2:7777", bound));
+
+        let err = hosts
+            .verify_remote_identity("host2", &impostor)
+            .expect_err("a remote presenting the wrong pubkey must be refused");
+        match err {
+            PeerError::PeerIdentityMismatch {
+                host,
+                expected,
+                presented,
+            } => {
+                assert_eq!(host, "host2");
+                assert_eq!(expected, bs58::encode(bound).into_string());
+                assert_eq!(presented, bs58::encode(impostor).into_string());
+            }
+            other => panic!("expected PeerIdentityMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_remote_identity_accepts_matching_pubkey() {
+        let bound = [5u8; 32];
+        let hosts = KnownHosts::new().with_host("host2", endpoint("http://host2:7777", bound));
+
+        let endpoint = hosts
+            .verify_remote_identity("host2", &bound)
+            .expect("a remote proving the bound identity must be accepted");
+        assert_eq!(endpoint.url, "http://host2:7777");
+    }
+
+    #[test]
+    fn verify_remote_identity_on_unknown_host_is_unknown_host_not_mismatch() {
+        let hosts = KnownHosts::new();
+        match hosts.verify_remote_identity("ghost", &[0u8; 32]) {
+            Err(PeerError::UnknownHost(h)) => assert_eq!(h, "ghost"),
+            other => {
+                panic!("verifying against an unregistered host must be UnknownHost, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn host_component_rejects_malformed_and_multi_at_displays() {
+        let hosts = KnownHosts::new();
+        // No '@', empty host, empty local, and — critically — multiple '@' are
+        // all rejected by the shared canonical grammar, so a multi-'@' display
+        // can never route to an attacker-chosen segment.
+        for bad in ["noatsign", "trailing@", "@emptylocal", "alice@host@evil"] {
+            let res = hosts.resolve_agent(&AgentId::new(bad, [0u8; 32]));
+            assert!(
+                matches!(res, Err(PeerError::MalformedAgentId(_))),
+                "{bad:?} must be MalformedAgentId, not routed, got {res:?}",
+            );
+        }
+        // A well-formed but unregistered host routes to an explicit UnknownHost.
+        assert!(matches!(
+            hosts.resolve_agent(&AgentId::new("alice@unregistered", [0u8; 32])),
+            Err(PeerError::UnknownHost(_)),
+        ));
+    }
+
+    #[test]
+    fn known_hosts_roundtrips_through_json_with_b58_pubkeys() {
+        let key = [7u8; 32];
+        let hosts = KnownHosts::new().with_host("host2", endpoint("http://host2:7777", key));
+
+        let json = serde_json::to_string(&hosts).unwrap();
+        assert!(
+            json.contains(&bs58::encode(key).into_string()),
+            "the pubkey must serialize as base58, not a raw byte array: {json}",
+        );
+
+        let back: KnownHosts = serde_json::from_str(&json).unwrap();
+        let ep = back.resolve_host("host2").unwrap();
+        assert_eq!(ep.url, "http://host2:7777");
+        assert_eq!(ep.pubkey, key);
+    }
+
+    #[test]
+    fn peer_endpoint_rejects_non_32_byte_pubkey_on_load() {
+        let json = r#"{"hosts":{"host2":{"url":"http://host2:7777","pubkey":"11111111"}}}"#;
+        let err = serde_json::from_str::<KnownHosts>(json)
+            .expect_err("a pubkey that does not decode to 32 bytes must be rejected");
+        assert!(
+            err.to_string().contains("32 bytes"),
+            "the error must name the 32-byte requirement, got {err}",
+        );
+    }
+
+    #[test]
+    fn peer_endpoint_rejects_malformed_base58_pubkey_on_load() {
+        // '0', 'O', 'I', 'l' are excluded from the base58 alphabet, so a pubkey
+        // field carrying them must fail the bs58 decode before the length gate.
+        let json = r#"{"hosts":{"host2":{"url":"http://host2:7777","pubkey":"0OIl"}}}"#;
+        serde_json::from_str::<KnownHosts>(json)
+            .expect_err("a pubkey that is not valid base58 must be rejected on load");
     }
 }

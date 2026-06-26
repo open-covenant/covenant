@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-26T17:43:08.972Z",
+  "updatedAt": "2026-06-26T18:03:12.866Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10962,
-    "tasks": 1291,
-    "integrated": 1293
+    "events": 10967,
+    "tasks": 1292,
+    "integrated": 1294
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 119,
-    "velocity": 17
+    "last24h": 6,
+    "last7d": 120,
+    "velocity": 17.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-26",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-26",
-      "total": 1293
+      "total": 1294
     }
   ],
   "states": {
-    "integrated": 1285,
-    "proposed": 1,
-    "blocked": 4,
-    "self_review": 1
+    "integrated": 1286,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multi-host-a2a-cross-host-signed-envelope",
-    "state": "self_review",
-    "since": "2026-06-26T17:26:40.647Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-26T17:47:00.612Z",
+      "task": "multi-host-a2a-cross-host-signed-envelope",
+      "note": "Integrated as d7bebd11 on loop/main-track. SignedA2ATask seal/open primitive (covenant-a2a) + verify_with_pubkey_bytes (covenant-identity); "
+    },
     {
       "at": "2026-06-26T16:35:58.518Z",
       "task": "multi-host-a2a-remote-recipient-refuse-not-silent-local",
@@ -315,11 +315,6 @@
       "at": "2026-06-23T19:57:56.602Z",
       "task": "witness-verifier-skill-manifest-fallback-coverage",
       "note": "manifest extraction + 5 mutation-proven tests; vitest 22/22, scripts EXIT=0"
-    },
-    {
-      "at": "2026-06-23T19:48:43.238Z",
-      "task": "settlement-publisher-operator-keypair-env-validation-coverag",
-      "note": "commit d8f50581: extracted keypair.mjs + 7 mutation-proven tests + vitest harness; vitest 7/7, validate.sh --scripts EXIT=0"
     }
   ]
 }

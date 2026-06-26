@@ -106,10 +106,17 @@ export default function LinksPage() {
 
       <div className="page-container">
         <div className="mx-auto flex w-full max-w-md flex-col items-center">
-          <Image src="/logomark.svg" alt="Covenant" width={52} height={52} priority className="opacity-90" />
+          <Image src="/logomark.svg" alt="" aria-hidden width={52} height={52} priority className="opacity-90" />
 
-          <h1 className="mt-6 text-[1.9rem] font-extralight uppercase leading-none tracking-[6px] text-white">
-            Covenant
+          <h1 className="mt-7">
+            <Image
+              src="/wordmark.png"
+              alt="Covenant"
+              width={600}
+              height={127}
+              priority
+              className="h-auto w-60 opacity-95"
+            />
           </h1>
 
           <p className="mt-4 max-w-xs text-balance text-center text-[13px] font-light leading-relaxed text-neutral-400">

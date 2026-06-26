@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-26T15:02:35.433Z",
+  "updatedAt": "2026-06-26T15:22:39.201Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10940,
+    "events": 10943,
     "tasks": 1289,
     "integrated": 1291
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1283,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "multi-host-daemon-known-hosts-config-wiring",
+    "state": "in_progress",
+    "since": "2026-06-26T15:04:21.285Z"
+  },
   "recent": [
     {
       "at": "2026-06-26T14:54:32.607Z",

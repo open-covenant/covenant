@@ -953,6 +953,23 @@ impl KnownHosts {
         }
         Ok(endpoint)
     }
+
+    /// Load the operator's known-hosts registry from a JSON file on disk.
+    /// Fail-closed on absence: a missing file means the operator has not
+    /// configured cross-host peering, so it loads as an EMPTY registry — every
+    /// host then resolves to [`PeerError::UnknownHost`], never a panic and never
+    /// a default-to-local — mirroring how the peer registry tolerates a missing
+    /// JSONL. Any OTHER io fault (permission denied, a directory in the path)
+    /// surfaces as [`PeerError::Io`] so a dropped registry is never silently
+    /// swallowed into an empty one; malformed JSON surfaces as
+    /// [`PeerError::Serde`].
+    pub async fn load_from_path(path: PathBuf) -> Result<Self, PeerError> {
+        match fs::read_to_string(&path).await {
+            Ok(raw) => Ok(serde_json::from_str(&raw)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 /// Host component of a `name@host` display string. Gates on the canonical
@@ -3763,5 +3780,70 @@ mod tests {
         let json = r#"{"hosts":{"host2":{"url":"http://host2:7777","pubkey":"0OIl"}}}"#;
         serde_json::from_str::<KnownHosts>(json)
             .expect_err("a pubkey that is not valid base58 must be rejected on load");
+    }
+
+    #[tokio::test]
+    async fn load_from_path_missing_file_is_empty_registry_not_default_to_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.json");
+        // Fail-closed: a missing registry means no cross-host peering is
+        // configured, so it loads empty and every host is UnknownHost — never a
+        // panic, never a silent default-to-local.
+        let hosts = KnownHosts::load_from_path(path).await.unwrap();
+        assert!(
+            hosts.is_empty(),
+            "a missing registry file must load as an empty KnownHosts",
+        );
+        match hosts.resolve_host("anyhost") {
+            Err(PeerError::UnknownHost(h)) => assert_eq!(h, "anyhost"),
+            other => {
+                panic!("an empty registry must resolve every host to UnknownHost, got {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn load_from_path_non_notfound_io_error_surfaces_not_empty() {
+        // A directory at the path is a real, non-NotFound io fault. It must
+        // surface as PeerError::Io, not be swallowed into a silently-empty
+        // registry that would drop the operator's configured peers.
+        let dir = tempfile::tempdir().unwrap();
+        let err = KnownHosts::load_from_path(dir.path().to_path_buf())
+            .await
+            .expect_err("reading a directory as a registry file must fail, not return empty");
+        assert!(
+            matches!(err, PeerError::Io(_)),
+            "a non-NotFound io fault must surface as PeerError::Io, not an empty registry: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn load_from_path_malformed_json_surfaces_serde_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known-hosts.json");
+        tokio::fs::write(&path, b"{not valid json").await.unwrap();
+        let err = KnownHosts::load_from_path(path)
+            .await
+            .expect_err("a malformed registry file must fail, not load empty or partial");
+        assert!(
+            matches!(err, PeerError::Serde(_)),
+            "malformed registry JSON must surface as PeerError::Serde: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn load_from_path_round_trips_a_written_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known-hosts.json");
+        let key = [8u8; 32];
+        let original = KnownHosts::new().with_host("host2", endpoint("http://host2:7777", key));
+        tokio::fs::write(&path, serde_json::to_vec(&original).unwrap())
+            .await
+            .unwrap();
+
+        let loaded = KnownHosts::load_from_path(path).await.unwrap();
+        let ep = loaded.resolve_host("host2").unwrap();
+        assert_eq!(ep.url, "http://host2:7777");
+        assert_eq!(ep.pubkey, key);
     }
 }

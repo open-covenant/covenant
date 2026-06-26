@@ -15385,7 +15385,7 @@ impl std::error::Error for BudgetSeedError {
     }
 }
 
-fn epoch_ms() -> u64 {
+pub(crate) fn epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -48674,9 +48674,11 @@ required = {caps:?}
         .with_cross_host_dedup(dedup)
     }
 
-    async fn grant_recv(s: &Server, sender_display: &str) {
+    async fn grant_recv(s: &Server, sender: &LocalIdentity) {
+        // Cross-host admission requires the pubkey-b58 recv form (4b-2a review
+        // NOTE 3), not the display form.
         s.op_respond(Request::GrantCapability {
-            action: format!("a2a.recv.{sender_display}"),
+            action: format!("a2a.recv.{}", sender.agent_id().pubkey_base58()),
             scope: None,
             expires_at: None,
         })
@@ -48727,7 +48729,7 @@ required = {caps:?}
         let dir = tempfile::tempdir().unwrap();
         let alice = LocalIdentity::generate("alice@host1");
         let s = cross_host_server(dir.path(), &alice).await;
-        grant_recv(&s, "alice@host1").await;
+        grant_recv(&s, &alice).await;
         let now = 10_000_000;
         let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0001, now);
         let id = envelope.open().unwrap().id;
@@ -48754,7 +48756,7 @@ required = {caps:?}
         let alice = LocalIdentity::generate("alice@host1");
         let mallory = LocalIdentity::generate("mallory@host1");
         let s = cross_host_server(dir.path(), &alice).await;
-        grant_recv(&s, "alice@host1").await;
+        grant_recv(&s, &alice).await;
         let now = 10_000_000;
         // The payload claims alice as sender; mallory holds the pen.
         let task = covenant_a2a::A2ATask {
@@ -48796,7 +48798,7 @@ required = {caps:?}
         // carol is a real keyholder, validly signs her own envelope, but her host
         // is not in the registry — authenticity is not admission.
         let carol = LocalIdentity::generate("carol@elsewhere");
-        grant_recv(&s, "carol@elsewhere").await;
+        grant_recv(&s, &carol).await;
         let now = 10_000_000;
         let envelope = sealed_envelope(&carol, s.identity.agent_id(), 0x4b2a_0003, now);
         assert_eq!(
@@ -48821,7 +48823,7 @@ required = {caps:?}
         // eve shares the host but holds a different key. open() succeeds (eve
         // signs as eve), but the registry binds host1 to alice's key.
         let eve = LocalIdentity::generate("eve@host1");
-        grant_recv(&s, "eve@host1").await;
+        grant_recv(&s, &eve).await;
         let now = 10_000_000;
         let envelope = sealed_envelope(&eve, s.identity.agent_id(), 0x4b2a_0004, now);
         assert_eq!(
@@ -48840,7 +48842,7 @@ required = {caps:?}
         let dir = tempfile::tempdir().unwrap();
         let alice = LocalIdentity::generate("alice@host1");
         let s = cross_host_server(dir.path(), &alice).await;
-        grant_recv(&s, "alice@host1").await;
+        grant_recv(&s, &alice).await;
         let now = 10_000_000;
         // A verified envelope whose recipient is not this daemon still opens.
         let envelope =
@@ -48864,7 +48866,7 @@ required = {caps:?}
         let dir = tempfile::tempdir().unwrap();
         let alice = LocalIdentity::generate("alice@host1");
         let s = cross_host_server(dir.path(), &alice).await;
-        grant_recv(&s, "alice@host1").await;
+        grant_recv(&s, &alice).await;
         let now = 10_000_000;
         let issued = now - cross_host::CROSS_HOST_MAX_AGE_MS - 1;
         let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0006, issued);
@@ -48887,7 +48889,7 @@ required = {caps:?}
         let dir = tempfile::tempdir().unwrap();
         let alice = LocalIdentity::generate("alice@host1");
         let s = cross_host_server(dir.path(), &alice).await;
-        grant_recv(&s, "alice@host1").await;
+        grant_recv(&s, &alice).await;
         let now = 10_000_000;
         let issued = now + cross_host::CROSS_HOST_MAX_SKEW_MS + 1;
         let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0007, issued);
@@ -48905,7 +48907,7 @@ required = {caps:?}
     async fn admit_rejects_when_the_recipient_has_not_granted_recv() {
         let dir = tempfile::tempdir().unwrap();
         let alice = LocalIdentity::generate("alice@host1");
-        // No grant_recv: the recipient never admitted a2a.recv.alice@host1.
+        // No grant_recv: the recipient never admitted a2a.recv.<alice pubkey>.
         let s = cross_host_server(dir.path(), &alice).await;
         let now = 10_000_000;
         let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0008, now);
@@ -48928,7 +48930,7 @@ required = {caps:?}
         let dir = tempfile::tempdir().unwrap();
         let alice = LocalIdentity::generate("alice@host1");
         let s = cross_host_server(dir.path(), &alice).await;
-        grant_recv(&s, "alice@host1").await;
+        grant_recv(&s, &alice).await;
         let now = 10_000_000;
         let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0009, now);
         let id = envelope.open().unwrap().id;
@@ -48973,7 +48975,7 @@ required = {caps:?}
         let id = envelope.open().unwrap().id;
         {
             let s = cross_host_server_with_identity(dir.path(), &alice, identity.clone()).await;
-            grant_recv(&s, "alice@host1").await;
+            grant_recv(&s, &alice).await;
             assert_eq!(
                 s.admit_remote_a2a_task(envelope.clone(), now).await,
                 cross_host::RemoteAdmission::Admitted { task_id: id }
@@ -48982,7 +48984,7 @@ required = {caps:?}
         // A fresh daemon over the SAME dedup log still recognizes the replay.
         let restarted =
             cross_host_server_with_identity(dir.path(), &alice, identity.clone()).await;
-        grant_recv(&restarted, "alice@host1").await;
+        grant_recv(&restarted, &alice).await;
         assert_eq!(
             restarted.admit_remote_a2a_task(envelope, now + 1).await,
             cross_host::RemoteAdmission::Duplicate { task_id: id }

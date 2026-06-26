@@ -1017,3 +1017,502 @@ async fn reject_surfaces_audit_write_failure_as_503() {
     assert_eq!(body["kind"], "error");
     assert_eq!(body["message"], "audit write failed; refusing to proceed");
 }
+
+// --- Cross-host A2A inbound admission route (multi-host slice 4b-2b) ---------
+//
+// `POST /a2a/peer-tasks` is the first externally-reachable, bearer-EXEMPT
+// surface: a remote daemon holds no local token and authenticates by an
+// envelope signature, gated by `Server::admit_remote_a2a_task` rather than
+// `require_bearer`. These tests drive it over the live gateway.
+
+fn real_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+struct CrossHostFixture {
+    base: String,
+    receiver_token: String,
+    receiver: covenant_types::AgentId,
+    sender: LocalIdentity,
+    audit: Arc<dyn AuditLog>,
+    _dir: tempfile::TempDir,
+    _handle: tokio::task::JoinHandle<()>,
+}
+
+/// Spawn a daemon that knows `alice@host1` as a cross-host peer and holds a
+/// fresh restart-durable dedup log. The injected `audit` lets a test model an
+/// audit outage; a bearer token is registered for the receiver so the operator
+/// can self-grant the recv capability over the authenticated API while the
+/// route under test stays bearer-exempt.
+async fn spawn_cross_host_fixture(audit: Arc<dyn AuditLog>) -> CrossHostFixture {
+    let receiver = Arc::new(LocalIdentity::generate("user@local"));
+    let receiver_agent = covenant_types::AgentId::new(receiver.display(), receiver.pubkey_bytes());
+    let sender = LocalIdentity::generate("alice@host1");
+    let dir = tempfile::tempdir().unwrap();
+
+    let known_hosts = covenant_peer_auth::KnownHosts::new().with_host(
+        "host1",
+        covenant_peer_auth::PeerEndpoint {
+            url: "http://host1:7777".into(),
+            pubkey: sender.pubkey_bytes(),
+        },
+    );
+    let dedup = Arc::new(
+        covenantd::cross_host::JsonlCrossHostDedup::open(dir.path().join("cross-host-dedup.jsonl"))
+            .await
+            .unwrap(),
+    );
+
+    let peers: Arc<dyn covenant_peer_auth::PeerRegistry> =
+        Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new());
+    let token = covenant_peer_auth::PeerToken::generate();
+    let token_b58 = token.to_b58();
+    peers
+        .register(covenant_peer_auth::PeerEntry {
+            token,
+            agent_id: receiver_agent.clone(),
+            registered_at: 0,
+        })
+        .await
+        .unwrap();
+
+    let server = Server::new(
+        Arc::new(Router::from_cards(vec![])),
+        Arc::new(MockRunner::new("")),
+        Arc::new(InMemoryStore::new()),
+        Arc::new(InMemorySettlement::new()),
+        audit.clone(),
+        Arc::new(InMemoryCapabilityStore::new()),
+        Arc::new(MockEmbedder::new(64)),
+        receiver,
+        Arc::new(covenant_memory::IgnoreSet::default()),
+        Arc::new(covenant_mcp::ToolRegistry::from_tools(vec![])),
+        Arc::new(covenant_a2a::InMemoryMailbox::new()),
+        peers,
+        Arc::new(covenant_budget::InMemoryLedger::new()),
+    )
+    .with_known_hosts(known_hosts)
+    .with_cross_host_dedup(dedup);
+
+    let (live_traces_tx, _) = tokio::sync::broadcast::channel(16);
+    let app = router(HttpState {
+        server,
+        live_traces_tx,
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let _handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    CrossHostFixture {
+        base: format!("http://{addr}"),
+        receiver_token: token_b58,
+        receiver: receiver_agent,
+        sender,
+        audit,
+        _dir: dir,
+        _handle,
+    }
+}
+
+fn seal_to(
+    sender: &LocalIdentity,
+    recipient: &covenant_types::AgentId,
+    id: u128,
+    issued_at_ms: u64,
+) -> covenant_a2a::SignedA2ATask {
+    let task = covenant_a2a::A2ATask {
+        id: uuid::Uuid::from_u128(id),
+        sender: sender.agent_id(),
+        recipient: recipient.clone(),
+        intent_text: "ship the receipt batch".into(),
+        task_kind: None,
+        parent: None,
+        deadline_ms: None,
+        idempotency: None,
+    };
+    covenant_a2a::SignedA2ATask::seal(&task, issued_at_ms, sender)
+}
+
+async fn grant_recv_http(base: &str, token: &str, sender_b58: &str) {
+    let g: serde_json::Value = reqwest::Client::new()
+        .post(format!("{base}/capabilities/grant"))
+        .bearer_auth(token)
+        .json(&json!({ "action": format!("a2a.recv.{sender_b58}") }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(g["kind"], "capability_granted", "recv grant must succeed: {g}");
+}
+
+async fn cross_host_reasons(audit: &Arc<dyn AuditLog>) -> Vec<(String, String)> {
+    audit
+        .recent(usize::MAX)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            covenant_audit::AuditKind::CrossHostA2AAdmission {
+                outcome, reason, ..
+            } => Some((outcome, reason)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn peer_tasks_route_admits_without_bearer_while_protected_routes_stay_gated() {
+    let f = spawn_cross_host_fixture(Arc::new(InMemoryAuditLog::new())).await;
+    grant_recv_http(
+        &f.base,
+        &f.receiver_token,
+        &f.sender.agent_id().pubkey_base58(),
+    )
+    .await;
+    let envelope = seal_to(&f.sender, &f.receiver, 0x4b2b_0001, real_now_ms());
+
+    // The new route admits a valid envelope with NO Authorization header.
+    let r = reqwest::Client::new()
+        .post(format!("{}/a2a/peer-tasks", f.base))
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        202,
+        "the bearer-exempt route must admit a valid envelope without a token"
+    );
+
+    // The exemption must NOT leak: a protected route still 401s without a bearer.
+    let protected = reqwest::Client::new()
+        .get(format!("{}/tools", f.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        protected.status(),
+        401,
+        "the bearer exemption must stay confined to /a2a/peer-tasks"
+    );
+}
+
+#[tokio::test]
+async fn peer_tasks_route_caps_oversize_body_before_admission_runs() {
+    let f = spawn_cross_host_fixture(Arc::new(InMemoryAuditLog::new())).await;
+    // 128 KiB — over the route's 64 KiB cap. DefaultBodyLimit must 413 before
+    // the Json extractor or the admission core can allocate the body.
+    let oversize = "x".repeat(128 * 1024);
+    let r = reqwest::Client::new()
+        .post(format!("{}/a2a/peer-tasks", f.base))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(oversize)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        413,
+        "a body over the route cap must 413 before admission, got {}",
+        r.status()
+    );
+    assert!(
+        cross_host_reasons(&f.audit).await.is_empty(),
+        "the oversize body must be refused before admit_remote_a2a_task is entered"
+    );
+}
+
+#[tokio::test]
+async fn peer_tasks_route_collapses_every_rejection_to_one_non_leaking_response() {
+    // No recv grant: a fresh valid envelope rejects at the recv-gate, while
+    // other envelopes reject at earlier stages. Every cause must look identical
+    // on the wire; only the audit feed distinguishes the stage.
+    let f = spawn_cross_host_fixture(Arc::new(InMemoryAuditLog::new())).await;
+    let now = real_now_ms();
+    let client = reqwest::Client::new();
+
+    // (a) bad signature: payload claims alice, a different key signs.
+    let mallory = LocalIdentity::generate("mallory@host1");
+    let forged = {
+        let task = covenant_a2a::A2ATask {
+            id: uuid::Uuid::from_u128(0x4b2b_0101),
+            sender: f.sender.agent_id(),
+            recipient: f.receiver.clone(),
+            intent_text: "drain the treasury".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        covenant_a2a::SignedA2ATask::seal(&task, now, &mallory)
+    };
+    // (b) unknown host: carol's host is not in the registry.
+    let carol = LocalIdentity::generate("carol@elsewhere");
+    let unknown = seal_to(&carol, &f.receiver, 0x4b2b_0102, now);
+    // (c) stale: a valid alice envelope dated past the freshness window.
+    let stale = seal_to(
+        &f.sender,
+        &f.receiver,
+        0x4b2b_0103,
+        now - covenantd::cross_host::CROSS_HOST_MAX_AGE_MS - 10_000,
+    );
+    // (d) recv not granted: a fresh valid alice envelope, but no grant exists.
+    let ungranted = seal_to(&f.sender, &f.receiver, 0x4b2b_0104, now);
+
+    let mut responses = Vec::new();
+    for env in [&forged, &unknown, &stale, &ungranted] {
+        let r = client
+            .post(format!("{}/a2a/peer-tasks", f.base))
+            .json(env)
+            .send()
+            .await
+            .unwrap();
+        let status = r.status();
+        let body: serde_json::Value = r.json().await.unwrap();
+        responses.push((status, body));
+    }
+    let first = &responses[0];
+    assert_eq!(first.0, 403);
+    assert_eq!(first.1, json!({ "kind": "rejected" }));
+    for r in &responses[1..] {
+        assert_eq!(
+            (r.0, &r.1),
+            (first.0, &first.1),
+            "every rejection cause must map to one identical response body and status"
+        );
+    }
+
+    // The audit feed is the sole place the stage is observable.
+    let reasons: std::collections::HashSet<String> = cross_host_reasons(&f.audit)
+        .await
+        .into_iter()
+        .map(|(_, reason)| reason)
+        .collect();
+    for expected in ["signature_invalid", "unknown_principal", "stale", "recv_not_granted"] {
+        assert!(
+            reasons.contains(expected),
+            "the audit feed must record the distinct stage {expected}: {reasons:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn peer_tasks_route_uses_the_real_receiver_clock_for_freshness() {
+    let f = spawn_cross_host_fixture(Arc::new(InMemoryAuditLog::new())).await;
+    grant_recv_http(
+        &f.base,
+        &f.receiver_token,
+        &f.sender.agent_id().pubkey_base58(),
+    )
+    .await;
+    let now = real_now_ms();
+    let client = reqwest::Client::new();
+
+    // A stale envelope is rejected — only possible if the route wired the real
+    // clock, not a fixed/zero now that would let every freshness check pass.
+    let stale = seal_to(
+        &f.sender,
+        &f.receiver,
+        0x4b2b_0201,
+        now - covenantd::cross_host::CROSS_HOST_MAX_AGE_MS - 10_000,
+    );
+    let r = client
+        .post(format!("{}/a2a/peer-tasks", f.base))
+        .json(&stale)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        403,
+        "a stale envelope must be rejected against the real receiver clock"
+    );
+
+    // A fresh envelope from the same sender is admitted.
+    let fresh = seal_to(&f.sender, &f.receiver, 0x4b2b_0202, now);
+    let r = client
+        .post(format!("{}/a2a/peer-tasks", f.base))
+        .json(&fresh)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 202, "a fresh envelope must be admitted");
+}
+
+#[tokio::test]
+async fn peer_tasks_route_absorbs_a_replay_idempotently() {
+    let f = spawn_cross_host_fixture(Arc::new(InMemoryAuditLog::new())).await;
+    grant_recv_http(
+        &f.base,
+        &f.receiver_token,
+        &f.sender.agent_id().pubkey_base58(),
+    )
+    .await;
+    let envelope = seal_to(&f.sender, &f.receiver, 0x4b2b_0301, real_now_ms());
+    let client = reqwest::Client::new();
+
+    let first = client
+        .post(format!("{}/a2a/peer-tasks", f.base))
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 202, "first delivery is admitted");
+    let replay = client
+        .post(format!("{}/a2a/peer-tasks", f.base))
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.status(),
+        202,
+        "a replay is acknowledged with the same ack, never split into admit-vs-error"
+    );
+
+    // The mailbox holds exactly one copy: drain once -> task, again -> none.
+    let drain1: serde_json::Value = client
+        .get(format!("{}/a2a/tasks/next", f.base))
+        .bearer_auth(&f.receiver_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        drain1["task"].is_object(),
+        "the first delivery must be enqueued: {drain1}"
+    );
+    let drain2: serde_json::Value = client
+        .get(format!("{}/a2a/tasks/next", f.base))
+        .bearer_auth(&f.receiver_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        drain2["task"].is_null(),
+        "the replay must not enqueue a second copy: {drain2}"
+    );
+}
+
+#[tokio::test]
+async fn peer_tasks_route_binds_host_from_signed_payload_not_the_transport() {
+    let f = spawn_cross_host_fixture(Arc::new(InMemoryAuditLog::new())).await;
+    grant_recv_http(
+        &f.base,
+        &f.receiver_token,
+        &f.sender.agent_id().pubkey_base58(),
+    )
+    .await;
+    let envelope = seal_to(&f.sender, &f.receiver, 0x4b2b_0401, real_now_ms());
+
+    // A mixed-case Host header that does not match the registry key MUST NOT
+    // influence admission: the sender host comes from the signed payload
+    // (host1), byte-exact matched, so the envelope still admits and no
+    // transport-derived casing can split or confuse host identity.
+    let r = reqwest::Client::new()
+        .post(format!("{}/a2a/peer-tasks", f.base))
+        .header(reqwest::header::HOST, "HOST1.EXAMPLE")
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        202,
+        "admission must bind host from the signed payload, never the Host header"
+    );
+}
+
+/// An audit log that records everything except the cross-host ADMITTED/DUPLICATE
+/// rows, modelling an audit outage that strikes exactly when the admission core
+/// must persist a delivery before enqueue.
+struct FailCrossHostAdmissionAudit {
+    inner: InMemoryAuditLog,
+}
+
+#[async_trait::async_trait]
+impl AuditLog for FailCrossHostAdmissionAudit {
+    async fn record(
+        &self,
+        event: covenant_audit::AuditEvent,
+    ) -> Result<(), covenant_audit::AuditError> {
+        if let covenant_audit::AuditKind::CrossHostA2AAdmission { outcome, .. } = &event.kind {
+            if outcome == "admitted" || outcome == "duplicate" {
+                return Err(covenant_audit::AuditError::Io(std::io::Error::other(
+                    "audit outage on cross-host admission (test fixture)",
+                )));
+            }
+        }
+        self.inner.record(event).await
+    }
+    async fn recent(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
+        self.inner.recent(limit).await
+    }
+    async fn purge_older_than(&self, before_ms: u64) -> Result<u64, covenant_audit::AuditError> {
+        self.inner.purge_older_than(before_ms).await
+    }
+    async fn verify_integrity(
+        &self,
+    ) -> Result<covenant_audit::AuditIntegrityReport, covenant_audit::AuditError> {
+        self.inner.verify_integrity().await
+    }
+}
+
+#[tokio::test]
+async fn peer_tasks_route_fails_closed_when_the_admitted_row_cannot_persist() {
+    // Accountability invariant (4b-2a review NOTE 1): an admitted task must not
+    // reach the mailbox without a durable audit row. With the admitted-row write
+    // failing, an otherwise-admissible envelope is refused and nothing enqueues.
+    let f = spawn_cross_host_fixture(Arc::new(FailCrossHostAdmissionAudit {
+        inner: InMemoryAuditLog::new(),
+    }))
+    .await;
+    grant_recv_http(
+        &f.base,
+        &f.receiver_token,
+        &f.sender.agent_id().pubkey_base58(),
+    )
+    .await;
+    let envelope = seal_to(&f.sender, &f.receiver, 0x4b2b_0501, real_now_ms());
+
+    let r = reqwest::Client::new()
+        .post(format!("{}/a2a/peer-tasks", f.base))
+        .json(&envelope)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        403,
+        "a non-durable admission must fail closed, not deliver silently"
+    );
+
+    // Nothing was enqueued: the mailbox drain comes back empty.
+    let drain: serde_json::Value = reqwest::Client::new()
+        .get(format!("{}/a2a/tasks/next", f.base))
+        .bearer_auth(&f.receiver_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        drain["task"].is_null(),
+        "no task may reach the mailbox without a durable admitted row: {drain}"
+    );
+}

@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use covenant_a2a::{A2AEnvelopeError, SignedA2ATask};
-use covenant_audit::{AuditEvent, AuditKind};
+use covenant_audit::{AuditError, AuditEvent, AuditKind};
 use covenant_permissions::A2aScopeRequest;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -281,11 +281,19 @@ impl Server {
         }
 
         // 5. Recv-gate. The recipient (this daemon) must have granted
-        //    a2a.recv.<sender> to itself, the same admission the local cross-peer
-        //    send path enforces. Run BEFORE the dedup claim so a task refused here
-        //    is never recorded as seen — a legitimate retry after the grant lands
-        //    must not be swallowed as a duplicate.
-        let recv_alternatives = task.sender.scoped_action_alternatives("a2a.recv");
+        //    a2a.recv.<sender_pubkey_b58> to itself. Run BEFORE the dedup claim so
+        //    a task refused here is never recorded as seen — a legitimate retry
+        //    after the grant lands must not be swallowed as a duplicate.
+        //
+        //    Require the pubkey-b58 form only, not the display form the local
+        //    cross-peer send path also accepts (4b-2a review NOTE 3). The host
+        //    segment of the display is registry-validated and the pubkey is
+        //    proven equal to the registry-bound key, but the display's name
+        //    segment is sender-chosen; keying the grant on the unforgeable pubkey
+        //    drops that one sender-influenced input from the cross-host trust
+        //    path. Cross-host admission is network-unreachable before slice
+        //    4b-2b, so no operator relies on a display-form remote recv grant.
+        let recv_required = [format!("a2a.recv.{sender_b58}")];
         let task_id_s = task.id.to_string();
         let recv_scope = A2aScopeRequest {
             peer_pubkey_b58: Some(&sender_b58),
@@ -294,7 +302,7 @@ impl Server {
             duplicate_risk: None,
         };
         match self
-            .recipient_has_recv_for(&task.recipient, &recv_alternatives, recv_scope)
+            .recipient_has_recv_for(&task.recipient, &recv_required, recv_scope)
             .await
         {
             Ok(A2aScopeCheck { allowed: true, .. }) => {}
@@ -336,14 +344,22 @@ impl Server {
         match dedup.claim_fresh(&key, now_ms).await {
             Ok(true) => {}
             Ok(false) => {
-                self.audit_cross_host(
-                    now_ms,
-                    &sender_b58,
-                    &recipient_display,
-                    "duplicate",
-                    "duplicate",
-                )
-                .await;
+                // A duplicate absorbs a replay of an already-delivered task, so
+                // the operator must see it durably; fail closed if the row
+                // cannot land (carry-forward 4b-2a review NOTE 1).
+                if self
+                    .audit_cross_host_required(
+                        now_ms,
+                        &sender_b58,
+                        &recipient_display,
+                        "duplicate",
+                        "duplicate",
+                    )
+                    .await
+                    .is_err()
+                {
+                    return RemoteAdmission::Rejected;
+                }
                 return RemoteAdmission::Duplicate { task_id: task.id };
             }
             Err(_) => {
@@ -361,19 +377,28 @@ impl Server {
             }
         }
 
-        // 7. Enqueue onto the same mailbox the local path uses. The claim is
-        //    already durable; if the append fails the task is claimed-but-not-
-        //    enqueued — a bounded loss under mailbox IO failure, preferred over
-        //    holding the replay window open by claiming only after a successful
-        //    enqueue.
+        // 7. Record the admission durably BEFORE the task reaches the mailbox,
+        //    then enqueue (carry-forward 4b-2a review NOTE 1). Ordering the
+        //    required audit first makes "a task on the mailbox" imply "a durable
+        //    admitted row exists", so an accountability record can never lag a
+        //    delivered task. Fail closed if the row cannot land: the dedup claim
+        //    is already durable, so the refusal is absorbed as a duplicate on
+        //    retry — a bounded loss under audit outage, preferred over an
+        //    unattributable task on the mailbox.
         let task_id = task.id;
+        if self
+            .audit_cross_host_required(now_ms, &sender_b58, &recipient_display, "admitted", "")
+            .await
+            .is_err()
+        {
+            return RemoteAdmission::Rejected;
+        }
         match self.mailbox.send_task(task).await {
-            Ok(()) => {
-                self.audit_cross_host(now_ms, &sender_b58, &recipient_display, "admitted", "")
-                    .await;
-                RemoteAdmission::Admitted { task_id }
-            }
+            Ok(()) => RemoteAdmission::Admitted { task_id },
             Err(_) => {
+                // The admitted row is already durable; emit a best-effort
+                // correction so the feed shows the enqueue failure that followed
+                // it rather than a silent over-claim of a task that never landed.
                 self.audit_cross_host(
                     now_ms,
                     &sender_b58,
@@ -387,18 +412,18 @@ impl Server {
         }
     }
 
-    /// Record one cross-host admission decision on the operator's audit feed.
-    /// Daemon-authored (`issuer = self.identity`): the remote sender holds no
-    /// local token, so its identity lives in `sender_pubkey_b58`, not the issuer.
-    async fn audit_cross_host(
+    /// Build one cross-host admission audit event. Daemon-authored
+    /// (`issuer = self.identity`): the remote sender holds no local token, so its
+    /// identity lives in `sender_pubkey_b58`, not the issuer.
+    fn cross_host_event(
         &self,
         now_ms: u64,
         sender_pubkey_b58: &str,
         recipient_display: &str,
         outcome: &str,
         reason: &str,
-    ) {
-        let event = AuditEvent {
+    ) -> AuditEvent {
+        AuditEvent {
             id: Uuid::new_v4(),
             timestamp_ms: now_ms,
             issuer: self.identity.agent_id(),
@@ -408,8 +433,40 @@ impl Server {
                 outcome: outcome.to_string(),
                 reason: reason.to_string(),
             },
-        };
+        }
+    }
+
+    /// Record a cross-host admission decision best-effort. Used for the rejection
+    /// outcomes: a rejected task never reaches the mailbox, so a lost row leaves
+    /// no delivered task unaccounted for.
+    async fn audit_cross_host(
+        &self,
+        now_ms: u64,
+        sender_pubkey_b58: &str,
+        recipient_display: &str,
+        outcome: &str,
+        reason: &str,
+    ) {
+        let event =
+            self.cross_host_event(now_ms, sender_pubkey_b58, recipient_display, outcome, reason);
         self.record_daemon_event(event).await;
+    }
+
+    /// Record an admitted/duplicate decision durably, returning `Err` if the row
+    /// cannot land. These outcomes either deliver a task or absorb a replay of a
+    /// delivered one, so the operator must be able to see them; the caller
+    /// refuses the envelope on `Err` rather than proceed without a record.
+    async fn audit_cross_host_required(
+        &self,
+        now_ms: u64,
+        sender_pubkey_b58: &str,
+        recipient_display: &str,
+        outcome: &str,
+        reason: &str,
+    ) -> Result<(), AuditError> {
+        let event =
+            self.cross_host_event(now_ms, sender_pubkey_b58, recipient_display, outcome, reason);
+        self.record_daemon_event_required(event).await
     }
 }
 

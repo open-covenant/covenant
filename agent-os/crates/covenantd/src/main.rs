@@ -836,19 +836,25 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
     Some(cfg)
 }
 
-/// Mask secret query params (api keys, tokens) in a URL before logging it,
-/// so a keyed RPC endpoint in `sap.env` never lands in stdout/journald.
+/// Mask secret query params (api keys, tokens) in a URL before logging it, so a
+/// keyed RPC endpoint in `sap.env` never lands in stdout/journald. Masks every
+/// occurrence of each key, not just the first, and covers the hyphenated
+/// `api-key` form (used by common Solana RPC providers) alongside the underscore
+/// form. Best-effort: a secret carried as a path segment rather than a
+/// `key=value` query param is out of scope.
 fn redact_url(url: &str) -> String {
     let mut out = url.to_string();
-    for key in ["api_key", "apikey", "token", "secret"] {
+    for key in ["api_key", "api-key", "apikey", "token", "secret"] {
         let needle = format!("{key}=");
-        if let Some(start) = out.find(&needle) {
-            let val_start = start + needle.len();
+        let mut from = 0;
+        while let Some(rel) = out[from..].find(&needle) {
+            let val_start = from + rel + needle.len();
             let val_end = out[val_start..]
                 .find('&')
                 .map(|i| val_start + i)
                 .unwrap_or(out.len());
             out.replace_range(val_start..val_end, "***");
+            from = val_start + 3; // resume past the inserted mask
         }
     }
     out
@@ -886,6 +892,71 @@ fn default_ignorefile() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_url_masks_every_secret_query_param_occurrence_and_hyphen_form() {
+        // redact_url is the only guard between a keyed sap.env RPC endpoint and
+        // the daemon's startup info log (the `rpc_url = %redact_url(...)` field).
+        // It has no direct test today, so three real leaks have no signal:
+        //
+        //  (a) the hyphenated `api-key=` form (used by common Solana RPC
+        //      providers) — masking only `api_key`/`apikey` leaves it in the log;
+        //  (b) a second occurrence of a key — masking only the first match leaks
+        //      the rest;
+        //  (c) a refactor that narrowed the value span past the next `&` and
+        //      swallowed a following non-secret param, or stopped short of the
+        //      string end and left a trailing secret.
+
+        // (a) Hyphen form: a Helius-style endpoint must not leak its key.
+        let helius = redact_url("https://mainnet.helius-rpc.com/?api-key=HELIUSSECRET");
+        assert!(
+            !helius.contains("HELIUSSECRET"),
+            "the hyphenated api-key= form must be masked — common Solana RPC \
+             providers key on `api-key`, and leaving it unmasked writes the \
+             secret straight to journald: {helius}"
+        );
+        assert!(
+            helius.contains("api-key=***"),
+            "the api-key value must be replaced with the *** mask sentinel: {helius}"
+        );
+
+        // (b) Every occurrence, not just the first.
+        let repeated =
+            redact_url("https://rpc.example.com/?api_key=FIRSTKEY&hint=1&api_key=SECONDKEY");
+        assert!(
+            !repeated.contains("FIRSTKEY") && !repeated.contains("SECONDKEY"),
+            "a key repeated in the query must be masked at EVERY occurrence — \
+             masking only the first leaks the rest into the log: {repeated}"
+        );
+        assert!(
+            repeated.contains("hint=1"),
+            "a non-secret param between two masked keys must survive untouched: {repeated}"
+        );
+
+        // (c) Value span ends at the next `&`, and runs to the end of the string
+        //     when the secret is the trailing param.
+        let mid = redact_url("https://rpc.example.com/?token=MIDSECRET&cluster=mainnet");
+        assert!(
+            !mid.contains("MIDSECRET") && mid.contains("cluster=mainnet"),
+            "a secret followed by `&param` must be masked up to (not past) the \
+             `&`, preserving the trailing param: {mid}"
+        );
+        let trailing = redact_url("https://rpc.example.com/?cluster=mainnet&secret=ENDSECRET");
+        assert!(
+            !trailing.contains("ENDSECRET") && trailing.contains("secret=***"),
+            "a secret as the final param (no trailing `&`) must be masked through \
+             the end of the string: {trailing}"
+        );
+
+        // A URL with no secret query param is returned unchanged — the redactor
+        // must not corrupt or over-mask an already-safe endpoint.
+        let plain = "https://rpc.example.com/v1/mainnet";
+        assert_eq!(
+            redact_url(plain),
+            plain,
+            "an endpoint with no secret query param must pass through verbatim"
+        );
+    }
 
     #[test]
     fn default_ignorefile_pins_each_credential_path_pattern_and_operator_comment_header() {

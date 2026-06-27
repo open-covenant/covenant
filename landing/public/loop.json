@@ -1,21 +1,17 @@
 {
-  "updatedAt": "2026-06-26T23:44:57.912Z",
+  "updatedAt": "2026-06-27T00:05:01.741Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10990,
-    "tasks": 1294,
-    "integrated": 1296
+    "events": 10994,
+    "tasks": 1295,
+    "integrated": 1297
   },
   "throughput": {
-    "last24h": 8,
-    "last7d": 121,
-    "velocity": 17.3
+    "last24h": 9,
+    "last7d": 122,
+    "velocity": 17.4
   },
   "daily": [
-    {
-      "date": "06-06",
-      "count": 42
-    },
     {
       "date": "06-07",
       "count": 50
@@ -94,14 +90,14 @@
     },
     {
       "date": "06-26",
-      "count": 8
+      "count": 9
+    },
+    {
+      "date": "06-27",
+      "count": 0
     }
   ],
   "cumulative": [
-    {
-      "date": "06-06",
-      "total": 894
-    },
     {
       "date": "06-07",
       "total": 944
@@ -180,14 +176,17 @@
     },
     {
       "date": "06-26",
-      "total": 1296
+      "total": 1297
+    },
+    {
+      "date": "06-27",
+      "total": 1297
     }
   ],
   "states": {
-    "integrated": 1288,
-    "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "integrated": 1289,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multi-host-a2a-cross-host-outbound-deliver",
-    "state": "cross_review",
-    "since": "2026-06-26T23:43:19.782Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-26T23:47:29.670Z",
+      "task": "multi-host-a2a-cross-host-outbound-deliver",
+      "note": "Integrated as 36256df5, pushed f32392dc..36256df5 to origin/loop/main-track. 4b-3 complete: send_a2a_task routes a known-host recipient to d"
+    },
     {
       "at": "2026-06-26T22:35:57.799Z",
       "task": "multi-host-a2a-cross-host-inbound-route",
@@ -315,11 +315,6 @@
       "at": "2026-06-23T20:31:08.812Z",
       "task": "indexer-model-base58-normalize-arms-coverage",
       "note": "Committed 63b6e0eb: 7 new test cases covering normalize_event length/charset reject arms + trim + seed_events, mutation-proved. Test-only, n"
-    },
-    {
-      "at": "2026-06-23T20:06:22.625Z",
-      "task": "settlement-publisher-dispatch-selection-ordering-coverage",
-      "note": "dispatch-select extraction + 5 mutation-proven tests; vitest 20/20, scripts EXIT=0"
     }
   ]
 }

@@ -3267,6 +3267,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_open_replay_clamps_balance_when_persisted_debits_exceed_capacity() {
+        // JsonlLedger::open replays each persisted Debit into the in-memory
+        // bucket with saturating_sub (lib.rs:837). A crafted or legacy ledger
+        // can carry pre-recorded debits summing beyond capacity (try_debit
+        // refuses them live, but a hand-written or capacity-lowered log can
+        // hold them). A plain `-` underflows here: a debug panic during open,
+        // or a release wrap that loads a near-u64::MAX balance and silently
+        // defeats the cap for that agent on every startup. The sibling
+        // compaction test only asserts the post-compaction balance, so the
+        // open-replay clamp's observable result is otherwise never asserted.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("legacy@local");
+
+        // Stamp at a recent time so the per-debit replay refill and the
+        // read-time refill are sub-token no-ops (5 credits/hour is ~1 token
+        // per 12 min); the assertion then reads the replayed clamp rather than
+        // a balance refilled from a 1970 last_refill.
+        let now = epoch_ms();
+        let mk_debit = |credits: u64| {
+            BudgetEvent::Debit(BudgetDebit {
+                agent: a.clone(),
+                credits,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: now,
+            })
+        };
+        let log = [
+            BudgetEvent::CapacitySet {
+                agent: a.clone(),
+                credits_per_hour: 5,
+                at_ms: now,
+            },
+            mk_debit(3),
+            mk_debit(3),
+        ];
+        let body = log
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let l = JsonlLedger::open(path).await.unwrap();
+        assert_eq!(
+            l.tokens_remaining(&a).await.unwrap(),
+            0,
+            "6 credits of persisted debits against a 5-credit bucket must clamp \
+             the replayed balance to 0, not wrap toward u64::MAX",
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_set_capacity_clamps_tokens_when_shrinking() {
         let l = InMemoryLedger::new();
         let a = agent("a@local");

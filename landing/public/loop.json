@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T14:29:56.007Z",
+  "updatedAt": "2026-06-27T14:50:00.018Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11351,
-    "tasks": 1335,
-    "integrated": 1337
+    "events": 11374,
+    "tasks": 1337,
+    "integrated": 1340
   },
   "throughput": {
-    "last24h": 48,
-    "last7d": 159,
-    "velocity": 22.7
+    "last24h": 50,
+    "last7d": 162,
+    "velocity": 23.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 40
+      "count": 43
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1337
+      "total": 1340
     }
   ],
   "states": {
-    "integrated": 1329,
+    "integrated": 1332,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,23 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "settlement-dispatch-select-malformed-feed-skip-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T14:29:11.888Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T14:37:54.262Z",
+      "task": "hatcher-mapmeshgrants-failsafe-arms-coverage",
+      "note": "committed on loop/main-track; +1 mesh case pinning two over-grant fail-safes + browser routing, mutation-proven"
+    },
+    {
+      "at": "2026-06-27T14:35:12.554Z",
+      "task": "hatcher-pairing-message-separator-antispoof-coverage",
+      "note": "committed on loop/main-track; +1 describe pinning pairingMessage anti-spoof framing, mutation-proven, independent review SHIP"
+    },
+    {
+      "at": "2026-06-27T14:30:31.337Z",
+      "task": "settlement-dispatch-select-malformed-feed-skip-coverage",
+      "note": "committed on loop/main-track; +1 vitest case pinning selectDispatches null-safety, mutation-proven"
+    },
     {
       "at": "2026-06-27T14:25:42.915Z",
       "task": "witness-skill-manifest-fallback-rung-coverage",
@@ -305,21 +315,6 @@
       "at": "2026-06-27T10:31:34.938Z",
       "task": "tools-search-from-config-absent-search-none-coverage",
       "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T10:19:13.950Z",
-      "task": "audit-provenance-filter-until-window-upper-bound-coverage",
-      "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T09:46:04.157Z",
-      "task": "settlement-build-receipt-batch-empty-fail-closed-coverage",
-      "note": "Fail-closed coverage landed for build_receipt_batch empty/all-settled EmptyBatch guard. Committing."
-    },
-    {
-      "at": "2026-06-27T09:33:16.923Z",
-      "task": "runtime-parse-proc-stat-malformed-line-fail-closed-coverage",
-      "note": "Fail-closed coverage landed for parse_proc_stat malformed-input arms (subprocess-tracker pid-reuse refusal). Committing."
     }
   ]
 }

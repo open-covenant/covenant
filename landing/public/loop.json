@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T01:05:12.823Z",
+  "updatedAt": "2026-06-27T01:25:16.438Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11010,
-    "tasks": 1296,
-    "integrated": 1299
+    "events": 11023,
+    "tasks": 1298,
+    "integrated": 1300
   },
   "throughput": {
-    "last24h": 11,
-    "last7d": 123,
-    "velocity": 17.6
+    "last24h": 12,
+    "last7d": 124,
+    "velocity": 17.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-27",
-      "total": 1299
+      "total": 1300
     }
   ],
   "states": {
-    "integrated": 1291,
+    "integrated": 1292,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "llm-router-empty-providers-cache-reput-coverage",
+    "state": "in_progress",
+    "since": "2026-06-27T01:23:56.665Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-27T01:11:55.317Z",
+      "task": "cross-host-admission-enqueue-failure-coverage",
+      "note": "Integrated as 7bb169bd. Test-only slice pinning the cross-host admission post-enqueue correction arm (no false Admitted on mailbox-write fai"
+    },
     {
       "at": "2026-06-27T00:59:29.319Z",
       "task": "cross-host-admission-dedup-write-failure-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-23T20:49:51.753Z",
       "task": "indexer-x402-config-from-env-coverage",
       "note": "Committed; test-only slice closing x402 from_env coverage."
-    },
-    {
-      "at": "2026-06-23T20:45:36.383Z",
-      "task": "indexer-config-from-env-coverage",
-      "note": "Committed 814c188c: sequential from_env test (defaults + confirmations parse-fallback + numeric override + per-var overrides), mutation-prov"
     }
   ]
 }

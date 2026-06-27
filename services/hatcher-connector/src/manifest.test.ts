@@ -13,6 +13,12 @@ describe('parseManifest', () => {
     expect(m.runner.min_daemon_protocol).toBe(2);
     expect(m.limits.max_files).toBe(40);
     expect(m.proof.spec).toBe('covenant.connector-trace.v0');
+    // Safety/integrity defaults a manifest inherits by omitting limits/proof:
+    // a deadline is mandatory, the runner has a bounded wall clock, and the
+    // trace binds the audit root. Flipping any of these weakens the invariant.
+    expect(m.limits.max_run_ms).toBe(1_800_000);
+    expect(m.limits.deadline_required).toBe(true);
+    expect(m.proof.audit_root).toBe(true);
   });
 
   it('accepts the full capability union', () => {

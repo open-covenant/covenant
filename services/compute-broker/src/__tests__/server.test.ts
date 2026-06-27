@@ -383,6 +383,26 @@ describe('compute-broker server', () => {
     expect(badAuth.statusCode).toBe(403);
   });
 
+  it('leases/activate rejects a same-length wrong operator bearer', async () => {
+    // The badauth test above sends a different-length token, so requireOperator
+    // short-circuits on the cheap length check and never runs timingSafeEqual.
+    // Flip one byte while keeping the length identical so the constant-time
+    // byte-comparison is the only thing that can reject it — without this, a
+    // mutation trusting length alone would accept any same-length forgery.
+    const last = operatorBearer.slice(-1);
+    const sameLengthWrong = `${operatorBearer.slice(0, -1)}${last === 'x' ? 'y' : 'x'}`;
+    expect(sameLengthWrong).toHaveLength(operatorBearer.length);
+    expect(sameLengthWrong).not.toBe(operatorBearer);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/leases/activate',
+      headers: { authorization: `Bearer ${sameLengthWrong}` },
+      payload: { lease_id: 'ionet-lease-samelen', provider: 'ionet' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'invalid bearer' });
+  });
+
   it('leases/activate activates the selected provider lease', async () => {
     const res = await app.inject({
       method: 'POST',

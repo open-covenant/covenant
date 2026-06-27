@@ -148,4 +148,10 @@ describe("buildSkillManifest", () => {
     });
     expect(buildSkillManifest([]).tx).toBeNull();
   });
+
+  it("keeps the installed skill identity when a context injection overrides neither name nor digest", () => {
+    const m = buildSkillManifest([installed("deploy", "abc"), injected(undefined, undefined)]);
+    expect(m.skill).toEqual({ name: "deploy", digest: "sha256:abc" });
+    expect(m.capabilities).toEqual(["skill.use.deploy"]);
+  });
 });

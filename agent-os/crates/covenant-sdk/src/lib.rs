@@ -1129,6 +1129,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_required_capability_skips_empty_grant_hint() {
+        // Grant marker present but the action is empty (a delimiter follows
+        // `grant ` immediately). The empty-action guard must refuse to emit
+        // Some("") and instead recover the quoted capability...
+        assert_eq!(
+            parse_required_capability(
+                "tool x requires capability \"tool.call.x\". \
+                 Grant it with `covenant capabilities grant `."
+            )
+            .as_deref(),
+            Some("tool.call.x"),
+        );
+        // ...and stay None when no quoted form exists, never feeding a
+        // degenerate grant_capability("") down the auto-retry path.
+        assert!(parse_required_capability("do this: covenant capabilities grant ").is_none());
+    }
+
+    #[test]
     fn resolve_home_prefers_covenant_home() {
         let home = resolve_home(Some("/explicit".into()), Some("/home/u".into())).unwrap();
         assert_eq!(home, PathBuf::from("/explicit"));

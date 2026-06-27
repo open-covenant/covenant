@@ -63293,6 +63293,56 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[test]
+    fn parse_projection_policy_pins_no_extrapolation_alias_and_trim_empty_normalization() {
+        use covenant_budget::BudgetProjectionPolicy;
+        // The routing arms (none/linear/linear_extrapolation/unrecognized/
+        // non-integer thresholds and the DEFAULT_* fallbacks) are pinned by
+        // the projection_tick_config_* tests above. This covers the two gaps
+        // in parse_projection_policy's input handling: the no_extrapolation
+        // alias and the `.map(str::trim).filter(|s| !s.is_empty())`
+        // normalization that runs before the match.
+
+        // no_extrapolation is a documented accepted spelling with no other
+        // coverage; dropping it from the NoExtrapolation arm would hard-error
+        // a daemon whose operator set COVENANT_BUDGET_PROJECTION_POLICY to it.
+        assert_eq!(
+            parse_projection_policy(Some("no_extrapolation"), None, None)
+                .expect("no_extrapolation is a documented spelling and must parse"),
+            BudgetProjectionPolicy::NoExtrapolation,
+        );
+
+        // An empty or whitespace-only value must normalize to the
+        // conservative default, not the Some(other) hard error — operators
+        // routinely export VAR= to mean "unset". The empty-filter after the
+        // trim is what folds these onto the None arm.
+        for blank in ["", "   ", "\t"] {
+            let policy = parse_projection_policy(Some(blank), None, None).unwrap_or_else(|e| {
+                panic!("an empty/whitespace policy {blank:?} must default, not error: {e}")
+            });
+            assert_eq!(
+                policy,
+                BudgetProjectionPolicy::NoExtrapolation,
+                "an empty/whitespace COVENANT_BUDGET_PROJECTION_POLICY must default to the \
+                 conservative policy; dropping the empty-filter routes {blank:?} to the typo bail",
+            );
+        }
+
+        // Surrounding whitespace is trimmed before matching, so a padded
+        // spelling still selects its policy; with thresholds unset the linear
+        // arm falls back to the conservative constants, not zero.
+        assert_eq!(
+            parse_projection_policy(Some("  linear  "), None, None)
+                .expect("a whitespace-padded linear spelling must trim and parse"),
+            BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms: DEFAULT_PROJECTION_MIN_WINDOW_MS,
+                min_debit_samples: DEFAULT_PROJECTION_MIN_SAMPLES,
+            },
+            "dropping str::trim would leave \"  linear  \" unmatched and hard-error instead of \
+             selecting LinearExtrapolation",
+        );
+    }
+
     #[tokio::test]
     async fn projection_tick_decision_exhausted_preempts_under_default_policy() {
         // Empty-bucket hard guarantee: an exhausted agent is flagged

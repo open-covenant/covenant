@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T08:28:09.918Z",
+  "updatedAt": "2026-06-27T08:48:13.602Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11143,
-    "tasks": 1311,
-    "integrated": 1314
+    "events": 11156,
+    "tasks": 1313,
+    "integrated": 1315
   },
   "throughput": {
-    "last24h": 26,
-    "last7d": 137,
-    "velocity": 19.6
+    "last24h": 27,
+    "last7d": 138,
+    "velocity": 19.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 17
+      "count": 18
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-27",
-      "total": 1314
+      "total": 1315
     }
   ],
   "states": {
-    "integrated": 1306,
+    "integrated": 1307,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "llm-ollama-embedder-error-arm-coverage",
+    "state": "in_progress",
+    "since": "2026-06-27T08:47:22.983Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-27T08:44:24.940Z",
+      "task": "llm-provider-non-success-status-arm-coverage",
+      "note": "Non-2xx Status-arm coverage landed for all three chat providers; provider error-path coverage now spans memory axis (caps), no-text axis (Em"
+    },
     {
       "at": "2026-06-27T08:26:53.067Z",
       "task": "llm-provider-empty-response-arm-parity-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-26T22:35:57.799Z",
       "task": "multi-host-a2a-cross-host-inbound-route",
       "note": "Integrated as f32392dc, pushed 5b261659..f32392dc to origin/loop/main-track. 4b-2b complete: bearer-exempt POST /a2a/peer-tasks fronting the"
-    },
-    {
-      "at": "2026-06-26T20:53:04.152Z",
-      "task": "multi-host-a2a-cross-host-inbound-verify",
-      "note": "Integrated as 5b261659, pushed d7bebd11..5b261659 to origin/loop/main-track. 4b-2a (receiver-side cross-host A2A admission core) complete: S"
     }
   ]
 }

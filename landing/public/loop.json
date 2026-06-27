@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T00:25:05.358Z",
+  "updatedAt": "2026-06-27T00:45:09.060Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 10997,
+    "events": 11002,
     "tasks": 1295,
-    "integrated": 1297
+    "integrated": 1298
   },
   "throughput": {
-    "last24h": 9,
-    "last7d": 122,
-    "velocity": 17.4
+    "last24h": 10,
+    "last7d": 123,
+    "velocity": 17.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1297
+      "total": 1298
     }
   ],
   "states": {
-    "integrated": 1289,
+    "integrated": 1290,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multi-host-a2a-cross-host-loopback-live",
-    "state": "in_progress",
-    "since": "2026-06-27T00:07:03.176Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T00:34:34.033Z",
+      "task": "multi-host-a2a-cross-host-loopback-live",
+      "note": "Committed 50d94243 and pushed to origin/loop/main-track (36256df5..50d94243). All push identity guards passed. Finishes multi-host-networkin"
+    },
     {
       "at": "2026-06-26T23:47:29.670Z",
       "task": "multi-host-a2a-cross-host-outbound-deliver",
@@ -315,11 +315,6 @@
       "at": "2026-06-23T20:40:08.493Z",
       "task": "indexer-api-http-handler-coverage",
       "note": "Committing handler tests + tower/http-body-util dev-deps."
-    },
-    {
-      "at": "2026-06-23T20:31:08.812Z",
-      "task": "indexer-model-base58-normalize-arms-coverage",
-      "note": "Committed 63b6e0eb: 7 new test cases covering normalize_event length/charset reject arms + trim + seed_events, mutation-proved. Test-only, n"
     }
   ]
 }

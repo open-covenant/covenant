@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T10:08:28.501Z",
+  "updatedAt": "2026-06-27T10:28:35.428Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11192,
-    "tasks": 1317,
-    "integrated": 1319
+    "events": 11198,
+    "tasks": 1318,
+    "integrated": 1320
   },
   "throughput": {
-    "last24h": 31,
-    "last7d": 142,
-    "velocity": 20.3
+    "last24h": 32,
+    "last7d": 143,
+    "velocity": 20.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 22
+      "count": 23
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1319
+      "total": 1320
     }
   ],
   "states": {
-    "integrated": 1311,
-    "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "integrated": 1312,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -200,7 +199,7 @@
     },
     {
       "name": "audit",
-      "count": 93
+      "count": 94
     },
     {
       "name": "live",
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "audit-provenance-filter-until-window-upper-bound-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T10:04:15.500Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T10:19:13.950Z",
+      "task": "audit-provenance-filter-until-window-upper-bound-coverage",
+      "note": "committed to loop/main-track"
+    },
     {
       "at": "2026-06-27T09:46:04.157Z",
       "task": "settlement-build-receipt-batch-empty-fail-closed-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-27T01:37:55.033Z",
       "task": "llm-router-empty-providers-cache-reput-coverage",
       "note": "Committed e1061a07 on loop/main-track; covenant-llm 50 lib tests pass; README metrics 3163; both arms mutation-proven."
-    },
-    {
-      "at": "2026-06-27T01:11:55.317Z",
-      "task": "cross-host-admission-enqueue-failure-coverage",
-      "note": "Integrated as 7bb169bd. Test-only slice pinning the cross-host admission post-enqueue correction arm (no false Admitted on mailbox-write fai"
     }
   ]
 }

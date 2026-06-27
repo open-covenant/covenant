@@ -114,3 +114,42 @@ describe('HttpDaemonClient response guards', () => {
     await expect(client().verify()).resolves.toEqual(report);
   });
 });
+
+// submitIntent is the primary connector entrypoint (Hatcher dispatch -> covenant
+// intent). It must surface a daemon-side rejection rather than report it as
+// accepted, refuse a malformed /intent response, and default the optional
+// text/sources fields. connector.test.ts only drives a FakeDaemon, so the real
+// mapping is otherwise uncovered.
+describe('HttpDaemonClient submitIntent', () => {
+  it('surfaces the daemon error message on a rejected intent', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ kind: 'error', message: 'policy denied' })));
+
+    await expect(client().submitIntent('do a thing')).rejects.toThrow('daemon intent error: policy denied');
+  });
+
+  it('rejects a malformed /intent response shape', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ intent_id: 7, status: 'queued' })));
+    await expect(client().submitIntent('x')).rejects.toThrow('unexpected /intent response shape');
+
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ intent_id: 'i1' })));
+    await expect(client().submitIntent('x')).rejects.toThrow('unexpected /intent response shape');
+  });
+
+  it('returns a typed IntentResult, defaulting optional text/sources', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ intent_id: 'i1', status: 'queued' })));
+
+    await expect(client().submitIntent('x')).resolves.toEqual({
+      intent_id: 'i1',
+      status: 'queued',
+      text: '',
+      sources: [],
+    });
+  });
+
+  it('passes through a fully-populated IntentResult', async () => {
+    const full = { intent_id: 'i2', status: 'ok', text: 'done', sources: ['mem://a'] };
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(full)));
+
+    await expect(client().submitIntent('x')).resolves.toEqual(full);
+  });
+});

@@ -48901,6 +48901,80 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn admit_rejects_a_malformed_signature_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        // A faithfully sealed envelope whose signature bytes are then truncated
+        // to a non-64-byte length. open() parses the payload first (so the
+        // failure is provably the signature length check, not the payload arm)
+        // and rejects it as MalformedSignature before any authorization runs —
+        // a distinct admission reason from signature_invalid, which owns a
+        // well-formed 64-byte signature that does not verify.
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000f, now);
+        let mut value = serde_json::to_value(&envelope).unwrap();
+        value["signature"] = serde_json::json!([1u8, 2, 3]);
+        let envelope: covenant_a2a::SignedA2ATask = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "an envelope with a malformed signature must never enqueue"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                && reason == "malformed_signature"
+                && sender_b58.is_empty()),
+            "a structurally-malformed signature is its own admission reason, distinct \
+             from signature_invalid, recorded with no proven sender: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_malformed_payload_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        // task_json that does not deserialize to an A2ATask. open() fails at the
+        // payload parse, which runs before the signature length check, so this is
+        // the MalformedPayload arm — a distinct admission reason from both
+        // signature_invalid and malformed_signature.
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0010, now);
+        let mut value = serde_json::to_value(&envelope).unwrap();
+        value["task_json"] = serde_json::to_value(b"not a valid task".as_slice()).unwrap();
+        let envelope: covenant_a2a::SignedA2ATask = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "an envelope whose payload is not an A2ATask must never enqueue"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                && reason == "malformed_payload"
+                && sender_b58.is_empty()),
+            "an undeserializable payload is its own admission reason, distinct \
+             from signature_invalid, recorded with no proven sender: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn admit_rejects_a_validly_signed_envelope_from_an_unregistered_host() {
         let dir = tempfile::tempdir().unwrap();
         let alice = LocalIdentity::generate("alice@host1");

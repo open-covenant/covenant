@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T19:51:21.124Z",
+  "updatedAt": "2026-06-27T19:57:01.775Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11552,
-    "tasks": 1357,
-    "integrated": 1360
+    "events": 11561,
+    "tasks": 1358,
+    "integrated": 1361
   },
   "throughput": {
-    "last24h": 66,
-    "last7d": 181,
-    "velocity": 25.9
+    "last24h": 67,
+    "last7d": 182,
+    "velocity": 26
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 63
+      "count": 64
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1360
+      "total": 1361
     }
   ],
   "states": {
-    "integrated": 1352,
+    "integrated": 1353,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T19:53:04.147Z",
+      "task": "hatcher-connector-submit-intent-response-mapping-coverage",
+      "note": "Committed f1266e20. Test-only slice pinning submitIntent error/shape/defaulting arms; daemon.ts unchanged; 4 arms mutation-proven."
+    },
     {
       "at": "2026-06-27T19:47:48.656Z",
       "task": "coding-gateway-e2b-exec-result-surfacing-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-27T16:09:01.294Z",
       "task": "compute-broker-operator-bearer-same-length-coverage",
       "note": "Committed 39cb4077 on loop/main-track. 1 file, +20. Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-27T16:05:10.650Z",
-      "task": "covenant-types-agent-id-local-segment-charset-coverage",
-      "note": "Committed 395dcade on loop/main-track (test(covenant-types): pin validate_agent_id_display local-segment charset arm). 1 file, +31/-7. Pushi"
     }
   ]
 }

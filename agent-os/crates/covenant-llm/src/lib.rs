@@ -3039,6 +3039,55 @@ model = "nomic-embed-text"
         );
     }
 
+    #[tokio::test]
+    async fn ollama_embedder_surfaces_status_and_empty_on_degenerate_responses() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // embed() is the memory-vectorization boundary. A non-2xx embeddings
+        // response must surface ProviderError::Status (carrying the real code
+        // and body), and a 200 whose embedding vector is empty must surface
+        // ProviderError::Empty — never Ok(vec![]). A zero-length embedding
+        // stored as a memory vector cannot be normalized or cosine-compared, so
+        // an empty array slipping through as Ok would silently corrupt
+        // similarity search. The caps test only serves a valid 200; this pins
+        // the embedder's two error arms.
+        let failing = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(429).set_body_string(r#"{"error":"rate limited"}"#))
+            .mount(&failing)
+            .await;
+        let err = OllamaEmbedder::with_limits(failing.uri(), "m", 16 * 1024)
+            .embed("hi")
+            .await
+            .expect_err("a non-2xx embeddings response must be Status, not Ok or a parse error");
+        match err {
+            ProviderError::Status { status, body } => {
+                assert_eq!(status, 429, "the real upstream status must be carried");
+                assert!(
+                    body.contains("rate limited"),
+                    "the embeddings error body must be surfaced for diagnostics: {body:?}"
+                );
+            }
+            other => panic!("a non-2xx response must surface ProviderError::Status, got {other:?}"),
+        }
+
+        let empty = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"embedding":[]}"#))
+            .mount(&empty)
+            .await;
+        let err = OllamaEmbedder::with_limits(empty.uri(), "m", 16 * 1024)
+            .embed("hi")
+            .await
+            .expect_err("an empty embedding vector must be Empty, not Ok(vec![])");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "an empty embedding array must surface ProviderError::Empty so a zero-length \
+             vector never reaches the memory store; got {err:?}"
+        );
+    }
+
     // ---------- Router ----------
 
     use async_trait::async_trait;

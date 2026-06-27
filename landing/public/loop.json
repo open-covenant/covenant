@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T11:49:24.275Z",
+  "updatedAt": "2026-06-27T12:09:27.954Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11255,
-    "tasks": 1324,
-    "integrated": 1326
+    "events": 11296,
+    "tasks": 1328,
+    "integrated": 1331
   },
   "throughput": {
-    "last24h": 38,
-    "last7d": 148,
-    "velocity": 21.1
+    "last24h": 43,
+    "last7d": 153,
+    "velocity": 21.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 29
+      "count": 34
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1326
+      "total": 1331
     }
   ],
   "states": {
-    "integrated": 1318,
+    "integrated": 1323,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,33 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "proof-gen-proof-format-validation-guard-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T11:48:37.544Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T12:08:30.224Z",
+      "task": "hermes-mcp-bridge-redact-home-and-auth-header-coverage",
+      "note": "committed to loop/main-track"
+    },
+    {
+      "at": "2026-06-27T12:06:27.950Z",
+      "task": "mcp-bridge-daemon-auth-token-resolution-and-health-noauth-co",
+      "note": "committed to loop/main-track"
+    },
+    {
+      "at": "2026-06-27T11:57:49.396Z",
+      "task": "hatcher-connector-a2a-dispatch-forwards-task-kind-deadline-c",
+      "note": "committed to loop/main-track"
+    },
+    {
+      "at": "2026-06-27T11:54:37.294Z",
+      "task": "hatcher-connector-manifest-safety-defaults-coverage",
+      "note": "committed to loop/main-track"
+    },
+    {
+      "at": "2026-06-27T11:51:18.739Z",
+      "task": "proof-gen-proof-format-validation-guard-coverage",
+      "note": "committed to loop/main-track"
+    },
     {
       "at": "2026-06-27T11:47:11.075Z",
       "task": "fairscale-bridge-outcome-production-status-alias-coverage",
@@ -295,31 +315,6 @@
       "at": "2026-06-27T07:43:18.991Z",
       "task": "daemon-sse-broadcast-stream-lag-close-arm-coverage",
       "note": "committed c0fe146d on loop/main-track; tokio_broadcast_stream Ok/Lagged/Closed arms covered, Lagged mutation-proven"
-    },
-    {
-      "at": "2026-06-27T07:24:01.187Z",
-      "task": "memory-tier-slug-backfill-plan-value-coverage",
-      "note": "committed; pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-27T07:17:21.907Z",
-      "task": "sdk-response-kind-tag-strip-anti-leak-coverage",
-      "note": "committed f20bad31 (test+README metrics); pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-27T06:42:48.753Z",
-      "task": "x402-payai-short-network-caip2-shortening-coverage",
-      "note": "committed 78f4c7f0 (test+README metrics); pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-27T05:35:26.800Z",
-      "task": "covenantd-redact-url-secret-query-redaction-hardening",
-      "note": "Integrated as cb53ed99 on loop/main-track. Security review recorded here (cross_review state was skipped earlier due to a role-slug typo): t"
-    },
-    {
-      "at": "2026-06-27T05:06:39.889Z",
-      "task": "cross-host-peer-task-ingress-body-cap-and-rejection-http-cov",
-      "note": "committed 6470d086 on loop/main-track; in-process router test for the 64 KiB pre-verify body cap and coarse-403 rejected-no-enqueue ingress "
     }
   ]
 }

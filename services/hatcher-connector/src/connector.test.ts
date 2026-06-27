@@ -265,4 +265,43 @@ describe('Connector dispatch flow', () => {
     expect(result.proof.receipt_id).toBeNull();
     expect(result.proof.memory_ids).toEqual([]);
   });
+
+  it('cancel emits one terminal cancelled result and the finalize guard suppresses a second', async () => {
+    const daemon = new FakeDaemon();
+    // A controllable live stream: yield one trace event, then block on a gate.
+    // Releasing the gate resolves the stream NORMALLY (not an abort-throw), so
+    // runTrace falls through to finalize — modelling the race where the run
+    // finishes at the same tick a cancel arrives. That isolates finalize's
+    // `!active.has` guard (the second defense) rather than runTrace's
+    // abort early-return.
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((r) => {
+      releaseStream = r;
+    });
+    vi.spyOn(daemon, 'streamEvents').mockImplementation(async (_id, onEvent) => {
+      onEvent({ type: 'tool_call', run_id: 'r1', tool: 'shell', preview: 'long task' });
+      await streamGate;
+    });
+    const { transport, connector } = build(daemon);
+    await connector.start();
+
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'cx', agent_id: 'PK', intent: { text: 'long task' } });
+    await flush();
+    await flush();
+    expect(connector.inFlight).toBe(1); // streaming, slot held
+
+    transport.inject({ v: 1, type: 'cancel', dispatch_id: 'cx' });
+    await flush();
+    expect(connector.inFlight).toBe(0); // cancel aborted the stream and freed the slot
+
+    // Let the stream finish normally; runTrace now reaches finalize, whose guard
+    // must refuse to emit a second terminal result for the already-cancelled run.
+    releaseStream();
+    await flush();
+    await flush();
+
+    const results = transport.sent.filter((f) => f.type === 'result');
+    expect(results).toHaveLength(1); // exactly one terminal — no double-result
+    expect((results[0] as { status: string }).status).toBe('cancelled');
+  });
 });

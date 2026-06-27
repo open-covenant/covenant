@@ -42,4 +42,10 @@ describe("selectDispatches", () => {
     const out = selectDispatches(events).map((e) => e.id);
     expect(out).toEqual(["a", "b"]);
   });
+
+  it("drops malformed feed entries (null, undefined, missing kind) without throwing", () => {
+    const events = [null, undefined, { id: "x" }, dispatched("d1", 1)];
+    expect(() => selectDispatches(events)).not.toThrow();
+    expect(selectDispatches(events).map((e) => e.id)).toEqual(["d1"]);
+  });
 });

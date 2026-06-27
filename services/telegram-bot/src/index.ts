@@ -6,7 +6,7 @@ const app = Fastify({ logger: true, bodyLimit: 32 * 1024 });
 const PORT = Number(process.env.TELEGRAM_PORT ?? 8788);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const network = resolveSolanaNetwork();
-const RATE_LIMIT_PER_MIN = Number(process.env.TELEGRAM_RATE_LIMIT_PER_MIN ?? 5);
+export const RATE_LIMIT_PER_MIN = Number(process.env.TELEGRAM_RATE_LIMIT_PER_MIN ?? 5);
 
 let botRunning = false;
 
@@ -31,7 +31,7 @@ const ALLOWED_USERS = parseAllowlist(process.env.TELEGRAM_ALLOWED_USER_IDS);
 // the polling/webhook layer is not horizontally scaled. Pruned on miss.
 type Bucket = { count: number; resetAt: number };
 const userBuckets = new Map<number, Bucket>();
-function rateLimit(userId: number): boolean {
+export function rateLimit(userId: number): boolean {
   const now = Date.now();
   const bucket = userBuckets.get(userId);
   if (!bucket || now >= bucket.resetAt) {

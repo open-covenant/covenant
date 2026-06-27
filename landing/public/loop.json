@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T15:50:12.916Z",
+  "updatedAt": "2026-06-27T16:10:16.879Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11374,
-    "tasks": 1337,
-    "integrated": 1340
+    "events": 11393,
+    "tasks": 1340,
+    "integrated": 1342
   },
   "throughput": {
-    "last24h": 48,
-    "last7d": 162,
-    "velocity": 23.1
+    "last24h": 50,
+    "last7d": 164,
+    "velocity": 23.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 43
+      "count": 45
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-27",
-      "total": 1340
+      "total": 1342
     }
   ],
   "states": {
-    "integrated": 1332,
-    "proposed": 1,
+    "integrated": 1334,
+    "proposed": 2,
     "blocked": 4
   },
   "areas": [
@@ -195,7 +195,7 @@
     },
     {
       "name": "covenant",
-      "count": 99
+      "count": 100
     },
     {
       "name": "audit",
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T16:09:01.294Z",
+      "task": "compute-broker-operator-bearer-same-length-coverage",
+      "note": "Committed 39cb4077 on loop/main-track. 1 file, +20. Pushing to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-27T16:05:10.650Z",
+      "task": "covenant-types-agent-id-local-segment-charset-coverage",
+      "note": "Committed 395dcade on loop/main-track (test(covenant-types): pin validate_agent_id_display local-segment charset arm). 1 file, +31/-7. Pushi"
+    },
     {
       "at": "2026-06-27T14:37:54.262Z",
       "task": "hatcher-mapmeshgrants-failsafe-arms-coverage",
@@ -304,16 +314,6 @@
     {
       "at": "2026-06-27T10:53:11.361Z",
       "task": "llm-provider-from-config-absent-llm-none-coverage",
-      "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T10:38:55.607Z",
-      "task": "memory-ignore-pattern-empty-glob-none-coverage",
-      "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T10:31:34.938Z",
-      "task": "tools-search-from-config-absent-search-none-coverage",
       "note": "committed to loop/main-track"
     }
   ]

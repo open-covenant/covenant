@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T17:10:28.972Z",
+  "updatedAt": "2026-06-27T17:30:33.076Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11447,
-    "tasks": 1346,
-    "integrated": 1348
+    "events": 11464,
+    "tasks": 1347,
+    "integrated": 1350
   },
   "throughput": {
-    "last24h": 55,
-    "last7d": 169,
-    "velocity": 24.1
+    "last24h": 57,
+    "last7d": 171,
+    "velocity": 24.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 51
+      "count": 53
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-27",
-      "total": 1348
+      "total": 1350
     }
   ],
   "states": {
-    "integrated": 1340,
-    "proposed": 2,
+    "integrated": 1342,
+    "proposed": 1,
     "blocked": 4
   },
   "areas": [
@@ -195,7 +195,7 @@
     },
     {
       "name": "covenant",
-      "count": 102
+      "count": 103
     },
     {
       "name": "audit",
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T17:23:00.393Z",
+      "task": "hatcher-connector-cancel-finalize-double-result-coverage",
+      "note": "Committed 8ddaa078 on loop/main-track. 1 file (+39). Pushing to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-27T17:18:48.405Z",
+      "task": "covenant-a2a-taskrecv-replay-lease-attribution-coverage",
+      "note": "Committed 545d9bcd on loop/main-track. 2 files (test +43, README metrics). Pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-27T17:00:59.835Z",
       "task": "fairscale-bridge-text-suffix-redaction-coverage",
@@ -304,16 +314,6 @@
     {
       "at": "2026-06-27T12:08:30.224Z",
       "task": "hermes-mcp-bridge-redact-home-and-auth-header-coverage",
-      "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T12:06:27.950Z",
-      "task": "mcp-bridge-daemon-auth-token-resolution-and-health-noauth-co",
-      "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T11:57:49.396Z",
-      "task": "hatcher-connector-a2a-dispatch-forwards-task-kind-deadline-c",
       "note": "committed to loop/main-track"
     }
   ]

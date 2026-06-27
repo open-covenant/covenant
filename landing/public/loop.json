@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T13:49:47.687Z",
+  "updatedAt": "2026-06-27T14:09:52.384Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11316,
+    "events": 11320,
     "tasks": 1331,
-    "integrated": 1333
+    "integrated": 1334
   },
   "throughput": {
-    "last24h": 44,
-    "last7d": 155,
-    "velocity": 22.1
+    "last24h": 45,
+    "last7d": 156,
+    "velocity": 22.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 36
+      "count": 37
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1333
+      "total": 1334
     }
   ],
   "states": {
-    "integrated": 1325,
+    "integrated": 1326,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "gvisor-oci-config-memory-limit-conversion-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T13:20:07.660Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T13:54:14.311Z",
+      "task": "gvisor-oci-config-memory-limit-conversion-coverage",
+      "note": "test-only coverage slice integrated; commit pending."
+    },
     {
       "at": "2026-06-27T13:12:48.398Z",
       "task": "audit-verify-integrity-missing-anchor-diagnostic-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-27T08:44:24.940Z",
       "task": "llm-provider-non-success-status-arm-coverage",
       "note": "Non-2xx Status-arm coverage landed for all three chat providers; provider error-path coverage now spans memory axis (caps), no-text axis (Em"
-    },
-    {
-      "at": "2026-06-27T08:26:53.067Z",
-      "task": "llm-provider-empty-response-arm-parity-coverage",
-      "note": "Empty-arm parity for openai+ollama process_response landed; three-provider Empty coverage now symmetric. Committing."
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T23:32:02.878Z",
+  "updatedAt": "2026-06-27T23:52:06.791Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11733,
-    "tasks": 1378,
-    "integrated": 1380
+    "events": 11766,
+    "tasks": 1381,
+    "integrated": 1384
   },
   "throughput": {
-    "last24h": 84,
-    "last7d": 198,
-    "velocity": 28.3
+    "last24h": 87,
+    "last7d": 202,
+    "velocity": 28.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 83
+      "count": 87
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-27",
-      "total": 1380
+      "total": 1384
     }
   ],
   "states": {
-    "integrated": 1372,
-    "proposed": 2,
+    "integrated": 1376,
+    "proposed": 1,
     "blocked": 4
   },
   "areas": [
@@ -216,6 +216,26 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T23:51:42.833Z",
+      "task": "landing-stake-readers-decode-coverage",
+      "note": "Committed; pushing."
+    },
+    {
+      "at": "2026-06-27T23:46:28.225Z",
+      "task": "landing-stake-format-coverage",
+      "note": "Committed; pushing."
+    },
+    {
+      "at": "2026-06-27T23:41:01.613Z",
+      "task": "landing-stake-anchor-serialization-coverage",
+      "note": "Committed; pushing."
+    },
+    {
+      "at": "2026-06-27T23:35:08.397Z",
+      "task": "landing-stake-apy-coverage",
+      "note": "Committed ed0a1d42 (apy.test.ts + landing vitest infra). Pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-27T22:57:50.329Z",
       "task": "sap-bridge-signer-required-guard-coverage",
@@ -295,26 +315,6 @@
       "at": "2026-06-27T20:25:03.505Z",
       "task": "sdk-session-jwt-failclosed-coverage",
       "note": "Committed 7d9a2053 on loop/main-track."
-    },
-    {
-      "at": "2026-06-27T20:21:47.684Z",
-      "task": "compute-broker-hextokey-nonhex-rejection-coverage",
-      "note": "Committed f4f143cd on loop/main-track."
-    },
-    {
-      "at": "2026-06-27T20:19:10.141Z",
-      "task": "compute-broker-missing-credential-failclosed-coverage",
-      "note": "Committed 4ad606aa on loop/main-track; agent-os/autonomy records gitignored, commit is the test file only."
-    },
-    {
-      "at": "2026-06-27T19:58:33.412Z",
-      "task": "hatcher-connector-stream-events-sse-parse-coverage",
-      "note": "Committed 89017110. Test-only slice pinning the streamEvents SSE parser; daemon.ts unchanged; 4 arms mutation-proven."
-    },
-    {
-      "at": "2026-06-27T19:53:04.147Z",
-      "task": "hatcher-connector-submit-intent-response-mapping-coverage",
-      "note": "Committed f1266e20. Test-only slice pinning submitIntent error/shape/defaulting arms; daemon.ts unchanged; 4 arms mutation-proven."
     }
   ]
 }

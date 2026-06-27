@@ -50,6 +50,25 @@ describe('A2ABridge.dispatchToLocal', () => {
 
     expect(daemon.sent[0]!.idempotency).toEqual({ duplicate_safety: 'idempotent', key: 'mesh-9' });
   });
+
+  it('forwards task_kind and deadline_ms onto the A2ATask when the mesh task carries them', async () => {
+    n = 0;
+    const daemon = new FakeA2A();
+    const bridge = new A2ABridge(daemon, SELF, { idGen });
+    // task_kind drives the daemon's A2A idempotency bucket (it falls back to
+    // intent_text when absent), so dropping it silently changes dedup behavior.
+    await bridge.dispatchToLocal({
+      mesh_task_id: 'mesh-2',
+      recipient: RECIP,
+      intent_text: 'x',
+      task_kind: 'research.lookup',
+      deadline_ms: 1_700_000_000_000,
+    });
+
+    const t = daemon.sent[0]!;
+    expect(t.task_kind).toBe('research.lookup');
+    expect(t.deadline_ms).toBe(1_700_000_000_000);
+  });
 });
 
 describe('A2ABridge.drainResults', () => {

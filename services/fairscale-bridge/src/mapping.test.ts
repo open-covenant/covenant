@@ -67,4 +67,31 @@ describe('toConductEvent', () => {
     expect(c.weight).toBe(0);
     expect(c.summary).toBe('operator token rotated');
   });
+
+  // The daemon writes status="ok"/"error"/"no_match" for IntentDispatched — it
+  // never emits the "success"/"failed" spelling the cases above use — so the
+  // alias arms below are the ones every real intent is scored through.
+  it('scores the ok/error/no_match intent statuses the daemon actually emits', () => {
+    const ok = toConductEvent(base({ type: 'intent_dispatched', status: 'ok', intent_text: 'x' }));
+    expect(ok.outcome).toBe('success');
+    expect(ok.weight).toBe(3);
+
+    const err = toConductEvent(base({ type: 'intent_dispatched', status: 'error', intent_text: 'x' }));
+    expect(err.outcome).toBe('failure');
+    expect(err.weight).toBe(-3);
+
+    const noMatch = toConductEvent(base({ type: 'intent_dispatched', status: 'no_match', intent_text: 'x' }));
+    expect(noMatch.outcome).toBe('neutral');
+    expect(noMatch.weight).toBe(0);
+  });
+
+  it('scores a capability check by its passed flag', () => {
+    const passed = toConductEvent(base({ type: 'capability_check', passed: true, agent_id: 'a', required_actions: [], missing_actions: [] }));
+    expect(passed.outcome).toBe('success');
+    expect(passed.weight).toBe(1);
+
+    const denied = toConductEvent(base({ type: 'capability_check', passed: false, agent_id: 'a', required_actions: ['memory.write'], missing_actions: ['memory.write'] }));
+    expect(denied.outcome).toBe('failure');
+    expect(denied.weight).toBe(-1);
+  });
 });

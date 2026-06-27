@@ -3253,4 +3253,50 @@ model = "nomic-embed-text"
         assert_eq!(cache.get("a"), Some("1".into()));
         assert_eq!(cache.get("c"), Some("3".into()));
     }
+
+    #[tokio::test]
+    async fn router_with_no_providers_surfaces_empty() {
+        // An empty provider list leaves nothing to try and no upstream error to
+        // surface, so the fallback loop falls through to its terminal arm. That
+        // arm must yield the deterministic Empty rather than panic on an unwrap
+        // of the never-set last error. The exhaustion test covers the populated
+        // case (every provider fails retryably); this pins the empty case.
+        let router = Router::new("m", vec![]);
+
+        let err = router
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "a router with no providers must surface Empty, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn in_memory_lru_cache_reput_updates_value_without_consuming_a_second_slot() {
+        // Re-putting an existing key must overwrite its value and refresh
+        // recency through the single order-deque entry it already owns. Pushing
+        // a second entry would double-count the key against capacity and evict a
+        // still-live key; the eviction test only ever puts distinct keys.
+        let cache = InMemoryLruCache::new(2);
+        cache.put("a", "1".into());
+        cache.put("a", "2".into());
+
+        assert_eq!(
+            cache.get("a"),
+            Some("2".into()),
+            "re-putting a key must overwrite its value",
+        );
+
+        cache.put("b", "3".into());
+
+        assert_eq!(
+            cache.get("a"),
+            Some("2".into()),
+            "the re-put key must occupy one slot, so b fits without evicting a",
+        );
+        assert_eq!(cache.get("b"), Some("3".into()));
+    }
 }

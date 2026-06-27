@@ -333,6 +333,40 @@ describe('compute-broker server', () => {
     expect(ionet.calls).not.toContainEqual({ op: 'cancel', leaseId });
   });
 
+  it('bonds/cancel returns 404 when the lease exists on no provider and burns the nonce first', async () => {
+    class UnavailableProvider extends FakeProvider {
+      async status(): Promise<'reserved' | 'active' | 'cancelled' | 'reclaimed'> {
+        throw new Error('provider status backend unavailable');
+      }
+    }
+    const isolated = build({
+      cfg,
+      providers: { ionet: new UnavailableProvider('ionet'), akash: new UnavailableProvider('akash') },
+    });
+    await isolated.ready();
+
+    const leaseId = 'ghost-lease';
+    const { agentDid, nonce, expires_at, signed_request } = await freshCancelPayload(leaseId);
+    const res = await isolated.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: { lease_id: leaseId, agent_did: agentDid, signed_request, nonce, expires_at },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: 'lease not found on any provider' });
+
+    // The nonce is recorded before the provider lookup, so a same-nonce replay is
+    // refused as used — it is never re-evaluated against the providers (anti-probe).
+    const replay = await isolated.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: { lease_id: leaseId, agent_did: agentDid, signed_request, nonce, expires_at },
+    });
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json()).toMatchObject({ error: 'nonce already used' });
+    await isolated.close();
+  });
+
   it('leases/activate requires operator bearer', async () => {
     const noAuth = await app.inject({
       method: 'POST',

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-27T21:51:43.928Z",
+  "updatedAt": "2026-06-27T22:11:47.674Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11678,
-    "tasks": 1371,
-    "integrated": 1374
+    "events": 11687,
+    "tasks": 1372,
+    "integrated": 1375
   },
   "throughput": {
-    "last24h": 79,
+    "last24h": 80,
     "last7d": 194,
     "velocity": 27.7
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 77
+      "count": 78
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1374
+      "total": 1375
     }
   ],
   "states": {
-    "integrated": 1366,
+    "integrated": 1367,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T22:07:57.494Z",
+      "task": "config-network-resolution-routing-coverage",
+      "note": "committing test file to loop/main-track"
+    },
     {
       "at": "2026-06-27T21:50:18.526Z",
       "task": "sdk-solana-stake-uncovered-builder-authorization-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-27T19:07:19.146Z",
       "task": "covenant-mcp-tool-arg-type-mismatch-sibling-arm-coverage",
       "note": "Integrated at 4c284c20: validate_arguments per-type rejection arms (boolean/number/object/array/null) covered + mutation-proven. Committed t"
-    },
-    {
-      "at": "2026-06-27T18:25:48.852Z",
-      "task": "coding-gateway-sandbox-cost-metering-coverage",
-      "note": "Committed. Test-only; autonomy records gitignored. sandboxCostUsd metering now covered (3/3 mutations caught)."
     }
   ]
 }

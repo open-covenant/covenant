@@ -49671,6 +49671,48 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_send_connection_refused_surfaces_transport_not_timeout() {
+        // The Err arm of cross-host delivery splits on `e.is_timeout()`: a slow
+        // remote is 'timeout' (covered above), a connection-level failure
+        // (refused/reset/DNS) is 'transport'. Bind an ephemeral port and drop the
+        // listener so nothing answers, then deliver there: the connect is refused
+        // at once — not a timeout — so the audit reason must be 'transport', never
+        // 'timeout'. Both arms return the same client-facing error, so the operator
+        // audit reason is the only place the distinction survives.
+        use std::net::TcpListener;
+        use std::time::Duration;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let key = [3u8; 32];
+        let endpoint = covenant_peer_auth::PeerEndpoint {
+            url: format!("http://{addr}"),
+            pubkey: key,
+        };
+        let s = server_with(vec![], "")
+            .with_known_hosts(KnownHosts::new().with_host("remote", endpoint.clone()));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        match s
+            .deliver_cross_host_with_timeout(task, endpoint, Duration::from_secs(2))
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("unreachable"), "got: {message}");
+            }
+            other => panic!("a refused connection must return a bounded error: {other:?}"),
+        }
+        let outcomes = cross_host_delivery_outcomes(&s).await;
+        assert!(
+            outcomes.contains(&("unreachable".to_string(), "transport".to_string())),
+            "a refused connection must leave an 'unreachable'/'transport' audit row: {outcomes:?}"
+        );
+        assert!(
+            !outcomes.contains(&("unreachable".to_string(), "timeout".to_string())),
+            "a connection refusal must not be mislabeled as a timeout: {outcomes:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a2a_send_cross_host_refuses_a_sender_that_is_not_this_daemon() {
         // The daemon seals cross-host envelopes under its own identity, so it must
         // not vouch-seal a task whose sender is a different local peer. Such a task

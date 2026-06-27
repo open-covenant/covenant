@@ -58,7 +58,7 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "production-ready",
     q: "Is Covenant production-ready?",
-    a: "Not yet. Covenant is pre-1.0. The local control plane, including the daemon, CLI, identity, permissions, memory, and audit log, is implemented and live-tested. Production-grade isolation, networked multi-host operation, and on-chain settlement are on the roadmap, not the changelog.",
+    a: "Not yet. Covenant is pre-1.0. The local control plane, including the daemon, CLI, identity, permissions, memory, and audit log, is implemented and live-tested. The Solana settlement program is live on mainnet (credits, staking, slashing, on-chain receipt anchoring), though its daemon-driven per-intent lifecycle is not yet production. Production-grade isolation and networked multi-host operation remain on the roadmap, not the changelog.",
   },
   {
     id: "staking",

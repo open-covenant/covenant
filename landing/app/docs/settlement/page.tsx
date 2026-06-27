@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-const META_ARGS = ["settlement", "Settlement", 'Local receipts, credit accounting, and the planned on-chain settlement path.'] as const;
+const META_ARGS = ["settlement", "Settlement", 'Local receipts, credit accounting, and the on-chain settlement program, live on mainnet.'] as const;
 export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function SettlementPage() {
@@ -194,16 +194,18 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
 
       <h2>Release</h2>
       <p>
-        Local receipts and recent-receipt reads are implemented. On-chain
-        settlement is planned and scaffolded; it is not production and
-        should not be described as deployed.
+        Local receipts and recent-receipt reads are implemented. The Solana
+        settlement program is deployed and live on mainnet — $CVNT-to-credits,
+        staking, slashing, and on-chain receipt anchoring transact on-chain.
+        The daemon-driven per-intent settlement lifecycle that anchors internal
+        resource receipts is not yet production.
       </p>
 
       <h2>Related</h2>
       <ul>
         <li>
           <Link href="/architecture">Architecture</Link>: the
-          settlement scaffold in the broader system map.
+          settlement program in the broader system map.
         </li>
         <li>
           <Link href="/identity">Identity and keys</Link>: the

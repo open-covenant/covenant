@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-27T01:25:16.438Z",
+  "updatedAt": "2026-06-27T01:45:20.211Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11023,
+    "events": 11027,
     "tasks": 1298,
-    "integrated": 1300
+    "integrated": 1301
   },
   "throughput": {
-    "last24h": 12,
+    "last24h": 13,
     "last7d": 124,
     "velocity": 17.7
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1300
+      "total": 1301
     }
   ],
   "states": {
-    "integrated": 1292,
+    "integrated": 1293,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "llm-router-empty-providers-cache-reput-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T01:23:56.665Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T01:37:55.033Z",
+      "task": "llm-router-empty-providers-cache-reput-coverage",
+      "note": "Committed e1061a07 on loop/main-track; covenant-llm 50 lib tests pass; README metrics 3163; both arms mutation-proven."
+    },
     {
       "at": "2026-06-27T01:11:55.317Z",
       "task": "cross-host-admission-enqueue-failure-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-23T20:54:53.474Z",
       "task": "indexer-x402-paid-summary-handler-coverage",
       "note": "Committed; closes indexer paid_summary 503/402/200+header coverage."
-    },
-    {
-      "at": "2026-06-23T20:49:51.753Z",
-      "task": "indexer-x402-config-from-env-coverage",
-      "note": "Committed; test-only slice closing x402 from_env coverage."
     }
   ]
 }

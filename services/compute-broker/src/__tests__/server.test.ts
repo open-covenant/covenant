@@ -155,6 +155,32 @@ describe('compute-broker server', () => {
     await nokey.close();
   });
 
+  it('bonds/cancel returns 503 without broker key', async () => {
+    // Symmetric to the bonds/request 503 above: an unprovisioned broker (no
+    // signing key) must refuse to cancel a bond rather than proceeding. The
+    // body is zod-valid so the request reaches the signingKeyHex gate, which
+    // sits before any signature verification.
+    const nokey = build({
+      cfg: loadConfig({ OPERATOR_BEARER_TOKEN: operatorBearer }),
+      providers: { ionet: new FakeProvider('ionet'), akash: new FakeProvider('akash') },
+    });
+    await nokey.ready();
+    const res = await nokey.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: 'lease-nokey',
+        agent_did: '11111111111111111111111111111111',
+        signed_request: bs58.encode(new Uint8Array(64)),
+        nonce: bs58.encode(new Uint8Array(16)),
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'broker key not loaded' });
+    await nokey.close();
+  });
+
   const freshCancelPayload = async (leaseId: string, opts: { expirySecs?: number } = {}) => {
     const agentKey = hexToKey('cd'.repeat(32));
     const agentPk = await deriveAgentKey(agentKey);
@@ -437,6 +463,27 @@ describe('compute-broker server', () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ error: 'invalid bearer' });
+  });
+
+  it('leases/activate returns 503 when no operator bearer is configured', async () => {
+    // Deny-by-default: a deploy that never set OPERATOR_BEARER_TOKEN must
+    // refuse every operator-gated route, even when the caller supplies a
+    // Bearer header — the missing *server* credential, not a missing client
+    // header, is what fails the request closed.
+    const nobearer = build({
+      cfg: loadConfig({ BROKER_SIGNING_KEY_HEX: key }),
+      providers: { ionet: new FakeProvider('ionet'), akash: new FakeProvider('akash') },
+    });
+    await nobearer.ready();
+    const res = await nobearer.inject({
+      method: 'POST',
+      url: '/leases/activate',
+      headers: { authorization: `Bearer ${operatorBearer}` },
+      payload: { lease_id: 'ionet-lease-nobearer', provider: 'ionet' },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: /operator bearer not configured/ });
+    await nobearer.close();
   });
 
   it('leases/activate activates the selected provider lease', async () => {

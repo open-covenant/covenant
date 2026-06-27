@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T09:28:21.128Z",
+  "updatedAt": "2026-06-27T09:48:24.886Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11170,
-    "tasks": 1314,
-    "integrated": 1317
+    "events": 11188,
+    "tasks": 1316,
+    "integrated": 1319
   },
   "throughput": {
-    "last24h": 29,
-    "last7d": 140,
-    "velocity": 20
+    "last24h": 31,
+    "last7d": 142,
+    "velocity": 20.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 20
+      "count": 22
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1317
+      "total": 1319
     }
   ],
   "states": {
-    "integrated": 1309,
+    "integrated": 1311,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T09:46:04.157Z",
+      "task": "settlement-build-receipt-batch-empty-fail-closed-coverage",
+      "note": "Fail-closed coverage landed for build_receipt_batch empty/all-settled EmptyBatch guard. Committing."
+    },
+    {
+      "at": "2026-06-27T09:33:16.923Z",
+      "task": "runtime-parse-proc-stat-malformed-line-fail-closed-coverage",
+      "note": "Fail-closed coverage landed for parse_proc_stat malformed-input arms (subprocess-tracker pid-reuse refusal). Committing."
+    },
     {
       "at": "2026-06-27T09:16:42.103Z",
       "task": "cross-host-dedup-open-unreadable-log-fail-closed-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T01:11:55.317Z",
       "task": "cross-host-admission-enqueue-failure-coverage",
       "note": "Integrated as 7bb169bd. Test-only slice pinning the cross-host admission post-enqueue correction arm (no false Admitted on mailbox-write fai"
-    },
-    {
-      "at": "2026-06-27T00:59:29.319Z",
-      "task": "cross-host-admission-dedup-write-failure-coverage",
-      "note": "Integrated as 60041914. Test-only slice pinning the cross-host admission anti-replay durability fail-closed guarantee (dedup_write_failed ar"
-    },
-    {
-      "at": "2026-06-27T00:34:34.033Z",
-      "task": "multi-host-a2a-cross-host-loopback-live",
-      "note": "Committed 50d94243 and pushed to origin/loop/main-track (36256df5..50d94243). All push identity guards passed. Finishes multi-host-networkin"
     }
   ]
 }

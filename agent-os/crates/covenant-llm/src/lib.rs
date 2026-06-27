@@ -2952,6 +2952,66 @@ model = "nomic-embed-text"
     }
 
     #[tokio::test]
+    async fn providers_surface_status_error_on_non_success_http() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A non-2xx provider response (429 rate limit, 401 auth, 5xx upstream)
+        // must surface ProviderError::Status carrying the real status code and
+        // the provider's error body: the operator needs the body to see why, and
+        // is_retryable classifies Status as a definite, non-retryable response so
+        // the router stops rather than re-billing the next provider. The caps
+        // tests only serve 200s; this pins the non-success arm of every chat
+        // provider's complete(). One method-only mock answers all three provider
+        // paths (/api/chat, the anthropic endpoint, /v1/chat/completions).
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .set_body_string(r#"{"error":{"message":"rate limited"}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        fn assert_429(err: ProviderError) {
+            match err {
+                ProviderError::Status { status, body } => {
+                    assert_eq!(
+                        status, 429,
+                        "the real upstream status must be carried, not a hardcoded code"
+                    );
+                    assert!(
+                        body.contains("rate limited"),
+                        "the provider error body must be surfaced for operator diagnostics: {body:?}"
+                    );
+                }
+                other => {
+                    panic!("a non-2xx response must surface ProviderError::Status, got {other:?}")
+                }
+            }
+        }
+
+        assert_429(
+            OllamaProvider::with_limits(server.uri(), "m", 16 * 1024)
+                .complete(&[ChatMessage::user("hi")])
+                .await
+                .expect_err("a 429 must be Status, not Ok or a parse error"),
+        );
+        assert_429(
+            AnthropicProvider::with_limits("k", "m", server.uri(), 16 * 1024)
+                .complete(&[ChatMessage::user("hi")])
+                .await
+                .expect_err("a 429 must be Status, not Ok or a parse error"),
+        );
+        assert_429(
+            OpenAiProvider::with_limits("k", server.uri(), "m", 16 * 1024)
+                .complete(&[ChatMessage::user("hi")])
+                .await
+                .expect_err("a 429 must be Status, not Ok or a parse error"),
+        );
+    }
+
+    #[tokio::test]
     async fn ollama_embedder_caps_oversized_body_and_reads_a_small_body() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};

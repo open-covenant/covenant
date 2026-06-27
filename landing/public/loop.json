@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T16:30:20.907Z",
+  "updatedAt": "2026-06-27T16:50:24.919Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11420,
-    "tasks": 1343,
-    "integrated": 1345
+    "events": 11429,
+    "tasks": 1344,
+    "integrated": 1346
   },
   "throughput": {
     "last24h": 53,
-    "last7d": 166,
-    "velocity": 23.7
+    "last7d": 167,
+    "velocity": 23.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 48
+      "count": 49
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1345
+      "total": 1346
     }
   ],
   "states": {
-    "integrated": 1337,
+    "integrated": 1338,
     "proposed": 2,
     "blocked": 4
   },
@@ -195,7 +195,7 @@
     },
     {
       "name": "covenant",
-      "count": 100
+      "count": 101
     },
     {
       "name": "audit",
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T16:44:41.589Z",
+      "task": "covenant-budget-compact-debit-underflow-clamp-coverage",
+      "note": "Committed 10f64abb on loop/main-track. 2 files (test +64, README metrics +/-1). Pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-27T16:21:05.443Z",
       "task": "compute-broker-bonds-cancel-badsig-nonce-preservation-covera",
@@ -310,11 +315,6 @@
       "at": "2026-06-27T11:51:18.739Z",
       "task": "proof-gen-proof-format-validation-guard-coverage",
       "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T11:47:11.075Z",
-      "task": "fairscale-bridge-outcome-production-status-alias-coverage",
-      "note": "committed to loop/main-track as 0c82a268"
     }
   ]
 }

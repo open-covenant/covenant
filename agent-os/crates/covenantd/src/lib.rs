@@ -49531,6 +49531,61 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_send_to_remote_with_unexpected_status_surfaces_remote_error() {
+        // A reachable remote that answers with neither 202 (admitted) nor 403
+        // (cleanly refused) is broken, not refusing: a 5xx must reach the caller
+        // as a distinct Response::Error plus a 'remote_error' audit row — never
+        // conflated with a clean 'remote_refused', never reported as a queue, and
+        // never enqueued locally. Conflating the two would hide a remote outage
+        // behind an admission refusal on the operator feed.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let s = server_with(vec![], "").with_known_hosts(KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: remote.uri(),
+                pubkey: key,
+            },
+        ));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.bob@remote".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => {
+                assert!(message.contains("unexpected status"), "got: {message}");
+            }
+            other => panic!("a broken remote must surface as an error, not a queue: {other:?}"),
+        }
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a task the remote never accepted must never enqueue locally"
+        );
+        let outcomes = cross_host_delivery_outcomes(&s).await;
+        assert!(
+            outcomes.contains(&("refused".to_string(), "remote_error".to_string())),
+            "an unexpected remote status must leave a 'remote_error' audit row, distinct from remote_refused: {outcomes:?}"
+        );
+        assert!(
+            !outcomes.contains(&("refused".to_string(), "remote_refused".to_string())),
+            "a 5xx must not be mislabeled as a clean remote refusal: {outcomes:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a2a_send_to_remote_with_mismatched_key_is_refused_before_any_post() {
         // MITM guard: a recipient whose key is NOT the known-hosts binding for its
         // host is refused by the identity check before a sealed envelope reaches

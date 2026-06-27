@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T04:47:03.394Z",
+  "updatedAt": "2026-06-27T05:07:07.132Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11076,
+    "events": 11081,
     "tasks": 1304,
-    "integrated": 1306
+    "integrated": 1307
   },
   "throughput": {
-    "last24h": 18,
-    "last7d": 129,
-    "velocity": 18.4
+    "last24h": 19,
+    "last7d": 130,
+    "velocity": 18.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 9
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1306
+      "total": 1307
     }
   ],
   "states": {
-    "integrated": 1298,
+    "integrated": 1299,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "cross-host-peer-task-ingress-body-cap-and-rejection-http-cov",
-    "state": "in_progress",
-    "since": "2026-06-27T04:46:26.308Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T05:06:39.889Z",
+      "task": "cross-host-peer-task-ingress-body-cap-and-rejection-http-cov",
+      "note": "committed 6470d086 on loop/main-track; in-process router test for the 64 KiB pre-verify body cap and coarse-403 rejected-no-enqueue ingress "
+    },
     {
       "at": "2026-06-27T04:33:22.400Z",
       "task": "cross-host-admission-open-error-reason-mapping-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-24T00:06:44.341Z",
       "task": "x402-untrusted-response-deserialize-failure-coverage",
       "note": "Committed f21967c4 + pushed to origin/loop/main-track. Slice integrated: 2 mutation-proven tests, README metric 3087."
-    },
-    {
-      "at": "2026-06-23T22:45:41.619Z",
-      "task": "x402-signer-decode-payment-requirement-coverage",
-      "note": "sidecar decode-bail now covered via behavior-preserving decode_requirement extract; test + README metrics in one slice commit on loop/main-t"
     }
   ]
 }

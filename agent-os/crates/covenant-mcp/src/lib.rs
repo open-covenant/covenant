@@ -725,6 +725,43 @@ mod tests {
     }
 
     #[test]
+    fn validate_arguments_rejects_each_simple_type_mismatch() {
+        // json_value_matches_type's boolean/number/object/array/null arms gate
+        // per-property types but, unlike string and integer, have no rejection
+        // coverage. A `=> true` regression on any of them would silently admit a
+        // mistyped argument — e.g. a flag-typed `boolean` parameter set from the
+        // string "yes" — at the validation boundary whose reason feeds the
+        // tamper-evident chain. Each case reaches its arm through the public
+        // validate_arguments path with a value of a deliberately wrong JSON type.
+        let cases: &[(&str, Value)] = &[
+            ("boolean", serde_json::json!("yes")),
+            ("number", serde_json::json!("5")),
+            ("object", serde_json::json!([1])),
+            ("array", serde_json::json!({})),
+            ("null", serde_json::json!(1)),
+        ];
+        for &(declared, ref mistyped) in cases {
+            let spec = ToolSpec {
+                name: "t".into(),
+                description: "d".into(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": { "x": { "type": declared } },
+                    "required": ["x"],
+                }),
+            };
+            let err = spec
+                .validate_arguments(&serde_json::json!({ "x": mistyped }))
+                .expect_err("a mistyped argument must be rejected");
+            assert!(err.contains("field `x`"), "{declared}: names the field: {err}");
+            assert!(
+                err.contains(declared),
+                "{declared}: names the expected type: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn validate_arguments_rejects_non_object_when_fields_required() {
         let spec = EchoTool.spec();
         let err = spec

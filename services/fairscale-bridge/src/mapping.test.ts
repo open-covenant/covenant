@@ -61,6 +61,22 @@ describe('toConductEvent', () => {
     expect(c.summary).toBe('approval requested (2 options)');
   });
 
+  it('redacts a _text-suffixed field not in REDACT_KEYS and keeps the underscore boundary', () => {
+    // mapping.ts:106's `_text` suffix is the forward-compat PII guard for
+    // free-text fields the daemon may add later without listing them in
+    // REDACT_KEYS. prompt_text is not in REDACT_KEYS, so the suffix is its
+    // only redactor — every other redaction test leans on an enumerated key.
+    // `context` ends with "text" but not "_text", so it is the control: it
+    // must pass through, pinning the underscore so a narrowing to
+    // endsWith('text') is also caught.
+    const c = toConductEvent(
+      base({ type: 'intent_dispatched', status: 'ok', prompt_text: 'secret words', context: 'benign' }),
+    );
+    expect(c.detail.prompt_text).toBe('[redacted:12]');
+    expect(c.detail.context).toBe('benign');
+    expect(JSON.stringify(c)).not.toContain('secret words');
+  });
+
   it('defaults unknown event types to neutral with humanized summary', () => {
     const c = toConductEvent(base({ type: 'operator_token_rotated', old_token_prefix: 'aa', new_token_prefix: 'bb' }));
     expect(c.outcome).toBe('neutral');

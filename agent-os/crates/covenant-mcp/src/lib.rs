@@ -680,6 +680,31 @@ mod tests {
     }
 
     #[test]
+    fn validate_arguments_accepts_unknown_type_keyword() {
+        // json_value_matches_type's `_ => true` catch-all: a property whose
+        // declared type is a keyword we don't model is accepted, never
+        // rejected ("never reject what we don't understand") — so a forward
+        // JSON Schema type name keeps spec-compliant MCP clients working.
+        // This is a DIFFERENT path from the union case above: a union
+        // `type: [..]` exits at the `as_str()` None guard before
+        // json_value_matches_type runs, so only a single unknown *string*
+        // type keyword exercises the catch-all. Narrowing it to `_ => false`
+        // would silently reject a legitimate tool call here.
+        let spec = ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "x": { "type": "futureUnknownType" } },
+                "required": ["x"],
+            }),
+        };
+        assert!(spec
+            .validate_arguments(&serde_json::json!({ "x": "anything" }))
+            .is_ok());
+    }
+
+    #[test]
     fn validate_arguments_integer_accepts_whole_float_rejects_string() {
         let spec = ToolSpec {
             name: "t".into(),

@@ -761,6 +761,20 @@ provider = "made-up"
     }
 
     #[test]
+    fn search_from_config_returns_none_when_no_search_block_configured() {
+        // Distinct from the unknown-provider None above: that arm means
+        // a provider was named but isn't recognized; this one means no
+        // [search] block exists at all, the default for a daemon that
+        // never configured web search. pick_search depends on this None
+        // to fall back to the no-op search path — an unwrap here would
+        // crash that default daemon, a default provider would silently
+        // enable search no operator asked for.
+        let cfg = SearchConfig::default();
+        assert!(cfg.search.is_none(), "default config has no [search] block");
+        assert!(search_from_config(&cfg).is_none());
+    }
+
+    #[test]
     fn search_from_config_pins_mock_and_serpapi_discriminator_mapping() {
         // search_from_config matches SearchSection.provider against
         // three exact slugs (mock, brave, serpapi) and falls through

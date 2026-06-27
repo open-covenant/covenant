@@ -415,6 +415,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn short_network_strips_caip2_solana_prefix_else_passthrough() {
+        // The envelope's "network" field is emitted straight from short_network,
+        // and PayAI's facilitator expects the short "solana" id, not the CAIP-2
+        // form. Pin the exact mapping a mutation could otherwise break silently.
+        assert_eq!(
+            short_network("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
+            "solana",
+            "CAIP-2 mainnet collapses to the short form"
+        );
+        assert_eq!(
+            short_network("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"),
+            "solana",
+            "the match is namespace-prefix based, not an exact CAIP-2 string"
+        );
+        assert_eq!(
+            short_network("solana"),
+            "solana",
+            "the already-short form passes through the else branch unchanged"
+        );
+        assert_eq!(
+            short_network("ethereum"),
+            "ethereum",
+            "a non-Solana network must not be relabelled (kills always-solana and swapped branches)"
+        );
+        assert_eq!(
+            short_network("solana-localnet"),
+            "solana-localnet",
+            "a 'solana'-prefixed label without the CAIP-2 colon is left intact (the ':' is load-bearing)"
+        );
+    }
+
     #[tokio::test]
     async fn build_payment_errors_without_fee_payer_in_extra() {
         let signer = PayaiSolanaSigner::new(Keypair::new(), "https://unused");

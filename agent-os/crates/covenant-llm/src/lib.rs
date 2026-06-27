@@ -1409,6 +1409,21 @@ provider = "made-up"
     }
 
     #[test]
+    fn provider_from_config_returns_none_when_no_llm_block_configured() {
+        // Distinct from the unknown-provider None above: that arm means
+        // a provider was named but isn't recognized; this one means no
+        // [llm] block exists at all, the default for a daemon that never
+        // configured an LLM. pick_provider depends on this None to fall
+        // back to the Ollama/mock ladder — an unwrap here would crash
+        // that default daemon, a default provider would silently enable
+        // an LLM no operator asked for. The serde test pins the struct
+        // field (default_cfg.llm.is_none()) but never drives the fn.
+        let cfg = ProviderConfig::default();
+        assert!(cfg.llm.is_none(), "default config has no [llm] block");
+        assert!(provider_from_config(&cfg).is_none());
+    }
+
+    #[test]
     fn provider_from_config_pins_mock_openai_and_deepseek_discriminator_mapping() {
         // provider_from_config matches LlmSection.provider against five
         // exact slugs (mock, ollama, anthropic, openai, deepseek). The

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T07:07:52.797Z",
+  "updatedAt": "2026-06-27T07:27:59.013Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11102,
-    "tasks": 1307,
-    "integrated": 1309
+    "events": 11116,
+    "tasks": 1308,
+    "integrated": 1311
   },
   "throughput": {
-    "last24h": 21,
-    "last7d": 132,
-    "velocity": 18.9
+    "last24h": 23,
+    "last7d": 134,
+    "velocity": 19.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 12
+      "count": 14
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1309
+      "total": 1311
     }
   ],
   "states": {
-    "integrated": 1301,
+    "integrated": 1303,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sdk-response-kind-tag-strip-anti-leak-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T07:00:48.724Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T07:24:01.187Z",
+      "task": "memory-tier-slug-backfill-plan-value-coverage",
+      "note": "committed; pushing to origin/loop/main-track"
+    },
+    {
+      "at": "2026-06-27T07:17:21.907Z",
+      "task": "sdk-response-kind-tag-strip-anti-leak-coverage",
+      "note": "committed f20bad31 (test+README metrics); pushing to origin/loop/main-track"
+    },
     {
       "at": "2026-06-27T06:42:48.753Z",
       "task": "x402-payai-short-network-caip2-shortening-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-26T15:47:13.750Z",
       "task": "multi-host-daemon-known-hosts-config-wiring",
       "note": "Integrated as aac7bcb4, pushed to origin/loop/main-track. covenantd loads+holds known-hosts registry fail-closed; slice 4 (A2A dispatch cons"
-    },
-    {
-      "at": "2026-06-26T14:54:32.607Z",
-      "task": "multi-host-known-hosts-file-load",
-      "note": "integrated at 41aeb9dd (peer-auth lib.rs + README metrics). Slice 2 of multi-host-networking complete: KnownHosts::load_from_path with fail-"
-    },
-    {
-      "at": "2026-06-26T14:33:01.051Z",
-      "task": "multi-host-peer-endpoint-resolution",
-      "note": "integrated at e76ea99a (peer-auth lib.rs + README metrics; autonomy records gitignored). Slice 1 of multi-host-networking complete: KnownHos"
     }
   ]
 }

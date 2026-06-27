@@ -272,6 +272,67 @@ describe('compute-broker server', () => {
     expect(replay.json()).toMatchObject({ error: 'nonce already used' });
   });
 
+  it('bonds/cancel refuses a second cancel of an already-cancelled lease without re-refunding', async () => {
+    const leaseId = 'ionet-lease-double-cancel';
+    const first = await freshCancelPayload(leaseId);
+    const firstRes = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: first.agentDid,
+        signed_request: first.signed_request,
+        nonce: first.nonce,
+        expires_at: first.expires_at,
+      },
+    });
+    expect(firstRes.statusCode).toBe(200);
+
+    const second = await freshCancelPayload(leaseId);
+    const secondRes = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: second.agentDid,
+        signed_request: second.signed_request,
+        nonce: second.nonce,
+        expires_at: second.expires_at,
+      },
+    });
+    expect(secondRes.statusCode).toBe(409);
+    expect(secondRes.json()).toMatchObject({ error: 'lease already cancelled' });
+    const cancels = ionet.calls.filter((c) => c.op === 'cancel' && c.leaseId === leaseId);
+    expect(cancels).toHaveLength(1);
+  });
+
+  it('bonds/cancel refuses cancel of a reclaimed lease', async () => {
+    const leaseId = 'ionet-lease-reclaimed';
+    const reclaim = await app.inject({
+      method: 'POST',
+      url: '/leases/reclaim',
+      headers: operatorAuth,
+      payload: { lease_id: leaseId, provider: 'ionet' },
+    });
+    expect(reclaim.statusCode).toBe(200);
+
+    const { agentDid, nonce, expires_at, signed_request } = await freshCancelPayload(leaseId);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: agentDid,
+        signed_request,
+        nonce,
+        expires_at,
+      },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'lease already reclaimed' });
+    expect(ionet.calls).not.toContainEqual({ op: 'cancel', leaseId });
+  });
+
   it('leases/activate requires operator bearer', async () => {
     const noAuth = await app.inject({
       method: 'POST',

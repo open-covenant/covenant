@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T03:05:42.067Z",
+  "updatedAt": "2026-06-27T03:25:45.781Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11050,
-    "tasks": 1301,
-    "integrated": 1303
+    "events": 11058,
+    "tasks": 1302,
+    "integrated": 1304
   },
   "throughput": {
-    "last24h": 15,
-    "last7d": 126,
-    "velocity": 18
+    "last24h": 16,
+    "last7d": 127,
+    "velocity": 18.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-27",
-      "total": 1303
+      "total": 1304
     }
   ],
   "states": {
-    "integrated": 1295,
+    "integrated": 1296,
     "proposed": 1,
     "blocked": 4,
-    "self_review": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "cross-host-delivery-remote-error-status-coverage",
-    "state": "self_review",
-    "since": "2026-06-27T03:03:15.557Z"
+    "task": "cross-host-delivery-transport-connection-error-coverage",
+    "state": "in_progress",
+    "since": "2026-06-27T03:19:58.625Z"
   },
   "recent": [
+    {
+      "at": "2026-06-27T03:06:33.362Z",
+      "task": "cross-host-delivery-remote-error-status-coverage",
+      "note": "committed e9a0d7b4; staged only README.md + covenantd/src/lib.rs; pushing to origin/loop/main-track"
+    },
     {
       "at": "2026-06-27T02:51:31.600Z",
       "task": "cross-host-admission-duplicate-audit-failure-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-23T22:20:14.397Z",
       "task": "router-load-agents-malformed-manifest-coverage",
       "note": "load_agents_from_dir malformed-manifest code path now covered; test + README metrics in one slice commit on loop/main-track"
-    },
-    {
-      "at": "2026-06-23T21:57:37.840Z",
-      "task": "research-agent-llm-failure-fallback-coverage",
-      "note": "LLM-Err fallback arm now covered; test + README metrics in one slice commit on loop/main-track"
     }
   ]
 }

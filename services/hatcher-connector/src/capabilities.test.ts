@@ -86,4 +86,18 @@ describe('mapMeshGrants — Hatcher per-dispatch grants ({scope, constraints})',
     expect(grants.map((g) => g.action)).toEqual(['tool.call.summarize', 'a2a.send.PKa']);
     expect(policy.notes.some((n) => n.includes('quantum.teleport'))).toBe(true);
   });
+
+  it('fails safe: no grant for a peerless a2a or an mcp wildcard; browser routes to consent policy', () => {
+    const { grants, policy } = mapMeshGrants(
+      [
+        { scope: 'a2a.send' },
+        { scope: 'mcp.*' },
+        { scope: 'browser.open', constraints: { domains: ['docs.rs'] } },
+      ],
+      EXP,
+    );
+    expect(grants).toEqual([]);
+    expect(policy.mcpWildcard).toBe(true);
+    expect(policy.net).toEqual({ domains: ['docs.rs'] });
+  });
 });

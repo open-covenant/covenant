@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T14:09:52.384Z",
+  "updatedAt": "2026-06-27T14:29:56.007Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11320,
-    "tasks": 1331,
-    "integrated": 1334
+    "events": 11351,
+    "tasks": 1335,
+    "integrated": 1337
   },
   "throughput": {
-    "last24h": 45,
-    "last7d": 156,
-    "velocity": 22.3
+    "last24h": 48,
+    "last7d": 159,
+    "velocity": 22.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 37
+      "count": 40
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-27",
-      "total": 1334
+      "total": 1337
     }
   ],
   "states": {
-    "integrated": 1326,
+    "integrated": 1329,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,27 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "settlement-dispatch-select-malformed-feed-skip-coverage",
+    "state": "in_progress",
+    "since": "2026-06-27T14:29:11.888Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-27T14:25:42.915Z",
+      "task": "witness-skill-manifest-fallback-rung-coverage",
+      "note": "committed on loop/main-track; +1 vitest case pinning both buildSkillManifest fallback rungs, mutation-proven"
+    },
+    {
+      "at": "2026-06-27T14:21:02.655Z",
+      "task": "proofgen-wrap-witness-key-length-guard-coverage",
+      "note": "committed on loop/main-track; +1 vitest case pinning wrapWitnessKey both-sides length guard, mutation-proven, independent review SHIP"
+    },
+    {
+      "at": "2026-06-27T14:15:34.727Z",
+      "task": "witness-refutation-reset-issuer-scope-coverage",
+      "note": "committed 59156faa on loop/main-track; +1 vitest case pinning cross-issuer reset scoping in scanRefutations, mutation-proven, independent re"
+    },
     {
       "at": "2026-06-27T13:54:14.311Z",
       "task": "gvisor-oci-config-memory-limit-conversion-coverage",
@@ -300,21 +320,6 @@
       "at": "2026-06-27T09:33:16.923Z",
       "task": "runtime-parse-proc-stat-malformed-line-fail-closed-coverage",
       "note": "Fail-closed coverage landed for parse_proc_stat malformed-input arms (subprocess-tracker pid-reuse refusal). Committing."
-    },
-    {
-      "at": "2026-06-27T09:16:42.103Z",
-      "task": "cross-host-dedup-open-unreadable-log-fail-closed-coverage",
-      "note": "Fail-closed coverage landed for JsonlCrossHostDedup::open non-NotFound read arm. Committing."
-    },
-    {
-      "at": "2026-06-27T08:55:00.382Z",
-      "task": "llm-ollama-embedder-error-arm-coverage",
-      "note": "Embedder error-path coverage landed; covenant-llm provider/embedder error arms (memory cap, no-text Empty, non-2xx Status) now symmetric acr"
-    },
-    {
-      "at": "2026-06-27T08:44:24.940Z",
-      "task": "llm-provider-non-success-status-arm-coverage",
-      "note": "Non-2xx Status-arm coverage landed for all three chat providers; provider error-path coverage now spans memory axis (caps), no-text axis (Em"
     }
   ]
 }

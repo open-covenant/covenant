@@ -49184,6 +49184,72 @@ required = {caps:?}
         );
     }
 
+    /// A cross-host admission server with NO anti-replay dedup store wired:
+    /// `cross_host_dedup` is left at its `None` default (never passed to
+    /// [`Server::with_cross_host_dedup`]). Mirrors [`cross_host_server`]
+    /// otherwise (host1 -> `sender`, fresh daemon identity) so an envelope
+    /// clears every security gate and reaches the dedup step, where the
+    /// unconfigured-store arm fails closed.
+    async fn cross_host_server_without_dedup(sender: &LocalIdentity) -> Server {
+        let known_hosts = KnownHosts::new().with_host(
+            "host1",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://host1:7777".into(),
+                pubkey: sender.pubkey_bytes(),
+            },
+        );
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_known_hosts(known_hosts)
+    }
+
+    #[tokio::test]
+    async fn admit_refuses_when_dedup_store_is_unconfigured() {
+        // The anti-replay claim is the pipeline's only replay guarantee. A
+        // cross-host-enabled daemon whose dedup store was never wired
+        // (`cross_host_dedup` at its None default) has no way to absorb a
+        // replay, so admission must fail closed rather than enqueue a
+        // cross-host task with no replay protection at all -- the public
+        // contract documented on the field and on with_cross_host_dedup.
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server_without_dedup(&alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000d, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected,
+            "with no dedup store wired, admission must fail closed, not admit an unprotected task"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a task admitted with no anti-replay store must never reach the mailbox"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                && reason == "dedup_unconfigured"
+                && *sender_b58 == alice.agent_id().pubkey_base58()),
+            "the missing-dedup refusal must attribute the proven sender on the audit feed: {rows:?}"
+        );
+    }
+
     /// A cross-host task whose sender is this daemon (the v0 cross-host
     /// principal) and whose recipient carries `pubkey` — set equal to the
     /// known-hosts binding to clear the identity check, or different to trip it.

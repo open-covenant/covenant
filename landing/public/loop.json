@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T04:26:18.995Z",
+  "updatedAt": "2026-06-27T04:47:03.394Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11067,
-    "tasks": 1303,
-    "integrated": 1305
+    "events": 11076,
+    "tasks": 1304,
+    "integrated": 1306
   },
   "throughput": {
-    "last24h": 17,
-    "last7d": 128,
-    "velocity": 18.3
+    "last24h": 18,
+    "last7d": 129,
+    "velocity": 18.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 8
+      "count": 9
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1305
+      "total": 1306
     }
   ],
   "states": {
-    "integrated": 1297,
+    "integrated": 1298,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "cross-host-admission-open-error-reason-mapping-coverage",
+    "task": "cross-host-peer-task-ingress-body-cap-and-rejection-http-cov",
     "state": "in_progress",
-    "since": "2026-06-27T04:12:43.971Z"
+    "since": "2026-06-27T04:46:26.308Z"
   },
   "recent": [
+    {
+      "at": "2026-06-27T04:33:22.400Z",
+      "task": "cross-host-admission-open-error-reason-mapping-coverage",
+      "note": "committed 82f9dd5a on loop/main-track; 2 mutation-proven admission tests for malformed_signature/malformed_payload distinct audit reasons"
+    },
     {
       "at": "2026-06-27T03:49:50.610Z",
       "task": "cross-host-delivery-transport-connection-error-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-23T22:45:41.619Z",
       "task": "x402-signer-decode-payment-requirement-coverage",
       "note": "sidecar decode-bail now covered via behavior-preserving decode_requirement extract; test + README metrics in one slice commit on loop/main-t"
-    },
-    {
-      "at": "2026-06-23T22:39:34.773Z",
-      "task": "search-provider-http-error-surfacing-coverage",
-      "note": "Brave/SerpApi Status + Brave Empty production paths now covered; tests + README metrics in one slice commit on loop/main-track"
     }
   ]
 }

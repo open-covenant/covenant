@@ -48994,6 +48994,46 @@ required = {caps:?}
         );
     }
 
+    #[tokio::test]
+    async fn admit_fails_closed_when_the_dedup_claim_cannot_be_durably_recorded() {
+        // The anti-replay claim is the pipeline's replay guarantee: it must be
+        // durably recorded BEFORE the task is enqueued, so a crash can only lose
+        // a task, never re-admit a replay. If the claim itself cannot be written
+        // (a full or unwritable disk), admission must refuse rather than enqueue
+        // a task whose later replay could slip past an empty cache. Sabotage the
+        // dedup log by turning its path into a directory after the server opened
+        // it — open() creates only the parent, not the file — so the next append
+        // hits EISDIR and claim_fresh returns Err. That filesystem fault is the
+        // only way to drive the write-failure arm of the concrete dedup store.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        std::fs::create_dir(dir.path().join("cross-host-dedup.jsonl"))
+            .expect("place a directory at the not-yet-created dedup log so its append fails");
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000b, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected,
+            "an un-recordable dedup claim must fail closed, not admit an un-deduplicated task"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a task whose replay claim could not be persisted must never reach the mailbox"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                && reason == "dedup_write_failed"
+                && *sender_b58 == alice.agent_id().pubkey_base58()),
+            "the write failure must be attributed to the proven sender on the audit feed: {rows:?}"
+        );
+    }
+
     /// A cross-host task whose sender is this daemon (the v0 cross-host
     /// principal) and whose recipient carries `pubkey` — set equal to the
     /// known-hosts binding to clear the identity check, or different to trip it.

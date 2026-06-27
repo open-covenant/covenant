@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T17:30:33.076Z",
+  "updatedAt": "2026-06-27T17:50:36.964Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11464,
-    "tasks": 1347,
-    "integrated": 1350
+    "events": 11481,
+    "tasks": 1350,
+    "integrated": 1352
   },
   "throughput": {
-    "last24h": 57,
-    "last7d": 171,
-    "velocity": 24.4
+    "last24h": 58,
+    "last7d": 173,
+    "velocity": 24.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 53
+      "count": 55
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-27",
-      "total": 1350
+      "total": 1352
     }
   ],
   "states": {
-    "integrated": 1342,
-    "proposed": 1,
+    "integrated": 1344,
+    "proposed": 2,
     "blocked": 4
   },
   "areas": [
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T17:44:28.380Z",
+      "task": "telegram-bot-rate-limit-guard-coverage",
+      "note": "Committed b230b926 on loop/main-track. Security note (cross_review folded in — actor-role string was rejected): exports are testability-only"
+    },
+    {
+      "at": "2026-06-27T17:38:49.042Z",
+      "task": "fairscale-bridge-daemon-health-probe-coverage",
+      "note": "Committed 4083eb6b on loop/main-track: +22 lines, one describe block, mutation-proven 3/3 arms."
+    },
     {
       "at": "2026-06-27T17:23:00.393Z",
       "task": "hatcher-connector-cancel-finalize-double-result-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T13:12:48.398Z",
       "task": "audit-verify-integrity-missing-anchor-diagnostic-coverage",
       "note": "test-only coverage slice integrated; commit pending."
-    },
-    {
-      "at": "2026-06-27T12:39:19.441Z",
-      "task": "mcp-validate-arguments-unknown-type-keyword-permissive-cover",
-      "note": "test-only coverage slice integrated; commit pending."
-    },
-    {
-      "at": "2026-06-27T12:08:30.224Z",
-      "task": "hermes-mcp-bridge-redact-home-and-auth-header-coverage",
-      "note": "committed to loop/main-track"
     }
   ]
 }

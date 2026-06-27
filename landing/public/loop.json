@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T03:45:51.145Z",
+  "updatedAt": "2026-06-27T04:06:14.303Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11058,
+    "events": 11063,
     "tasks": 1302,
-    "integrated": 1304
+    "integrated": 1305
   },
   "throughput": {
-    "last24h": 16,
-    "last7d": 127,
-    "velocity": 18.1
+    "last24h": 17,
+    "last7d": 128,
+    "velocity": 18.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1304
+      "total": 1305
     }
   ],
   "states": {
-    "integrated": 1296,
+    "integrated": 1297,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "cross-host-delivery-transport-connection-error-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T03:19:58.625Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T03:49:50.610Z",
+      "task": "cross-host-delivery-transport-connection-error-coverage",
+      "note": "committed c87181a4; staged only README.md + covenantd/src/lib.rs; pushed to origin/loop/main-track. cross_host.rs reverts clean (no producti"
+    },
     {
       "at": "2026-06-27T03:06:33.362Z",
       "task": "cross-host-delivery-remote-error-status-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-23T22:39:34.773Z",
       "task": "search-provider-http-error-surfacing-coverage",
       "note": "Brave/SerpApi Status + Brave Empty production paths now covered; tests + README metrics in one slice commit on loop/main-track"
-    },
-    {
-      "at": "2026-06-23T22:20:14.397Z",
-      "task": "router-load-agents-malformed-manifest-coverage",
-      "note": "load_agents_from_dir malformed-manifest code path now covered; test + README metrics in one slice commit on loop/main-track"
     }
   ]
 }

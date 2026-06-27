@@ -1611,6 +1611,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_integrity_report_detects_missing_anchor_for_unanchored_event() {
+        // verify_integrity flags a well-formed event line that has no backing
+        // chain anchor: the `Ok(event)` branch's `None => "chain entry {index}
+        // missing"` arm (lib.rs:977), reached only when the event log outruns
+        // the append-only hash-chain sidecar (event_lines.len() >
+        // anchors.len()). That skew is the signature of a forged event appended
+        // without extending the chain, and the diagnostic must name the
+        // specific unanchored index. The sibling dangling-anchor test drives
+        // the OPPOSITE skew (anchors > events), landing in the line-995 block
+        // and the `Some` arms; the tampered/malformed tests run equal counts
+        // (the `Some(_)` mismatch / parse-error arms). None reaches this `None`.
+        //
+        // Mutation: narrowing line 977 to `None => {}` drops only this
+        // per-index diagnostic. The `anchors.len() != event_lines.len()` parity
+        // check at lib.rs:953 already flips `valid`, so asserting only
+        // `!report.valid` would NOT catch the regression — the load-bearing
+        // assertion is the specific "chain entry 1 missing" string.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+
+        // Append a second copy of the valid event line so the event log holds
+        // two well-formed events while the chain sidecar keeps its one anchor:
+        // index 1 is a forged event with no anchor.
+        let line = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        std::fs::write(&path, format!("{line}\n{line}\n")).unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(
+            !report.valid,
+            "an event with no backing chain anchor must mark the report invalid: {report:?}",
+        );
+        assert_eq!(report.events, 2, "the event log now holds two event lines");
+        assert_eq!(report.anchors, 1, "the chain sidecar still holds one anchor");
+        assert!(
+            report
+                .failures
+                .iter()
+                .any(|f| f.contains("chain entry 1 missing")),
+            "the unanchored event must surface its specific index as a \
+             missing-anchor failure, not just an invalid verdict: {report:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn jsonl_integrity_report_detects_tampered_event_line() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");

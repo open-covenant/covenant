@@ -1636,6 +1636,86 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn tokio_broadcast_stream_maps_ok_lagged_and_closed_arms() {
+        // The broadcast->Stream bridge under the agent-trace SSE endpoint
+        // collapses three recv() outcomes onto the `Option<StreamedTrace>`
+        // item: Ok(trace) -> Some(trace) (deliver), Lagged -> None (skip the
+        // missed window but keep streaming), Closed -> end of stream. Every
+        // recv here resolves synchronously, so no paused clock is needed.
+        use covenant_runtime::{RuntimeTrace, StreamedTrace};
+        use covenant_types::AgentId;
+        use futures::StreamExt;
+
+        let intent_id = uuid::Uuid::from_u128(0xfeed);
+        let trace = |run: &str| StreamedTrace {
+            intent_id,
+            issuer: AgentId::new("agent@local", [3u8; 32]),
+            trace: RuntimeTrace::HermesToolInvoked {
+                run_id: run.into(),
+                tool: "terminal".into(),
+                preview: "ls".into(),
+            },
+        };
+
+        // Ok arm: a published trace surfaces as Some(Some(trace)) carrying the
+        // exact payload. Dropping it (Some(None) on the Ok arm) would push
+        // empty SSE frames and never deliver a real trace.
+        let (tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(8);
+        let mut stream = Box::pin(tokio_broadcast_stream(rx));
+        tx.send(trace("ok-1")).expect("send into an open channel");
+        let delivered = stream
+            .next()
+            .await
+            .expect("the stream must yield while the channel is open")
+            .expect("an Ok recv must forward the trace, not an empty None frame");
+        assert!(
+            matches!(&delivered.trace, RuntimeTrace::HermesToolInvoked { run_id, .. } if run_id == "ok-1"),
+            "the Ok arm must forward the exact published trace, not a different or dropped payload",
+        );
+
+        // Lagged arm: a capacity-1 buffer with two sends before any recv
+        // evicts the first message, so the receiver lags by one window. The
+        // stream must yield Some(None) (skip it) and KEEP GOING — swapping the
+        // Lagged arm to terminate would silently disconnect any SSE client
+        // that briefly fell behind the broadcast buffer.
+        let (tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(1);
+        let mut stream = Box::pin(tokio_broadcast_stream(rx));
+        tx.send(trace("evicted")).expect("first send");
+        tx.send(trace("survivor")).expect("second send evicts the first");
+        let lagged = stream
+            .next()
+            .await
+            .expect("a lagged receiver must still yield an item, not terminate the stream");
+        assert!(
+            lagged.is_none(),
+            "the Lagged arm must yield Some(None) so the handler drops the missed \
+             window; mapping it to None would terminate the SSE stream for a client \
+             that only briefly fell behind",
+        );
+        let resumed = stream
+            .next()
+            .await
+            .expect("the stream must continue after a lag, not stop")
+            .expect("the post-lag recv delivers the surviving buffered trace");
+        assert!(
+            matches!(&resumed.trace, RuntimeTrace::HermesToolInvoked { run_id, .. } if run_id == "survivor"),
+            "after skipping the lagged window the stream must resume delivering live traces",
+        );
+
+        // Closed arm: with every sender dropped the channel is Closed and the
+        // stream terminates (next() -> None). Mapping Closed to Some((None, rx))
+        // would spin the unfold forever on a dead receiver.
+        let (tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(8);
+        let mut stream = Box::pin(tokio_broadcast_stream(rx));
+        drop(tx);
+        assert!(
+            stream.next().await.is_none(),
+            "a Closed channel must terminate the stream; looping on Closed would \
+             busy-spin the SSE task on a permanently-dead receiver",
+        );
+    }
+
     #[test]
     fn http_parse_status_pins_accepted_spellings_and_permissive_fallback() {
         use covenant_peer_auth::PeerStatusFilter;

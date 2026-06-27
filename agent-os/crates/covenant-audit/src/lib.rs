@@ -5052,6 +5052,33 @@ mod tests {
     }
 
     #[test]
+    fn filter_rule_prefix_excludes_rows_without_a_rule() {
+        // The catch-all rule arm rejects two inputs: a non-matching
+        // Some signature (covered by wrong_rule) and a None rule — a row
+        // recording no authorizing signature, like a denial. A
+        // rule-prefix filter must exclude the ruleless row, not fold it
+        // into a signature-scoped provenance query.
+        let denied = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 0,
+            kind: "capability_check".into(),
+            actor: "research".into(),
+            action: "a2a.send".into(),
+            approver: None,
+            rule: None,
+            outcome: "denied".into(),
+        };
+        let by_rule = ProvenanceFilter {
+            rule: Some("GrantSig".into()),
+            ..Default::default()
+        };
+        assert!(
+            !by_rule.matches(&denied),
+            "filtering by a rule prefix must exclude rows that record no rule",
+        );
+    }
+
+    #[test]
     fn event_at_helper_threads_timestamp_into_projection() {
         let rows = project_privileged_actions(&event_at(
             42,

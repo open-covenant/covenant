@@ -3203,6 +3203,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_compact_clamps_persisted_balance_when_dropped_debits_exceed_capacity() {
+        // compact_older_than folds dropped pre-cutoff debits into a synthetic
+        // bucket via saturating_sub (lib.rs:1073) and persists the result as a
+        // Snapshot that becomes the authoritative balance across every reopen.
+        // When the dropped debits sum beyond the bucket (reachable via a
+        // capacity lowered after debits, or a legacy log) a plain `-` underflows:
+        // a debug panic mid-compaction, or a release wrap that writes a
+        // near-u64::MAX balance to disk and permanently defeats the cap. The
+        // post==pre compaction tests keep debits within capacity, so this
+        // boundary is otherwise never reached.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("over@local");
+
+        // Stamp at a recent time so the reopen's lazy refill is a no-op (5
+        // credits/hour needs ~12 min to refill a single token); the assertion
+        // then reads the persisted clamp rather than a refilled balance.
+        let now = epoch_ms();
+        let cutoff = now + 1;
+
+        // try_debit would refuse the second debit (3 + 3 > 5), so the
+        // over-capacity pre-cutoff log is authored directly.
+        let mk_debit = |credits: u64| {
+            BudgetEvent::Debit(BudgetDebit {
+                agent: a.clone(),
+                credits,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: now,
+            })
+        };
+        let log = [
+            BudgetEvent::CapacitySet {
+                agent: a.clone(),
+                credits_per_hour: 5,
+                at_ms: now,
+            },
+            mk_debit(3),
+            mk_debit(3),
+        ];
+        let body = log
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let l = JsonlLedger::open(path.clone()).await.unwrap();
+        assert_eq!(
+            l.compact_older_than(cutoff).await.unwrap(),
+            2,
+            "both pre-cutoff debits are folded into the snapshot and dropped",
+        );
+
+        // Reopen so the assertion reads the persisted post-compaction Snapshot.
+        let l2 = JsonlLedger::open(path).await.unwrap();
+        assert_eq!(
+            l2.tokens_remaining(&a).await.unwrap(),
+            0,
+            "6 credits of debits against a 5-credit bucket must clamp the \
+             persisted balance to 0, not wrap toward u64::MAX",
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_set_capacity_clamps_tokens_when_shrinking() {
         let l = InMemoryLedger::new();
         let a = agent("a@local");

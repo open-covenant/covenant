@@ -49250,6 +49250,151 @@ required = {caps:?}
         );
     }
 
+    /// An audit log that records everything except the cross-host DUPLICATE row,
+    /// modelling an audit outage that strikes exactly when the admission core
+    /// must persist a detected replay before absorbing it as Duplicate. The
+    /// admitted row still lands, so the first delivery succeeds and the second
+    /// admit reaches the duplicate-audit step.
+    struct FailDuplicateCrossHostAudit {
+        inner: covenant_audit::InMemoryAuditLog,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_audit::AuditLog for FailDuplicateCrossHostAudit {
+        async fn record(
+            &self,
+            event: covenant_audit::AuditEvent,
+        ) -> Result<(), covenant_audit::AuditError> {
+            if let AuditKind::CrossHostA2AAdmission { outcome, .. } = &event.kind {
+                if outcome == "duplicate" {
+                    return Err(covenant_audit::AuditError::Io(std::io::Error::other(
+                        "audit outage on cross-host duplicate row (test fixture)",
+                    )));
+                }
+            }
+            self.inner.record(event).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
+            self.inner.recent(limit).await
+        }
+        async fn purge_older_than(&self, before_ms: u64) -> Result<u64, covenant_audit::AuditError> {
+            self.inner.purge_older_than(before_ms).await
+        }
+        async fn verify_integrity(
+            &self,
+        ) -> Result<covenant_audit::AuditIntegrityReport, covenant_audit::AuditError> {
+            self.inner.verify_integrity().await
+        }
+    }
+
+    /// The cross-host admission server with a caller-supplied audit log, so a
+    /// failing required-audit write can be injected at a chosen outcome. Mirrors
+    /// [`cross_host_server`] otherwise (host1 -> `sender`, fresh dedup log,
+    /// generated daemon identity).
+    async fn cross_host_server_with_audit(
+        dir: &std::path::Path,
+        sender: &LocalIdentity,
+        audit: Arc<dyn covenant_audit::AuditLog>,
+    ) -> Server {
+        let known_hosts = KnownHosts::new().with_host(
+            "host1",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://host1:7777".into(),
+                pubkey: sender.pubkey_bytes(),
+            },
+        );
+        let dedup = Arc::new(
+            cross_host::JsonlCrossHostDedup::open(dir.join("cross-host-dedup.jsonl"))
+                .await
+                .expect("open cross-host dedup"),
+        );
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit,
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_known_hosts(known_hosts)
+        .with_cross_host_dedup(dedup)
+    }
+
+    #[tokio::test]
+    async fn admit_fails_closed_when_the_duplicate_audit_row_cannot_persist() {
+        // A duplicate absorbs a replay of an already-delivered task, so the
+        // operator must see it durably (carry-forward 4b-2a review NOTE 1). If
+        // the required 'duplicate' row cannot land, admission must fail closed
+        // and return Rejected rather than silently absorb the replay as
+        // Duplicate with no record. Distinct from the admitted-site required
+        // audit (covered over HTTP): the correct outcome here is Rejected, since
+        // the first copy was already delivered -- so a regression that returned
+        // Duplicate while ignoring the audit Err would slip past that sibling.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server_with_audit(
+            dir.path(),
+            &alice,
+            Arc::new(FailDuplicateCrossHostAudit {
+                inner: covenant_audit::InMemoryAuditLog::new(),
+            }),
+        )
+        .await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000e, now);
+        let id = envelope.open().unwrap().id;
+        // First copy is admitted and enqueued: its 'admitted' row lands.
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope.clone(), now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id }
+        );
+        // The replay is recognized as a duplicate, but the required 'duplicate'
+        // row cannot persist, so admission fails closed instead of returning
+        // Duplicate.
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now + 1).await,
+            cross_host::RemoteAdmission::Rejected,
+            "a duplicate whose required audit row cannot persist must fail closed, not absorb silently as Duplicate"
+        );
+        // Only the first copy reached the mailbox; the refused replay never
+        // enqueues a second.
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: Some(ref t) } if t.id == id
+            ),
+            "the first copy is enqueued"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "the refused replay must not enqueue a second copy"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter()
+                .any(|(outcome, reason, _)| outcome == "admitted" && reason.is_empty()),
+            "the first copy's admitted row is durable on the feed: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|(outcome, _, _)| outcome == "duplicate"),
+            "the duplicate row's required write failed, so it must be absent: {rows:?}"
+        );
+    }
+
     /// A cross-host task whose sender is this daemon (the v0 cross-host
     /// principal) and whose recipient carries `pubkey` — set equal to the
     /// known-hosts binding to clear the identity check, or different to trip it.

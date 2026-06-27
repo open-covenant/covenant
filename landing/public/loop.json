@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T22:11:47.674Z",
+  "updatedAt": "2026-06-27T22:31:51.528Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11687,
-    "tasks": 1372,
-    "integrated": 1375
+    "events": 11697,
+    "tasks": 1374,
+    "integrated": 1376
   },
   "throughput": {
-    "last24h": 80,
-    "last7d": 194,
-    "velocity": 27.7
+    "last24h": 81,
+    "last7d": 195,
+    "velocity": 27.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 78
+      "count": 79
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-27",
-      "total": 1375
+      "total": 1376
     }
   ],
   "states": {
-    "integrated": 1367,
-    "proposed": 1,
+    "integrated": 1368,
+    "proposed": 2,
     "blocked": 4
   },
   "areas": [
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T22:20:18.831Z",
+      "task": "sap-bridge-keypair-load-failclosed-coverage",
+      "note": "committing test file to loop/main-track"
+    },
     {
       "at": "2026-06-27T22:07:57.494Z",
       "task": "config-network-resolution-routing-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-27T19:22:35.151Z",
       "task": "hatcher-connector-daemon-client-error-classification-coverag",
       "note": "Integrated at d304ab21: HttpDaemonClient error-classification/retry coverage (3 mutation-proven arms). Committed the new test file only; bac"
-    },
-    {
-      "at": "2026-06-27T19:07:19.146Z",
-      "task": "covenant-mcp-tool-arg-type-mismatch-sibling-arm-coverage",
-      "note": "Integrated at 4c284c20: validate_arguments per-type rejection arms (boolean/number/object/array/null) covered + mutation-proven. Committed t"
     }
   ]
 }

@@ -2439,6 +2439,57 @@ backend = "linux-gvisor"
     }
 
     #[test]
+    fn gvisor_oci_config_pins_memory_mb_byte_limit() {
+        // oci_config projects resources.memory_mb into the OCI cgroup memory
+        // ceiling at linux.resources.memory.limit, converting MiB -> bytes via
+        // saturating_mul(1024 * 1024) (lib.rs:1212-1216, 1261-1263). That limit
+        // is the sandbox's memory-exhaustion guard: a unit slip (MiB -> KiB)
+        // would cap a 64-MiB agent at 64 KiB and brick it, while dropping the
+        // field removes the bound entirely. The restrictive-OCI-config test
+        // above asserts process/root/mounts/namespaces but never reads the
+        // memory block, so the conversion is otherwise unpinned.
+        //
+        // memory_mb belongs to [resources], not [sandbox] (where the
+        // sandbox_manifest extra-block lands), so build the card from a literal
+        // manifest with a distinctive non-default value (64, not the 512
+        // default) — the assertion must not be able to pass on a coincidence.
+        let dir = tempdir().unwrap();
+        let rootfs = tempdir().unwrap();
+        let scratch = tempdir().unwrap();
+        std::fs::write(dir.path().join("agent.sh"), "#!/bin/sh\n").unwrap();
+
+        let runner = GvisorRunner::with_paths("runsc", rootfs.path(), scratch.path());
+        let manifest = r#"
+[agent]
+id = "sandboxed"
+name = "Sandboxed"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./agent.sh"
+
+[resources]
+cpu_ms_per_task = 5000
+memory_mb = 64
+network = "off"
+
+[sandbox]
+required = true
+backend = "linux-gvisor"
+filesystem = "read-only-package"
+"#;
+        let card = card_for(manifest, dir.path().to_path_buf());
+        let config = runner.oci_config(&card).unwrap();
+
+        assert_eq!(
+            config["linux"]["resources"]["memory"]["limit"],
+            json!(64u64 * 1024 * 1024),
+            "OCI memory.limit must be memory_mb converted to BYTES (MiB); a unit \
+             slip (x1024 instead of x1024^2) silently caps a 64-MiB sandbox at \
+             64 KiB or removes the memory-exhaustion guard: {config}",
+        );
+    }
+
+    #[test]
     fn agent_subprocess_env_withholds_operator_secrets_but_keeps_path_home_and_covenant_config() {
         use std::collections::BTreeMap;
 

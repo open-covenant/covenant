@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-27T05:47:37.849Z",
+  "updatedAt": "2026-06-27T06:07:41.555Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11089,
-    "tasks": 1305,
+    "events": 11093,
+    "tasks": 1306,
     "integrated": 1308
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1300,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "x402-payai-short-network-caip2-shortening-coverage",
+    "state": "in_progress",
+    "since": "2026-06-27T05:58:58.803Z"
+  },
   "recent": [
     {
       "at": "2026-06-27T05:35:26.800Z",

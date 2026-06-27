@@ -9,6 +9,19 @@ describe('base58Encode', () => {
   });
 });
 
+describe('pairingMessage (leg-3 anti-spoof framing)', () => {
+  it('frames nonce|code|pubkey with 0x1f separators so a shifted boundary cannot spoof another split', () => {
+    // Frozen against an independent base58 of "N\x1fC\x1fPK"; separator drift or
+    // field reordering breaks this instead of silently passing a relational check.
+    expect(pairingMessage('N', 'C', 'PK')).toBe('fuM82nXL');
+    // The separators are load-bearing: moving the boundary between fields must
+    // change the signed message, else a crafted nonce could absorb the code/pubkey.
+    const canonical = pairingMessage('N', 'C', 'PK');
+    expect(pairingMessage('NC', '', 'PK')).not.toBe(canonical);
+    expect(pairingMessage('N', 'CP', 'K')).not.toBe(canonical);
+  });
+});
+
 describe('proveIdentity (pairing leg-3)', () => {
   it('builds nonce‖code‖pubkey, signs it via the daemon, and returns the attestation', async () => {
     const calls: Array<{ m: string; ts: number }> = [];

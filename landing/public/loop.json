@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T19:31:17.237Z",
+  "updatedAt": "2026-06-27T19:51:21.124Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11534,
-    "tasks": 1355,
-    "integrated": 1358
+    "events": 11552,
+    "tasks": 1357,
+    "integrated": 1360
   },
   "throughput": {
-    "last24h": 64,
-    "last7d": 179,
-    "velocity": 25.6
+    "last24h": 66,
+    "last7d": 181,
+    "velocity": 25.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 61
+      "count": 63
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1358
+      "total": 1360
     }
   ],
   "states": {
-    "integrated": 1350,
+    "integrated": 1352,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T19:47:48.656Z",
+      "task": "coding-gateway-e2b-exec-result-surfacing-coverage",
+      "note": "Committed 0705fcbf. Test-only slice pinning E2bSandbox.exec surface/rethrow/timeout-default arms. e2b.ts unchanged; 4 arms mutation-proven."
+    },
+    {
+      "at": "2026-06-27T19:41:23.501Z",
+      "task": "coding-gateway-e2b-egress-firewall-coverage",
+      "note": "Committed 0d734006. Test-only slice pinning the E2B egress firewall (deny-all+allowlist) and sandbox-options projection in E2bSandboxProvide"
+    },
     {
       "at": "2026-06-27T19:26:23.096Z",
       "task": "hatcher-connector-daemon-client-attestation-verify-guard-cov",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T16:05:10.650Z",
       "task": "covenant-types-agent-id-local-segment-charset-coverage",
       "note": "Committed 395dcade on loop/main-track (test(covenant-types): pin validate_agent_id_display local-segment charset arm). 1 file, +31/-7. Pushi"
-    },
-    {
-      "at": "2026-06-27T14:37:54.262Z",
-      "task": "hatcher-mapmeshgrants-failsafe-arms-coverage",
-      "note": "committed on loop/main-track; +1 mesh case pinning two over-grant fail-safes + browser routing, mutation-proven"
-    },
-    {
-      "at": "2026-06-27T14:35:12.554Z",
-      "task": "hatcher-pairing-message-separator-antispoof-coverage",
-      "note": "committed on loop/main-track; +1 describe pinning pairingMessage anti-spoof framing, mutation-proven, independent review SHIP"
     }
   ]
 }

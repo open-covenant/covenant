@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T20:51:32.625Z",
+  "updatedAt": "2026-06-27T21:11:36.508Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11624,
-    "tasks": 1365,
-    "integrated": 1368
+    "events": 11651,
+    "tasks": 1368,
+    "integrated": 1371
   },
   "throughput": {
-    "last24h": 74,
-    "last7d": 189,
-    "velocity": 27
+    "last24h": 76,
+    "last7d": 191,
+    "velocity": 27.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 71
+      "count": 74
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1368
+      "total": 1371
     }
   ],
   "states": {
-    "integrated": 1360,
+    "integrated": 1363,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T21:09:42.931Z",
+      "task": "sdk-network-config-validation-coverage",
+      "note": "Committed. resolveSolanaNetwork program id + COVNT mint validation wiring, mutation-proven (label swap + guard removal), 3/3 + sdk suite 32/"
+    },
+    {
+      "at": "2026-06-27T21:03:41.903Z",
+      "task": "proof-gen-prove-rate-limit-route-coverage",
+      "note": "Committed 20775292. test(proof-gen): /prove 429/503-backend/400 route arms, mutation-proven (code swap 511/512/513), 3/3 + suite 49/49, scri"
+    },
+    {
+      "at": "2026-06-27T20:57:45.074Z",
+      "task": "sap-bridge-attestation-input-validation-coverage",
+      "note": "Committed 9e7fe698. test(sap-bridge): attestAgent root hex-shape + attestationType 1..=32 reject arms, mutation-proven, 8/8 pass, scripts ga"
+    },
     {
       "at": "2026-06-27T20:41:58.458Z",
       "task": "sdk-account-validator-failclosed-coverage",
@@ -300,21 +315,6 @@
       "at": "2026-06-27T17:44:28.380Z",
       "task": "telegram-bot-rate-limit-guard-coverage",
       "note": "Committed b230b926 on loop/main-track. Security note (cross_review folded in — actor-role string was rejected): exports are testability-only"
-    },
-    {
-      "at": "2026-06-27T17:38:49.042Z",
-      "task": "fairscale-bridge-daemon-health-probe-coverage",
-      "note": "Committed 4083eb6b on loop/main-track: +22 lines, one describe block, mutation-proven 3/3 arms."
-    },
-    {
-      "at": "2026-06-27T17:23:00.393Z",
-      "task": "hatcher-connector-cancel-finalize-double-result-coverage",
-      "note": "Committed 8ddaa078 on loop/main-track. 1 file (+39). Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-27T17:18:48.405Z",
-      "task": "covenant-a2a-taskrecv-replay-lease-attribution-coverage",
-      "note": "Committed 545d9bcd on loop/main-track. 2 files (test +43, README metrics). Pushing to origin/loop/main-track."
     }
   ]
 }

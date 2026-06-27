@@ -2,9 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { Keypair } from '@solana/web3.js';
 import {
   BridgeDisabledError,
+  BridgeSignerRequiredError,
   BridgeVerifierRequiredError,
   SapBridge,
   resolveSynapseConfig,
+  type AgentManifest,
+  type AuditRootAttestation,
   type SapKeypair,
 } from '../index.js';
 
@@ -96,5 +99,32 @@ describe('SapBridge', () => {
     await expect(
       bridge.attestAgent({ agentPda: validAgentPda(), rootHashHex: validRoot, attestationType: 'x'.repeat(33) }),
     ).rejects.toThrow('attestationType must be 1..=32 characters');
+  });
+});
+
+describe('SapBridge on-chain write signer guard', () => {
+  // publishAgent / updateAgent / publishAuditRoot each call requireSigner()
+  // before loadSdk(), so an enabled bridge with no signer fails closed with
+  // BridgeSignerRequiredError before any RPC. The empty manifest/attestation
+  // never matters: the guard precedes any argument use. Distinct from the
+  // verifier guard (different op, error type, and COVENANT_SAP_KEYPAIR env).
+  const enabledNoSigner = () => new SapBridge({ config: enabledConfig() });
+
+  it('publishAuditRoot fails closed without a signer when enabled', async () => {
+    await expect(
+      enabledNoSigner().publishAuditRoot({} as AuditRootAttestation),
+    ).rejects.toBeInstanceOf(BridgeSignerRequiredError);
+  });
+
+  it('publishAgent reports the operation that requires a signer', async () => {
+    await expect(enabledNoSigner().publishAgent({} as AgentManifest)).rejects.toThrow(
+      'publishAgent requires a signer',
+    );
+  });
+
+  it('updateAgent reports the operation that requires a signer', async () => {
+    await expect(enabledNoSigner().updateAgent({} as AgentManifest)).rejects.toThrow(
+      'updateAgent requires a signer',
+    );
   });
 });

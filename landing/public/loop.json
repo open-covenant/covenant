@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-27T02:05:23.977Z",
+  "updatedAt": "2026-06-27T02:25:28.247Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11027,
-    "tasks": 1298,
+    "events": 11031,
+    "tasks": 1299,
     "integrated": 1301
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1293,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "cross-host-admission-dedup-unconfigured-coverage",
+    "state": "in_progress",
+    "since": "2026-06-27T02:18:42.995Z"
+  },
   "recent": [
     {
       "at": "2026-06-27T01:37:55.033Z",

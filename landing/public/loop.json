@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T16:10:16.879Z",
+  "updatedAt": "2026-06-27T16:30:20.907Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11393,
-    "tasks": 1340,
-    "integrated": 1342
+    "events": 11420,
+    "tasks": 1343,
+    "integrated": 1345
   },
   "throughput": {
-    "last24h": 50,
-    "last7d": 164,
-    "velocity": 23.4
+    "last24h": 53,
+    "last7d": 166,
+    "velocity": 23.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 45
+      "count": 48
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1342
+      "total": 1345
     }
   ],
   "states": {
-    "integrated": 1334,
+    "integrated": 1337,
     "proposed": 2,
     "blocked": 4
   },
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T16:21:05.443Z",
+      "task": "compute-broker-bonds-cancel-badsig-nonce-preservation-covera",
+      "note": "Committed 88670a5a on loop/main-track. 1 file, +36. Pushing to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-27T16:17:17.959Z",
+      "task": "coding-gateway-sandbox-sibling-prefix-escape-coverage",
+      "note": "Committed f3275e5b on loop/main-track. 1 file, +16. Pushing to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-27T16:11:51.554Z",
+      "task": "fairscale-bridge-api-bearer-same-length-coverage",
+      "note": "Committed 14612ce6 on loop/main-track. 1 file, +17. Pushing to origin/loop/main-track."
+    },
     {
       "at": "2026-06-27T16:09:01.294Z",
       "task": "compute-broker-operator-bearer-same-length-coverage",
@@ -300,21 +315,6 @@
       "at": "2026-06-27T11:47:11.075Z",
       "task": "fairscale-bridge-outcome-production-status-alias-coverage",
       "note": "committed to loop/main-track as 0c82a268"
-    },
-    {
-      "at": "2026-06-27T11:22:53.852Z",
-      "task": "audit-provenance-filter-rule-prefix-excludes-ruleless-rows-c",
-      "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T11:00:26.904Z",
-      "task": "llm-embedder-from-config-absent-embed-none-coverage",
-      "note": "committed to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T10:53:11.361Z",
-      "task": "llm-provider-from-config-absent-llm-none-coverage",
-      "note": "committed to loop/main-track"
     }
   ]
 }

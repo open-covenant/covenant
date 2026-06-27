@@ -107,6 +107,35 @@ describe('Hermes MCP bridge', () => {
     expect(result?.content[0]?.text).not.toContain('127.0.0.1:9999');
   });
 
+  it('redacts the HOME directory from API errors', async () => {
+    const home = '/home/operator-xyz';
+    const fetchImpl = fetchJson(() => ({
+      status: 500,
+      body: { error: `failed reading ${home}/.hermes/state` },
+    }));
+
+    const result = await callHermesTool('hermes_health', {}, { env: { HOME: home }, fetchImpl });
+
+    expect(result?.isError).toBe(true);
+    expect(result?.content[0]?.text).toContain('$HOME');
+    expect(result?.content[0]?.text).not.toContain(home);
+  });
+
+  it('omits the Authorization header when the API key is absent or whitespace-only', async () => {
+    const authHeaderFor = async (env: Record<string, string>) => {
+      let auth: unknown = 'unset';
+      const fetchImpl = fetchJson((_url, init) => {
+        auth = (init.headers as Record<string, string>).Authorization;
+        return { body: { ok: true } };
+      });
+      await callHermesTool('hermes_health', {}, { env, fetchImpl });
+      return auth;
+    };
+
+    expect(await authHeaderFor({})).toBeUndefined();
+    expect(await authHeaderFor({ HERMES_API_KEY: '   ' })).toBeUndefined();
+  });
+
   it('rejects a hermes run with neither input nor prompt', async () => {
     const fetchImpl = fetchJson(() => ({ body: { run_id: 'should-not-happen' } }));
     const result = await callHermesTool('hermes_run', {}, { env: {}, fetchImpl });

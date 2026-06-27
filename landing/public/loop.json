@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T11:09:16.791Z",
+  "updatedAt": "2026-06-27T11:29:20.548Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11234,
+    "events": 11242,
     "tasks": 1322,
-    "integrated": 1324
+    "integrated": 1325
   },
   "throughput": {
-    "last24h": 36,
-    "last7d": 146,
-    "velocity": 20.9
+    "last24h": 37,
+    "last7d": 147,
+    "velocity": 21
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 27
+      "count": 28
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-27",
-      "total": 1324
+      "total": 1325
     }
   ],
   "states": {
-    "integrated": 1316,
-    "proposed": 2,
+    "integrated": 1317,
+    "proposed": 1,
     "blocked": 4
   },
   "areas": [
@@ -199,7 +199,7 @@
     },
     {
       "name": "audit",
-      "count": 94
+      "count": 95
     },
     {
       "name": "live",
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T11:22:53.852Z",
+      "task": "audit-provenance-filter-rule-prefix-excludes-ruleless-rows-c",
+      "note": "committed to loop/main-track"
+    },
     {
       "at": "2026-06-27T11:00:26.904Z",
       "task": "llm-embedder-from-config-absent-embed-none-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-27T04:33:22.400Z",
       "task": "cross-host-admission-open-error-reason-mapping-coverage",
       "note": "committed 82f9dd5a on loop/main-track; 2 mutation-proven admission tests for malformed_signature/malformed_payload distinct audit reasons"
-    },
-    {
-      "at": "2026-06-27T03:49:50.610Z",
-      "task": "cross-host-delivery-transport-connection-error-coverage",
-      "note": "committed c87181a4; staged only README.md + covenantd/src/lib.rs; pushed to origin/loop/main-track. cross_host.rs reverts clean (no producti"
     }
   ]
 }

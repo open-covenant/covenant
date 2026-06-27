@@ -49828,6 +49828,84 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn peer_task_http_ingress_caps_pre_verify_body_and_coarsely_refuses_rejected() {
+        // The bearer-EXEMPT `POST /a2a/peer-tasks` ingress (http::admit_peer_task)
+        // is a thin transport over admit_remote_a2a_task fronted by two security
+        // bounds the loopback live test (happy 202 only) never exercises: a 64 KiB
+        // DefaultBodyLimit (PEER_TASK_BODY_CAP) that bounds the buffer a remote can
+        // force the daemon to hold BEFORE any signature check, and a coarse 403 that
+        // maps every RemoteAdmission::Rejected cause to one body so the rejection
+        // stage stays on the audit feed and the response is never a probing oracle.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+
+        let state = crate::http::HttpState {
+            server: s.clone(),
+            live_traces_tx: tokio::sync::broadcast::channel::<covenant_runtime::StreamedTrace>(16).0,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, crate::http::router(state)).await.unwrap();
+        });
+        let url = format!("http://{addr}/a2a/peer-tasks");
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        // A body one byte past the 64 KiB pre-verify cap is refused by the body-limit
+        // layer before the handler — and admission — ever runs: a 413, not a 202/403
+        // admission outcome. The length must exceed PEER_TASK_BODY_CAP (http.rs);
+        // raising that cap to or above this length makes this assertion bite.
+        let oversized = client
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(vec![b'x'; 64 * 1024 + 1])
+            .send()
+            .await
+            .expect("post oversized body");
+        assert_eq!(
+            oversized.status(),
+            reqwest::StatusCode::PAYLOAD_TOO_LARGE,
+            "a body past the pre-verify cap must be refused 413 before admission"
+        );
+
+        // A faithfully sealed envelope from a host this daemon never registered
+        // opens cleanly, and even holds a recv grant, but fails authorization
+        // (unknown_principal). The ingress answers ONE coarse 403 {kind:rejected};
+        // the rejection cause lives only on the audit feed.
+        let mallory = LocalIdentity::generate("mallory@host9");
+        grant_recv(&s, &mallory).await;
+        let envelope = sealed_envelope(&mallory, s.identity.agent_id(), 0x4b2a_0011, 10_000_000);
+        let rejected = client
+            .post(&url)
+            .json(&envelope)
+            .send()
+            .await
+            .expect("post rejected envelope");
+        assert_eq!(
+            rejected.status(),
+            reqwest::StatusCode::FORBIDDEN,
+            "a rejected admission must map to a coarse 403, not a cause-specific status"
+        );
+        let body: serde_json::Value = rejected.json().await.expect("403 body");
+        assert_eq!(
+            body["kind"], "rejected",
+            "the 403 body must be the coarse rejected ack: {body}"
+        );
+
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "neither an over-cap body nor a rejected envelope may enqueue onto the local mailbox"
+        );
+    }
+
+    #[tokio::test]
     async fn a2a_send_to_remote_host_without_grant_reveals_no_registry_membership() {
         // Authorize-before-reveal: a caller without the a2a.send capability is
         // refused by the capability gate with "requires capability" and learns

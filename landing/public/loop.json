@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T07:27:59.013Z",
+  "updatedAt": "2026-06-27T07:48:02.638Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11116,
-    "tasks": 1308,
-    "integrated": 1311
+    "events": 11125,
+    "tasks": 1309,
+    "integrated": 1312
   },
   "throughput": {
-    "last24h": 23,
-    "last7d": 134,
-    "velocity": 19.1
+    "last24h": 24,
+    "last7d": 135,
+    "velocity": 19.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 14
+      "count": 15
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1311
+      "total": 1312
     }
   ],
   "states": {
-    "integrated": 1303,
+    "integrated": 1304,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T07:43:18.991Z",
+      "task": "daemon-sse-broadcast-stream-lag-close-arm-coverage",
+      "note": "committed c0fe146d on loop/main-track; tokio_broadcast_stream Ok/Lagged/Closed arms covered, Lagged mutation-proven"
+    },
     {
       "at": "2026-06-27T07:24:01.187Z",
       "task": "memory-tier-slug-backfill-plan-value-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-26T16:35:58.518Z",
       "task": "multi-host-a2a-remote-recipient-refuse-not-silent-local",
       "note": "Integrated as 74126358, pushed to origin/loop/main-track. A2A send now refuses configured-remote recipients (no silent local misdelivery); k"
-    },
-    {
-      "at": "2026-06-26T15:47:13.750Z",
-      "task": "multi-host-daemon-known-hosts-config-wiring",
-      "note": "Integrated as aac7bcb4, pushed to origin/loop/main-track. covenantd loads+holds known-hosts registry fail-closed; slice 4 (A2A dispatch cons"
     }
   ]
 }

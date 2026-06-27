@@ -49,6 +49,7 @@ const MILESTONES: Milestone[] = [
       "Signed permission lifecycle with grant, scope check, expiry, and revocation",
       "Verifiable workflow records and commit-scoped provenance for every privileged action",
       "Public sandbox at sandbox.opencovenant.org",
+      "Live progress streaming: watch an agent work in real time across the CLI, console, and HTTP gateway",
       "Settlement program live on Solana mainnet: $CVNT-to-credits, staking, slashing, and on-chain receipt anchoring transact on-chain; the daemon-driven per-intent settlement lifecycle is not yet production",
       "Apache 2.0 core",
     ],
@@ -58,9 +59,8 @@ const MILESTONES: Milestone[] = [
     title: "Production, Tools, and Marketplace Foundation",
     status: "Next",
     intro:
-      "The next release. Live agent visibility, the core tools agents need, and the marketplace foundation, landing as a single push.",
+      "The next release. The core tools agents need and the marketplace foundation, landing as a single push.",
     bullets: [
-      "Live progress streaming: watch an agent work in real time across the CLI, console, and HTTP gateway",
       "Unified model provider: plug in Anthropic, OpenAI, DeepSeek, or local Ollama once; Covenant handles fallback, response caching, and cost tracking",
       "Plugin catalog: install vetted tools from a one-click catalog inside the console, starting with filesystem access",
       "Production-grade isolated runtime for untrusted agent code on Linux",

@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SpendLedger, modelCostUsd, type BudgetCaps } from "../src/budget.js";
+import { SpendLedger, modelCostUsd, sandboxCostUsd, type BudgetCaps } from "../src/budget.js";
+import { config } from "../src/config.js";
 
 const caps: BudgetCaps = {
   dailyUsd: 6,
@@ -407,5 +408,31 @@ describe("SpendLedger", () => {
     } finally {
       rmSync(path, { force: true });
     }
+  });
+});
+
+describe("sandboxCostUsd", () => {
+  // The completion commit charges modelCostUsd(model, usage) + sandboxCostUsd(seconds)
+  // (server.ts), and that sum is what the daily/monthly caps meter — so the
+  // sandbox term bounds how long a run can burn wall clock before admission refuses.
+  it("charges nothing for a zero-second run", () => {
+    // The cheapest `*`->`+` tripwire: 0 * rate is 0, but 0 + rate would bill a
+    // flat per-second charge on a run that used no sandbox time at all.
+    expect(sandboxCostUsd(0)).toBe(0);
+  });
+
+  it("scales linearly with wall-clock seconds", () => {
+    // (2s)*rate == 2*(s*rate) but (2s)+rate != 2*(s+rate): linearity catches a
+    // `+` or otherwise non-linear mutation without depending on the exact rate.
+    expect(sandboxCostUsd(7200)).toBeCloseTo(2 * sandboxCostUsd(3600));
+    expect(sandboxCostUsd(3600)).toBeGreaterThan(0);
+  });
+
+  it("meters at the configured default rate of $0.0001/s", () => {
+    // A zeroed/garbled CODER_SANDBOX_USD_PER_SEC would silently stop metering
+    // sandbox wall-clock entirely. Pin the default against an independent
+    // constant (10000s -> $1), not a config-derived self-check.
+    expect(config.sandboxUsdPerSec).toBe(0.0001);
+    expect(sandboxCostUsd(10_000)).toBeCloseTo(1);
   });
 });

@@ -6040,6 +6040,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_taskrecv_replay_leased_to_recipient() {
+        // A replayed MailboxEvent::TaskRecv leases with leased_to=None
+        // (lib.rs:973), so lease_task falls back to task.recipient
+        // (lib.rs:1039). Production only ever appends TaskLeased with an
+        // explicit lessee; TaskRecv is the legacy-JSONL replay path that fixes
+        // in-flight lease ownership after a daemon restart from such a log. The
+        // sibling reopen test drives try_recv_task_for (the Some(leased_to)
+        // arm), so this recipient fallback is otherwise never exercised.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let task = dummy_task();
+        assert_ne!(
+            task.sender, task.recipient,
+            "the fallback attributes to recipient, not sender — they must differ \
+             for the assertion to distinguish the two",
+        );
+
+        let log = [
+            MailboxEvent::TaskSent { task: task.clone() },
+            MailboxEvent::TaskRecv { task_id: task.id },
+        ];
+        let body = log
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let m = JsonlMailbox::open(path).await.unwrap();
+        let queue = m.task_queue(10).await.unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].state, A2ATaskQueueState::InFlight);
+        assert_eq!(queue[0].task.id, task.id);
+        assert_eq!(queue[0].attempt, 1);
+        assert_eq!(
+            queue[0].leased_to.as_ref(),
+            Some(&task.recipient),
+            "a TaskRecv-replayed lease (leased_to=None) must default the lessee \
+             to the task recipient, not the sender",
+        );
+    }
+
+    #[tokio::test]
     async fn result_post_clears_in_flight_queue_state() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.jsonl");

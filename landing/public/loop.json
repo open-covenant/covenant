@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T19:11:13.289Z",
+  "updatedAt": "2026-06-27T19:31:17.237Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11516,
-    "tasks": 1353,
-    "integrated": 1356
+    "events": 11534,
+    "tasks": 1355,
+    "integrated": 1358
   },
   "throughput": {
-    "last24h": 62,
-    "last7d": 177,
-    "velocity": 25.3
+    "last24h": 64,
+    "last7d": 179,
+    "velocity": 25.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 59
+      "count": 61
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1356
+      "total": 1358
     }
   ],
   "states": {
-    "integrated": 1348,
+    "integrated": 1350,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T19:26:23.096Z",
+      "task": "hatcher-connector-daemon-client-attestation-verify-guard-cov",
+      "note": "Integrated: signAttestation/verify guard coverage (3 mutations proven). Test-file change only."
+    },
+    {
+      "at": "2026-06-27T19:22:35.151Z",
+      "task": "hatcher-connector-daemon-client-error-classification-coverag",
+      "note": "Integrated at d304ab21: HttpDaemonClient error-classification/retry coverage (3 mutation-proven arms). Committed the new test file only; bac"
+    },
     {
       "at": "2026-06-27T19:07:19.146Z",
       "task": "covenant-mcp-tool-arg-type-mismatch-sibling-arm-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T14:35:12.554Z",
       "task": "hatcher-pairing-message-separator-antispoof-coverage",
       "note": "committed on loop/main-track; +1 describe pinning pairingMessage anti-spoof framing, mutation-proven, independent review SHIP"
-    },
-    {
-      "at": "2026-06-27T14:30:31.337Z",
-      "task": "settlement-dispatch-select-malformed-feed-skip-coverage",
-      "note": "committed on loop/main-track; +1 vitest case pinning selectDispatches null-safety, mutation-proven"
-    },
-    {
-      "at": "2026-06-27T14:25:42.915Z",
-      "task": "witness-skill-manifest-fallback-rung-coverage",
-      "note": "committed on loop/main-track; +1 vitest case pinning both buildSkillManifest fallback rungs, mutation-proven"
     }
   ]
 }

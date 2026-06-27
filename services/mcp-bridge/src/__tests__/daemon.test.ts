@@ -139,4 +139,58 @@ describe('daemon-backed MCP tools', () => {
     expect(result?.isError).toBeUndefined();
     expect(result?.content[0]?.text).toContain('"echo"');
   });
+
+  it('calls daemon_health without a bearer token even when none is configured', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'covenant-home-'));
+    let sawAuth: unknown = 'unset';
+    const fetchImpl = fetchJson((url, init) => {
+      expect(url.toString()).toBe('http://127.0.0.1:8421/health');
+      sawAuth = (init.headers as Record<string, string>).Authorization;
+      return { body: { status: 'ok' } };
+    });
+
+    // No env token and an empty home (no token file): an authed endpoint would
+    // throw resolving the token here, so reaching the daemon at all proves
+    // health skipped auth entirely.
+    const result = await callDaemonTool('daemon_health', {}, { env: { HOME: home }, fetchImpl });
+
+    expect(result?.isError).toBeUndefined();
+    expect(sawAuth).toBeUndefined();
+  });
+
+  it('prefers an explicit COVENANT_AUTH_TOKEN over the on-disk operator token', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'covenant-home-'));
+    mkdirSync(path.join(home, 'peers'), { recursive: true });
+    writeFileSync(path.join(home, 'peers', 'operator.token'), 'on-disk-token');
+
+    const fetchImpl = fetchJson((_url, init) => {
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer env-token' });
+      return { body: { tools: [] } };
+    });
+
+    const result = await callDaemonTool('daemon_tools_list', {}, {
+      env: { COVENANT_AUTH_TOKEN: 'env-token', COVENANT_HOME: home },
+      fetchImpl,
+    });
+
+    expect(result?.isError).toBeUndefined();
+  });
+
+  it('treats a whitespace-only COVENANT_AUTH_TOKEN as unset and falls through to the file', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'covenant-home-'));
+    mkdirSync(path.join(home, 'peers'), { recursive: true });
+    writeFileSync(path.join(home, 'peers', 'operator.token'), 'on-disk-token');
+
+    const fetchImpl = fetchJson((_url, init) => {
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer on-disk-token' });
+      return { body: { tools: [] } };
+    });
+
+    const result = await callDaemonTool('daemon_tools_list', {}, {
+      env: { COVENANT_AUTH_TOKEN: '   ', COVENANT_HOME: home },
+      fetchImpl,
+    });
+
+    expect(result?.isError).toBeUndefined();
+  });
 });

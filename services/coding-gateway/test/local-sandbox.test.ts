@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { basename } from "node:path";
 import { LocalSandboxProvider } from "../src/sandbox/local.js";
 import type { Sandbox } from "../src/types.js";
 
@@ -46,6 +47,21 @@ describe("LocalSandbox", () => {
     sandbox = await make("traversal");
     await expect(sandbox.writeFile("../escape.txt", "x")).rejects.toThrow(/escapes workspace/);
     await expect(sandbox.readFile("../../etc/hosts")).rejects.toThrow(/escapes workspace/);
+  });
+
+  it("rejects a sibling directory sharing the workspace name as a prefix", async () => {
+    sandbox = await make("sibling-prefix");
+    // The `../escape.txt` cases resolve to paths that don't share the root as a
+    // prefix at all, so they never test the `+ sep` boundary in safe(). A sibling
+    // named "<root-basename>-leak" DOES start with this.root as a string prefix —
+    // only the trailing separator distinguishes it. Discover the real basename via
+    // the sandbox's own cwd (the random mkdtemp suffix is otherwise unknowable).
+    const root = (await sandbox.exec("pwd")).stdout.trim();
+    const sibling = `../${basename(root)}-leak/f.txt`;
+    await expect(sandbox.readFile(sibling)).rejects.toThrow(/escapes workspace/);
+    await expect(sandbox.writeFile(sibling, "x")).rejects.toThrow(/escapes workspace/);
+    await sandbox.writeFile("nested/ok.txt", "in");
+    expect(await sandbox.readFile("nested/ok.txt")).toBe("in");
   });
 
   it("destroy removes the workspace", async () => {

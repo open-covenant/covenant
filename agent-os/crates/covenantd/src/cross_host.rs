@@ -813,4 +813,25 @@ mod tests {
             "a corrupt replay log must fail closed, not silently drop keys"
         );
     }
+
+    #[tokio::test]
+    async fn open_fails_closed_on_an_unreadable_log() {
+        // A corrupt *line* is one way the replay log is unusable; an unreadable
+        // *file* is the other, and only a genuinely-absent file (NotFound) is the
+        // empty-cache case. open() must fail closed on the unreadable arm too: if
+        // it swallowed a non-NotFound read error and returned an empty cache, a
+        // daemon whose dedup log became unreadable (here: a directory at the path;
+        // in the field: a wrong file type or an ACL change) would boot with NO
+        // anti-replay protection and re-admit every cross-host envelope it had
+        // already seen. open_rejects_a_corrupt_log covers the serde arm; this is
+        // the symmetric I/O-read arm, which had no coverage.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dedup.jsonl");
+        std::fs::create_dir(&path).expect("place a directory where the log file is expected");
+        assert!(
+            JsonlCrossHostDedup::open(path).await.is_err(),
+            "an unreadable replay log must fail closed, not boot with an empty \
+             (replay-vulnerable) anti-replay cache"
+        );
+    }
 }

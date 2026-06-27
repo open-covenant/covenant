@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T17:50:36.964Z",
+  "updatedAt": "2026-06-27T18:10:40.963Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11481,
-    "tasks": 1350,
-    "integrated": 1352
+    "events": 11490,
+    "tasks": 1351,
+    "integrated": 1353
   },
   "throughput": {
-    "last24h": 58,
-    "last7d": 173,
-    "velocity": 24.7
+    "last24h": 59,
+    "last7d": 174,
+    "velocity": 24.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 55
+      "count": 56
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1352
+      "total": 1353
     }
   ],
   "states": {
-    "integrated": 1344,
+    "integrated": 1345,
     "proposed": 2,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T17:54:19.793Z",
+      "task": "compute-broker-provider-failclosed-select-coverage",
+      "note": "Committed 502accc6 on loop/main-track: +59 lines, providers.test.ts, mutation-proven 5/5 across both providers."
+    },
     {
       "at": "2026-06-27T17:44:28.380Z",
       "task": "telegram-bot-rate-limit-guard-coverage",
@@ -309,11 +314,6 @@
     {
       "at": "2026-06-27T13:54:14.311Z",
       "task": "gvisor-oci-config-memory-limit-conversion-coverage",
-      "note": "test-only coverage slice integrated; commit pending."
-    },
-    {
-      "at": "2026-06-27T13:12:48.398Z",
-      "task": "audit-verify-integrity-missing-anchor-diagnostic-coverage",
       "note": "test-only coverage slice integrated; commit pending."
     }
   ]

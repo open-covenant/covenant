@@ -1111,6 +1111,39 @@ mod tests {
     }
 
     #[test]
+    fn build_receipt_batch_rejects_an_empty_or_all_settled_batch() {
+        // The unsettled-is-empty guard is what stops build_receipt_batch from
+        // indexing an empty merkle level: with no unsettled receipts the
+        // `while level.len() > 1` loop never runs and the `level[0]` read would
+        // panic on an empty Vec. The guard converts that into a clean
+        // Err(EmptyBatch) — a benign "nothing to flush", not a crash. The four
+        // build_receipt_batch_pins_* tests all pass unsettled receipts (the
+        // happy path), and the EmptyBatch Display pins construct the variant
+        // directly, so the guard itself — that the FUNCTION returns EmptyBatch
+        // instead of panicking — has no coverage. Both ways the unsettled set
+        // can be empty must fail closed.
+
+        // No receipts at all.
+        assert!(
+            matches!(build_receipt_batch(&[]), Err(SettlementError::EmptyBatch)),
+            "an empty receipt slice has nothing to settle and must return EmptyBatch, not panic"
+        );
+
+        // Receipts present, but every one is already settled (batch_id set), so
+        // the unsettled filter empties the set.
+        let mut settled = receipt(1);
+        settled.batch_id = Some("already-batched".to_string());
+        assert!(
+            matches!(
+                build_receipt_batch(&[settled]),
+                Err(SettlementError::EmptyBatch)
+            ),
+            "a batch whose every receipt is already settled has nothing new to \
+             settle and must return EmptyBatch, not panic"
+        );
+    }
+
+    #[test]
     fn build_receipt_batch_pins_batch_id_domain_separator_prefix() {
         // covenant_settlement::build_receipt_batch derives
         // batch_id with:

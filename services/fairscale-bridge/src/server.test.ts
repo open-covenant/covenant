@@ -59,6 +59,23 @@ describe('auth', () => {
     start([]);
     expect((await app.inject({ method: 'GET', url: '/v1/conduct-events', headers: { authorization: 'Bearer nope' } })).statusCode).toBe(403);
   });
+  it('rejects a same-length wrong token', async () => {
+    start([]);
+    // 'Bearer nope' above is a different length, so requireFairscale short-circuits
+    // on the length check and never reaches timingSafeEqual. Flip one byte at equal
+    // length so the constant-time compare is the only thing that can reject it.
+    const last = cfg.apiToken.slice(-1);
+    const sameLengthWrong = `${cfg.apiToken.slice(0, -1)}${last === 'x' ? 'y' : 'x'}`;
+    expect(sameLengthWrong).toHaveLength(cfg.apiToken.length);
+    expect(sameLengthWrong).not.toBe(cfg.apiToken);
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/conduct-events',
+      headers: { authorization: `Bearer ${sameLengthWrong}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'invalid token' });
+  });
   it('leaves healthz public with version', async () => {
     start([]);
     const res = await app.inject({ method: 'GET', url: '/healthz' });

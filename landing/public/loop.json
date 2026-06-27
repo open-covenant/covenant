@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T06:27:45.457Z",
+  "updatedAt": "2026-06-27T06:47:49.135Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11093,
+    "events": 11098,
     "tasks": 1306,
-    "integrated": 1308
+    "integrated": 1309
   },
   "throughput": {
-    "last24h": 20,
-    "last7d": 131,
-    "velocity": 18.7
+    "last24h": 21,
+    "last7d": 132,
+    "velocity": 18.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 11
+      "count": 12
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1308
+      "total": 1309
     }
   ],
   "states": {
-    "integrated": 1300,
+    "integrated": 1301,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "x402-payai-short-network-caip2-shortening-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T05:58:58.803Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T06:42:48.753Z",
+      "task": "x402-payai-short-network-caip2-shortening-coverage",
+      "note": "committed 78f4c7f0 (test+README metrics); pushing to origin/loop/main-track"
+    },
     {
       "at": "2026-06-27T05:35:26.800Z",
       "task": "covenantd-redact-url-secret-query-redaction-hardening",
@@ -315,11 +315,6 @@
       "at": "2026-06-26T14:33:01.051Z",
       "task": "multi-host-peer-endpoint-resolution",
       "note": "integrated at e76ea99a (peer-auth lib.rs + README metrics; autonomy records gitignored). Slice 1 of multi-host-networking complete: KnownHos"
-    },
-    {
-      "at": "2026-06-26T13:18:40.947Z",
-      "task": "unified-model-provider-fallback-router",
-      "note": "integrated at c8f9eaff: Router shipped in covenant-llm, dependency-light, all gates green; next epic task wires Router into daemon provider "
     }
   ]
 }

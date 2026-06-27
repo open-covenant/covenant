@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-27T18:30:44.937Z",
+  "updatedAt": "2026-06-27T18:50:48.799Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11507,
-    "tasks": 1352,
+    "events": 11511,
+    "tasks": 1353,
     "integrated": 1355
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1347,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "covenant-mcp-tool-arg-type-mismatch-sibling-arm-coverage",
+    "state": "in_progress",
+    "since": "2026-06-27T18:39:02.198Z"
+  },
   "recent": [
     {
       "at": "2026-06-27T18:25:48.852Z",

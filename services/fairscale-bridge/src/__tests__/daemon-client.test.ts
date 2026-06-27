@@ -92,3 +92,25 @@ describe('HttpDaemonClient retry policy', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('HttpDaemonClient health probe', () => {
+  it('reports healthy when the daemon /health responds ok', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 200 })));
+
+    await expect(client().health()).resolves.toBe(true);
+  });
+
+  it('reports unhealthy on a non-2xx status instead of trusting the connection', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })));
+
+    await expect(client().health()).resolves.toBe(false);
+  });
+
+  it('fails closed to false on a network error rather than throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('network');
+    }));
+
+    await expect(client().health()).resolves.toBe(false);
+  });
+});

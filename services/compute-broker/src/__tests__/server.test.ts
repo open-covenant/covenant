@@ -272,6 +272,42 @@ describe('compute-broker server', () => {
     expect(replay.json()).toMatchObject({ error: 'nonce already used' });
   });
 
+  it('bonds/cancel does not burn the nonce on a signature-verification failure', async () => {
+    const leaseId = 'ionet-lease-badsig-nonce';
+    const { agentDid, nonce, expires_at, signed_request } = await freshCancelPayload(leaseId);
+
+    // A bad signature carrying a fresh, valid nonce must be rejected *before* the
+    // nonce is recorded — otherwise an attacker could poison a victim's nonce.
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: agentDid,
+        signed_request: bs58.encode(new Uint8Array(64)),
+        nonce,
+        expires_at,
+      },
+    });
+    expect(bad.statusCode).toBe(403);
+
+    // The real signer retries the SAME nonce with the valid signature and must
+    // succeed; a 409 here would mean the failed attempt consumed the nonce.
+    const good = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: agentDid,
+        signed_request,
+        nonce,
+        expires_at,
+      },
+    });
+    expect(good.statusCode).toBe(200);
+    expect(good.json()).toMatchObject({ lease_id: leaseId, status: 'cancelled' });
+  });
+
   it('bonds/cancel refuses a second cancel of an already-cancelled lease without re-refunding', async () => {
     const leaseId = 'ionet-lease-double-cancel';
     const first = await freshCancelPayload(leaseId);

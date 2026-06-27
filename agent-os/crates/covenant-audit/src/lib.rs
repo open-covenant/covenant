@@ -5004,6 +5004,32 @@ mod tests {
     }
 
     #[test]
+    fn filter_until_window_upper_bound_excludes_rows_after_the_window() {
+        let action = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 1_000,
+            kind: "capability_granted".into(),
+            actor: "research@agent".into(),
+            action: "memory.write".into(),
+            approver: Some("operator@local".into()),
+            rule: Some("GrantSignatureABC".into()),
+            outcome: "granted".into(),
+        };
+
+        let before_until = ProvenanceFilter {
+            until_ms: Some(999),
+            ..Default::default()
+        };
+        assert!(!before_until.matches(&action), "a row past the until bound is excluded");
+
+        let at_until = ProvenanceFilter {
+            until_ms: Some(1_000),
+            ..Default::default()
+        };
+        assert!(at_until.matches(&action), "the upper window bound is inclusive");
+    }
+
+    #[test]
     fn filter_approver_skips_rows_without_an_approver() {
         let denied = PrivilegedAction {
             event_id: Uuid::new_v4(),

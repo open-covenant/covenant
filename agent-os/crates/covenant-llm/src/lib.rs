@@ -2079,6 +2079,22 @@ provider = "made-up"
         );
     }
 
+    #[test]
+    fn embedder_from_config_returns_none_when_no_embed_block_configured() {
+        // Distinct from the unknown-provider None above: that arm means
+        // a provider was named but isn't recognized; this one means no
+        // [embed] block exists at all, the default for a daemon that
+        // never configured an embedder. pick_embedder depends on this
+        // None to fall back to the no-embedder path — an unwrap here
+        // would crash that default daemon, a default embedder would
+        // silently enable embeddings no operator asked for. The serde
+        // test pins the struct field (default_cfg.embed.is_none()) but
+        // never drives the fn.
+        let cfg = EmbedderConfig::default();
+        assert!(cfg.embed.is_none(), "default config has no [embed] block");
+        assert!(embedder_from_config(&cfg).is_none());
+    }
+
     #[tokio::test]
     async fn from_config_mock_arms_pin_canonical_default_canned_string_and_dim() {
         // provider_from_config and embedder_from_config both carry

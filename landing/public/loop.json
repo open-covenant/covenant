@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T20:11:24.991Z",
+  "updatedAt": "2026-06-27T20:31:28.693Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11570,
-    "tasks": 1359,
-    "integrated": 1362
+    "events": 11602,
+    "tasks": 1363,
+    "integrated": 1365
   },
   "throughput": {
-    "last24h": 68,
-    "last7d": 183,
-    "velocity": 26.1
+    "last24h": 71,
+    "last7d": 186,
+    "velocity": 26.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 65
+      "count": 68
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-27",
-      "total": 1362
+      "total": 1365
     }
   ],
   "states": {
-    "integrated": 1354,
+    "integrated": 1357,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "self_review": 1
   },
   "areas": [
     {
@@ -214,8 +215,27 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "proof-gen-server-route-failclosed-coverage",
+    "state": "self_review",
+    "since": "2026-06-27T20:31:24.976Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-27T20:25:03.505Z",
+      "task": "sdk-session-jwt-failclosed-coverage",
+      "note": "Committed 7d9a2053 on loop/main-track."
+    },
+    {
+      "at": "2026-06-27T20:21:47.684Z",
+      "task": "compute-broker-hextokey-nonhex-rejection-coverage",
+      "note": "Committed f4f143cd on loop/main-track."
+    },
+    {
+      "at": "2026-06-27T20:19:10.141Z",
+      "task": "compute-broker-missing-credential-failclosed-coverage",
+      "note": "Committed 4ad606aa on loop/main-track; agent-os/autonomy records gitignored, commit is the test file only."
+    },
     {
       "at": "2026-06-27T19:58:33.412Z",
       "task": "hatcher-connector-stream-events-sse-parse-coverage",
@@ -300,21 +320,6 @@
       "at": "2026-06-27T16:44:41.589Z",
       "task": "covenant-budget-compact-debit-underflow-clamp-coverage",
       "note": "Committed 10f64abb on loop/main-track. 2 files (test +64, README metrics +/-1). Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-27T16:21:05.443Z",
-      "task": "compute-broker-bonds-cancel-badsig-nonce-preservation-covera",
-      "note": "Committed 88670a5a on loop/main-track. 1 file, +36. Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-27T16:17:17.959Z",
-      "task": "coding-gateway-sandbox-sibling-prefix-escape-coverage",
-      "note": "Committed f3275e5b on loop/main-track. 1 file, +16. Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-27T16:11:51.554Z",
-      "task": "fairscale-bridge-api-bearer-same-length-coverage",
-      "note": "Committed 14612ce6 on loop/main-track. 1 file, +17. Pushing to origin/loop/main-track."
     }
   ]
 }

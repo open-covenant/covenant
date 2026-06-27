@@ -531,4 +531,52 @@ describe('compute-broker server', () => {
     });
     expect(ionet.calls).toContainEqual({ op: 'reclaim', leaseId: 'ionet-expired' });
   });
+
+  class FailingProvider extends FakeProvider {
+    async activate(): Promise<void> {
+      throw new Error('provider activate backend down');
+    }
+    async reclaim(): Promise<void> {
+      throw new Error('provider reclaim backend down');
+    }
+  }
+
+  it('leases/activate surfaces a provider failure as 502', async () => {
+    const failing = build({
+      cfg,
+      providers: { ionet: new FailingProvider('ionet'), akash: new FailingProvider('akash') },
+    });
+    await failing.ready();
+    const res = await failing.inject({
+      method: 'POST',
+      url: '/leases/activate',
+      headers: operatorAuth,
+      payload: { lease_id: 'ionet-lease-fail', provider: 'ionet' },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: /provider activate backend down/ });
+    await failing.close();
+  });
+
+  it('leases/expire-sweep reports an error status when a provider reclaim fails', async () => {
+    const failing = build({
+      cfg,
+      providers: { ionet: new FailingProvider('ionet'), akash: new FailingProvider('akash') },
+    });
+    await failing.ready();
+    const res = await failing.inject({
+      method: 'POST',
+      url: '/leases/expire-sweep',
+      headers: operatorAuth,
+      payload: {
+        now_unix: 1_700_000_100,
+        leases: [{ lease_id: 'ionet-expired-fail', provider: 'ionet', slashable_until: 1_700_000_000 }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ reclaimed: 0, skipped: 0, errors: 1 });
+    const body = res.json() as { results: Array<{ lease_id: string; status: string; reason?: string }> };
+    expect(body.results[0]).toMatchObject({ lease_id: 'ionet-expired-fail', status: 'error' });
+    await failing.close();
+  });
 });

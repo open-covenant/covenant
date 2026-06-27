@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-27T00:45:09.060Z",
+  "updatedAt": "2026-06-27T01:05:12.823Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11002,
-    "tasks": 1295,
-    "integrated": 1298
+    "events": 11010,
+    "tasks": 1296,
+    "integrated": 1299
   },
   "throughput": {
-    "last24h": 10,
+    "last24h": 11,
     "last7d": 123,
     "velocity": 17.6
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1298
+      "total": 1299
     }
   ],
   "states": {
-    "integrated": 1290,
+    "integrated": 1291,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T00:59:29.319Z",
+      "task": "cross-host-admission-dedup-write-failure-coverage",
+      "note": "Integrated as 60041914. Test-only slice pinning the cross-host admission anti-replay durability fail-closed guarantee (dedup_write_failed ar"
+    },
     {
       "at": "2026-06-27T00:34:34.033Z",
       "task": "multi-host-a2a-cross-host-loopback-live",
@@ -310,11 +315,6 @@
       "at": "2026-06-23T20:45:36.383Z",
       "task": "indexer-config-from-env-coverage",
       "note": "Committed 814c188c: sequential from_env test (defaults + confirmations parse-fallback + numeric override + per-var overrides), mutation-prov"
-    },
-    {
-      "at": "2026-06-23T20:40:08.493Z",
-      "task": "indexer-api-http-handler-coverage",
-      "note": "Committing handler tests + tower/http-body-util dev-deps."
     }
   ]
 }

@@ -205,6 +205,20 @@ mod tests {
         assert_eq!(s.patterns()[0].raw().trim(), "*.key");
     }
 
+    // The second None arm: '/', '!', and '!/' each reduce to an empty
+    // glob once the anchor/negation prefix is stripped. They must be
+    // dropped, not built into a pattern whose empty glob matches every
+    // candidate at offset 0 (which would silently ignore — or, negated,
+    // force-include — every memory file).
+    #[test]
+    fn parse_skips_anchor_or_negation_only_lines() {
+        let s = IgnoreSet::parse("/\n!\n!/\n*.key\n");
+        assert_eq!(s.len(), 1, "anchor/negation-only lines produce no pattern");
+        assert_eq!(s.patterns()[0].raw().trim(), "*.key");
+        assert!(s.is_ignored("private.key"));
+        assert!(!s.is_ignored("notes.txt"));
+    }
+
     #[test]
     fn negation_reverses_match() {
         let s = IgnoreSet::parse("*.log\n!keep.log\n");

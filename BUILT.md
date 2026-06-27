@@ -17,7 +17,7 @@ The repository already contains concrete substrate for agentic operation:
 | 5 | Permissions | `covenant-permissions` | Security-sensitive operations are expected to pass capability and review gates. |
 | 6 | Comms | `covenant-ipc`, `covenantd` HTTP gateway, `covenant-mcp`, `covenant-a2a` | Tool and peer boundaries are explicit, not implicit process sharing. |
 | 7 | Compositor | `agent-os/covenant-web` Next.js console and `covenant-tui` terminal binary | Operator-facing surface for agent state, decisions, and audit; the TUI renders intent, memory, audit, capabilities, A2A, chain-receipts, and peer-registry views over the daemon IPC. |
-| 8 | Settlement | `covenant-settlement` plus `agent-os/programs/settlement` Solana scaffold | Resource accounting exists locally, including rollback-backed receipt backfill primitives; on-chain settlement is not production. |
+| 8 | Settlement | `covenant-settlement` plus the `agent-os/programs/settlement` Solana program, deployed on mainnet | Resource accounting exists locally, including rollback-backed receipt backfill primitives. The settlement program is deployed on Solana mainnet — credits, staking, slashing, and on-chain receipt anchoring are implemented on-chain; the daemon-driven economic lifecycle (per-intent consume) is not yet production. |
 
 Audit (`covenant-audit`) is a cross-cutting accountability layer underlying Identity, Permissions, and Settlement — append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations.
 
@@ -84,7 +84,7 @@ Covenant does not currently claim:
 - full autonomous software engineering without human authority;
 - production sandbox-grade isolation for arbitrary untrusted agents;
 - production multi-peer operation across untrusted hosts;
-- on-chain settlement in production;
+- the daemon-driven on-chain settlement lifecycle in production (the Solana settlement program is live on mainnet; per-intent consume is not yet production);
 - public benchmarked self-improvement;
 - release-ready installer or SDK ecosystem.
 

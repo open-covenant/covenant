@@ -1,6 +1,6 @@
 # Covenant Agent OS
 
-`agent-os/` contains the local operating-layer runtime: the daemon, CLI, shared protocol crates, agent runtime, memory, identity, permissions, audit, peer auth, MCP/A2A adapters, local operator console, and settlement scaffold.
+`agent-os/` contains the local operating-layer runtime: the daemon, CLI, shared protocol crates, agent runtime, memory, identity, permissions, audit, peer auth, MCP/A2A adapters, local operator console, and the settlement program (deployed on Solana mainnet; daemon-driven lifecycle not yet production).
 
 ## Build
 

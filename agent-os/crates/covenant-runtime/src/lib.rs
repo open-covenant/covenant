@@ -3681,6 +3681,61 @@ cpu_ms_per_task = 5000
     }
 
     #[test]
+    fn parse_proc_stat_fails_closed_on_every_malformed_line() {
+        // ProcIdentity::current treats a `None` from the parser as "cannot
+        // prove ownership → do not re-track", and recover() refuses to adopt a
+        // pid it cannot prove identity for. The happy-path test above proves the
+        // parser reads the right columns; this proves the other half — that a
+        // malformed /proc/<pid>/stat line (a corrupt or truncated kernel read, a
+        // hostile container /proc) fails closed to `None` rather than fabricating
+        // a bogus pgid/starttime that recovery would then compare against the
+        // value captured at register time. A parser that defaulted a bad field to
+        // 0 or dropped a guard would mint a wrong-but-valid identity and break the
+        // pid-reuse refusal, yet pass every existing test.
+
+        // No ')' at all: the comm anchor the trailing fields are read relative to
+        // is missing, so there is nothing to parse.
+        assert!(
+            parse_proc_stat("4242 weird-comm-without-parens R 1 4200").is_none(),
+            "a line with no ')' has no comm anchor and must fail closed"
+        );
+
+        // Well-formed up to the last ')', but pgid (field 5) is not a number.
+        let mut bad_pgid = vec!["4242", "(comm)", "R", "1", "not-a-pgid"];
+        for _ in 6..=21 {
+            bad_pgid.push("0");
+        }
+        bad_pgid.push("99887");
+        assert!(
+            parse_proc_stat(&bad_pgid.join(" ")).is_none(),
+            "a non-numeric pgid must fail closed, not default to a fabricated value"
+        );
+
+        // Well-formed up to the last ')', but starttime (field 22) is not a number.
+        let mut bad_start = vec!["4242", "(comm)", "R", "1", "4200"];
+        for _ in 6..=21 {
+            bad_start.push("0");
+        }
+        bad_start.push("not-a-time");
+        assert!(
+            parse_proc_stat(&bad_start.join(" ")).is_none(),
+            "a non-numeric starttime must fail closed"
+        );
+
+        // Truncated before pgid: only state and ppid follow the comm.
+        assert!(
+            parse_proc_stat("4242 (comm) R 1").is_none(),
+            "fewer than 3 post-comm fields means no pgid (field 5) and must fail closed"
+        );
+
+        // Truncated after pgid but before starttime: pgid parses, field 22 is absent.
+        assert!(
+            parse_proc_stat("4242 (comm) R 1 4200").is_none(),
+            "a line that stops before field 22 has no starttime and must fail closed"
+        );
+    }
+
+    #[test]
     fn subprocess_tracker_recover_retracks_validated_survivor() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("subprocess-tracker.jsonl");

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T21:11:36.508Z",
+  "updatedAt": "2026-06-27T21:31:40.218Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11651,
-    "tasks": 1368,
-    "integrated": 1371
+    "events": 11660,
+    "tasks": 1369,
+    "integrated": 1372
   },
   "throughput": {
-    "last24h": 76,
-    "last7d": 191,
-    "velocity": 27.3
+    "last24h": 77,
+    "last7d": 192,
+    "velocity": 27.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 74
+      "count": 75
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1371
+      "total": 1372
     }
   ],
   "states": {
-    "integrated": 1363,
+    "integrated": 1364,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T21:17:53.340Z",
+      "task": "sdk-ui-json-http-failclosed-coverage",
+      "note": "Committed. getJson error-surfacing + invalid_json + empty_response + credentials contract, mutation-proven (Run A msg-swap + Run B throw-rem"
+    },
     {
       "at": "2026-06-27T21:09:42.931Z",
       "task": "sdk-network-config-validation-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-27T17:54:19.793Z",
       "task": "compute-broker-provider-failclosed-select-coverage",
       "note": "Committed 502accc6 on loop/main-track: +59 lines, providers.test.ts, mutation-proven 5/5 across both providers."
-    },
-    {
-      "at": "2026-06-27T17:44:28.380Z",
-      "task": "telegram-bot-rate-limit-guard-coverage",
-      "note": "Committed b230b926 on loop/main-track. Security note (cross_review folded in — actor-role string was rejected): exports are testability-only"
     }
   ]
 }

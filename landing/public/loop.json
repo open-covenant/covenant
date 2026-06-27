@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T18:50:48.799Z",
+  "updatedAt": "2026-06-27T19:11:13.289Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11511,
+    "events": 11516,
     "tasks": 1353,
-    "integrated": 1355
+    "integrated": 1356
   },
   "throughput": {
-    "last24h": 61,
-    "last7d": 176,
-    "velocity": 25.1
+    "last24h": 62,
+    "last7d": 177,
+    "velocity": 25.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 58
+      "count": 59
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1355
+      "total": 1356
     }
   ],
   "states": {
-    "integrated": 1347,
+    "integrated": 1348,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -196,7 +195,7 @@
     },
     {
       "name": "covenant",
-      "count": 103
+      "count": 104
     },
     {
       "name": "audit",
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "covenant-mcp-tool-arg-type-mismatch-sibling-arm-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T18:39:02.198Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T19:07:19.146Z",
+      "task": "covenant-mcp-tool-arg-type-mismatch-sibling-arm-coverage",
+      "note": "Integrated at 4c284c20: validate_arguments per-type rejection arms (boolean/number/object/array/null) covered + mutation-proven. Committed t"
+    },
     {
       "at": "2026-06-27T18:25:48.852Z",
       "task": "coding-gateway-sandbox-cost-metering-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-27T14:25:42.915Z",
       "task": "witness-skill-manifest-fallback-rung-coverage",
       "note": "committed on loop/main-track; +1 vitest case pinning both buildSkillManifest fallback rungs, mutation-proven"
-    },
-    {
-      "at": "2026-06-27T14:21:02.655Z",
-      "task": "proofgen-wrap-witness-key-length-guard-coverage",
-      "note": "committed on loop/main-track; +1 vitest case pinning wrapWitnessKey both-sides length guard, mutation-proven, independent review SHIP"
     }
   ]
 }

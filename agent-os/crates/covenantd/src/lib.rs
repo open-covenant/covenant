@@ -48670,6 +48670,120 @@ required = {caps:?}
         .with_cross_host_dedup(dedup)
     }
 
+    /// A mailbox whose enqueue (`send_task`) fails while every read stays
+    /// benign, so the post-admission enqueue-failure arm can be driven: the
+    /// task clears every gate and the durable admitted row lands, then the
+    /// mailbox write fails.
+    struct EnqueueFailingMailbox;
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for EnqueueFailingMailbox {
+        async fn send_task(
+            &self,
+            _task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox enqueue (send_task) write failure",
+            )))
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_task_for(
+            &self,
+            _recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_result_for(
+            &self,
+            _peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn recent_tasks(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(Vec::new())
+        }
+        async fn task_queue(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            Ok(Vec::new())
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn recent_results(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(Vec::new())
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            Ok(0)
+        }
+    }
+
+    /// The cross-host admission server with a caller-supplied mailbox, so a
+    /// failing enqueue can be injected at the pipeline's final step. Mirrors
+    /// [`cross_host_server`] otherwise (host1 -> `sender`, fresh dedup log).
+    async fn cross_host_server_with_mailbox(
+        dir: &std::path::Path,
+        sender: &LocalIdentity,
+        mailbox: Arc<dyn covenant_a2a::Mailbox>,
+    ) -> Server {
+        let known_hosts = KnownHosts::new().with_host(
+            "host1",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://host1:7777".into(),
+                pubkey: sender.pubkey_bytes(),
+            },
+        );
+        let dedup = Arc::new(
+            cross_host::JsonlCrossHostDedup::open(dir.join("cross-host-dedup.jsonl"))
+                .await
+                .expect("open cross-host dedup"),
+        );
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![])),
+            mailbox,
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_known_hosts(known_hosts)
+        .with_cross_host_dedup(dedup)
+    }
+
     async fn grant_recv(s: &Server, sender: &LocalIdentity) {
         // Cross-host admission requires the pubkey-b58 recv form (4b-2a review
         // NOTE 3), not the display form.
@@ -49031,6 +49145,42 @@ required = {caps:?}
                 && reason == "dedup_write_failed"
                 && *sender_b58 == alice.agent_id().pubkey_base58()),
             "the write failure must be attributed to the proven sender on the audit feed: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_reports_rejected_when_the_mailbox_enqueue_fails_after_a_durable_admitted_row() {
+        // The admitted audit row is persisted (required) BEFORE the task is
+        // enqueued, so "a task on the mailbox" always implies "a durable admitted
+        // row". If the enqueue then fails, admission must not over-claim Admitted
+        // for a task that never landed: it emits a best-effort enqueue_failed
+        // correction on the feed and returns Rejected so the sender learns the
+        // task did not reach the mailbox.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server_with_mailbox(dir.path(), &alice, Arc::new(EnqueueFailingMailbox))
+            .await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000c, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected,
+            "a failed enqueue must not be reported as Admitted for a task that never landed"
+        );
+        let rows = cross_host_rows(&s).await;
+        let alice_b58 = alice.agent_id().pubkey_base58();
+        assert!(
+            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "admitted"
+                && reason.is_empty()
+                && *sender_b58 == alice_b58),
+            "the durable admitted row precedes the enqueue and stays on the feed: {rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                && reason == "enqueue_failed"
+                && *sender_b58 == alice_b58),
+            "the enqueue failure must be corrected on the audit feed: {rows:?}"
         );
     }
 

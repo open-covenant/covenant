@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T18:10:40.963Z",
+  "updatedAt": "2026-06-27T18:30:44.937Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11490,
-    "tasks": 1351,
-    "integrated": 1353
+    "events": 11507,
+    "tasks": 1352,
+    "integrated": 1355
   },
   "throughput": {
-    "last24h": 59,
-    "last7d": 174,
-    "velocity": 24.9
+    "last24h": 61,
+    "last7d": 176,
+    "velocity": 25.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 56
+      "count": 58
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-27",
-      "total": 1353
+      "total": 1355
     }
   ],
   "states": {
-    "integrated": 1345,
-    "proposed": 2,
+    "integrated": 1347,
+    "proposed": 1,
     "blocked": 4
   },
   "areas": [
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T18:25:48.852Z",
+      "task": "coding-gateway-sandbox-cost-metering-coverage",
+      "note": "Committed. Test-only; autonomy records gitignored. sandboxCostUsd metering now covered (3/3 mutations caught)."
+    },
+    {
+      "at": "2026-06-27T18:15:47.166Z",
+      "task": "fairscale-bridge-loadconfig-token-strength-clamp-coverage",
+      "note": "Committed 2c154176. Test-only slice; autonomy records local/gitignored. fairscale loadConfig boot-gate now covered (7/7 mutations caught)."
+    },
     {
       "at": "2026-06-27T17:54:19.793Z",
       "task": "compute-broker-provider-failclosed-select-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T14:21:02.655Z",
       "task": "proofgen-wrap-witness-key-length-guard-coverage",
       "note": "committed on loop/main-track; +1 vitest case pinning wrapWitnessKey both-sides length guard, mutation-proven, independent review SHIP"
-    },
-    {
-      "at": "2026-06-27T14:15:34.727Z",
-      "task": "witness-refutation-reset-issuer-scope-coverage",
-      "note": "committed 59156faa on loop/main-track; +1 vitest case pinning cross-issuer reset scoping in scanRefutations, mutation-proven, independent re"
-    },
-    {
-      "at": "2026-06-27T13:54:14.311Z",
-      "task": "gvisor-oci-config-memory-limit-conversion-coverage",
-      "note": "test-only coverage slice integrated; commit pending."
     }
   ]
 }

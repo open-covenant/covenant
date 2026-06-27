@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-27T04:06:14.303Z",
+  "updatedAt": "2026-06-27T04:26:18.995Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11063,
-    "tasks": 1302,
+    "events": 11067,
+    "tasks": 1303,
     "integrated": 1305
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1297,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "cross-host-admission-open-error-reason-mapping-coverage",
+    "state": "in_progress",
+    "since": "2026-06-27T04:12:43.971Z"
+  },
   "recent": [
     {
       "at": "2026-06-27T03:49:50.610Z",

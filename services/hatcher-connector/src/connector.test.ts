@@ -113,6 +113,35 @@ describe('Connector dispatch flow', () => {
     expect(transport.sent).toEqual([{ v: 1, type: 'error', dispatch_id: 'd2', code: 'not_admitted', message: 'empty intent text' }]);
   });
 
+  it('rejects a new dispatch when the concurrency cap is full (back-pressure)', async () => {
+    const daemon = new FakeDaemon();
+    // Hold the first dispatch in-flight: its grant never resolves, so the slot
+    // stays reserved while a second, distinct dispatch arrives.
+    vi.spyOn(daemon, 'grant').mockImplementation(() => new Promise<void>(() => {}));
+    const transport = new StubTransport();
+    const connector = new Connector(daemon, transport, {
+      maxConcurrentDispatch: 1,
+      defaultDeadlineMs: 60_000,
+      manifestCapabilities: CAPS,
+      now: () => 1_000,
+    });
+    await connector.start();
+
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'first', agent_id: 'PK', intent: { text: 'hold the slot' } });
+    await flush();
+    expect(connector.inFlight).toBe(1);
+
+    // Valid text, so this can only be the concurrency arm — not the empty-text sibling above.
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'second', agent_id: 'PK', intent: { text: 'also valid' } });
+    await flush();
+
+    expect(transport.sent).toEqual([
+      { v: 1, type: 'error', dispatch_id: 'second', code: 'not_admitted', message: 'max concurrent dispatch reached' },
+    ]);
+    expect(daemon.submitted).toEqual([]); // neither dispatch reached intent submission
+    expect(connector.inFlight).toBe(1); // the rejected dispatch never took a slot
+  });
+
   it('surfaces capability_denied when a grant fails and does not dispatch', async () => {
     const daemon = new FakeDaemon();
     daemon.failGrant = true;

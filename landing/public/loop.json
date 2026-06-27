@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T21:31:40.218Z",
+  "updatedAt": "2026-06-27T21:51:43.928Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11660,
-    "tasks": 1369,
-    "integrated": 1372
+    "events": 11678,
+    "tasks": 1371,
+    "integrated": 1374
   },
   "throughput": {
-    "last24h": 77,
-    "last7d": 192,
-    "velocity": 27.4
+    "last24h": 79,
+    "last7d": 194,
+    "velocity": 27.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 75
+      "count": 77
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1372
+      "total": 1374
     }
   ],
   "states": {
-    "integrated": 1364,
+    "integrated": 1366,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T21:50:18.526Z",
+      "task": "sdk-solana-stake-uncovered-builder-authorization-coverage",
+      "note": "stake uncovered-builder authorization coverage landed"
+    },
+    {
+      "at": "2026-06-27T21:42:52.694Z",
+      "task": "sdk-solana-instruction-account-authorization-coverage",
+      "note": "instruction descriptor authorization-flag + data-binding coverage landed"
+    },
     {
       "at": "2026-06-27T21:17:53.340Z",
       "task": "sdk-ui-json-http-failclosed-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T18:25:48.852Z",
       "task": "coding-gateway-sandbox-cost-metering-coverage",
       "note": "Committed. Test-only; autonomy records gitignored. sandboxCostUsd metering now covered (3/3 mutations caught)."
-    },
-    {
-      "at": "2026-06-27T18:15:47.166Z",
-      "task": "fairscale-bridge-loadconfig-token-strength-clamp-coverage",
-      "note": "Committed 2c154176. Test-only slice; autonomy records local/gitignored. fairscale loadConfig boot-gate now covered (7/7 mutations caught)."
-    },
-    {
-      "at": "2026-06-27T17:54:19.793Z",
-      "task": "compute-broker-provider-failclosed-select-coverage",
-      "note": "Committed 502accc6 on loop/main-track: +59 lines, providers.test.ts, mutation-proven 5/5 across both providers."
     }
   ]
 }

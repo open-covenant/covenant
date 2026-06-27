@@ -76,3 +76,50 @@ describe("E2bSandboxProvider egress firewall", () => {
     expect(createMock.mock.calls.at(-1)).toHaveLength(1);
   });
 });
+
+describe("E2bSandbox.exec result surfacing", () => {
+  beforeEach(() => {
+    createMock.mockReset();
+    delete process.env.E2B_EGRESS_ALLOW;
+    delete process.env.E2B_TEMPLATE;
+  });
+
+  // create() returns `new E2bSandbox(sbx)`, so a fake `sbx.commands.run`
+  // drives the exec error-surfacing arm without a live microVM.
+  async function sandboxWithRun(run: (cmd: string, o: { timeoutMs: number }) => Promise<unknown>) {
+    createMock.mockResolvedValue({ commands: { run } });
+    return new E2bSandboxProvider("k").create(SPEC);
+  }
+
+  it("returns the command result and defaults the per-command timeout backstop", async () => {
+    const seen: { timeoutMs: number }[] = [];
+    const sbx = await sandboxWithRun(async (_cmd, o) => {
+      seen.push(o);
+      return { stdout: "ok", stderr: "", exitCode: 0 };
+    });
+    expect(await sbx.exec("npm test")).toEqual({ stdout: "ok", stderr: "", exitCode: 0 });
+    await sbx.exec("npm test", { timeoutMs: 5_000 });
+    expect(seen.map((o) => o.timeoutMs)).toEqual([300_000, 5_000]);
+  });
+
+  it("surfaces an e2b non-zero exit as a result rather than throwing", async () => {
+    const sbx = await sandboxWithRun(async () => {
+      throw { stdout: "build out", stderr: "boom", exitCode: 2 };
+    });
+    expect(await sbx.exec("npm run build")).toEqual({ stdout: "build out", stderr: "boom", exitCode: 2 });
+  });
+
+  it("defaults absent stdout/stderr to empty strings on a surfaced failure", async () => {
+    const sbx = await sandboxWithRun(async () => {
+      throw { exitCode: 1 };
+    });
+    expect(await sbx.exec("false")).toEqual({ stdout: "", stderr: "", exitCode: 1 });
+  });
+
+  it("rethrows a transport error that carries no exit code", async () => {
+    const sbx = await sandboxWithRun(async () => {
+      throw new Error("microVM unreachable");
+    });
+    await expect(sbx.exec("npm test")).rejects.toThrow(/microVM unreachable/);
+  });
+});

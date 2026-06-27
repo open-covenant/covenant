@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T10:49:13.132Z",
+  "updatedAt": "2026-06-27T11:09:16.791Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11216,
-    "tasks": 1320,
-    "integrated": 1322
+    "events": 11234,
+    "tasks": 1322,
+    "integrated": 1324
   },
   "throughput": {
-    "last24h": 34,
-    "last7d": 144,
-    "velocity": 20.6
+    "last24h": 36,
+    "last7d": 146,
+    "velocity": 20.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 25
+      "count": 27
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1322
+      "total": 1324
     }
   ],
   "states": {
-    "integrated": 1314,
+    "integrated": 1316,
     "proposed": 2,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T11:00:26.904Z",
+      "task": "llm-embedder-from-config-absent-embed-none-coverage",
+      "note": "committed to loop/main-track"
+    },
+    {
+      "at": "2026-06-27T10:53:11.361Z",
+      "task": "llm-provider-from-config-absent-llm-none-coverage",
+      "note": "committed to loop/main-track"
+    },
     {
       "at": "2026-06-27T10:38:55.607Z",
       "task": "memory-ignore-pattern-empty-glob-none-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T03:49:50.610Z",
       "task": "cross-host-delivery-transport-connection-error-coverage",
       "note": "committed c87181a4; staged only README.md + covenantd/src/lib.rs; pushed to origin/loop/main-track. cross_host.rs reverts clean (no producti"
-    },
-    {
-      "at": "2026-06-27T03:06:33.362Z",
-      "task": "cross-host-delivery-remote-error-status-coverage",
-      "note": "committed e9a0d7b4; staged only README.md + covenantd/src/lib.rs; pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-27T02:51:31.600Z",
-      "task": "cross-host-admission-duplicate-audit-failure-coverage",
-      "note": "committed cb2ec2cd; staged only README.md + covenantd/src/lib.rs (stake/landing drift excluded); pushing to origin/loop/main-track"
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T05:27:11.237Z",
+  "updatedAt": "2026-06-27T05:47:37.849Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11085,
+    "events": 11089,
     "tasks": 1305,
-    "integrated": 1307
+    "integrated": 1308
   },
   "throughput": {
-    "last24h": 19,
-    "last7d": 130,
-    "velocity": 18.6
+    "last24h": 20,
+    "last7d": 131,
+    "velocity": 18.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 10
+      "count": 11
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1307
+      "total": 1308
     }
   ],
   "states": {
-    "integrated": 1299,
+    "integrated": 1300,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "covenantd-redact-url-secret-query-redaction-hardening",
-    "state": "in_progress",
-    "since": "2026-06-27T05:21:50.372Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T05:35:26.800Z",
+      "task": "covenantd-redact-url-secret-query-redaction-hardening",
+      "note": "Integrated as cb53ed99 on loop/main-track. Security review recorded here (cross_review state was skipped earlier due to a role-slug typo): t"
+    },
     {
       "at": "2026-06-27T05:06:39.889Z",
       "task": "cross-host-peer-task-ingress-body-cap-and-rejection-http-cov",
@@ -315,11 +315,6 @@
       "at": "2026-06-26T13:18:40.947Z",
       "task": "unified-model-provider-fallback-router",
       "note": "integrated at c8f9eaff: Router shipped in covenant-llm, dependency-light, all gates green; next epic task wires Router into daemon provider "
-    },
-    {
-      "at": "2026-06-24T00:06:44.341Z",
-      "task": "x402-untrusted-response-deserialize-failure-coverage",
-      "note": "Committed f21967c4 + pushed to origin/loop/main-track. Slice integrated: 2 mutation-proven tests, README metric 3087."
     }
   ]
 }

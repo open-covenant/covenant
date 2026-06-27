@@ -2730,6 +2730,34 @@ model = "nomic-embed-text"
     }
 
     #[test]
+    fn openai_empty_response_surfaces_empty_not_ok() {
+        // The Empty arm distinguishes "the model produced no usable text"
+        // from a valid completion. An OpenAI-compatible endpoint can return a
+        // zero-length `choices` array (a content-filter block or degenerate
+        // turn) or a single choice whose content is "" — both must surface
+        // ProviderError::Empty, never an Ok("") that a plan / compaction caller
+        // would treat as the model's answer. The anthropic path pins this arm;
+        // the openai path was the only sibling left without it.
+        let raw = r#"{"choices": [], "usage": {"completion_tokens": 0}}"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let err = process_openai_response(response)
+            .expect_err("a response with no choices must surface Empty, not Ok");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "zero choices must be Empty: {err:?}"
+        );
+
+        let raw = r#"{"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]}"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let err = process_openai_response(response)
+            .expect_err("an empty-content choice must surface Empty, not Ok");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "empty content on a normal stop must be Empty: {err:?}"
+        );
+    }
+
+    #[test]
     fn ollama_provider_surfaces_truncated_when_done_reason_is_length() {
         // Ollama sets done_reason="length" when /api/chat stops at the
         // num_predict ceiling. The prior parser read only message.content and
@@ -2801,6 +2829,22 @@ model = "nomic-embed-text"
             }
             other => panic!("expected ProviderError::Truncated, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ollama_empty_response_surfaces_empty_not_ok() {
+        // A normal-stop Ollama response whose message.content is empty must
+        // surface ProviderError::Empty rather than Ok(""), matching the
+        // anthropic and openai Empty-arm contract. Empty stays reserved for
+        // "model produced no text"; the length done_reason owns Truncated.
+        let raw = r#"{"message": {"role": "assistant", "content": ""}, "done": true, "done_reason": "stop"}"#;
+        let response: OllamaChatResponse = serde_json::from_str(raw).unwrap();
+        let err = process_ollama_response(response)
+            .expect_err("empty content on a normal stop must surface Empty, not Ok");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "empty content must be Empty: {err:?}"
+        );
     }
 
     #[tokio::test]

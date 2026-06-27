@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T08:48:13.602Z",
+  "updatedAt": "2026-06-27T08:56:59.751Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11156,
+    "events": 11161,
     "tasks": 1313,
-    "integrated": 1315
+    "integrated": 1316
   },
   "throughput": {
-    "last24h": 27,
-    "last7d": 138,
-    "velocity": 19.7
+    "last24h": 28,
+    "last7d": 139,
+    "velocity": 19.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 18
+      "count": 19
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-27",
-      "total": 1315
+      "total": 1316
     }
   ],
   "states": {
-    "integrated": 1307,
+    "integrated": 1308,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "llm-ollama-embedder-error-arm-coverage",
-    "state": "in_progress",
-    "since": "2026-06-27T08:47:22.983Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T08:55:00.382Z",
+      "task": "llm-ollama-embedder-error-arm-coverage",
+      "note": "Embedder error-path coverage landed; covenant-llm provider/embedder error arms (memory cap, no-text Empty, non-2xx Status) now symmetric acr"
+    },
     {
       "at": "2026-06-27T08:44:24.940Z",
       "task": "llm-provider-non-success-status-arm-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-26T23:47:29.670Z",
       "task": "multi-host-a2a-cross-host-outbound-deliver",
       "note": "Integrated as 36256df5, pushed f32392dc..36256df5 to origin/loop/main-track. 4b-3 complete: send_a2a_task routes a known-host recipient to d"
-    },
-    {
-      "at": "2026-06-26T22:35:57.799Z",
-      "task": "multi-host-a2a-cross-host-inbound-route",
-      "note": "Integrated as f32392dc, pushed 5b261659..f32392dc to origin/loop/main-track. 4b-2b complete: bearer-exempt POST /a2a/peer-tasks fronting the"
     }
   ]
 }

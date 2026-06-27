@@ -88,6 +88,18 @@ describe("scanRefutations", () => {
       ],
     });
   });
+
+  it("scopes the context reset to its own issuer: B's reset does not clear A's poison", () => {
+    const events = [
+      ev("u1", "pkA", "untrusted_input_observed"),
+      ev("r1", "pkB", "skill_context_injected"),
+      ev("s1", "pkA", "skill_tx_signed"),
+    ];
+    expect(scanRefutations(events)).toEqual({
+      verdict: "refute",
+      refutations: [{ signed_event: "s1", after_untrusted: "u1" }],
+    });
+  });
 });
 
 describe("buildSkillManifest", () => {

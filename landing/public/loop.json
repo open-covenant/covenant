@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T07:48:02.638Z",
+  "updatedAt": "2026-06-27T08:08:06.247Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11125,
-    "tasks": 1309,
-    "integrated": 1312
+    "events": 11134,
+    "tasks": 1310,
+    "integrated": 1313
   },
   "throughput": {
-    "last24h": 24,
-    "last7d": 135,
-    "velocity": 19.3
+    "last24h": 25,
+    "last7d": 136,
+    "velocity": 19.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 15
+      "count": 16
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1312
+      "total": 1313
     }
   ],
   "states": {
-    "integrated": 1304,
+    "integrated": 1305,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-27T08:02:07.069Z",
+      "task": "daemon-projection-policy-spelling-and-trim-normalization-cov",
+      "note": "committed 8a1f58a0 on loop/main-track; no_extrapolation alias + trim/empty normalization pinned, empty-filter mutation-proven"
+    },
     {
       "at": "2026-06-27T07:43:18.991Z",
       "task": "daemon-sse-broadcast-stream-lag-close-arm-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-26T17:47:00.612Z",
       "task": "multi-host-a2a-cross-host-signed-envelope",
       "note": "Integrated as d7bebd11 on loop/main-track. SignedA2ATask seal/open primitive (covenant-a2a) + verify_with_pubkey_bytes (covenant-identity); "
-    },
-    {
-      "at": "2026-06-26T16:35:58.518Z",
-      "task": "multi-host-a2a-remote-recipient-refuse-not-silent-local",
-      "note": "Integrated as 74126358, pushed to origin/loop/main-track. A2A send now refuses configured-remote recipients (no silent local misdelivery); k"
     }
   ]
 }

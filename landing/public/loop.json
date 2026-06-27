@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-27T13:09:38.941Z",
+  "updatedAt": "2026-06-27T13:29:42.647Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11308,
-    "tasks": 1330,
-    "integrated": 1332
+    "events": 11316,
+    "tasks": 1331,
+    "integrated": 1333
   },
   "throughput": {
     "last24h": 44,
-    "last7d": 154,
-    "velocity": 22
+    "last7d": 155,
+    "velocity": 22.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-27",
-      "count": 35
+      "count": 36
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-27",
-      "total": 1332
+      "total": 1333
     }
   ],
   "states": {
-    "integrated": 1324,
+    "integrated": 1325,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -200,7 +200,7 @@
     },
     {
       "name": "audit",
-      "count": 95
+      "count": 96
     },
     {
       "name": "live",
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "audit-verify-integrity-missing-anchor-diagnostic-coverage",
+    "task": "gvisor-oci-config-memory-limit-conversion-coverage",
     "state": "in_progress",
-    "since": "2026-06-27T12:54:25.328Z"
+    "since": "2026-06-27T13:20:07.660Z"
   },
   "recent": [
+    {
+      "at": "2026-06-27T13:12:48.398Z",
+      "task": "audit-verify-integrity-missing-anchor-diagnostic-coverage",
+      "note": "test-only coverage slice integrated; commit pending."
+    },
     {
       "at": "2026-06-27T12:39:19.441Z",
       "task": "mcp-validate-arguments-unknown-type-keyword-permissive-cover",
@@ -315,11 +320,6 @@
       "at": "2026-06-27T08:26:53.067Z",
       "task": "llm-provider-empty-response-arm-parity-coverage",
       "note": "Empty-arm parity for openai+ollama process_response landed; three-provider Empty coverage now symmetric. Committing."
-    },
-    {
-      "at": "2026-06-27T08:02:07.069Z",
-      "task": "daemon-projection-policy-spelling-and-trim-normalization-cov",
-      "note": "committed 8a1f58a0 on loop/main-track; no_extrapolation alias + trim/empty normalization pinned, empty-filter mutation-proven"
     }
   ]
 }

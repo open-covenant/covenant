@@ -441,6 +441,87 @@ describe("SpendLedger", () => {
       rmSync(path, { force: true });
     }
   });
+
+  it("discards a persisted daily counter from a previous day so a new-day boot gets a fresh daily cap", () => {
+    // The daily tally is a same-day counter: a restart on a new day must start at
+    // $0, not inherit yesterday's spend (which would silently eat today's headroom).
+    // month is held at the current month so this isolates the day-equality guard
+    // while confirming the monthly tally still carries across the day boundary.
+    const path = join(tmpdir(), `covenant-ledger-staleday-${Date.now()}.json`);
+    const month = new Date().toISOString().slice(0, 7);
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          day: "2000-01-01", // a day that is never today
+          month,
+          dailyUsd: 5,
+          monthlyUsd: 5,
+          outcomes: { completed: 0, failed: 0, cancelled: 0 },
+          pending: [],
+        }),
+      );
+      const snap = new SpendLedger(caps, path).snapshot();
+      expect(snap.dailyUsd).toBe(0); // stale day → daily counter reset
+      expect(snap.monthlyUsd).toBeCloseTo(5); // same month → monthly counter carried
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  it("discards a persisted monthly counter from a previous month so a new-month boot gets a fresh monthly cap", () => {
+    // Symmetric to the daily case at the month granularity: a boot in a new month
+    // must not inherit last month's spend against the monthly cap, while the daily
+    // tally still restores when the persisted day matches today.
+    const path = join(tmpdir(), `covenant-ledger-stalemonth-${Date.now()}.json`);
+    const day = new Date().toISOString().slice(0, 10);
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          day,
+          month: "2000-01", // a month that is never now
+          dailyUsd: 3,
+          monthlyUsd: 99,
+          outcomes: { completed: 0, failed: 0, cancelled: 0 },
+          pending: [],
+        }),
+      );
+      const snap = new SpendLedger(caps, path).snapshot();
+      expect(snap.monthlyUsd).toBe(0); // stale month → monthly counter reset
+      expect(snap.dailyUsd).toBeCloseTo(3); // same day → daily counter carried
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  it("rejects a non-numeric persisted daily counter instead of poisoning the cap arithmetic", () => {
+    // A truncated/corrupt ledger could carry a string (or null) where a USD number
+    // is expected. Assigning it would make every subsequent cap comparison operate
+    // on a non-number (NaN/string concat), so the typeof guard must drop it and
+    // keep the in-memory counter a real number starting from $0.
+    const path = join(tmpdir(), `covenant-ledger-corrupt-${Date.now()}.json`);
+    const day = new Date().toISOString().slice(0, 10);
+    const month = new Date().toISOString().slice(0, 7);
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          day,
+          month,
+          dailyUsd: "5", // corrupt: a string where a number is required
+          monthlyUsd: 0,
+          outcomes: { completed: 0, failed: 0, cancelled: 0 },
+          pending: [],
+        }),
+      );
+      const snap = new SpendLedger(caps, path).snapshot();
+      expect(snap.dailyUsd).toBe(0); // the string was rejected, not assigned through
+      expect(typeof snap.dailyUsd).toBe("number");
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
 });
 
 describe("sandboxCostUsd", () => {

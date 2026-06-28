@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T22:36:22.056Z",
+  "updatedAt": "2026-06-28T22:56:25.942Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12044,
-    "tasks": 1413,
-    "integrated": 1415
+    "events": 12070,
+    "tasks": 1415,
+    "integrated": 1418
   },
   "throughput": {
-    "last24h": 38,
-    "last7d": 200,
-    "velocity": 28.6
+    "last24h": 39,
+    "last7d": 202,
+    "velocity": 28.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 29
+      "count": 32
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-28",
-      "total": 1415
+      "total": 1418
     }
   ],
   "states": {
-    "integrated": 1407,
-    "proposed": 2,
+    "integrated": 1410,
+    "proposed": 1,
     "blocked": 4
   },
   "areas": [
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T22:51:44.285Z",
+      "task": "landing-contact-route-failclosed-validation-coverage",
+      "note": "Committed; test-only, route.ts unchanged. 6 mutation-proven arms. Pushing."
+    },
+    {
+      "at": "2026-06-28T22:46:05.892Z",
+      "task": "landing-agent-ingest-route-failclosed-coverage",
+      "note": "Committed 68941884 (test-only; route.ts unchanged). 5 mutation-proven fail-closed arms. Pushing to origin/loop/main-track."
+    },
+    {
+      "at": "2026-06-28T22:38:16.952Z",
+      "task": "landing-verify-route-get-orchestrator-coverage",
+      "note": "Committed f6aafbbe (test+config only; route.ts unchanged). vitest.config.mts + route.test.ts; 6 mutation-proven GET arms. Pushing to origin/"
+    },
     {
       "at": "2026-06-28T22:10:14.796Z",
       "task": "landing-verify-git-runner-cutover-extraction-coverage",
@@ -300,21 +315,6 @@
       "at": "2026-06-28T02:22:49.182Z",
       "task": "hatcher-connector-finalize-status-mapping-coverage",
       "note": "committed bc4f6a02; pushed to origin/loop/main-track; test-only +52 on connector.test.ts"
-    },
-    {
-      "at": "2026-06-28T02:07:30.613Z",
-      "task": "fairscale-summary-conditional-arm-coverage",
-      "note": "committed; test-only +12 on mapping.test.ts"
-    },
-    {
-      "at": "2026-06-28T02:02:49.414Z",
-      "task": "fairscale-redact-nonstring-value-arm-coverage",
-      "note": "committed; test-only +17 on mapping.test.ts"
-    },
-    {
-      "at": "2026-06-28T01:58:51.954Z",
-      "task": "hatcher-mesh-grants-collection-constraint-failclosed-coverag",
-      "note": "committed; test-only +18 on capabilities.test.ts"
     }
   ]
 }

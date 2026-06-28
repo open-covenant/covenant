@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T02:12:32.869Z",
+  "updatedAt": "2026-06-28T02:32:36.593Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11889,
-    "tasks": 1395,
-    "integrated": 1398
+    "events": 11907,
+    "tasks": 1397,
+    "integrated": 1400
   },
   "throughput": {
-    "last24h": 97,
-    "last7d": 213,
-    "velocity": 30.4
+    "last24h": 99,
+    "last7d": 214,
+    "velocity": 30.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 12
+      "count": 14
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-28",
-      "total": 1398
+      "total": 1400
     }
   ],
   "states": {
-    "integrated": 1390,
+    "integrated": 1392,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T02:30:31.184Z",
+      "task": "coding-gateway-ledger-rehydration-staleness-guard-coverage",
+      "note": "committed 2f33bab1; pushed to origin/loop/main-track; test-only +81 on budget.test.ts"
+    },
+    {
+      "at": "2026-06-28T02:22:49.182Z",
+      "task": "hatcher-connector-finalize-status-mapping-coverage",
+      "note": "committed bc4f6a02; pushed to origin/loop/main-track; test-only +52 on connector.test.ts"
+    },
     {
       "at": "2026-06-28T02:07:30.613Z",
       "task": "fairscale-summary-conditional-arm-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T23:35:08.397Z",
       "task": "landing-stake-apy-coverage",
       "note": "Committed ed0a1d42 (apy.test.ts + landing vitest infra). Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-27T22:57:50.329Z",
-      "task": "sap-bridge-signer-required-guard-coverage",
-      "note": "committing test update to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T22:50:57.049Z",
-      "task": "sdk-solana-explorer-href-routing-coverage",
-      "note": "committing test file to loop/main-track"
     }
   ]
 }

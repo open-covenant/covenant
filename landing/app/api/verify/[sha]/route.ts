@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import { findRepoRoot } from "@/lib/agentStream.mjs";
 import { recomputeAuditRoot } from "@/lib/audit/auditRoot";
 import { redactAuthor } from "@/lib/verify/author";
+import { checkSkillRun } from "@/lib/verify/skillRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,42 +27,6 @@ type Witness = {
   drillHref?: string;
   badge?: { text: string; tone: "yellow" | "red" } | null;
 };
-
-type SkillRunTx = { sig: string; cluster: "devnet" | "mainnet"; slot: number | null };
-type SkillRun = {
-  skill: { name: string; digest: string };
-  capabilities: string[];
-  tx: SkillRunTx | null;
-};
-
-// A skill-driven run anchored to this commit, sourced from
-// landing/public/witness/skill/<sha>.json. Null for an ordinary code commit.
-function checkSkillRun(repoRoot: string, sha: string): SkillRun | null {
-  const manifest = join(repoRoot, "landing", "public", "witness", "skill", `${sha}.json`);
-  if (!existsSync(manifest)) return null;
-  try {
-    const raw = JSON.parse(readFileSync(manifest, "utf8")) as Record<string, unknown>;
-    const skill = (raw.skill ?? {}) as Record<string, unknown>;
-    const name = typeof skill.name === "string" ? skill.name : "";
-    const digest = typeof skill.digest === "string" ? skill.digest : "";
-    if (!name || !digest) return null;
-    const capabilities = Array.isArray(raw.capabilities)
-      ? raw.capabilities.filter((c): c is string => typeof c === "string")
-      : [];
-    const txRaw = (raw.tx ?? null) as Record<string, unknown> | null;
-    const tx: SkillRunTx | null =
-      txRaw && typeof txRaw.sig === "string" && txRaw.sig
-        ? {
-            sig: txRaw.sig,
-            cluster: txRaw.cluster === "mainnet" ? "mainnet" : "devnet",
-            slot: typeof txRaw.slot === "number" ? txRaw.slot : null,
-          }
-        : null;
-    return { skill: { name, digest }, capabilities, tx };
-  } catch {
-    return null;
-  }
-}
 
 const COVENANT_AUTHOR_EMAIL = "covenant@users.noreply.github.com";
 

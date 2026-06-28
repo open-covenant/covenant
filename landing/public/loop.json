@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T01:32:25.190Z",
+  "updatedAt": "2026-06-28T01:52:29.033Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11844,
-    "tasks": 1390,
-    "integrated": 1393
+    "events": 11857,
+    "tasks": 1392,
+    "integrated": 1394
   },
   "throughput": {
     "last24h": 93,
-    "last7d": 210,
-    "velocity": 30
+    "last7d": 209,
+    "velocity": 29.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-28",
-      "total": 1393
+      "total": 1394
     }
   ],
   "states": {
-    "integrated": 1385,
+    "integrated": 1386,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "hatcher-ws-transport-binary-frame-coverage",
+    "state": "in_progress",
+    "since": "2026-06-28T01:49:57.225Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-28T01:39:08.430Z",
+      "task": "hatcher-mesh-grants-failclosed-constraint-coverage",
+      "note": "Committing test-only fail-closed constraint coverage for mapMeshGrants."
+    },
     {
       "at": "2026-06-28T01:26:02.677Z",
       "task": "coding-gateway-budget-deadline-boundary-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-27T22:07:57.494Z",
       "task": "config-network-resolution-routing-coverage",
       "note": "committing test file to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T21:50:18.526Z",
-      "task": "sdk-solana-stake-uncovered-builder-authorization-coverage",
-      "note": "stake uncovered-builder authorization coverage landed"
     }
   ]
 }

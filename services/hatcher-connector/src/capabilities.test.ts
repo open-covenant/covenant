@@ -121,4 +121,24 @@ describe('mapMeshGrants — Hatcher per-dispatch grants ({scope, constraints})',
     const { grants } = mapMeshGrants([{ scope: 'a2a', constraints: { peer: 'PKa' } }], EXP);
     expect(grants).toEqual([]);
   });
+
+  it('drops a non-array filesystem paths constraint instead of spreading it into the sandbox allowlist', () => {
+    // A dispatch frame sending paths as a bare string (not the expected array)
+    // must fail closed to an empty fs scope; without the Array.isArray guard the
+    // string would spread character-by-character into the sandbox allowlist.
+    const { grants, policy } = mapMeshGrants([{ scope: 'filesystem.read', constraints: { paths: '/etc' } }], EXP);
+    expect(grants).toEqual([]);
+    expect(policy.fs).toEqual({ read: [], write: [] });
+  });
+
+  it('drops a non-array browser/network domains constraint instead of spreading it into the egress allowlist', () => {
+    const { policy } = mapMeshGrants([{ scope: 'browser.open', constraints: { domains: 'evil.com' } }], EXP);
+    expect(policy.net).toEqual({ domains: [] });
+  });
+
+  it('omits a non-string github repo constraint rather than binding it to the github capability scope', () => {
+    const { grants, policy } = mapMeshGrants([{ scope: 'github.read', constraints: { repo: 123 } }], EXP);
+    expect(grants).toEqual([{ action: 'tool.call.github', scope: { version: 1, tool: 'github' }, expires_at: EXP }]);
+    expect(policy.github).toEqual({ scopes: ['github.read'] });
+  });
 });

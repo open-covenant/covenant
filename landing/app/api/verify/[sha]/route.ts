@@ -5,7 +5,6 @@
 // before it has actually been checked.
 
 import { execFileSync } from "node:child_process";
-import { createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { NextResponse } from "next/server";
@@ -13,20 +12,11 @@ import { findRepoRoot } from "@/lib/agentStream.mjs";
 import { recomputeAuditRoot } from "@/lib/audit/auditRoot";
 import { redactAuthor } from "@/lib/verify/author";
 import { checkSkillRun } from "@/lib/verify/skillRun";
+import type { Witness } from "@/lib/verify/types";
+import { checkAnchor4VerifierSig } from "@/lib/verify/verifierSig";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type WitnessState = "green" | "yellow" | "red" | "gray";
-
-type Witness = {
-  key: "rekor" | "audit_chain" | "solana_anchor" | "verifier_sig";
-  label: string;
-  state: WitnessState;
-  detail: string;
-  drillHref?: string;
-  badge?: { text: string; tone: "yellow" | "red" } | null;
-};
 
 const COVENANT_AUTHOR_EMAIL = "covenant@users.noreply.github.com";
 
@@ -213,73 +203,6 @@ function checkAnchor3Solana(repoRoot: string, sha: string): Witness {
       label: "Solana settlement anchor",
       state: "red",
       detail: "Settlement manifest unreadable.",
-    };
-  }
-}
-
-// Anchor 4 — verifier-refuter signature. A separately-keyed ed25519 verifier
-// signs the audit root into attestations/<sha>.verifier.sig. Presence alone is
-// not sufficient: the light stays yellow until the signature is checked against
-// the published verifier pubkey.
-function checkAnchor4VerifierSig(repoRoot: string, sha: string): Witness {
-  const sigPath = join(repoRoot, "attestations", `${sha}.verifier.sig`);
-  if (!existsSync(sigPath)) {
-    return {
-      key: "verifier_sig",
-      label: "Verifier-Refuter signature",
-      state: "yellow",
-      detail:
-        "No verifier signature published for this commit yet. A separately-keyed ed25519 verifier signs the audit root; until then this light reads yellow.",
-    };
-  }
-  try {
-    const att = JSON.parse(readFileSync(join(repoRoot, "attestations", `${sha}.json`), "utf8")) as {
-      audit_root_hex?: string;
-      verdict?: string;
-      domain?: string;
-    };
-    const pubkeyPath = join(repoRoot, "landing", "public", "witness", "verifier-pubkey.txt");
-    if (!att.audit_root_hex || !existsSync(pubkeyPath)) {
-      return {
-        key: "verifier_sig",
-        label: "Verifier-Refuter signature",
-        state: "yellow",
-        detail: "Verifier signature present but the published pubkey or audit root is missing.",
-      };
-    }
-    const pubkey = readFileSync(pubkeyPath, "utf8").trim();
-    const sig = readFileSync(sigPath, "utf8").trim();
-    const domain = att.domain || "covenant.witness.v1";
-    const message = Buffer.from(`${domain}\n${att.audit_root_hex}`, "utf8");
-    const key = createPublicKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", x: pubkey } });
-    if (!edVerify(null, message, key, Buffer.from(sig, "base64url"))) {
-      return {
-        key: "verifier_sig",
-        label: "Verifier-Refuter signature",
-        state: "red",
-        detail: "Verifier signature did not verify against the published verifier pubkey.",
-      };
-    }
-    if (att.verdict === "refute") {
-      return {
-        key: "verifier_sig",
-        label: "Verifier-Refuter signature",
-        state: "red",
-        detail: `Verifier refuted this run (signed by ${pubkey.slice(0, 12)}…): a signed action causally followed untrusted on-chain input.`,
-      };
-    }
-    return {
-      key: "verifier_sig",
-      label: "Verifier-Refuter signature",
-      state: "green",
-      detail: `Audit root signed by an independent verifier (${pubkey.slice(0, 12)}…), no refutation. Check it yourself against landing/public/witness/verifier-pubkey.txt.`,
-    };
-  } catch {
-    return {
-      key: "verifier_sig",
-      label: "Verifier-Refuter signature",
-      state: "red",
-      detail: "Verifier signature or pubkey unreadable.",
     };
   }
 }

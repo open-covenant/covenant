@@ -100,4 +100,25 @@ describe('mapMeshGrants — Hatcher per-dispatch grants ({scope, constraints})',
     expect(policy.mcpWildcard).toBe(true);
     expect(policy.net).toEqual({ domains: ['docs.rs'] });
   });
+
+  it('ignores malformed terminal constraint types so a bad dispatch frame cannot corrupt the exec policy', () => {
+    // constraints arrive untyped (Record<string, unknown>). A non-string
+    // approval or non-number timeout_ms must be dropped by the typeof guards,
+    // not written into the sandbox consent policy as a truthy-but-meaningless
+    // value that would weaken the approval gate or the wall-clock ceiling.
+    const { grants, policy } = mapMeshGrants(
+      [{ scope: 'terminal.exec', constraints: { approval: 123, timeout_ms: 'soon' } }],
+      EXP,
+    );
+    expect(grants).toEqual([]);
+    expect(policy.exec).toEqual({});
+  });
+
+  it('fails safe on a verbless a2a scope even when a peer is supplied', () => {
+    // 'a2a' with no verb segment (split('.')[1] is undefined) must not emit an
+    // `a2a.undefined.<peer>` grant — the verb half of the `verb && peer` guard
+    // fails closed just like the peerless half above.
+    const { grants } = mapMeshGrants([{ scope: 'a2a', constraints: { peer: 'PKa' } }], EXP);
+    expect(grants).toEqual([]);
+  });
 });

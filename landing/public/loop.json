@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T01:12:21.449Z",
+  "updatedAt": "2026-06-28T01:32:25.190Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11826,
-    "tasks": 1388,
-    "integrated": 1391
+    "events": 11844,
+    "tasks": 1390,
+    "integrated": 1393
   },
   "throughput": {
-    "last24h": 91,
-    "last7d": 208,
-    "velocity": 29.7
+    "last24h": 93,
+    "last7d": 210,
+    "velocity": 30
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 5
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-28",
-      "total": 1391
+      "total": 1393
     }
   ],
   "states": {
-    "integrated": 1383,
+    "integrated": 1385,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T01:26:02.677Z",
+      "task": "coding-gateway-budget-deadline-boundary-coverage",
+      "note": "Committing test-only deadline-boundary coverage for spend-ledger warm recovery."
+    },
+    {
+      "at": "2026-06-28T01:21:07.395Z",
+      "task": "sdk-stake-rotate-tier-arm-coverage",
+      "note": "Committing test-only coverage for stake rotate-present path and lock-tier accept arms."
+    },
     {
       "at": "2026-06-28T01:04:31.498Z",
       "task": "sdk-ui-getjson-error-surface-coverage",
@@ -305,16 +315,6 @@
       "at": "2026-06-27T21:50:18.526Z",
       "task": "sdk-solana-stake-uncovered-builder-authorization-coverage",
       "note": "stake uncovered-builder authorization coverage landed"
-    },
-    {
-      "at": "2026-06-27T21:42:52.694Z",
-      "task": "sdk-solana-instruction-account-authorization-coverage",
-      "note": "instruction descriptor authorization-flag + data-binding coverage landed"
-    },
-    {
-      "at": "2026-06-27T21:17:53.340Z",
-      "task": "sdk-ui-json-http-failclosed-coverage",
-      "note": "Committed. getJson error-surfacing + invalid_json + empty_response + credentials contract, mutation-proven (Run A msg-swap + Run B throw-rem"
     }
   ]
 }

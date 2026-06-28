@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clean, commitEvent, parseTransitionLine } from "../agentBus.mjs";
+import { bus, clean, commitEvent, parseTransitionLine } from "../agentBus.mjs";
 
 const line = (o: Record<string, unknown>) => JSON.stringify(o);
 
@@ -134,5 +134,62 @@ describe("commitEvent", () => {
       subject: "",
       stat: "",
     });
+  });
+});
+
+// bus is the in-process singleton that fans events to SSE subscribers and keeps
+// a bounded replay ring. It must drop nullish events, cap the ring so a long
+// run cannot grow memory without bound, and isolate a throwing subscriber so one
+// bad fan-out target cannot stall delivery to the rest of the live feed.
+describe("bus", () => {
+  const offs: Array<() => void> = [];
+  const track = (cb: (e: unknown) => void) => {
+    const off = bus.subscribe(cb);
+    offs.push(off);
+    return off;
+  };
+
+  beforeEach(() => {
+    bus.ring.length = 0;
+  });
+  afterEach(() => {
+    while (offs.length) offs.pop()!();
+    bus.ring.length = 0;
+  });
+
+  it("delivers events to subscribers and stops after unsubscribe", () => {
+    const got: number[] = [];
+    const off = track((e) => got.push((e as { n: number }).n));
+    bus.publish({ n: 1 });
+    bus.publish({ n: 2 });
+    off();
+    bus.publish({ n: 3 });
+    expect(got).toEqual([1, 2]);
+  });
+
+  it("ignores a nullish event without touching the ring or subscribers", () => {
+    const got: unknown[] = [];
+    track((e) => got.push(e));
+    bus.publish(null);
+    bus.publish(undefined);
+    expect(got).toHaveLength(0);
+    expect(bus.ring).toHaveLength(0);
+  });
+
+  it("caps the replay ring at 200, dropping the oldest events", () => {
+    for (let i = 0; i < 250; i += 1) bus.publish({ n: i });
+    expect(bus.ring).toHaveLength(200);
+    expect((bus.ring[0] as { n: number }).n).toBe(50);
+    expect((bus.ring[199] as { n: number }).n).toBe(249);
+  });
+
+  it("isolates a throwing subscriber from the rest of the fan-out", () => {
+    const seen: number[] = [];
+    track(() => {
+      throw new Error("boom");
+    });
+    track((e) => seen.push((e as { n: number }).n));
+    bus.publish({ n: 42 });
+    expect(seen).toEqual([42]);
   });
 });

@@ -759,19 +759,68 @@ i32x4_shuffle::<0, 1, 4, 5>(p1, p3),
 i32x4_shuffle::<2, 3, 6, 7>(p1, p3),
 ]
 }
-#[target_feature(enable = "simd128")]
-fn lanes_hex(state: &[v128; 8]) -> [[u8; 64]; 4] {
-let lo = transpose32(state[0], state[1], state[2], state[3]);
-let hi = transpose32(state[4], state[5], state[6], state[7]);
-let mut out = [[0u8; 64]; 4];
-let mut l = 0;
-while l < 4 {
-hex_half::<0>(&mut out[l], lo[l]);
-hex_half::<32>(&mut out[l], hi[l]);
-l += 1;
-}
-out
-}
+    #[target_feature(enable = "simd128")]
+    fn lanes_hex(state: &[v128; 8]) -> [[u8; 64]; 4] {
+        let table = u8x16(
+            b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd',
+            b'e', b'f',
+        );
+        let nib = u8x16_splat(0x0f);
+        macro_rules! enc {
+            ($v:expr, $out:expr, $o:expr) => {{
+                let v: v128 = $v;
+                let out: &mut [u8; 64] = $out;
+                let o: usize = $o;
+                let hi = u8x16_shr(v, 4);
+                let lo = v128_and(v, nib);
+                let n0 =
+                    i8x16_shuffle::<0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23>(hi, lo);
+                let n1 = i8x16_shuffle::<
+                    8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31,
+                >(hi, lo);
+                let c0 = i8x16_swizzle(table, n0);
+                let c1 = i8x16_swizzle(table, n1);
+                out[o..o + 8].copy_from_slice(&u64x2_extract_lane::<0>(c0).to_le_bytes());
+                out[o + 8..o + 16].copy_from_slice(&u64x2_extract_lane::<1>(c0).to_le_bytes());
+                out[o + 16..o + 24].copy_from_slice(&u64x2_extract_lane::<0>(c1).to_le_bytes());
+                out[o + 24..o + 32].copy_from_slice(&u64x2_extract_lane::<1>(c1).to_le_bytes());
+            }};
+        }
+        let mut out = [[0u8; 64]; 4];
+        // 4x4 u32 transpose whose stage-2 byte shuffles also reverse each u32's bytes
+        // (big-endian), absorbing the per-lane reversal hex_half used to perform.
+        macro_rules! block {
+            ($a:expr, $b:expr, $c:expr, $d:expr, $o:expr) => {{
+                let s0: v128 = $a;
+                let s1: v128 = $b;
+                let s2: v128 = $c;
+                let s3: v128 = $d;
+                let p0 = i32x4_shuffle::<0, 4, 1, 5>(s0, s1);
+                let p1 = i32x4_shuffle::<2, 6, 3, 7>(s0, s1);
+                let p2 = i32x4_shuffle::<0, 4, 1, 5>(s2, s3);
+                let p3 = i32x4_shuffle::<2, 6, 3, 7>(s2, s3);
+                let r0 = i8x16_shuffle::<
+                    3, 2, 1, 0, 7, 6, 5, 4, 19, 18, 17, 16, 23, 22, 21, 20,
+                >(p0, p2);
+                let r1 = i8x16_shuffle::<
+                    11, 10, 9, 8, 15, 14, 13, 12, 27, 26, 25, 24, 31, 30, 29, 28,
+                >(p0, p2);
+                let r2 = i8x16_shuffle::<
+                    3, 2, 1, 0, 7, 6, 5, 4, 19, 18, 17, 16, 23, 22, 21, 20,
+                >(p1, p3);
+                let r3 = i8x16_shuffle::<
+                    11, 10, 9, 8, 15, 14, 13, 12, 27, 26, 25, 24, 31, 30, 29, 28,
+                >(p1, p3);
+                enc!(r0, &mut out[0], $o);
+                enc!(r1, &mut out[1], $o);
+                enc!(r2, &mut out[2], $o);
+                enc!(r3, &mut out[3], $o);
+            }};
+        }
+        block!(state[0], state[1], state[2], state[3], 0);
+        block!(state[4], state[5], state[6], state[7], 32);
+        out
+    }
 macro_rules! roundw {
 ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $wk:expr) => {
 let t1v = u32x4_add(

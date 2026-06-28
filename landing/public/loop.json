@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T21:56:14.419Z",
+  "updatedAt": "2026-06-28T22:16:18.212Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12034,
-    "tasks": 1411,
-    "integrated": 1414
+    "events": 12043,
+    "tasks": 1412,
+    "integrated": 1415
   },
   "throughput": {
     "last24h": 40,
-    "last7d": 200,
-    "velocity": 28.6
+    "last7d": 201,
+    "velocity": 28.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 28
+      "count": 29
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-28",
-      "total": 1414
+      "total": 1415
     }
   ],
   "states": {
-    "integrated": 1406,
+    "integrated": 1407,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T22:10:14.796Z",
+      "task": "landing-verify-git-runner-cutover-extraction-coverage",
+      "note": "Integrated as 2f495212 on loop/main-track. Extracted runGit -> lib/verify/git.ts and predatesCutover -> lib/verify/cutover.ts (5 files, +157"
+    },
     {
       "at": "2026-06-28T21:51:30.223Z",
       "task": "landing-verify-anchor3-settlement-extraction-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-28T01:58:51.954Z",
       "task": "hatcher-mesh-grants-collection-constraint-failclosed-coverag",
       "note": "committed; test-only +18 on capabilities.test.ts"
-    },
-    {
-      "at": "2026-06-28T01:54:55.015Z",
-      "task": "hatcher-ws-transport-binary-frame-coverage",
-      "note": "committed e7ac6d87; test-only +51 lines on wsTransport.test.ts"
     }
   ]
 }

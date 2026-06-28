@@ -127,4 +127,16 @@ describe('toConductEvent', () => {
     expect(c.detail.prompt_text).toBe('[redacted]');
     expect(JSON.stringify(c)).not.toContain('sk-secret');
   });
+
+  it('appends the matched agent to a dispatched-intent summary when one matched', () => {
+    const c = toConductEvent(base({ type: 'intent_dispatched', status: 'ok', matched_agent: 'fairscale-agent-7', intent_text: 'x' }));
+    expect(c.summary).toBe('intent ok -> fairscale-agent-7');
+  });
+
+  it('degrades an approval-request summary to zero options when choices is missing rather than throwing', () => {
+    // Array.isArray guards the .length deref: a malformed approval event without
+    // a choices array must summarize as "(0 options)", not abort the mapping.
+    const c = toConductEvent(base({ type: 'hermes_approval_requested', intent_id: 'i', run_id: 'r' }));
+    expect(c.summary).toBe('approval requested (0 options)');
+  });
 });

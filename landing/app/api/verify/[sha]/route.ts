@@ -9,8 +9,9 @@ import { createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { NextResponse } from "next/server";
-import { clean, findRepoRoot } from "@/lib/agentStream.mjs";
+import { findRepoRoot } from "@/lib/agentStream.mjs";
 import { recomputeAuditRoot } from "@/lib/audit/auditRoot";
+import { redactAuthor } from "@/lib/verify/author";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,15 +68,6 @@ const COVENANT_AUTHOR_EMAIL = "covenant@users.noreply.github.com";
 // First commit produced under the witness pipeline. Commits before it render as
 // historical (all anchors gray). Empty until the pipeline ships.
 const WITNESS_CUTOVER_SHA = process.env.WITNESS_CUTOVER_SHA || "";
-
-// Substitute a public label when an author name/email trips the banned-token
-// scan, so historical commits still render without leaking an operator identity.
-function redactAuthor(name: string, email: string): { display: string; email: string } {
-  if (clean(name) === null || clean(email) === null) {
-    return { display: "Covenant Legacy", email: "legacy@opencovenant.org" };
-  }
-  return { display: name, email };
-}
 
 function git(repoRoot: string, args: string[]): string | null {
   try {

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T21:36:10.605Z",
+  "updatedAt": "2026-06-28T21:56:14.419Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12011,
-    "tasks": 1409,
-    "integrated": 1411
+    "events": 12034,
+    "tasks": 1411,
+    "integrated": 1414
   },
   "throughput": {
-    "last24h": 39,
-    "last7d": 198,
-    "velocity": 28.3
+    "last24h": 40,
+    "last7d": 200,
+    "velocity": 28.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 25
+      "count": 28
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-28",
-      "total": 1411
+      "total": 1414
     }
   ],
   "states": {
-    "integrated": 1403,
+    "integrated": 1406,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,23 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "landing-verify-anchor1-memo-extraction-coverage",
-    "state": "in_progress",
-    "since": "2026-06-28T21:33:40.350Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T21:51:30.223Z",
+      "task": "landing-verify-anchor3-settlement-extraction-coverage",
+      "note": "Committed f67984e5 (3 files). All gates green; 8 arms mutation-proven. Verify-route anchor extraction vein complete."
+    },
+    {
+      "at": "2026-06-28T21:44:49.738Z",
+      "task": "landing-verify-anchor2-audit-chain-extraction-coverage",
+      "note": "Committed 77da28fc (3 files). All gates green; 8 arms mutation-proven."
+    },
+    {
+      "at": "2026-06-28T21:37:09.335Z",
+      "task": "landing-verify-anchor1-memo-extraction-coverage",
+      "note": "Committed eb7ab32f (3 files). All gates green; 8 arms mutation-proven (7 mutations killed)."
+    },
     {
       "at": "2026-06-28T21:31:59.862Z",
       "task": "landing-verify-anchor4-sig-extraction-coverage",
@@ -305,21 +315,6 @@
       "at": "2026-06-28T01:54:55.015Z",
       "task": "hatcher-ws-transport-binary-frame-coverage",
       "note": "committed e7ac6d87; test-only +51 lines on wsTransport.test.ts"
-    },
-    {
-      "at": "2026-06-28T01:39:08.430Z",
-      "task": "hatcher-mesh-grants-failclosed-constraint-coverage",
-      "note": "Committing test-only fail-closed constraint coverage for mapMeshGrants."
-    },
-    {
-      "at": "2026-06-28T01:26:02.677Z",
-      "task": "coding-gateway-budget-deadline-boundary-coverage",
-      "note": "Committing test-only deadline-boundary coverage for spend-ledger warm recovery."
-    },
-    {
-      "at": "2026-06-28T01:21:07.395Z",
-      "task": "sdk-stake-rotate-tier-arm-coverage",
-      "note": "Committing test-only coverage for stake rotate-present path and lock-tier accept arms."
     }
   ]
 }

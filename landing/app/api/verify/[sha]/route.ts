@@ -4,7 +4,6 @@
 // reads yellow until its artifact is published — a witness is never green
 // before it has actually been checked.
 
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { NextResponse } from "next/server";
@@ -12,6 +11,8 @@ import { findRepoRoot } from "@/lib/agentStream.mjs";
 import { redactAuthor } from "@/lib/verify/author";
 import { checkAnchor2AuditChain } from "@/lib/verify/auditChain";
 import { checkAnchor1CommitMemo } from "@/lib/verify/commitMemo";
+import { predatesCutover } from "@/lib/verify/cutover";
+import { runGit } from "@/lib/verify/git";
 import { checkAnchor3Solana } from "@/lib/verify/settlement";
 import { checkSkillRun } from "@/lib/verify/skillRun";
 import type { Witness } from "@/lib/verify/types";
@@ -26,24 +27,6 @@ const COVENANT_AUTHOR_EMAIL = "covenant@users.noreply.github.com";
 // historical (all anchors gray). Empty until the pipeline ships.
 const WITNESS_CUTOVER_SHA = process.env.WITNESS_CUTOVER_SHA || "";
 
-function git(repoRoot: string, args: string[]): string | null {
-  try {
-    return execFileSync("git", ["-C", repoRoot, ...args], {
-      encoding: "utf8",
-      maxBuffer: 4 * 1024 * 1024,
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-function predatesCutover(repoRoot: string, sha: string): boolean {
-  if (!WITNESS_CUTOVER_SHA) return false;
-  // merge-base --is-ancestor signals via exit code; git() returns null on
-  // non-zero (not an ancestor) and "" on success (sha is an ancestor = predates).
-  return git(repoRoot, ["merge-base", "--is-ancestor", sha, WITNESS_CUTOVER_SHA]) !== null;
-}
-
 export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }> }) {
   const { sha } = await ctx.params;
   if (!/^[0-9a-f]{7,40}$/i.test(sha)) {
@@ -52,7 +35,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
 
   const repoRoot = findRepoRoot(process.cwd()) || resolve(process.cwd(), "..");
 
-  const meta = git(repoRoot, [
+  const meta = runGit(repoRoot, [
     "show",
     "-s",
     "--format=%H%x09%h%x09%an%x09%ae%x09%aI%x09%s%x09%b",
@@ -78,7 +61,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ sha: string }>
     const author = redactAuthor(rawAuthorDisplay, rawAuthorEmail);
     predatesWitnessLoop =
       rawAuthorEmail !== COVENANT_AUTHOR_EMAIL && WITNESS_CUTOVER_SHA
-        ? predatesCutover(repoRoot, fullSha)
+        ? predatesCutover(repoRoot, fullSha, WITNESS_CUTOVER_SHA)
         : rawAuthorEmail !== COVENANT_AUTHOR_EMAIL;
     commit = {
       sha: fullSha,

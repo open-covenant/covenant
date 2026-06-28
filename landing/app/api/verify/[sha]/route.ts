@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import { findRepoRoot } from "@/lib/agentStream.mjs";
 import { recomputeAuditRoot } from "@/lib/audit/auditRoot";
 import { redactAuthor } from "@/lib/verify/author";
+import { checkAnchor1CommitMemo } from "@/lib/verify/commitMemo";
 import { checkSkillRun } from "@/lib/verify/skillRun";
 import type { Witness } from "@/lib/verify/types";
 import { checkAnchor4VerifierSig } from "@/lib/verify/verifierSig";
@@ -40,59 +41,6 @@ function predatesCutover(repoRoot: string, sha: string): boolean {
   // merge-base --is-ancestor signals via exit code; git() returns null on
   // non-zero (not an ancestor) and "" on success (sha is an ancestor = predates).
   return git(repoRoot, ["merge-base", "--is-ancestor", sha, WITNESS_CUTOVER_SHA]) !== null;
-}
-
-// Anchor 1 — per-commit Solana Memo tx, signed by the operator authority, with
-// payload covenant-commit-v1:<sha>:<audit_root_hex>:<unix_ms>. Reads the
-// recorded tx from landing/public/witness/memo/<sha>.json and confirms it.
-function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
-  const memoManifest = join(repoRoot, "landing", "public", "witness", "memo", `${sha}.json`);
-  if (!existsSync(memoManifest)) {
-    return {
-      key: "rekor",
-      label: "Solana commit memo",
-      state: "yellow",
-      detail:
-        "No memo anchor published for this commit yet. When the anchor daemon posts a memo tx (payload covenant-commit-v1:<sha>:<audit_root_hex>:<ts>, signed by the operator authority), this light verifies it.",
-      badge: { text: "Anchor not yet live", tone: "yellow" },
-    };
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(memoManifest, "utf8")) as {
-      tx?: string;
-      verified?: boolean;
-      slot?: number;
-      authority?: string;
-      cluster?: "devnet" | "mainnet";
-    };
-    const cluster = parsed.cluster ?? "devnet";
-    const solscan = parsed.tx
-      ? `https://solscan.io/tx/${parsed.tx}${cluster === "devnet" ? "?cluster=devnet" : ""}`
-      : undefined;
-    if (!parsed.verified || !parsed.tx) {
-      return {
-        key: "rekor",
-        label: "Solana commit memo",
-        state: "red",
-        detail: `Memo tx ${parsed.tx || "missing"} did not verify against the operator authority pubkey.`,
-        drillHref: solscan,
-      };
-    }
-    return {
-      key: "rekor",
-      label: "Solana commit memo",
-      state: "green",
-      detail: `Memo tx ${parsed.tx.slice(0, 16)}… signed by ${parsed.authority || "operator authority"} at slot ${parsed.slot ?? "?"} (${cluster}).`,
-      drillHref: solscan,
-    };
-  } catch {
-    return {
-      key: "rekor",
-      label: "Solana commit memo",
-      state: "red",
-      detail: "Memo manifest unreadable — investigate landing/public/witness/memo/<sha>.json.",
-    };
-  }
 }
 
 // Anchor 2 — local hash chain. attestations/<sha>.json holds per-LLM-call Step

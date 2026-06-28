@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-28T00:32:14.134Z",
+  "updatedAt": "2026-06-28T00:52:17.792Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11810,
-    "tasks": 1386,
+    "events": 11814,
+    "tasks": 1387,
     "integrated": 1389
   },
   "throughput": {
-    "last24h": 92,
+    "last24h": 91,
     "last7d": 206,
     "velocity": 29.4
   },
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1381,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "sap-bridge-rpc-stats-resolution-coverage",
+    "state": "in_progress",
+    "since": "2026-06-28T00:51:21.695Z"
+  },
   "recent": [
     {
       "at": "2026-06-28T00:28:38.577Z",

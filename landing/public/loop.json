@@ -1,21 +1,17 @@
 {
-  "updatedAt": "2026-06-27T23:52:06.791Z",
+  "updatedAt": "2026-06-28T00:12:10.489Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11766,
-    "tasks": 1381,
-    "integrated": 1384
+    "events": 11792,
+    "tasks": 1384,
+    "integrated": 1387
   },
   "throughput": {
-    "last24h": 87,
-    "last7d": 202,
-    "velocity": 28.9
+    "last24h": 90,
+    "last7d": 204,
+    "velocity": 29.1
   },
   "daily": [
-    {
-      "date": "06-07",
-      "count": 50
-    },
     {
       "date": "06-08",
       "count": 15
@@ -94,14 +90,14 @@
     },
     {
       "date": "06-27",
-      "count": 87
+      "count": 89
+    },
+    {
+      "date": "06-28",
+      "count": 1
     }
   ],
   "cumulative": [
-    {
-      "date": "06-07",
-      "total": 944
-    },
     {
       "date": "06-08",
       "total": 959
@@ -180,11 +176,15 @@
     },
     {
       "date": "06-27",
-      "total": 1384
+      "total": 1386
+    },
+    {
+      "date": "06-28",
+      "total": 1387
     }
   ],
   "states": {
-    "integrated": 1376,
+    "integrated": 1379,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,21 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T00:03:09.101Z",
+      "task": "landing-stake-env-cluster-routing-coverage",
+      "note": "Committed; pushing."
+    },
+    {
+      "at": "2026-06-27T23:59:17.074Z",
+      "task": "landing-stake-txbuilder-instruction-coverage",
+      "note": "Committed; pushing."
+    },
+    {
+      "at": "2026-06-27T23:54:31.338Z",
+      "task": "landing-stake-pdas-derivation-coverage",
+      "note": "Committed; pushing."
+    },
     {
       "at": "2026-06-27T23:51:42.833Z",
       "task": "landing-stake-readers-decode-coverage",
@@ -300,21 +315,6 @@
       "at": "2026-06-27T20:41:58.458Z",
       "task": "sdk-account-validator-failclosed-coverage",
       "note": "Committed on loop/main-track."
-    },
-    {
-      "at": "2026-06-27T20:37:56.389Z",
-      "task": "compute-broker-provider-failure-error-surface-coverage",
-      "note": "Committed on loop/main-track."
-    },
-    {
-      "at": "2026-06-27T20:33:24.019Z",
-      "task": "proof-gen-server-route-failclosed-coverage",
-      "note": "Committed on loop/main-track."
-    },
-    {
-      "at": "2026-06-27T20:25:03.505Z",
-      "task": "sdk-session-jwt-failclosed-coverage",
-      "note": "Committed 7d9a2053 on loop/main-track."
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T04:12:55.264Z",
+  "updatedAt": "2026-06-28T04:32:59.067Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11989,
-    "tasks": 1406,
-    "integrated": 1409
+    "events": 11998,
+    "tasks": 1407,
+    "integrated": 1410
   },
   "throughput": {
-    "last24h": 104,
-    "last7d": 221,
-    "velocity": 31.6
+    "last24h": 105,
+    "last7d": 222,
+    "velocity": 31.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 23
+      "count": 24
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-28",
-      "total": 1409
+      "total": 1410
     }
   ],
   "states": {
-    "integrated": 1401,
+    "integrated": 1402,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T04:16:12.732Z",
+      "task": "landing-verify-skill-run-extraction-coverage",
+      "note": "Integrated in 44f42366 on loop/main-track: checkSkillRun + types extracted to landing/lib/verify/skillRun.ts (byte-identical), route rewired"
+    },
     {
       "at": "2026-06-28T04:08:03.333Z",
       "task": "landing-verify-redact-author-extraction-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-28T01:04:31.498Z",
       "task": "sdk-ui-getjson-error-surface-coverage",
       "note": "Integrated as 86dad9c8 on loop/main-track: test-only slice pinning getJson empty-error-field and non-ok non-JSON body fallbacks in packages/"
-    },
-    {
-      "at": "2026-06-28T00:55:06.518Z",
-      "task": "sap-bridge-rpc-stats-resolution-coverage",
-      "note": "Integrated as 3830092c on loop/main-track: test-only slice pinning statsPath fallback resolution + readStats partial-merge in packages/sap-b"
     }
   ]
 }

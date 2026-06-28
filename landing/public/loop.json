@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T23:36:33.337Z",
+  "updatedAt": "2026-06-28T23:56:37.126Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12106,
-    "tasks": 1419,
-    "integrated": 1422
+    "events": 12115,
+    "tasks": 1420,
+    "integrated": 1423
   },
   "throughput": {
-    "last24h": 41,
-    "last7d": 205,
-    "velocity": 29.3
+    "last24h": 38,
+    "last7d": 204,
+    "velocity": 29.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 36
+      "count": 37
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-28",
-      "total": 1422
+      "total": 1423
     }
   ],
   "states": {
-    "integrated": 1414,
+    "integrated": 1415,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T23:54:16.156Z",
+      "task": "landing-middleware-host-routing-coverage",
+      "note": "committed 461f0185 test-only middleware host-routing coverage; pushed to origin/loop/main-track"
+    },
     {
       "at": "2026-06-28T23:36:25.046Z",
       "task": "landing-agent-stream-live-sse-route-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-28T03:15:37.337Z",
       "task": "landing-agent-bus-transition-parser-coverage",
       "note": "Integrated on loop/main-track. Mutation-proven test-only coverage of the live-feed transition parser."
-    },
-    {
-      "at": "2026-06-28T03:11:37.618Z",
-      "task": "landing-agent-stream-clean-identity-scrubber-coverage",
-      "note": "Integrated as c8e7ce0f on loop/main-track. Mutation-proven coverage of the agentStream clean() identity scrubber; test-only."
     }
   ]
 }

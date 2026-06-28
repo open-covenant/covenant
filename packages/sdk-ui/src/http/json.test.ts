@@ -53,4 +53,16 @@ describe('getJson', () => {
     stubFetch(resp(true, ''));
     await expect(getJson('/x')).rejects.toThrow('empty_response');
   });
+
+  it('treats an empty-string error or message field as no message and falls back to request failed', async () => {
+    stubFetch(resp(false, JSON.stringify({ error: '' })));
+    await expect(getJson('/x')).rejects.toThrow('request failed');
+    stubFetch(resp(false, JSON.stringify({ message: '' })));
+    await expect(getJson('/x')).rejects.toThrow('request failed');
+  });
+
+  it('falls back to request failed on a non-ok non-JSON body instead of leaking a parse error', async () => {
+    stubFetch(resp(false, '<html>503 Service Unavailable</html>'));
+    await expect(getJson('/x')).rejects.toThrow('request failed');
+  });
 });

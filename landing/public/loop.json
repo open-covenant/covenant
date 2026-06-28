@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T23:16:29.684Z",
+  "updatedAt": "2026-06-28T23:36:33.337Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12086,
-    "tasks": 1417,
-    "integrated": 1419
+    "events": 12106,
+    "tasks": 1419,
+    "integrated": 1422
   },
   "throughput": {
-    "last24h": 39,
-    "last7d": 202,
-    "velocity": 28.9
+    "last24h": 41,
+    "last7d": 205,
+    "velocity": 29.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 33
+      "count": 36
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-28",
-      "total": 1419
+      "total": 1422
     }
   ],
   "states": {
-    "integrated": 1411,
+    "integrated": 1414,
     "proposed": 1,
-    "blocked": 4,
-    "validation": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,23 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "landing-stats-route-fallback-chain-coverage",
-    "state": "validation",
-    "since": "2026-06-28T23:14:58.303Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T23:36:25.046Z",
+      "task": "landing-agent-stream-live-sse-route-coverage",
+      "note": "Committed (test-only). SSE live-feed route now has mutation-proven coverage of the connect framing, ring replay, post-connect fan-out, SSE h"
+    },
+    {
+      "at": "2026-06-28T23:30:03.846Z",
+      "task": "landing-agent-stream-route-snapshot-fallback-coverage",
+      "note": "Committed (test-only). agent-stream terminal route now has mutation-proven coverage of the >=12-commit richness boundary, the snapshot fallb"
+    },
+    {
+      "at": "2026-06-28T23:16:55.870Z",
+      "task": "landing-stats-route-fallback-chain-coverage",
+      "note": "Committed (test-only). Stats HUD route now has mutation-proven coverage of the GitHub-primary path, git+README fallback, snapshot-floor Math"
+    },
     {
       "at": "2026-06-28T23:09:27.227Z",
       "task": "landing-agents-passport-route-failclosed-coverage",
@@ -305,21 +315,6 @@
       "at": "2026-06-28T03:11:37.618Z",
       "task": "landing-agent-stream-clean-identity-scrubber-coverage",
       "note": "Integrated as c8e7ce0f on loop/main-track. Mutation-proven coverage of the agentStream clean() identity scrubber; test-only."
-    },
-    {
-      "at": "2026-06-28T03:04:17.777Z",
-      "task": "landing-audit-root-recompute-extraction-coverage",
-      "note": "Integrated as fdf6447e on loop/main-track. Behavior-preserving extraction of recomputeAuditRoot to landing/lib/audit/auditRoot.ts plus mutat"
-    },
-    {
-      "at": "2026-06-28T02:40:20.006Z",
-      "task": "fairscale-daemon-audit-verify-response-failclosed-coverage",
-      "note": "committed + pushed to origin/loop/main-track; test-only +18 on daemon-client.test.ts"
-    },
-    {
-      "at": "2026-06-28T02:30:31.184Z",
-      "task": "coding-gateway-ledger-rehydration-staleness-guard-coverage",
-      "note": "committed 2f33bab1; pushed to origin/loop/main-track; test-only +81 on budget.test.ts"
     }
   ]
 }

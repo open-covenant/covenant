@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T02:52:40.312Z",
+  "updatedAt": "2026-06-28T03:12:44.086Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11916,
-    "tasks": 1398,
-    "integrated": 1401
+    "events": 11934,
+    "tasks": 1400,
+    "integrated": 1403
   },
   "throughput": {
-    "last24h": 98,
-    "last7d": 215,
-    "velocity": 30.7
+    "last24h": 99,
+    "last7d": 216,
+    "velocity": 30.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 15
+      "count": 17
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-28",
-      "total": 1401
+      "total": 1403
     }
   ],
   "states": {
-    "integrated": 1393,
+    "integrated": 1395,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T03:11:37.618Z",
+      "task": "landing-agent-stream-clean-identity-scrubber-coverage",
+      "note": "Integrated as c8e7ce0f on loop/main-track. Mutation-proven coverage of the agentStream clean() identity scrubber; test-only."
+    },
+    {
+      "at": "2026-06-28T03:04:17.777Z",
+      "task": "landing-audit-root-recompute-extraction-coverage",
+      "note": "Integrated as fdf6447e on loop/main-track. Behavior-preserving extraction of recomputeAuditRoot to landing/lib/audit/auditRoot.ts plus mutat"
+    },
     {
       "at": "2026-06-28T02:40:20.006Z",
       "task": "fairscale-daemon-audit-verify-response-failclosed-coverage",
@@ -304,16 +314,6 @@
     {
       "at": "2026-06-27T23:51:42.833Z",
       "task": "landing-stake-readers-decode-coverage",
-      "note": "Committed; pushing."
-    },
-    {
-      "at": "2026-06-27T23:46:28.225Z",
-      "task": "landing-stake-format-coverage",
-      "note": "Committed; pushing."
-    },
-    {
-      "at": "2026-06-27T23:41:01.613Z",
-      "task": "landing-stake-anchor-serialization-coverage",
       "note": "Committed; pushing."
     }
   ]

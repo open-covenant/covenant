@@ -5,11 +5,12 @@
 // before it has actually been checked.
 
 import { execFileSync } from "node:child_process";
-import { createHash, createPublicKey, verify as edVerify } from "node:crypto";
+import { createPublicKey, verify as edVerify } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { NextResponse } from "next/server";
 import { clean, findRepoRoot } from "@/lib/agentStream.mjs";
+import { recomputeAuditRoot } from "@/lib/audit/auditRoot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -149,20 +150,9 @@ function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
 
 // Anchor 2 — local hash chain. attestations/<sha>.json holds per-LLM-call Step
 // records Merkle-rooted into audit_root_hex; green when present with a root.
-// Recompute the audit chain root from the raw event lines, exactly as the
-// daemon and the standalone verifier do: event_hash = sha256(line), then
-// chain = sha256(prev + "\n" + event_hash). The published steps ARE those
-// canonical lines, so this is a real independent check, not a trust.
-function recomputeAuditRoot(steps: string[]): string {
-  const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
-  let prev = "0".repeat(64);
-  for (const line of steps) {
-    const eventHash = sha256(Buffer.from(line, "utf8"));
-    prev = sha256(Buffer.from(`${prev}\n${eventHash}`, "utf8"));
-  }
-  return prev;
-}
-
+// recomputeAuditRoot (lib/audit/auditRoot.ts) replays the raw event lines the
+// same way the daemon and standalone verifier do, so this is a real independent
+// check of the published root, not a trust.
 function checkAnchor2AuditChain(repoRoot: string, sha: string): Witness {
   const attestationPath = join(repoRoot, "attestations", `${sha}.json`);
   if (!existsSync(attestationPath)) {

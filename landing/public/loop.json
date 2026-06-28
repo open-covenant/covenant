@@ -1,10 +1,10 @@
 {
-  "updatedAt": "2026-06-28T22:56:25.942Z",
+  "updatedAt": "2026-06-28T23:16:29.684Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12070,
-    "tasks": 1415,
-    "integrated": 1418
+    "events": 12086,
+    "tasks": 1417,
+    "integrated": 1419
   },
   "throughput": {
     "last24h": 39,
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 32
+      "count": 33
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-28",
-      "total": 1418
+      "total": 1419
     }
   ],
   "states": {
-    "integrated": 1410,
+    "integrated": 1411,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "validation": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "landing-stats-route-fallback-chain-coverage",
+    "state": "validation",
+    "since": "2026-06-28T23:14:58.303Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-28T23:09:27.227Z",
+      "task": "landing-agents-passport-route-failclosed-coverage",
+      "note": "Committed e2d04f52 (test-only, 202 lines). Agent-passport verifier GET now has mutation-proven fail-closed coverage: 400/502/404 gates, cove"
+    },
     {
       "at": "2026-06-28T22:51:44.285Z",
       "task": "landing-contact-route-failclosed-validation-coverage",
@@ -310,11 +320,6 @@
       "at": "2026-06-28T02:30:31.184Z",
       "task": "coding-gateway-ledger-rehydration-staleness-guard-coverage",
       "note": "committed 2f33bab1; pushed to origin/loop/main-track; test-only +81 on budget.test.ts"
-    },
-    {
-      "at": "2026-06-28T02:22:49.182Z",
-      "task": "hatcher-connector-finalize-status-mapping-coverage",
-      "note": "committed bc4f6a02; pushed to origin/loop/main-track; test-only +52 on connector.test.ts"
     }
   ]
 }

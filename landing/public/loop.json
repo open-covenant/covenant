@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T01:52:29.033Z",
+  "updatedAt": "2026-06-28T02:12:32.869Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11857,
-    "tasks": 1392,
-    "integrated": 1394
+    "events": 11889,
+    "tasks": 1395,
+    "integrated": 1398
   },
   "throughput": {
-    "last24h": 93,
-    "last7d": 209,
-    "velocity": 29.9
+    "last24h": 97,
+    "last7d": 213,
+    "velocity": 30.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 8
+      "count": 12
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-28",
-      "total": 1394
+      "total": 1398
     }
   ],
   "states": {
-    "integrated": 1386,
+    "integrated": 1390,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,28 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "hatcher-ws-transport-binary-frame-coverage",
-    "state": "in_progress",
-    "since": "2026-06-28T01:49:57.225Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T02:07:30.613Z",
+      "task": "fairscale-summary-conditional-arm-coverage",
+      "note": "committed; test-only +12 on mapping.test.ts"
+    },
+    {
+      "at": "2026-06-28T02:02:49.414Z",
+      "task": "fairscale-redact-nonstring-value-arm-coverage",
+      "note": "committed; test-only +17 on mapping.test.ts"
+    },
+    {
+      "at": "2026-06-28T01:58:51.954Z",
+      "task": "hatcher-mesh-grants-collection-constraint-failclosed-coverag",
+      "note": "committed; test-only +18 on capabilities.test.ts"
+    },
+    {
+      "at": "2026-06-28T01:54:55.015Z",
+      "task": "hatcher-ws-transport-binary-frame-coverage",
+      "note": "committed e7ac6d87; test-only +51 lines on wsTransport.test.ts"
+    },
     {
       "at": "2026-06-28T01:39:08.430Z",
       "task": "hatcher-mesh-grants-failclosed-constraint-coverage",
@@ -299,26 +314,6 @@
     {
       "at": "2026-06-27T22:50:57.049Z",
       "task": "sdk-solana-explorer-href-routing-coverage",
-      "note": "committing test file to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T22:41:31.605Z",
-      "task": "sdk-session-jwt-verify-failclosed-coverage",
-      "note": "committing test file to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T22:35:55.783Z",
-      "task": "brand-config-failclosed-coverage",
-      "note": "committing test file to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T22:20:18.831Z",
-      "task": "sap-bridge-keypair-load-failclosed-coverage",
-      "note": "committing test file to loop/main-track"
-    },
-    {
-      "at": "2026-06-27T22:07:57.494Z",
-      "task": "config-network-resolution-routing-coverage",
       "note": "committing test file to loop/main-track"
     }
   ]

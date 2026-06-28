@@ -110,4 +110,21 @@ describe('toConductEvent', () => {
     expect(denied.outcome).toBe('failure');
     expect(denied.weight).toBe(-1);
   });
+
+  it('preserves a null sensitive value rather than mislabeling absence as redacted', () => {
+    // A null/absent sensitive field carries no content, so redact keeps it
+    // verbatim — relabeling it [redacted] would falsely imply sensitive data
+    // was stripped where the field was simply empty.
+    const c = toConductEvent(base({ type: 'intent_dispatched', status: 'ok', intent_text: null }));
+    expect(c.detail.intent_text).toBe(null);
+  });
+
+  it('fully redacts a sensitive value that is neither string nor array instead of leaking it', () => {
+    // The redactor's final catch-all: a sensitive key whose value is a
+    // structured object (e.g. a forward-compat _text field the daemon emits as
+    // an object) must collapse to a flat [redacted], never be published verbatim.
+    const c = toConductEvent(base({ type: 'intent_dispatched', status: 'ok', prompt_text: { token: 'sk-secret' } }));
+    expect(c.detail.prompt_text).toBe('[redacted]');
+    expect(JSON.stringify(c)).not.toContain('sk-secret');
+  });
 });

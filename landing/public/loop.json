@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T00:52:17.792Z",
+  "updatedAt": "2026-06-28T01:12:21.449Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11814,
-    "tasks": 1387,
-    "integrated": 1389
+    "events": 11826,
+    "tasks": 1388,
+    "integrated": 1391
   },
   "throughput": {
     "last24h": 91,
-    "last7d": 206,
-    "velocity": 29.4
+    "last7d": 208,
+    "velocity": 29.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 3
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-28",
-      "total": 1389
+      "total": 1391
     }
   ],
   "states": {
-    "integrated": 1381,
+    "integrated": 1383,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sap-bridge-rpc-stats-resolution-coverage",
-    "state": "in_progress",
-    "since": "2026-06-28T00:51:21.695Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T01:04:31.498Z",
+      "task": "sdk-ui-getjson-error-surface-coverage",
+      "note": "Integrated as 86dad9c8 on loop/main-track: test-only slice pinning getJson empty-error-field and non-ok non-JSON body fallbacks in packages/"
+    },
+    {
+      "at": "2026-06-28T00:55:06.518Z",
+      "task": "sap-bridge-rpc-stats-resolution-coverage",
+      "note": "Integrated as 3830092c on loop/main-track: test-only slice pinning statsPath fallback resolution + readStats partial-merge in packages/sap-b"
+    },
     {
       "at": "2026-06-28T00:28:38.577Z",
       "task": "landing-docs-metadata-seo-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-27T21:17:53.340Z",
       "task": "sdk-ui-json-http-failclosed-coverage",
       "note": "Committed. getJson error-surfacing + invalid_json + empty_response + credentials contract, mutation-proven (Run A msg-swap + Run B throw-rem"
-    },
-    {
-      "at": "2026-06-27T21:09:42.931Z",
-      "task": "sdk-network-config-validation-coverage",
-      "note": "Committed. resolveSolanaNetwork program id + COVNT mint validation wiring, mutation-proven (label swap + guard removal), 3/3 + sdk suite 32/"
-    },
-    {
-      "at": "2026-06-27T21:03:41.903Z",
-      "task": "proof-gen-prove-rate-limit-route-coverage",
-      "note": "Committed 20775292. test(proof-gen): /prove 429/503-backend/400 route arms, mutation-proven (code swap 511/512/513), 3/3 + suite 49/49, scri"
     }
   ]
 }

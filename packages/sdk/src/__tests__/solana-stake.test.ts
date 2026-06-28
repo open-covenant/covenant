@@ -3,6 +3,8 @@ import {
   COVENANT_STAKE_PROGRAM_ID,
   STAKE_TIER_7D_BPS,
   STAKE_TIER_30D_BPS,
+  STAKE_TIER_90D_BPS,
+  STAKE_TIER_180D_BPS,
   prepareStakeAccrueInstruction,
   prepareStakeClaimInstruction,
   prepareStakeClosePositionInstruction,
@@ -288,5 +290,75 @@ describe('Solana stake descriptors — previously-uncovered builders', () => {
       { name: 'token_program', address: TOKEN_PROGRAM, signer: false, writable: false },
     ]);
     expect(ix.data).toEqual({ amount: '100' });
+  });
+});
+
+// The rotate_fee_router builder only had its all-absent path pinned (the data
+// nulls above); the present-value path, its account order, and the three
+// non-30d lock-tier accept arms of assertLockTier were unexercised.
+describe('Solana stake descriptors — remaining branch coverage', () => {
+  it('rotate_fee_router: present optional fields pass through verbatim and pin account order', () => {
+    const ix = prepareStakeRotateFeeRouterInstruction({
+      configAccount: A('2'),
+      feeRouterAccount: A('3'),
+      authority: A('4'),
+      newAuthority: A('5'),
+      newMaxDepositLamports: '9000',
+      newRateLimitSecs: '600',
+    }).instructions[0]!;
+
+    expect(ix.programId).toBe(COVENANT_STAKE_PROGRAM_ID);
+    expect(ix.instruction).toBe('rotate_fee_router');
+    expect(ix.accounts).toEqual([
+      { name: 'config', address: A('2'), signer: false, writable: false },
+      { name: 'fee_router', address: A('3'), signer: false, writable: true },
+      { name: 'authority', address: A('4'), signer: true, writable: false },
+    ]);
+    expect(ix.data).toEqual({
+      new_authority: A('5'),
+      new_max_deposit_lamports: '9000',
+      new_rate_limit_secs: '600',
+    });
+  });
+
+  it('rotate_fee_router: each optional field coalesces independently (mixed present/absent)', () => {
+    const ix = prepareStakeRotateFeeRouterInstruction({
+      configAccount: A('2'),
+      feeRouterAccount: A('3'),
+      authority: A('4'),
+      newAuthority: A('5'),
+      newRateLimitSecs: '600',
+    }).instructions[0]!;
+
+    // Distinct present values in their own slots prove no field reads another's
+    // input, and the absent middle field still resolves to null.
+    expect(ix.data).toEqual({
+      new_authority: A('5'),
+      new_max_deposit_lamports: null,
+      new_rate_limit_secs: '600',
+    });
+  });
+
+  it('create_position: assertLockTier admits every non-30d tier (7d/90d/180d accept arms)', () => {
+    const tiers = [
+      [STAKE_TIER_7D_BPS, 5_000],
+      [STAKE_TIER_90D_BPS, 15_000],
+      [STAKE_TIER_180D_BPS, 20_000],
+    ] as const;
+    for (const [tier, bps] of tiers) {
+      const ix = prepareStakeCreatePositionInstruction({
+        configAccount: A('2'),
+        positionAccount: A('3'),
+        covntMint: A('4'),
+        lockedVaultAuthority: A('5'),
+        lockedCvntVault: A('6'),
+        ownerCvntAta: A('7'),
+        owner: A('8'),
+        nonce: '1',
+        amount: '1000000000',
+        lockTierBps: tier,
+      }).instructions[0]!;
+      expect(ix.data.lock_tier_bps).toBe(bps);
+    }
   });
 });

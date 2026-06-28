@@ -55,6 +55,24 @@ describe('HttpDaemonClient response classification', () => {
     expect(urls[1]).not.toContain('since_ms');
   });
 
+  it('recentAudit fails closed when an audit_events response carries a non-array events field', async () => {
+    // kind is correct, so the `kind !== 'audit_events'` operand is false and the OR
+    // short-circuits onto the Array.isArray guard — the only path that exercises it.
+    // A malformed events field must throw, not be handed back as the audit events
+    // (the caller iterates/maps over them).
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ kind: 'audit_events', events: 'not-an-array' })));
+
+    await expect(client().recentAudit({ limit: 10 })).rejects.toThrow(
+      'unexpected daemon audit response: audit_events',
+    );
+  });
+
+  it('verify throws on a daemon error response ahead of the missing-report check', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ kind: 'error', message: 'audit chain broken' })));
+
+    await expect(client().verify()).rejects.toThrow('daemon verify error: audit chain broken');
+  });
+
   it('verify throws when the daemon returns no report', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ kind: 'verify_report' })));
 

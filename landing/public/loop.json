@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-28T03:12:44.086Z",
+  "updatedAt": "2026-06-28T03:32:47.831Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 11934,
-    "tasks": 1400,
-    "integrated": 1403
+    "events": 11952,
+    "tasks": 1402,
+    "integrated": 1405
   },
   "throughput": {
-    "last24h": 99,
-    "last7d": 216,
-    "velocity": 30.9
+    "last24h": 101,
+    "last7d": 218,
+    "velocity": 31.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-28",
-      "count": 17
+      "count": 19
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-28",
-      "total": 1403
+      "total": 1405
     }
   ],
   "states": {
-    "integrated": 1395,
+    "integrated": 1397,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-28T03:20:30.549Z",
+      "task": "landing-agent-stream-find-repo-root-coverage",
+      "note": "Integrated on loop/main-track. Mutation-proven repo-root resolver coverage; test-only."
+    },
+    {
+      "at": "2026-06-28T03:15:37.337Z",
+      "task": "landing-agent-bus-transition-parser-coverage",
+      "note": "Integrated on loop/main-track. Mutation-proven test-only coverage of the live-feed transition parser."
+    },
     {
       "at": "2026-06-28T03:11:37.618Z",
       "task": "landing-agent-stream-clean-identity-scrubber-coverage",
@@ -304,16 +314,6 @@
     {
       "at": "2026-06-27T23:59:17.074Z",
       "task": "landing-stake-txbuilder-instruction-coverage",
-      "note": "Committed; pushing."
-    },
-    {
-      "at": "2026-06-27T23:54:31.338Z",
-      "task": "landing-stake-pdas-derivation-coverage",
-      "note": "Committed; pushing."
-    },
-    {
-      "at": "2026-06-27T23:51:42.833Z",
-      "task": "landing-stake-readers-decode-coverage",
       "note": "Committed; pushing."
     }
   ]

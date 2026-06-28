@@ -12,6 +12,7 @@ class FakeDaemon implements DaemonClient {
   unreachable = false;
   status = 'running';
   failResult = false;
+  resultStatus: unknown = 'ok'; // intentResult's reported status; set non-string to model a result without one
 
   async health(): Promise<boolean> {
     return true;
@@ -22,7 +23,7 @@ class FakeDaemon implements DaemonClient {
   }
   async intentResult() {
     if (this.failResult) throw new Error('daemon /intents/int-1/result -> 404');
-    return { kind: 'intent_outcome', intent_id: 'int-1', status: 'ok' };
+    return { kind: 'intent_outcome', intent_id: 'int-1', status: this.resultStatus };
   }
   async streamEvents(_id: string, onEvent: (e: AgentEvent) => void): Promise<void> {
     for (const e of this.events) onEvent(e);
@@ -303,5 +304,55 @@ describe('Connector dispatch flow', () => {
     const results = transport.sent.filter((f) => f.type === 'result');
     expect(results).toHaveLength(1); // exactly one terminal — no double-result
     expect((results[0] as { status: string }).status).toBe('cancelled');
+  });
+
+  it('maps a daemon-reported failure status to a failed mesh result instead of silently succeeding', async () => {
+    const daemon = new FakeDaemon();
+    daemon.status = 'ok'; // terminal → finalize fast path
+    daemon.resultStatus = 'error'; // the daemon reports the run failed
+    const { transport, connector } = build(daemon);
+    await connector.start();
+
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'fx', agent_id: 'PK', intent: { text: 'do work' } });
+    await flush();
+    await flush();
+
+    const result = transport.sent.at(-1) as { type: string; status: string };
+    expect(result.type).toBe('result');
+    // meshStatus default arm: any non-ok/cancelled daemon status surfaces as failed, not success.
+    // Also proves daemonStatus carries the real value through rather than defaulting to 'ok'.
+    expect(result.status).toBe('failed');
+  });
+
+  it('maps a daemon-reported cancelled status through finalize to a cancelled mesh result', async () => {
+    const daemon = new FakeDaemon();
+    daemon.status = 'ok';
+    daemon.resultStatus = 'cancelled';
+    const { transport, connector } = build(daemon);
+    await connector.start();
+
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'dc', agent_id: 'PK', intent: { text: 'do work' } });
+    await flush();
+    await flush();
+
+    const result = transport.sent.at(-1) as { status: string };
+    // meshStatus 'cancelled' arm — distinct from the cancel-handler's literal 'cancelled'.
+    expect(result.status).toBe('cancelled');
+  });
+
+  it('defaults to a success status when the daemon result carries no string status field', async () => {
+    const daemon = new FakeDaemon();
+    daemon.status = 'ok';
+    daemon.resultStatus = undefined; // result without a usable status
+    const { transport, connector } = build(daemon);
+    await connector.start();
+
+    transport.inject({ v: 1, type: 'dispatch', dispatch_id: 'ns', agent_id: 'PK', intent: { text: 'do work' } });
+    await flush();
+    await flush();
+
+    const result = transport.sent.at(-1) as { status: string };
+    // daemonStatus false-arm fallback: a missing/non-string status defaults to 'ok' → meshStatus 'success'.
+    expect(result.status).toBe('success');
   });
 });

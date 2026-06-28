@@ -307,6 +307,38 @@ describe("SpendLedger", () => {
     }
   });
 
+  it("treats a pending deadline equal to the boot clock as expired (exclusive deadline boundary)", () => {
+    // The +30s/+120s warm-recovery tests above straddle the deadline but never
+    // land on it. restorePending keeps an entry only while deadlineEpochMs > now,
+    // so at exactly the deadline millisecond the reservation must prune (its
+    // wall-clock ceiling has been reached and the microVM has self-destructed),
+    // while one millisecond earlier it is still live. A `> -> >=` slip would
+    // wrongly reinstate a finished run as live admission capacity at the boundary.
+    const tinyCaps: BudgetCaps = { ...caps, wallMs: 60_000 };
+    const T = 1_000_000_000_000;
+    const seed = (path: string) => {
+      const before = new SpendLedger(tinyCaps, path, () => T);
+      expect(before.reserve().ok).toBe(true); // deadlineEpochMs = T + 60_000
+    };
+    const atPath = join(tmpdir(), `covenant-ledger-deadline-eq-${Date.now()}.json`);
+    const ltPath = join(tmpdir(), `covenant-ledger-deadline-lt-${Date.now()}-2.json`);
+    try {
+      seed(atPath);
+      seed(ltPath);
+
+      const atDeadline = new SpendLedger(tinyCaps, atPath, () => T + 60_000).snapshot();
+      expect(atDeadline.reserved).toBe(0);
+      expect(atDeadline.active).toBe(0);
+
+      const oneMsEarlier = new SpendLedger(tinyCaps, ltPath, () => T + 60_000 - 1).snapshot();
+      expect(oneMsEarlier.reserved).toBe(tinyCaps.perRunUsdMax);
+      expect(oneMsEarlier.active).toBe(1);
+    } finally {
+      rmSync(atPath, { force: true });
+      rmSync(ltPath, { force: true });
+    }
+  });
+
   it("removes the pending entry on commit so the file does not grow per-run (failure mode #3)", () => {
     const path = join(tmpdir(), `covenant-ledger-purge-${Date.now()}.json`);
     try {

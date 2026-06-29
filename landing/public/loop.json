@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T14:13:06.361Z",
+  "updatedAt": "2026-06-29T14:33:11.804Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12245,
-    "tasks": 1435,
-    "integrated": 1437
+    "events": 12253,
+    "tasks": 1436,
+    "integrated": 1438
   },
   "throughput": {
-    "last24h": 27,
-    "last7d": 206,
-    "velocity": 29.4
+    "last24h": 28,
+    "last7d": 207,
+    "velocity": 29.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 14
+      "count": 15
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-29",
-      "total": 1437
+      "total": 1438
     }
   ],
   "states": {
-    "integrated": 1429,
+    "integrated": 1430,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "planned": 1
   },
   "areas": [
     {
@@ -215,12 +215,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "sap-bridge-worker-read-capped-exact-fit-inclusive-boundary-c",
-    "state": "in_progress",
-    "since": "2026-06-29T13:51:39.709Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T14:21:27.689Z",
+      "task": "sap-bridge-worker-read-capped-exact-fit-inclusive-boundary-c",
+      "note": "Integrated on loop/main-track as 7fbb3d93 (README metrics bump + the exact-fit read_capped unit test). Mutation-proven: buf.len() > max -> >"
+    },
     {
       "at": "2026-06-29T13:34:44.812Z",
       "task": "tui-truncate-home-display-exact-budget-inclusive-endpoint-co",
@@ -315,11 +316,6 @@
       "at": "2026-06-28T23:09:27.227Z",
       "task": "landing-agents-passport-route-failclosed-coverage",
       "note": "Committed e2d04f52 (test-only, 202 lines). Agent-passport verifier GET now has mutation-proven fail-closed coverage: 400/502/404 gates, cove"
-    },
-    {
-      "at": "2026-06-28T22:51:44.285Z",
-      "task": "landing-contact-route-failclosed-validation-coverage",
-      "note": "Committed; test-only, route.ts unchanged. 6 mutation-proven arms. Pushing."
     }
   ]
 }

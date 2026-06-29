@@ -22,44 +22,62 @@ export const metadata: Metadata = {
 
 const CSS = `
 @page { size: A4; margin: 0; }
+/* Sizes below are the SCREEN sizes (matched to the rest of the site: ~14px body,
+   11px tracked labels, 15px lede). The @media print block at the bottom compacts
+   everything back down so the PDF still fits one A4 page. */
 #op {
-  --fg: #ededed; --muted: #8a8a8a; --faint: #6f6f6f; --line: #262626; --accent: #3a3a3a;
+  --fg: #ededed; --muted: #9a9a9a; --faint: #6f6f6f; --line: #262626; --accent: #3a3a3a;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   background: #030303; color: var(--fg); min-height: 100dvh;
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
-#op .page { max-width: 880px; margin: 0 auto; padding: clamp(28px, 5vw, 60px); background: #030303; }
-#op .mast { text-align: center; padding-bottom: 9px; }
-#op .wordmark { font-weight: 200; font-size: 26px; letter-spacing: 0.42em; text-indent: 0.42em; margin: 0; }
-#op .submark { font-family: var(--mono); font-size: 8px; letter-spacing: 0.34em; text-indent: 0.34em; color: var(--muted); margin: 7px 0 0; text-transform: uppercase; }
-#op hr { border: 0; border-top: 1px solid var(--line); margin: 13px 0 16px; }
-#op .deck { text-align: center; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.26em; text-indent: 0.26em; color: #cfcfcf; text-transform: uppercase; margin: 0 0 16px; }
-#op .lede { font-size: 12px; line-height: 1.62; color: #cdcdcd; margin: 0 0 22px; }
+#op .page { max-width: 920px; margin: 0 auto; padding: clamp(32px, 6vw, 72px); background: #030303; }
+#op .mast { text-align: center; padding-bottom: 12px; }
+#op .wordmark { font-weight: 200; font-size: 33px; letter-spacing: 0.42em; text-indent: 0.42em; margin: 0; }
+#op .submark { font-family: var(--mono); font-size: 10px; letter-spacing: 0.34em; text-indent: 0.34em; color: var(--muted); margin: 9px 0 0; text-transform: uppercase; }
+#op hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0 20px; }
+#op .deck { text-align: center; font-family: var(--mono); font-size: 12px; letter-spacing: 0.24em; text-indent: 0.24em; color: #d4d4d4; text-transform: uppercase; margin: 0 0 22px; }
+#op .lede { font-size: 15px; line-height: 1.72; color: #d0d0d0; margin: 0 0 30px; }
 #op .lede strong { color: var(--fg); font-weight: 600; }
-#op .cols { display: flex; gap: 34px; }
+#op .cols { display: flex; gap: 44px; }
 #op .col { flex: 1; min-width: 0; }
-#op .seclabel { font-family: var(--mono); font-size: 9px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--muted); margin: 0 0 11px; }
-#op .seclabel .n { color: var(--faint); margin-right: 9px; }
-#op .intro { color: var(--muted); font-size: 11px; line-height: 1.55; margin: 0 0 14px; }
-#op .guarantee { border-left: 1px solid var(--accent); padding: 0 0 0 12px; margin: 0 0 13px; }
-#op .guarantee p { margin: 0; font-size: 11px; line-height: 1.55; color: var(--muted); }
+#op .seclabel { font-family: var(--mono); font-size: 11px; letter-spacing: 0.32em; text-transform: uppercase; color: var(--muted); margin: 0 0 15px; }
+#op .seclabel .n { color: var(--faint); margin-right: 10px; }
+#op .intro { color: var(--muted); font-size: 14px; line-height: 1.65; margin: 0 0 18px; }
+#op .guarantee { border-left: 1px solid var(--accent); padding: 0 0 0 14px; margin: 0 0 17px; }
+#op .guarantee p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
 #op .guarantee b { color: var(--fg); font-weight: 600; }
 #op ul.live { list-style: none; margin: 0; padding: 0; }
-#op ul.live li { position: relative; padding-left: 16px; margin: 0 0 13px; font-size: 11px; line-height: 1.55; color: var(--muted); }
-#op ul.live li::before { content: ""; position: absolute; left: 0; top: 5px; width: 6px; height: 6px; background: #cfcfcf; }
+#op ul.live li { position: relative; padding-left: 18px; margin: 0 0 17px; font-size: 14px; line-height: 1.6; color: var(--muted); }
+#op ul.live li::before { content: ""; position: absolute; left: 0; top: 8px; width: 6px; height: 6px; background: #cfcfcf; }
 #op ul.live b { color: var(--fg); font-weight: 600; }
-#op .block { margin-top: 22px; }
-#op .block p { font-size: 11px; line-height: 1.62; color: var(--muted); margin: 0; }
+#op .block { margin-top: 30px; }
+#op .block p { font-size: 14px; line-height: 1.7; color: var(--muted); margin: 0; }
 #op .block p b { color: var(--fg); font-weight: 600; }
-#op .block p .lit { color: #cdcdcd; }
-#op .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 26px; padding-top: 12px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 9px; letter-spacing: 0.16em; color: var(--faint); text-transform: uppercase; }
+#op .block p .lit { color: #d0d0d0; }
+#op .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 36px; padding-top: 16px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; color: var(--faint); text-transform: uppercase; }
 #op .foot .site { color: var(--muted); }
 #op .foot .tag { font-family: var(--mono); color: #bdbdbd; margin-right: 6px; }
-@media (max-width: 640px) { #op .cols { flex-direction: column; gap: 22px; } }
+@media (max-width: 640px) { #op .cols { flex-direction: column; gap: 28px; } }
 @media print {
   #op { min-height: 0; }
   #op .page { width: 210mm; height: 297mm; max-width: none; overflow: hidden; padding: 15mm 16mm 12mm; }
+  #op .mast { padding-bottom: 9px; }
+  #op .wordmark { font-size: 26px; }
+  #op .submark { font-size: 8px; margin-top: 7px; }
+  #op hr { margin: 13px 0 16px; }
+  #op .deck { font-size: 9.5px; letter-spacing: 0.26em; text-indent: 0.26em; margin-bottom: 16px; }
+  #op .lede { font-size: 12px; line-height: 1.62; margin-bottom: 22px; }
   #op .cols { flex-direction: row; gap: 34px; }
+  #op .seclabel { font-size: 9px; letter-spacing: 0.3em; margin-bottom: 11px; }
+  #op .intro { font-size: 11px; line-height: 1.55; margin-bottom: 14px; }
+  #op .guarantee { padding-left: 12px; margin-bottom: 13px; }
+  #op .guarantee p { font-size: 11px; line-height: 1.55; }
+  #op ul.live li { padding-left: 16px; margin-bottom: 13px; font-size: 11px; line-height: 1.55; }
+  #op ul.live li::before { top: 5px; }
+  #op .block { margin-top: 22px; }
+  #op .block p { font-size: 11px; line-height: 1.62; }
+  #op .foot { margin-top: 26px; padding-top: 12px; font-size: 9px; }
 }
 `;
 

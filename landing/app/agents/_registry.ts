@@ -15,6 +15,11 @@ export const COVENANT_DATA_AUTHORITY = "DKxXrxxCzAwLSXRUWzUouiW46GNf4PR2mjjhAbtC
 // The Covenant Agents MPL Core collection on mainnet.
 export const COVENANT_COLLECTION = "Duqs6dq1wXPcRqJVUCgSZxrkLRdg3oBfZ3ViER1kt6gC";
 
+// The Covenant Oracle program: gates a gated agent's Core lifecycle events on a
+// live audit verdict via the Core Oracle external plugin (one ["oracle", asset]
+// PDA per agent). Source-verified on mainnet (see osecVerifyUrl).
+export const COVENANT_ORACLE_PROGRAM = "2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD";
+
 // The registered production agent + a known attestation, featured on /agents.
 export const FEATURED_AGENT_ASSET = "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc";
 export const FEATURED_ATTESTATION_ASSET = "4A2fdNqmPiQrv3iYv6WY2mQ9eSQuBERhdeg4vk7G8vGG";
@@ -35,4 +40,10 @@ export function solscanAccountUrl(address: string): string {
 
 export function metaplexAgentUrl(asset: string): string {
   return `https://www.metaplex.com/agents/${asset}`;
+}
+
+// OtterSec verified-build status: anyone can confirm the on-chain program bytes
+// were built from the public source at the recorded commit.
+export function osecVerifyUrl(programId: string): string {
+  return `https://verify.osec.io/status/${programId}`;
 }

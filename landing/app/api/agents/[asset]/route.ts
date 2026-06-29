@@ -17,6 +17,7 @@ import {
   COVENANT_COLLECTION,
   COVENANT_DATA_AUTHORITY,
 } from "@/app/agents/_registry";
+import { readAuditGate, type AuditGate } from "@/app/agents/_gate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,6 +62,8 @@ export type AgentPassport = {
     description: string | null;
     listsThisAsset: boolean;
   } | null;
+  /** Covenant audit gate (Core Oracle plugin), when the asset carries one. */
+  gate: AuditGate | null;
 };
 
 function rpcUrl(): string {
@@ -207,6 +210,9 @@ export async function GET(
     }
   }
 
+  // 5. The Covenant audit gate (Core Oracle plugin → covenant-oracle program).
+  const gate = await readAuditGate(rpc, externalPlugins, assetPk);
+
   const passport: AgentPassport = {
     asset: {
       id: assetPk.toBase58(),
@@ -226,6 +232,7 @@ export async function GET(
     },
     attestation,
     doc,
+    gate,
   };
 
   return NextResponse.json(passport, {

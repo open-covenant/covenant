@@ -18,6 +18,7 @@ import {
   ATTESTATION_TYPE,
   COVENANT_DATA_AUTHORITY,
 } from "@/app/agents/_registry";
+import { readAuditGate } from "@/app/agents/_gate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -168,11 +169,20 @@ export async function GET(
     (acc, v) => (acc && (acc.recordedAt ?? 0) >= (v.recordedAt ?? 0) ? acc : v),
     null,
   );
+
+  // Enforcement: is this agent's lifecycle gated on its live audit verdict?
+  const gate = await readAuditGate(
+    rpc,
+    (das["external_plugins"] ?? []) as Array<Record<string, unknown>>,
+    new PublicKey(asset),
+  );
+
   return NextResponse.json({
     kind: "agent",
     agent: asset,
     accountable: verified.length > 0,
     attestationCount: verified.length,
     latest,
+    gate,
   });
 }

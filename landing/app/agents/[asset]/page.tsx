@@ -1,8 +1,9 @@
-// /agents/[asset] — the agent passport. Renders the three independently
-// checkable facts about a 014 Registry asset (registry binding, Covenant
-// authority, witness-chain reproducibility) in the same witness language
-// as /verify/[sha]. Registered and proven are different states here, on
-// purpose — the gap between them is the page's whole argument.
+// /agents/[asset] — the agent passport. Renders the independently checkable
+// facts about a 014 Registry asset (registry binding, Covenant authority,
+// witness-chain reproducibility, and — for gated agents — the live audit gate)
+// in the same witness language as /verify/[sha]. Registered and proven are
+// different states here, on purpose; the gap between them is the page's
+// whole argument.
 
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -14,6 +15,7 @@ import { ChainVerifier } from "@/app/agents/ChainVerifier";
 import {
   COVENANT_DATA_AUTHORITY,
   metaplexAgentUrl,
+  osecVerifyUrl,
   solscanAccountUrl,
 } from "@/app/agents/_registry";
 import type { AgentPassport } from "@/app/api/agents/[asset]/route";
@@ -191,6 +193,13 @@ export default async function AgentPassportPage({
                 href={p.registry.registrationUri}
               />
             )}
+            {p.gate?.gated && (
+              <Field
+                label="Gating program (verified)"
+                value={p.gate.programId}
+                href={osecVerifyUrl(p.gate.programId)}
+              />
+            )}
           </dl>
           {isAgent && (
             <p className="mt-4 text-[11px] uppercase tracking-[1.5px]">
@@ -234,6 +243,21 @@ export default async function AgentPassportPage({
               }
               evidenceHref={p.registry.registrationUri ?? undefined}
               evidenceLabel="Document"
+            />
+          )}
+          {p.gate?.gated && (
+            <Check
+              state={p.gate.inPolicy === true ? "green" : p.gate.inPolicy === false ? "red" : "yellow"}
+              label="Audit gate"
+              detail={
+                p.gate.inPolicy === true
+                  ? `This agent's ${p.gate.gatedEvents.join(" / ")} is gated on its live Covenant audit verdict by the Core Oracle plugin. The verdict is in policy, so Core allows it. Flip the audit out of policy and Core vetoes the event on chain — the rule is enforced by Core, not by us. The gating program is source-verified: the deployed bytes match the published source.`
+                  : p.gate.inPolicy === false
+                    ? `The Covenant audit verdict is out of policy, so MPL Core is vetoing this agent's ${p.gate.gatedEvents.join(" / ")} right now. It stays blocked until the audit is back in policy. The gating program is source-verified: the deployed bytes match the published source.`
+                    : `This agent's ${p.gate.gatedEvents.join(" / ")} is gated by the Core Oracle plugin on its Covenant audit verdict; the current verdict could not be read just now. The gating program is source-verified on chain.`
+              }
+              evidenceHref={osecVerifyUrl(p.gate.programId)}
+              evidenceLabel="Verified gating program"
             />
           )}
         </div>

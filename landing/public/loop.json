@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T17:54:24.259Z",
+  "updatedAt": "2026-06-29T18:14:28.155Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12290,
-    "tasks": 1440,
-    "integrated": 1442
+    "events": 12299,
+    "tasks": 1441,
+    "integrated": 1443
   },
   "throughput": {
-    "last24h": 32,
-    "last7d": 206,
-    "velocity": 29.4
+    "last24h": 33,
+    "last7d": 207,
+    "velocity": 29.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 19
+      "count": 20
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-29",
-      "total": 1442
+      "total": 1443
     }
   ],
   "states": {
-    "integrated": 1434,
+    "integrated": 1435,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "x402-http-read-capped-exact-cap-inclusive-boundary-coverage",
+    "task": "covenantd-x402-read-capped-exact-cap-inclusive-boundary-cove",
     "state": "in_progress",
-    "since": "2026-06-29T17:48:23.025Z"
+    "since": "2026-06-29T17:59:27.360Z"
   },
   "recent": [
+    {
+      "at": "2026-06-29T17:58:37.020Z",
+      "task": "x402-http-read-capped-exact-cap-inclusive-boundary-coverage",
+      "note": "Committed 363ac7ca on loop/main-track. 1 file changed (http.rs +1 at-cap test; README unchanged). All declared verification passed; both >ma"
+    },
     {
       "at": "2026-06-29T17:47:40.909Z",
       "task": "metaplex-das-read-body-capped-exact-cap-inclusive-boundary-c",
@@ -315,11 +320,6 @@
       "at": "2026-06-29T00:03:36.324Z",
       "task": "landing-agent-terminal-format-extraction-coverage",
       "note": "committed extraction + coverage; pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-28T23:54:16.156Z",
-      "task": "landing-middleware-host-routing-coverage",
-      "note": "committed 461f0185 test-only middleware host-routing coverage; pushed to origin/loop/main-track"
     }
   ]
 }

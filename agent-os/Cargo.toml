@@ -31,6 +31,7 @@ members = [
     "crates/covenant-metaplex",
     "crates/covenant-sns",
     "crates/covenant-acedata",
+    "crates/covenant-krexa",
     "crates/covenant-sap-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenantd",

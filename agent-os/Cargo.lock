@@ -1614,6 +1614,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-krexa"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "covenant-mcp",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-llm"
 version = "0.1.0"
 dependencies = [
@@ -1996,6 +2011,7 @@ dependencies = [
  "covenant-hyre",
  "covenant-identity",
  "covenant-ipc",
+ "covenant-krexa",
  "covenant-llm",
  "covenant-manifest",
  "covenant-mcp",

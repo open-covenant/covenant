@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T20:56:30.948Z",
+  "updatedAt": "2026-06-29T21:16:59.571Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12335,
+    "events": 12340,
     "tasks": 1445,
-    "integrated": 1447
+    "integrated": 1448
   },
   "throughput": {
-    "last24h": 37,
-    "last7d": 208,
-    "velocity": 29.7
+    "last24h": 38,
+    "last7d": 209,
+    "velocity": 29.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 24
+      "count": 25
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1447
+      "total": 1448
     }
   ],
   "states": {
-    "integrated": 1439,
+    "integrated": 1440,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "cross-host-freshness-inclusive-boundary-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T20:42:44.210Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T21:05:50.943Z",
+      "task": "cross-host-freshness-inclusive-boundary-coverage",
+      "note": "committed 53624058 on loop/main-track: two at-boundary admit tests (age==CROSS_HOST_MAX_AGE_MS, lead==CROSS_HOST_MAX_SKEW_MS) both mutation-"
+    },
     {
       "at": "2026-06-29T20:29:10.663Z",
       "task": "covenant-cli-read-signer-stream-capped-exact-fit-not-overflo",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T00:52:42.401Z",
       "task": "landing-agents-passport-helpers-extraction-coverage",
       "note": "Integrated as a426064e. rpcUrl + normalizePayload + AttestationPayload extracted to _passport.ts; 10 unit tests pin RPC precedence chain + c"
-    },
-    {
-      "at": "2026-06-29T00:41:37.694Z",
-      "task": "landing-contact-clean-sanitizer-trim-cap-coverage",
-      "note": "Integrated as ef1f86f7. One arm pins contact route clean() .trim() and .slice(0,max) (2/2 mutations killed); zero production change. Gates: "
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T11:49:28.879Z",
+  "updatedAt": "2026-06-29T12:10:27.138Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12232,
-    "tasks": 1433,
+    "events": 12236,
+    "tasks": 1434,
     "integrated": 1436
   },
   "throughput": {
     "last24h": 26,
-    "last7d": 208,
-    "velocity": 29.7
+    "last7d": 207,
+    "velocity": 29.6
   },
   "daily": [
     {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1428,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "tui-truncate-home-display-exact-budget-inclusive-endpoint-co",
+    "state": "in_progress",
+    "since": "2026-06-29T11:57:04.466Z"
+  },
   "recent": [
     {
       "at": "2026-06-29T11:44:13.747Z",

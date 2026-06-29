@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T13:32:17.135Z",
+  "updatedAt": "2026-06-29T13:53:02.098Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12237,
-    "tasks": 1434,
-    "integrated": 1436
+    "events": 12245,
+    "tasks": 1435,
+    "integrated": 1437
   },
   "throughput": {
-    "last24h": 26,
-    "last7d": 205,
-    "velocity": 29.3
+    "last24h": 27,
+    "last7d": 206,
+    "velocity": 29.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 13
+      "count": 14
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-29",
-      "total": 1436
+      "total": 1437
     }
   ],
   "states": {
-    "integrated": 1428,
+    "integrated": 1429,
     "proposed": 1,
     "blocked": 4,
-    "self_review": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "tui-truncate-home-display-exact-budget-inclusive-endpoint-co",
-    "state": "self_review",
-    "since": "2026-06-29T13:31:36.650Z"
+    "task": "sap-bridge-worker-read-capped-exact-fit-inclusive-boundary-c",
+    "state": "in_progress",
+    "since": "2026-06-29T13:51:39.709Z"
   },
   "recent": [
+    {
+      "at": "2026-06-29T13:34:44.812Z",
+      "task": "tui-truncate-home-display-exact-budget-inclusive-endpoint-co",
+      "note": "Integrated on loop/main-track as e349f5d9 (README metrics bump + the exact-budget unit test). Mutation-proven: the less-than-or-equal to str"
+    },
     {
       "at": "2026-06-29T11:44:13.747Z",
       "task": "hermes-drain-sse-frames-residual-buffer-inclusive-cap-covera",
@@ -315,11 +320,6 @@
       "at": "2026-06-28T22:51:44.285Z",
       "task": "landing-contact-route-failclosed-validation-coverage",
       "note": "Committed; test-only, route.ts unchanged. 6 mutation-proven arms. Pushing."
-    },
-    {
-      "at": "2026-06-28T22:46:05.892Z",
-      "task": "landing-agent-ingest-route-failclosed-coverage",
-      "note": "Committed 68941884 (test-only; route.ts unchanged). 5 mutation-proven fail-closed arms. Pushing to origin/loop/main-track."
     }
   ]
 }

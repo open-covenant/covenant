@@ -142,11 +142,12 @@ export default function OnePagerPage() {
         <div className="block">
           <p className="seclabel"><span className="n">04</span>Business model</p>
           <p>
-            Covenant runs x402 seller infrastructure today. Execution skills monetize as a{" "}
+            <b>Covenant is infrastructure others build on.</b> Execution skills monetize as a{" "}
             <b>per-action fee assessed at signing</b>, with a premium tier for verifiable receipts and neutral
-            attestation. Covenant never touches a partner&rsquo;s payment rails or token.{" "}
-            <b>Revenue scales directly with agent on-chain activity</b>, the one metric every consumer agent roadmap is
-            built to grow. $CVNT aligns the network through real-yield staking from protocol fees.
+            attestation. Teams building their own agents and platforms <b>license the trust layer and its enterprise
+            features</b> directly. Covenant never touches a partner&rsquo;s payment rails or token, so revenue scales with
+            agent on-chain activity, the one metric every consumer agent roadmap is built to grow. $CVNT aligns the
+            network through real-yield staking from protocol fees.
           </p>
         </div>
 

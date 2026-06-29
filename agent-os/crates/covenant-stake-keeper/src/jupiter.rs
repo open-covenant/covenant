@@ -406,6 +406,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_body_capped_reads_a_body_at_the_exact_cap_and_rejects_one_byte_over() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // read_body_capped guards memory with `> max` on both the
+        // Content-Length pre-check (jupiter.rs:95) and the running accumulation
+        // check (jupiter.rs:103), so a body sized exactly at the cap fits and
+        // must read back whole. quote_caps_oversized_body_and_reads_a_small_body
+        // only brackets the boundary from far away (a 263-byte body under a
+        // 16 KiB cap and over an 8-byte cap), where `> max` and `>= max` agree,
+        // so a `> max -> >= max` slip on either guard survives it. Serve a body
+        // of known length N: at cap N the original accepts (N is not > N) while
+        // the mutant rejects, and at cap N-1 the body sits one byte over, so the
+        // pre-check fires and the rejection names the cap.
+        const BODY: &str = r#"{"inputMint":"So11111111111111111111111111111111111111112","outputMint":"2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump","inAmount":"1000000000","outAmount":"12345678","otherAmountThreshold":"12000000","swapMode":"ExactIn","slippageBps":200,"priceImpactPct":"0.42"}"#;
+        let n = BODY.len();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(BODY))
+            .mount(&server)
+            .await;
+
+        let input = Pubkey::new_unique();
+        let output = Pubkey::new_unique();
+
+        let (quote, _raw) = JupiterClient::with_limits(server.uri(), server.uri(), n)
+            .quote(&input, &output, 1_000_000_000, 200)
+            .await
+            .expect("a body sized exactly at the cap fits and must read back whole");
+        assert_eq!(quote.out_amount_u64().unwrap(), 12_345_678);
+
+        let err = JupiterClient::with_limits(server.uri(), server.uri(), n - 1)
+            .quote(&input, &output, 1_000_000_000, 200)
+            .await
+            .expect_err("a body one byte over the cap must be rejected");
+        assert!(
+            format!("{err:#}").contains("cap"),
+            "the one-byte-over rejection must surface the byte-cap error; got {err:#}",
+        );
+    }
+
+    #[tokio::test]
     async fn swap_caps_oversized_body() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};

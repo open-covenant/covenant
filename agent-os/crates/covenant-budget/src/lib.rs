@@ -2365,6 +2365,59 @@ mod tests {
     }
 
     #[test]
+    fn refill_eta_ms_clamps_overflowing_shortfall_to_u64_max() {
+        // refill_eta_ms (line 365) computes the ETA in u128 via
+        //   ms = (needed * MS_PER_HOUR).div_ceil(capacity)
+        // then folds it into the u64 return with
+        //   now.saturating_add(ms.min(u64::MAX as u128) as u64)   (line 374)
+        // The `.min(u64::MAX as u128)` clamp is the only thing between a
+        // u128 ms that exceeds u64::MAX and a silently wrapping `as u64`
+        // cast. At capacity=1 the boundary sits at
+        //   needed = u64::MAX / MS_PER_HOUR = 5_124_095_576_030 (floor).
+        // The four sibling refill_eta_ms tests (already-enough, zero
+        // capacity, exact-rate linear, div_ceil rounding) all use tiny
+        // shortfalls that never approach it, and ms_per_hour's size_of
+        // pin only asserts the constant stays u128-wide — none exercise
+        // the clamp, so dropping it survives them all.
+        let b = Bucket {
+            display: "x@y".into(),
+            capacity: 1,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+
+        // needed=5_124_095_576_030 -> ms=18_446_744_073_708_000_000,
+        // one tick below the boundary and still <= u64::MAX, so the
+        // clamp is a no-op and the exact (huge but representable) ETA
+        // must survive. Pins the clamp as inactive below the boundary,
+        // separating it from a ceiling lowered to any smaller constant.
+        assert_eq!(
+            refill_eta_ms(&b, 5_124_095_576_030, 0),
+            18_446_744_073_708_000_000,
+            "needed=5_124_095_576_030 at capacity=1 yields \
+             ms=18_446_744_073_708_000_000 (<= u64::MAX); the u64::MAX \
+             clamp must leave it untouched and return the exact ETA \
+             rather than prematurely saturating"
+        );
+
+        // needed=5_124_095_576_031 -> ms=18_446_744_073_711_600_000,
+        // one tick past the boundary and just over u64::MAX. The clamp
+        // must saturate the ETA to u64::MAX; without `.min(u64::MAX as
+        // u128)` the `as u64` cast wraps to 2_048_384, reporting a
+        // near-empty huge-capacity bucket as ~2ms from refilled.
+        assert_eq!(
+            refill_eta_ms(&b, 5_124_095_576_031, 0),
+            u64::MAX,
+            "needed=5_124_095_576_031 at capacity=1 yields \
+             ms=18_446_744_073_711_600_000 (> u64::MAX); the clamp must \
+             saturate the ETA to u64::MAX — dropping `.min(u64::MAX as \
+             u128)` wraps the u128->u64 cast to 2_048_384 and reports a \
+             dry bucket as nearly refilled, and a `.min`->`.max` swap \
+             selects the same wrapped value"
+        );
+    }
+
+    #[test]
     fn ms_per_hour_pins_three_six_million_milliseconds_and_unit_math() {
         // covenant_budget::MS_PER_HOUR is the load-bearing arithmetic
         // constant the entire credit-refill mechanism depends on. The

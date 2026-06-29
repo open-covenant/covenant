@@ -1,10 +1,10 @@
 {
-  "updatedAt": "2026-06-28T23:56:37.126Z",
+  "updatedAt": "2026-06-29T00:16:40.789Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12115,
-    "tasks": 1420,
-    "integrated": 1423
+    "events": 12137,
+    "tasks": 1423,
+    "integrated": 1425
   },
   "throughput": {
     "last24h": 38,
@@ -12,10 +12,6 @@
     "velocity": 29.1
   },
   "daily": [
-    {
-      "date": "06-08",
-      "count": 15
-    },
     {
       "date": "06-09",
       "count": 0
@@ -95,13 +91,13 @@
     {
       "date": "06-28",
       "count": 37
+    },
+    {
+      "date": "06-29",
+      "count": 2
     }
   ],
   "cumulative": [
-    {
-      "date": "06-08",
-      "total": 959
-    },
     {
       "date": "06-09",
       "total": 959
@@ -181,12 +177,17 @@
     {
       "date": "06-28",
       "total": 1423
+    },
+    {
+      "date": "06-29",
+      "total": 1425
     }
   ],
   "states": {
-    "integrated": 1415,
+    "integrated": 1417,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,22 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "landing-header-stats-uptime-extraction-coverage",
+    "state": "in_progress",
+    "since": "2026-06-29T00:11:37.626Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-29T00:10:05.737Z",
+      "task": "landing-verify-page-redact-author-dedup",
+      "note": "committed dedup; pushing to origin/loop/main-track"
+    },
+    {
+      "at": "2026-06-29T00:03:36.324Z",
+      "task": "landing-agent-terminal-format-extraction-coverage",
+      "note": "committed extraction + coverage; pushing to origin/loop/main-track"
+    },
     {
       "at": "2026-06-28T23:54:16.156Z",
       "task": "landing-middleware-host-routing-coverage",
@@ -305,16 +320,6 @@
       "at": "2026-06-28T03:38:21.073Z",
       "task": "landing-agent-stream-generate-stream-coverage",
       "note": "Committing test file to loop/main-track."
-    },
-    {
-      "at": "2026-06-28T03:20:30.549Z",
-      "task": "landing-agent-stream-find-repo-root-coverage",
-      "note": "Integrated on loop/main-track. Mutation-proven repo-root resolver coverage; test-only."
-    },
-    {
-      "at": "2026-06-28T03:15:37.337Z",
-      "task": "landing-agent-bus-transition-parser-coverage",
-      "note": "Integrated on loop/main-track. Mutation-proven test-only coverage of the live-feed transition parser."
     }
   ]
 }

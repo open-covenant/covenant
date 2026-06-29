@@ -104,6 +104,7 @@ pub mod settlement {
         credits.owner = ctx.accounts.owner.key();
         credits.balance = 0;
         credits.bump = ctx.bumps.credits;
+        credits.provenance_root = [0u8; 32];
 
         emit!(CreditAccountOpened {
             owner: credits.owner,
@@ -154,10 +155,21 @@ pub mod settlement {
 
         ctx.accounts.credits.balance -= amount;
 
+        // Fold the receipt into the account's provenance hash-chain. This runs in
+        // the ER per consume and commits to L1 with the balance, making the root a
+        // real-time, on-chain record of every metered action.
+        let provenance_root = anchor_lang::solana_program::hash::hashv(&[
+            &ctx.accounts.credits.provenance_root,
+            &receipt_hash,
+        ])
+        .to_bytes();
+        ctx.accounts.credits.provenance_root = provenance_root;
+
         emit!(CreditsConsumed {
             owner: ctx.accounts.owner.key(),
             amount,
             receipt_hash,
+            provenance_root,
         });
         Ok(())
     }
@@ -573,6 +585,47 @@ pub mod settlement {
         data[off..new_len].copy_from_slice(&min_stake_lock.to_le_bytes());
 
         emit!(ConfigMigrated { min_stake_lock });
+        Ok(())
+    }
+
+    /// One-time migration of a legacy `CreditAccount` (predates `provenance_root`)
+    /// to the current layout: grows the account by 32 bytes. `realloc` zero-fills
+    /// the new bytes, so the provenance root starts at genesis. Owner-gated by
+    /// reading the on-chain `owner` field directly (the legacy bytes cannot
+    /// deserialize into the new struct until the realloc completes). Idempotent.
+    pub fn migrate_credit_account(ctx: Context<MigrateCreditAccount>) -> Result<()> {
+        let info = ctx.accounts.credits.to_account_info();
+        {
+            let data = info.try_borrow_data()?;
+            require!(data.len() >= 40, CovenantError::Unauthorized);
+            let onchain_owner =
+                Pubkey::try_from(&data[8..40]).map_err(|_| error!(CovenantError::Unauthorized))?;
+            require_keys_eq!(
+                onchain_owner,
+                ctx.accounts.owner.key(),
+                CovenantError::Unauthorized
+            );
+        }
+
+        let new_len = 8 + CreditAccount::INIT_SPACE;
+        if info.data_len() < new_len {
+            let deficit = Rent::get()?
+                .minimum_balance(new_len)
+                .saturating_sub(info.lamports());
+            if deficit > 0 {
+                anchor_lang::system_program::transfer(
+                    CpiContext::new(
+                        ctx.accounts.system_program.to_account_info(),
+                        anchor_lang::system_program::Transfer {
+                            from: ctx.accounts.owner.to_account_info(),
+                            to: info.clone(),
+                        },
+                    ),
+                    deficit,
+                )?;
+            }
+            info.realloc(new_len, true)?;
+        }
         Ok(())
     }
 
@@ -1197,6 +1250,19 @@ pub struct MigrateConfig<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Migrate a legacy `CreditAccount` to the current layout. Raw account because
+/// the legacy bytes do not fit the new struct until realloc; the owner is
+/// validated against the on-chain `owner` field in the handler.
+#[derive(Accounts)]
+pub struct MigrateCreditAccount<'info> {
+    /// CHECK: credit PDA; owner validated manually against the on-chain bytes.
+    #[account(mut, seeds = [b"credits", owner.key().as_ref()], bump)]
+    pub credits: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 /// Delegate the credit-account PDA to the ER. `#[delegate]` adds the
 /// `delegate_pda` helper plus the buffer/record/metadata accounts and the
 /// delegation + owner programs. The PDA is passed unchecked because delegation
@@ -1300,6 +1366,13 @@ pub struct CreditAccount {
     pub owner: Pubkey,
     pub balance: u64,
     pub bump: u8,
+    /// Rolling hash-chain root over every consumed `receipt_hash`:
+    /// `root = sha256(root || receipt_hash)`, genesis = 32 zero bytes. Updated
+    /// on each `consume_credits` (gaslessly in the ER) and committed to L1 with
+    /// the balance, so it is a real-time, on-chain provenance record of the
+    /// metered actions. Appended last so legacy accounts migrate by realloc
+    /// (see `migrate_credit_account`).
+    pub provenance_root: [u8; 32],
 }
 
 #[account]
@@ -1387,6 +1460,7 @@ pub struct CreditsConsumed {
     pub owner: Pubkey,
     pub amount: u64,
     pub receipt_hash: [u8; 32],
+    pub provenance_root: [u8; 32],
 }
 
 #[event]

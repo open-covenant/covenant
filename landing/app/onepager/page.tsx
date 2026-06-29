@@ -33,8 +33,7 @@ const CSS = `
 }
 #op .page { max-width: 920px; margin: 0 auto; padding: clamp(32px, 6vw, 72px); background: #030303; }
 #op .mast { text-align: center; padding-bottom: 12px; }
-#op .wordmark { font-weight: 200; font-size: 33px; letter-spacing: 0.42em; text-indent: 0.42em; margin: 0; }
-#op .submark { font-family: var(--mono); font-size: 10px; letter-spacing: 0.34em; text-indent: 0.34em; color: var(--muted); margin: 9px 0 0; text-transform: uppercase; }
+#op .logo { display: block; width: 360px; max-width: 72%; height: auto; margin: 0 auto; }
 #op hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0 20px; }
 #op .deck { text-align: center; font-family: var(--mono); font-size: 12px; letter-spacing: 0.24em; text-indent: 0.24em; color: #d4d4d4; text-transform: uppercase; margin: 0 0 22px; }
 #op .lede { font-size: 15px; line-height: 1.72; color: #d0d0d0; margin: 0 0 30px; }
@@ -63,8 +62,7 @@ const CSS = `
   #op { min-height: 0; }
   #op .page { width: 210mm; height: 297mm; max-width: none; overflow: hidden; padding: 15mm 16mm 12mm; }
   #op .mast { padding-bottom: 9px; }
-  #op .wordmark { font-size: 26px; }
-  #op .submark { font-size: 8px; margin-top: 7px; }
+  #op .logo { width: 232px; }
   #op hr { margin: 13px 0 16px; }
   #op .deck { font-size: 9.5px; letter-spacing: 0.26em; text-indent: 0.26em; margin-bottom: 16px; }
   #op .lede { font-size: 12px; line-height: 1.62; margin-bottom: 22px; }
@@ -87,8 +85,8 @@ export default function OnePagerPage() {
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
       <div className="page" id="main-content">
         <div className="mast">
-          <p className="wordmark">COVENANT</p>
-          <p className="submark">Human intent {"</>"} agent protocol</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="Covenant — human intent / agent protocol" className="logo" />
         </div>
         <hr />
         <p className="deck">Verifiable trust &amp; safe execution for AI agents on Solana</p>

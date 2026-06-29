@@ -804,6 +804,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claim_fresh_retains_a_key_whose_age_equals_the_freshness_horizon() {
+        // claim_fresh prunes the seen set with now_ms - k.issued_at_ms <= horizon
+        // (cross_host.rs:151), where horizon = CROSS_HOST_MAX_AGE_MS +
+        // CROSS_HOST_MAX_SKEW_MS — an INCLUSIVE retention edge. A key whose age
+        // equals the horizon is still inside the window any valid (including
+        // maximally future-skewed) envelope bearing it could still arrive in, so
+        // it must stay recorded and keep absorbing the replay as a duplicate.
+        // stale_keys_are_pruned_and_reclaimable only probes age = horizon + 1,
+        // where `<= horizon` and `< horizon` agree (both prune), so a
+        // `<= horizon` -> `< horizon` slip would evict a key sitting exactly on
+        // the horizon one tick early and re-admit its replay as fresh. Pin the
+        // inclusive endpoint directly.
+        let dir = tempfile::tempdir().unwrap();
+        let dedup = JsonlCrossHostDedup::open(dir.path().join("dedup.jsonl"))
+            .await
+            .unwrap();
+        let horizon = CROSS_HOST_MAX_AGE_MS + CROSS_HOST_MAX_SKEW_MS;
+        let k = key(11, 1_000);
+        assert!(dedup.claim_fresh(&k, 1_000).await.unwrap(), "first claim is fresh");
+        assert!(
+            !dedup.claim_fresh(&k, 1_000 + horizon).await.unwrap(),
+            "a key whose age equals the freshness horizon is still retained and must keep absorbing the replay as a duplicate"
+        );
+    }
+
+    #[tokio::test]
     async fn open_rejects_a_corrupt_log() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dedup.jsonl");

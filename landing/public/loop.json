@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T00:56:48.253Z",
+  "updatedAt": "2026-06-29T01:16:52.106Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12173,
+    "events": 12178,
     "tasks": 1427,
-    "integrated": 1429
+    "integrated": 1430
   },
   "throughput": {
     "last24h": 39,
-    "last7d": 205,
-    "velocity": 29.3
+    "last7d": 206,
+    "velocity": 29.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1429
+      "total": 1430
     }
   ],
   "states": {
-    "integrated": 1421,
+    "integrated": 1422,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "landing-stats-parsers-extraction-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T00:55:41.141Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T01:00:30.844Z",
+      "task": "landing-stats-parsers-extraction-coverage",
+      "note": "Integrated as b48f77ee. parseMetrics + ghHeaders extracted to _stats.ts; 6 unit tests pin full-match extraction, thousands-separator capture"
+    },
     {
       "at": "2026-06-29T00:52:42.401Z",
       "task": "landing-agents-passport-helpers-extraction-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-28T21:31:59.862Z",
       "task": "landing-verify-anchor4-sig-extraction-coverage",
       "note": "Committed 4f1e837f (4 files: verifierSig.ts + types.ts + verifierSig.test.ts + route.ts rewire). Completes the in-progress Anchor-4 extracti"
-    },
-    {
-      "at": "2026-06-28T04:16:12.732Z",
-      "task": "landing-verify-skill-run-extraction-coverage",
-      "note": "Integrated in 44f42366 on loop/main-track: checkSkillRun + types extracted to landing/lib/verify/skillRun.ts (byte-identical), route rewired"
     }
   ]
 }

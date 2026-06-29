@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-29T22:17:11.489Z",
+  "updatedAt": "2026-06-29T22:37:15.612Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12349,
-    "tasks": 1446,
+    "events": 12353,
+    "tasks": 1447,
     "integrated": 1449
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1441,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-refill-eta-ms-u64-overflow-clamp-boundary-coverage",
+    "state": "in_progress",
+    "since": "2026-06-29T22:27:36.531Z"
+  },
   "recent": [
     {
       "at": "2026-06-29T21:44:10.662Z",

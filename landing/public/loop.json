@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T21:16:59.571Z",
+  "updatedAt": "2026-06-29T21:37:03.398Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12340,
-    "tasks": 1445,
+    "events": 12344,
+    "tasks": 1446,
     "integrated": 1448
   },
   "throughput": {
-    "last24h": 38,
-    "last7d": 209,
-    "velocity": 29.9
+    "last24h": 37,
+    "last7d": 208,
+    "velocity": 29.7
   },
   "daily": [
     {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1440,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "autonomy-status-gaps-source-flag-and-classification-coverage",
+    "state": "in_progress",
+    "since": "2026-06-29T21:28:28.247Z"
+  },
   "recent": [
     {
       "at": "2026-06-29T21:05:50.943Z",

@@ -425,4 +425,50 @@ mod tests {
             "a wrong-typed data field must surface a Decode error, got {err:?}"
         );
     }
+
+    #[tokio::test]
+    async fn read_capped_treats_an_exact_max_fill_as_an_exact_fit_not_overflow() {
+        // read_capped reads through take(max + 1) and sets
+        // overflowed = buf.len() > max (worker.rs:59), so a stream of exactly
+        // max bytes is an exact fit (overflowed false, buffer returned whole)
+        // and only max + 1 is a truncated flood (overflowed true, buffer
+        // clamped to max) — the discriminator the extra byte exists to enable.
+        // The invoke_with_limits cap tests bracket this from far away: 200
+        // bytes against a 64-byte cap fills the buffer to max + 1 (so `> max`
+        // and `>= max` agree), and the under-cap envelope is 21 bytes against
+        // 4096 (far under). Neither lands on buf.len() == max, where a
+        // `> max` -> `>= max` slip flips an exact-fit payload to a spurious
+        // overflow and discards a legal worst-case worker response. Pin the
+        // inclusive endpoint directly.
+        let max = 64;
+
+        let exact = vec![b'x'; max];
+        let mut reader = exact.as_slice();
+        let (buf, overflowed) = read_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            !overflowed,
+            "a stream of exactly max bytes is an exact fit, not a flood"
+        );
+        assert_eq!(
+            buf, exact,
+            "an exact-fit body must be returned whole, not truncated"
+        );
+
+        let flood = vec![b'x'; max + 1];
+        let mut reader = flood.as_slice();
+        let (buf, overflowed) = read_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            overflowed,
+            "a stream of max + 1 bytes is a truncated flood and must report overflow"
+        );
+        assert_eq!(
+            buf.len(),
+            max,
+            "an over-cap read must clamp the returned buffer to max"
+        );
+    }
 }

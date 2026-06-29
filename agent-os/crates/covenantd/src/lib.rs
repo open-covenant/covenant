@@ -49088,6 +49088,72 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn admit_accepts_an_envelope_whose_age_equals_the_freshness_window() {
+        // The staleness gate (cross_host.rs:286) rejects only when
+        // now - issued_at_ms > CROSS_HOST_MAX_AGE_MS — an EXCLUSIVE bound, so an
+        // envelope whose age is exactly the window is still fresh and must be
+        // admitted. admit_rejects_a_stale_envelope_outside_the_freshness_window
+        // probes age = MAX_AGE + 1, where `>` and `>=` agree (both reject), so a
+        // `>` -> `>=` slip would reject this on-the-edge envelope and shrink the
+        // admissible replay window by one tick undetected. Pin the inclusive edge.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let issued = now - cross_host::CROSS_HOST_MAX_AGE_MS;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0012, issued);
+        let id = envelope.open().unwrap().id;
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id },
+            "an envelope whose age equals MAX_AGE exactly is still inside the window and must be admitted"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: Some(ref t) } if t.id == id
+            ),
+            "the boundary envelope reaches the mailbox"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, _, _)| outcome == "admitted"),
+            "the boundary envelope is recorded as admitted, not stale"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_accepts_an_envelope_whose_future_lead_equals_the_skew_allowance() {
+        // The forged-future gate (cross_host.rs:291) rejects only when
+        // issued_at_ms - now > CROSS_HOST_MAX_SKEW_MS — an EXCLUSIVE bound, so an
+        // envelope leading "now" by exactly the allowance is within tolerated
+        // clock skew and must be admitted.
+        // admit_rejects_a_future_dated_envelope_beyond_the_skew_allowance probes
+        // lead = MAX_SKEW + 1, where `>` and `>=` agree, so a `>` -> `>=` slip
+        // would reject a legitimately skewed sender sitting on the allowance. Pin
+        // the inclusive edge.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let issued = now + cross_host::CROSS_HOST_MAX_SKEW_MS;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0013, issued);
+        let id = envelope.open().unwrap().id;
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id },
+            "an envelope leading now by exactly MAX_SKEW is within tolerated skew and must be admitted"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, _, _)| outcome == "admitted"),
+            "the boundary envelope is recorded as admitted, not future_skew"
+        );
+    }
+
+    #[tokio::test]
     async fn admit_rejects_when_the_recipient_has_not_granted_recv() {
         let dir = tempfile::tempdir().unwrap();
         let alice = LocalIdentity::generate("alice@host1");

@@ -109,6 +109,7 @@ agent-os/scripts/validate-alpha-release-evidence.mjs
 agent-os/scripts/validate-autonomy-handoff.mjs
 agent-os/scripts/validate-autonomy-next-cli.mjs
 agent-os/scripts/validate-autonomy-review-artifacts.mjs
+agent-os/scripts/validate-autonomy-status-gaps.mjs
 agent-os/scripts/validate-autonomy-summary.mjs
 agent-os/scripts/validate-autonomy.mjs
 agent-os/scripts/validate-build-release-scope-manifest.mjs

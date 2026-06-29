@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T01:36:55.844Z",
+  "updatedAt": "2026-06-29T01:57:00.906Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12182,
+    "events": 12187,
     "tasks": 1428,
-    "integrated": 1430
+    "integrated": 1431
   },
   "throughput": {
-    "last24h": 37,
-    "last7d": 206,
-    "velocity": 29.4
+    "last24h": 36,
+    "last7d": 205,
+    "velocity": 29.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1430
+      "total": 1431
     }
   ],
   "states": {
-    "integrated": 1422,
+    "integrated": 1423,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "x402-per-call-cap-inclusive-boundary-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T01:19:40.622Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T01:56:09.607Z",
+      "task": "x402-per-call-cap-inclusive-boundary-coverage",
+      "note": "Integrated as a81e9501. Inclusive per-call-cap boundary pinned: pick_accepts_amount_exactly_at_cap (client.rs, amount==cap accepted) + prefl"
+    },
     {
       "at": "2026-06-29T01:00:30.844Z",
       "task": "landing-stats-parsers-extraction-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-28T21:37:09.335Z",
       "task": "landing-verify-anchor1-memo-extraction-coverage",
       "note": "Committed eb7ab32f (3 files). All gates green; 8 arms mutation-proven (7 mutations killed)."
-    },
-    {
-      "at": "2026-06-28T21:31:59.862Z",
-      "task": "landing-verify-anchor4-sig-extraction-coverage",
-      "note": "Committed 4f1e837f (4 files: verifierSig.ts + types.ts + verifierSig.test.ts + route.ts rewire). Completes the in-progress Anchor-4 extracti"
     }
   ]
 }

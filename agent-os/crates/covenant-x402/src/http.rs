@@ -42,3 +42,50 @@ pub(crate) async fn read_capped(
     }
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn read_capped_reads_a_body_at_the_exact_cap_and_rejects_one_byte_over() {
+        // read_capped guards memory with `> max` on both the Content-Length
+        // pre-check (http.rs:28) and the running accumulation check (http.rs:36),
+        // so a body sized exactly at the cap fits and must read back whole. The
+        // crate's only body-cap test (latest_blockhash_rejects_oversized_rpc_body)
+        // serves a 4096-byte body against a 64-byte cap, where `> max` and
+        // `>= max` agree, so a `> max -> >= max` slip on either guard survives it.
+        // Serve a body of known length N: at cap N the original accepts (N is not
+        // > N) while the mutant rejects, and at cap N-1 the body sits one byte
+        // over, so the pre-check fires and the rejection names the cap.
+        const BODY: &str = "covenant-x402 bounded-read at-cap inclusive boundary fixture";
+        let n = BODY.len();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(BODY))
+            .mount(&server)
+            .await;
+
+        let resp = reqwest::get(server.uri())
+            .await
+            .expect("GET the at-cap body");
+        let body = read_capped(resp, n, X402Error::Sign)
+            .await
+            .expect("a body sized exactly at the cap fits and must read back whole");
+        assert_eq!(body, BODY);
+
+        let resp = reqwest::get(server.uri())
+            .await
+            .expect("GET the over-cap body");
+        let err = read_capped(resp, n - 1, X402Error::Sign)
+            .await
+            .expect_err("a body one byte over the cap must be rejected");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("cap")),
+            "the one-byte-over rejection must surface the byte-cap error; got {err:?}",
+        );
+    }
+}

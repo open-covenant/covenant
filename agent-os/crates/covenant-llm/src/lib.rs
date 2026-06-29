@@ -3379,6 +3379,25 @@ model = "nomic-embed-text"
     }
 
     #[test]
+    fn estimate_tokens_rounds_partial_tokens_up() {
+        // ~4 chars per token, rounding UP so a fractional token still budgets a
+        // whole one — conservative for cost_record's prompt/completion counts.
+        // The only test that pins concrete token values
+        // (router_with_pricing_emits_estimated_cost) uses 8- and 16-char inputs,
+        // both exact multiples of 4, where div_ceil(4) and a plain `/ 4` agree;
+        // non-multiple inputs are what pin the ceiling and the divisor. A
+        // div_ceil -> floor regression would under-count tokens and under-charge
+        // the budget. The .min(u32::MAX) clamp is left unpinned: it only bites on
+        // a multi-GB input.
+        assert_eq!(estimate_tokens(0), 0);
+        assert_eq!(estimate_tokens(1), 1);
+        assert_eq!(estimate_tokens(4), 1);
+        assert_eq!(estimate_tokens(5), 2);
+        assert_eq!(estimate_tokens(7), 2);
+        assert_eq!(estimate_tokens(8), 2);
+    }
+
+    #[test]
     fn cache_key_is_stable_and_sensitive_to_model_and_messages() {
         let a = [ChatMessage::user("hello"), ChatMessage::assistant("hi")];
         let k = cache_key("model-x", &a).unwrap();

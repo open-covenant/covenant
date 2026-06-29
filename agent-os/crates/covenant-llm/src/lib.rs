@@ -2922,6 +2922,36 @@ model = "nomic-embed-text"
     }
 
     #[tokio::test]
+    async fn ollama_provider_reads_body_sized_exactly_at_cap() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // read_body_capped's byte cap is INCLUSIVE: a body whose length is
+        // exactly `max` is read back, only a longer body is rejected. The
+        // sibling *_caps_oversized_body_and_reads_a_small_body tests pin
+        // strictly-under and strictly-over but never the at-cap case, so a
+        // `>` -> `>=` regression on either guard would silently make the cap
+        // exclusive and drop an at-limit response. Setting the cap to the
+        // body's exact byte length pins both guards at once: the Content-Length
+        // pre-check passes at len == max, so execution reaches the running
+        // accumulation guard (which the over-cap test never exercises, since
+        // its Content-Length pre-check short-circuits), and that guard also
+        // passes at exactly max.
+        let server = MockServer::start().await;
+        let body = r#"{"message":{"content":"hello world"}}"#;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let text = OllamaProvider::with_limits(server.uri(), "m", body.len())
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect("a body whose length equals the cap must read back: read_body_capped is inclusive");
+        assert_eq!(text, "hello world");
+    }
+
+    #[tokio::test]
     async fn anthropic_provider_caps_oversized_body_and_reads_a_small_body() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};

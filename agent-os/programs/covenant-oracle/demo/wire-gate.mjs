@@ -16,7 +16,7 @@ import {
 } from '@metaplex-foundation/umi';
 import { addPlugin, transfer, fetchAsset, CheckResult, mplCore } from '@metaplex-foundation/mpl-core';
 
-const ASSET = '4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc';
+const ASSET = process.argv[2];
 const ORACLE_PROGRAM = new PublicKey('2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD');
 const KEYPAIR_PATH = `${process.env.HOME}/.config/solana/covenant-metaplex-authority.json`; // DKxXr
 const envFile = `${process.env.HOME}/Projects/covenant/landing/.env.local`;

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-29T03:57:47.631Z",
+  "updatedAt": "2026-06-29T04:17:51.550Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12209,
+    "events": 12211,
     "tasks": 1431,
     "integrated": 1433
   },
   "throughput": {
-    "last24h": 25,
+    "last24h": 23,
     "last7d": 207,
     "velocity": 29.6
   },
@@ -187,7 +187,7 @@
     "integrated": 1425,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "stake-keeper-sweep-split-residue-leg-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T03:01:26.193Z"
+    "state": "cross_review",
+    "since": "2026-06-29T04:13:34.723Z"
   },
   "recent": [
     {

@@ -125,6 +125,31 @@ describe('WsTransport', () => {
     }
   });
 
+  it('applies full jitter to the reconnect delay at the upper random bound', async () => {
+    vi.useFakeTimers();
+    try {
+      // exp = min(30_000, 100 * 2**0) = 100; random() => 1 drives the
+      // jittered half to its maximum, so delay = exp/2 + 1 * (exp/2) = 100.
+      // The sibling backoff test pins random() => 0 (delay = exp/2 = 50),
+      // which leaves random() * (exp/2) — the anti-thundering-herd jitter —
+      // at zero and unexercised. The tight 99/100ms boundary below pins the
+      // upper jitter bound so a dropped or mis-scaled term cannot survive.
+      const t = new WsTransport({ url: 'wss://mesh', token: 'T', socketFactory: factory, backoffBaseMs: 100, random: () => 1 });
+      const p = t.connect();
+      const first = FakeSocket.last!;
+      first.fireOpen();
+      await p;
+
+      first.close(); // schedule reconnect at delay = 50 + 1 * 50 = 100ms
+      await vi.advanceTimersByTimeAsync(99);
+      expect(FakeSocket.last).toBe(first); // jitter holds the dial back; nothing fires at 99ms
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeSocket.last).not.toBe(first); // dials at exactly 100ms
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   async function openTransport(): Promise<{ got: InboundFrame[] }> {
     const t = new WsTransport({ url: 'wss://mesh', token: 'T', socketFactory: factory, reconnect: false });
     const got: InboundFrame[] = [];

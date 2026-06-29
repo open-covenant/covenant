@@ -830,8 +830,17 @@ mod tests {
     #[test]
     fn split_absorbs_rounding_residue_into_subsidy() {
         let cfg = base_cfg();
-        // 7 lamports: 25/25/30/20 doesn't round cleanly. Subsidy takes residue.
+        // 7 lamports, 25/25/30/20 bps: the proportional legs floor-truncate
+        // (1.75->1, 1.75->1, 2.1->2) and subsidy absorbs the residue
+        // (7-1-1-2=3), far above its own 1.4 share. The sum is tautological —
+        // subsidy is *defined* as surplus minus the other three — so pin the
+        // exact legs; that catches a `/ 10_000` -> `.div_ceil(10_000)` slip,
+        // which would round the legs up (2/2/3) and starve subsidy to 0.
         let s = SweepSplit::compute(7, &cfg);
+        assert_eq!(s.stakers, 1);
+        assert_eq!(s.buylock, 1);
+        assert_eq!(s.treasury, 2);
+        assert_eq!(s.subsidy, 3);
         assert_eq!(s.stakers + s.buylock + s.treasury + s.subsidy, 7);
     }
 

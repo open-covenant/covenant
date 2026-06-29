@@ -1,10 +1,10 @@
 {
-  "updatedAt": "2026-06-29T00:16:40.789Z",
+  "updatedAt": "2026-06-29T00:36:44.618Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12137,
-    "tasks": 1423,
-    "integrated": 1425
+    "events": 12151,
+    "tasks": 1424,
+    "integrated": 1427
   },
   "throughput": {
     "last24h": 38,
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 2
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1425
+      "total": 1427
     }
   ],
   "states": {
-    "integrated": 1417,
+    "integrated": 1419,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "landing-header-stats-uptime-extraction-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T00:11:37.626Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T00:35:46.996Z",
+      "task": "landing-mutation-quality-nightly-records-extraction-coverage",
+      "note": "Integrated as 67902ba0. readNightlyRecords + NightlyRecord extracted to landing/app/lineage/mutation-quality/_records.ts (injectable dir), 4"
+    },
+    {
+      "at": "2026-06-29T00:17:13.147Z",
+      "task": "landing-header-stats-uptime-extraction-coverage",
+      "note": "committed extraction + coverage; pushing to origin/loop/main-track"
+    },
     {
       "at": "2026-06-29T00:10:05.737Z",
       "task": "landing-verify-page-redact-author-dedup",
@@ -309,16 +314,6 @@
     {
       "at": "2026-06-28T03:49:05.356Z",
       "task": "landing-agent-bus-singleton-fanout-ring-coverage",
-      "note": "Committing test file to loop/main-track."
-    },
-    {
-      "at": "2026-06-28T03:44:53.306Z",
-      "task": "landing-agent-bus-commit-event-coverage",
-      "note": "Committing test file to loop/main-track."
-    },
-    {
-      "at": "2026-06-28T03:38:21.073Z",
-      "task": "landing-agent-stream-generate-stream-coverage",
       "note": "Committing test file to loop/main-track."
     }
   ]

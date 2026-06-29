@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T19:54:57.819Z",
+  "updatedAt": "2026-06-29T20:15:26.425Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12317,
-    "tasks": 1443,
-    "integrated": 1445
+    "events": 12326,
+    "tasks": 1444,
+    "integrated": 1446
   },
   "throughput": {
-    "last24h": 35,
-    "last7d": 206,
-    "velocity": 29.4
+    "last24h": 36,
+    "last7d": 207,
+    "velocity": 29.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 22
+      "count": 23
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-29",
-      "total": 1445
+      "total": 1446
     }
   ],
   "states": {
-    "integrated": 1437,
+    "integrated": 1438,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "covenantd-cross-host-dedup-horizon-inclusive-retention-bound",
+    "task": "covenant-cli-read-signer-stream-capped-exact-fit-not-overflo",
     "state": "in_progress",
-    "since": "2026-06-29T19:50:05.728Z"
+    "since": "2026-06-29T20:00:20.461Z"
   },
   "recent": [
+    {
+      "at": "2026-06-29T19:57:20.181Z",
+      "task": "covenantd-cross-host-dedup-horizon-inclusive-retention-bound",
+      "note": "Committing the claim_fresh at-horizon retention test + README metrics bump to loop/main-track."
+    },
     {
       "at": "2026-06-29T19:48:23.697Z",
       "task": "covenantd-x402-read-stream-capped-exact-fit-not-overflow-cov",
@@ -315,11 +320,6 @@
       "at": "2026-06-29T00:35:46.996Z",
       "task": "landing-mutation-quality-nightly-records-extraction-coverage",
       "note": "Integrated as 67902ba0. readNightlyRecords + NightlyRecord extracted to landing/app/lineage/mutation-quality/_records.ts (injectable dir), 4"
-    },
-    {
-      "at": "2026-06-29T00:17:13.147Z",
-      "task": "landing-header-stats-uptime-extraction-coverage",
-      "note": "committed extraction + coverage; pushing to origin/loop/main-track"
     }
   ]
 }

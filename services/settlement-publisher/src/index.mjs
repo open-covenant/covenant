@@ -22,6 +22,8 @@ import {
   Keypair,
   PublicKey,
   SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import http from "node:http";
 import { readFileSync, mkdirSync, appendFileSync, existsSync } from "node:fs";
@@ -38,6 +40,9 @@ const OPERATOR_TOKEN = process.env.COVENANT_OPERATOR_TOKEN ?? "";
 const RPC_URL =
   process.env.COVENANT_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 const CLUSTER = process.env.COVENANT_SOLANA_CLUSTER ?? "devnet";
+// When set, meter gaslessly in a MagicBlock ER (the credit account must be
+// delegated to the pinned validator) instead of paying a per-action L1 fee.
+const ER_URL = process.env.COVENANT_ER_URL ?? null;
 
 // On-chain addresses are baked in for the current devnet deployment.
 // Each is overridable via env so this same service can flip to mainnet
@@ -116,6 +121,7 @@ function recordSig(row) {
 const operator = loadOperatorKeypair();
 const wallet = new Wallet(operator);
 const conn = new Connection(RPC_URL, "confirmed");
+const erConn = ER_URL ? new Connection(ER_URL, "confirmed") : null;
 const provider = new AnchorProvider(conn, wallet, { commitment: "confirmed" });
 
 const idl = JSON.parse(
@@ -130,6 +136,7 @@ console.log("[boot] config:", CONFIG.toBase58());
 console.log("[boot] credit account:", CREDIT_ACCOUNT.toBase58());
 console.log("[boot] daemon:", DAEMON_URL);
 console.log("[boot] rpc:", RPC_URL);
+console.log("[boot] mode:", erConn ? `ER gasless (${ER_URL})` : `L1 (${CLUSTER})`);
 
 // ─── publish loop ─────────────────────────────────────────────────────
 
@@ -143,20 +150,36 @@ async function consumeOne(intentId, intentText) {
   const receiptHash = Array.from(
     createHash("sha256").update(intentId).digest(),
   );
-  const sig = await program.methods
+  const builder = program.methods
     .consumeCredits(SETTLE_AMOUNT, receiptHash)
     .accounts({
       config: CONFIG,
       credits: CREDIT_ACCOUNT,
       owner: operator.publicKey,
-    })
-    .rpc();
-  // Best-effort confirmation slot — solana's signature subscribe path
-  // would be more accurate but a single getSignatureStatuses call is
-  // fine for the sidecar's surfaceable info.
+    });
+
+  // ER mode: the credit account is delegated to the pinned validator, so the
+  // same consume_credits ix runs gaslessly in the rollup (committed back to L1
+  // out of band by the session delegate/commit/undelegate). L1 mode: anchor .rpc().
+  let sig, settledOn;
+  if (erConn) {
+    const ix = await builder.instruction();
+    sig = await sendAndConfirmTransaction(
+      erConn,
+      new Transaction().add(ix),
+      [operator],
+      { commitment: "confirmed", skipPreflight: true },
+    );
+    settledOn = "er";
+  } else {
+    sig = await builder.rpc();
+    settledOn = CLUSTER;
+  }
+
+  // Best-effort confirmation slot.
   let slot = null;
   try {
-    const st = await conn.getSignatureStatuses([sig]);
+    const st = await (erConn ?? conn).getSignatureStatuses([sig]);
     slot = st.value[0]?.slot ?? null;
   } catch {
     // best-effort; the sig is what matters
@@ -167,7 +190,7 @@ async function consumeOne(intentId, intentText) {
     slot,
     settled_at_ms: Date.now(),
     intent_text: intentText?.slice(0, 200) ?? null,
-    cluster: CLUSTER,
+    cluster: settledOn,
   });
   return sig;
 }
@@ -275,8 +298,20 @@ const server = http.createServer((req, res) => {
   res.writeHead(404);
   res.end();
 });
-server.listen(HTTP_PORT, "0.0.0.0", () => {
-  console.log(`[http] listening on :${HTTP_PORT}`);
-});
-
-loop();
+if (process.env.SETTLE_ONCE) {
+  // One-shot: poll the audit feed once, publish, exit. Used for tests and
+  // for cron-style operation without a long-lived process.
+  try {
+    const n = await pollOnce();
+    console.log(`[once] published ${n}`);
+  } catch (err) {
+    console.error(`[once] error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
+} else {
+  server.listen(HTTP_PORT, "0.0.0.0", () => {
+    console.log(`[http] listening on :${HTTP_PORT}`);
+  });
+  loop();
+}

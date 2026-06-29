@@ -16,7 +16,9 @@ a **response** about a **subject agent**. It is shaped after the ERC-8004
 Validation registry so the two ecosystems interoperate, and it is verifiable
 by anyone through a standard DAS query with no off-chain trust.
 
-It changes nothing already shipped under MIP-014; it sits beside it.
+It changes nothing already shipped under MIP-014; it sits beside it. An optional
+enforcement layer (below) lets an agent be *gated* on its own verdict on-chain,
+via the Core Oracle plugin, so an agent can only act while it is in policy.
 
 ## Motivation
 
@@ -70,6 +72,31 @@ trusted validator has `subject.asset == <agent>` and passes the above.
 No registry program call and no validator infrastructure are required — the
 check is a pure function over public DAS output.
 
+## Enforcement (optional): gating Core lifecycle events on the verdict
+
+A validation record is passive: a reader decides what to do with it. For an agent
+that should be *constrained* by its record, the same verdict can gate the agent
+asset's Core lifecycle events on-chain, with no new trust surface, using the
+**Core Oracle external plugin**.
+
+A small program owns one oracle account per agent at the `["oracle", asset]` PDA
+and exposes one authority-gated value: the agent's `OracleValidation`. The agent
+asset carries an Oracle external plugin with `base_address` = that PDA,
+`results_offset = Anchor`, and `lifecycle_checks = { transfer: [CanReject] }`
+(extendable to `execute`). The validator flips the verdict between `Pass` (in
+policy) and `Rejected` (out of policy); **MPL Core enforces it** — a `Rejected`
+verdict makes Core veto the event (transfer fails with a custom program error).
+The account layout is byte-compatible with `mpl-core`'s `OracleValidation` at the
+`Anchor` offset, so Core reads the verdict directly with no adapter.
+
+The result is an agent that can only transfer (or, extended, execute) while its
+audit chain is valid and in policy. It is additive and opt-in: an agent with no
+Oracle plugin behaves exactly as before; an agent with one is bound to its
+record, and the binding is a chain fact anyone can read from the asset's plugins.
+
+The gating program should itself be a **verified build**, so the enforcement
+logic is auditable from source, not trusted.
+
 ## Reference implementation (live on mainnet)
 
 Covenant produces and verifies these records today:
@@ -77,13 +104,19 @@ Covenant produces and verifies these records today:
 | What | Address |
 |---|---|
 | Validator (attestation authority) | `DKxXrxxCzAwLSXRUWzUouiW46GNf4PR2mjjhAbtCAkcK` |
-| Agent identity (subject) | `4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc` |
+| Agent identity (subject, gated) | `4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc` |
 | Validation record | `4A2fdNqmPiQrv3iYv6WY2mQ9eSQuBERhdeg4vk7G8vGG` |
+| Gating program (source-verified) | `2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD` |
+| Oracle account (verdict) | `4iQbGGLyLXed6aoKfrPAPUd7wxHaS3SPCUURVb3gUho3` |
 
 - Writer: `covenant-metaplex-signer` (isolated minting key, solana-sdk 3.x).
 - Verifier: `covenant_metaplex::verify` — `verify_attestation` (pure, over a
   DAS asset) and `verify_agent` (DAS-backed accountability), exposed as the
   capability-gated `metaplex.verify.*` MCP tools. No key, no Covenant infra.
+- Gate: the `covenant-oracle` program gates the agent identity above on its
+  verdict via the Oracle plugin. The program is a verified build —
+  `https://verify.osec.io/status/2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD`
+  reports the on-chain bytes match the published source.
 
 ## Relationship to the validation program
 

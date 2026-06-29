@@ -24,12 +24,10 @@ export const COVENANT_ORACLE_PROGRAM = "2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZ
 export const FEATURED_AGENT_ASSET = "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc";
 export const FEATURED_ATTESTATION_ASSET = "4A2fdNqmPiQrv3iYv6WY2mQ9eSQuBERhdeg4vk7G8vGG";
 
-// Attestation payload schema written into AppData by covenantd's signer.
-export const ATTESTATION_SCHEMA = "covenant.audit-root.appdata.v1";
-
-// v2 record: an ERC-8004 validation attestation. `type` is the ERC-8004
-// discriminator, `hashAlg` declares the commitment algorithm. The
-// "Covenant Verified" check (/api/verify) keys on these.
+// A validation record is an ERC-8004 validation attestation in Core AppData.
+// `type` is the ERC-8004 discriminator, `schema` versions the record, and
+// `hashAlg` declares the commitment algorithm. The "Covenant Verified" check
+// (and the passport) key on these.
 export const ATTESTATION_TYPE = "https://eips.ethereum.org/EIPS/eip-8004#validation-v1";
 export const ATTESTATION_SCHEMA_V2 = "covenant.audit-root.appdata.v2";
 export const ATTESTATION_HASH_ALG = "sha256-merkle";

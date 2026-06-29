@@ -11,7 +11,6 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
-import { ChainVerifier } from "@/app/agents/ChainVerifier";
 import {
   COVENANT_DATA_AUTHORITY,
   metaplexAgentUrl,
@@ -137,20 +136,21 @@ export default async function AgentPassportPage({
       ? "The asset carries an AgentIdentity plugin, but its registry account could not be confirmed just now."
       : "No 014 Registry record exists for this asset — it is a Core asset, not a registered agent.";
 
+  const recordAuthored = p.attestation?.authority === COVENANT_DATA_AUTHORITY;
   const authorityState: State = p.attestation
-    ? p.attestation.covenantAuthored
+    ? recordAuthored
       ? "green"
       : "red"
     : p.asset.inCovenantCollection
       ? "green"
       : "gray";
   const authorityDetail = p.attestation
-    ? p.attestation.covenantAuthored
-      ? `Only the AppData authority can write this attestation, and the on-chain authority is Covenant's signer (${COVENANT_DATA_AUTHORITY.slice(0, 8)}…). MPL Core enforced that at write time — authorship is a chain fact, not a claim.`
-      : `This attestation's AppData authority is ${p.attestation.authority ?? "unknown"}, which is NOT Covenant's signer. Treat the payload as foreign.`
+    ? recordAuthored
+      ? `Only the AppData authority can write this record, and the on-chain authority is Covenant's signer (${COVENANT_DATA_AUTHORITY.slice(0, 8)}…). MPL Core enforced that at write time — authorship is a chain fact, not a claim.`
+      : `This record's AppData authority is ${p.attestation.authority ?? "unknown"}, which is NOT Covenant's signer. Treat it as foreign.`
     : p.asset.inCovenantCollection
       ? "The asset sits in the Covenant Agents collection, whose update authority is Covenant's signer."
-      : "This asset carries no Covenant attestation payload.";
+      : "This asset carries no Covenant AppData of its own (an agent's record lives on a separate asset — see accountability).";
 
   return (
     <main id="main-content" className="min-h-[100dvh] bg-[#030303] text-neutral-200">
@@ -284,29 +284,51 @@ export default async function AgentPassportPage({
         </div>
 
         {p.attestation && (
-          <div className="mt-6 flex flex-col gap-4">
-            <div className="border border-neutral-800 bg-neutral-950/60 p-5">
-              <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
-                Attestation payload
-              </h2>
-              <dl className="mt-4 grid gap-4 sm:grid-cols-2">
-                <Field label="Schema" value={p.attestation.payload.schema} />
+          <div className="mt-6 border border-neutral-800 bg-neutral-950/60 p-5">
+            <div className="flex items-center gap-2.5">
+              <StateDot state={p.attestation.verified ? "green" : "red"} />
+              <span className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
+                Validation record
+              </span>
+            </div>
+            <p className="mt-3 text-[13px] font-light leading-relaxed text-neutral-400">
+              {p.attestation.verified
+                ? "This asset is a Covenant validation record. Its on-chain AppData authority is the Covenant validator (Core enforced it at write time), and it carries the ERC-8004 validation type, the expected schema, and a 64-hex response hash."
+                : `This asset carries AppData but does not verify as a Covenant validation record: ${p.attestation.reasons.join("; ")}.`}
+            </p>
+            <dl className="mt-4 grid gap-4 sm:grid-cols-2">
+              {p.attestation.subjectAsset && (
+                <Field
+                  label="Subject agent"
+                  value={p.attestation.subjectAsset}
+                  href={`/agents/${p.attestation.subjectAsset}`}
+                />
+              )}
+              {p.attestation.authority && (
+                <Field
+                  label="Validator"
+                  value={p.attestation.authority}
+                  href={solscanAccountUrl(p.attestation.authority)}
+                />
+              )}
+              {p.attestation.responseHash && (
+                <Field label="Response hash" value={p.attestation.responseHash} />
+              )}
+              {p.attestation.recordedAt && (
                 <Field
                   label="Recorded at"
-                  value={new Date(p.attestation.payload.recordedAt * 1000).toISOString()}
+                  value={new Date(p.attestation.recordedAt * 1000).toISOString()}
                 />
-                <Field label="Target" value={p.attestation.payload.releaseTarget} />
-                <Field label="Subject" value={p.attestation.payload.releaseSubject} />
-              </dl>
-            </div>
-            <ChainVerifier rootHex={p.attestation.payload.rootHashHex} />
+              )}
+            </dl>
           </div>
         )}
 
         <p className="mt-10 max-w-3xl text-[12px] font-light leading-relaxed text-neutral-500">
-          Registered and proven are different states. Registration binds an asset to the 014
-          Registry; proof is an audit root that reproduces, hash by hash, from the published
-          witness chain. This page never asks a server which one you are looking at — it checks.
+          Registered, accountable, and in policy are different states. Registration binds an asset
+          to the 014 Registry; a validation record makes the agent accountable; the audit gate
+          enforces the verdict on chain. This page never asks a server which one you are looking at
+          — each check is recomputed against the chain this request.
         </p>
       </div>
 

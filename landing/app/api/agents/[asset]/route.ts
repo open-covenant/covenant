@@ -13,24 +13,20 @@ import { NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import {
   AGENT_IDENTITY_PROGRAM,
-  ATTESTATION_SCHEMA,
   COVENANT_COLLECTION,
   COVENANT_DATA_AUTHORITY,
 } from "@/app/agents/_registry";
 import { readAuditGate, type AuditGate } from "@/app/agents/_gate";
-import { findAccountability, type Accountability } from "@/app/agents/_attest";
+import {
+  appData,
+  findAccountability,
+  verifyAttestation,
+  type Accountability,
+  type Verdict,
+} from "@/app/agents/_attest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type AttestationPayload = {
-  schema: string;
-  rootHashHex: string;
-  releaseTarget: string;
-  releaseSubject: string;
-  releaseScope: string;
-  recordedAt: number;
-};
 
 export type AgentPassport = {
   asset: {
@@ -50,13 +46,8 @@ export type AgentPassport = {
     identityPlugin: boolean;
     registrationUri: string | null;
   };
-  attestation: {
-    payload: AttestationPayload;
-    /** AppData write authority recorded on-chain. */
-    authority: string | null;
-    /** authority === the Covenant minting key. */
-    covenantAuthored: boolean;
-  } | null;
+  /** If this asset is itself a validation record, its verification verdict. */
+  attestation: Verdict | null;
   doc: {
     name: string;
     image: string | null;
@@ -89,24 +80,6 @@ async function rpc(method: string, params: unknown): Promise<unknown> {
   const body = (await res.json()) as { result?: unknown; error?: { message?: string } };
   if (body.error) throw new Error(`rpc ${method}: ${body.error.message ?? "error"}`);
   return body.result;
-}
-
-// Helius indexes the AppData JSON with snake_cased keys; the on-chain bytes
-// are camelCase. Accept either so the passport never depends on an
-// indexer's casing choice.
-function normalizePayload(raw: Record<string, unknown>): AttestationPayload | null {
-  const pick = (camel: string, snake: string): unknown => raw[camel] ?? raw[snake];
-  const schema = pick("schema", "schema");
-  const root = pick("rootHashHex", "root_hash_hex");
-  if (typeof schema !== "string" || typeof root !== "string") return null;
-  return {
-    schema,
-    rootHashHex: root,
-    releaseTarget: String(pick("releaseTarget", "release_target") ?? ""),
-    releaseSubject: String(pick("releaseSubject", "release_subject") ?? ""),
-    releaseScope: String(pick("releaseScope", "release_scope") ?? ""),
-    recordedAt: Number(pick("recordedAt", "recorded_at") ?? 0),
-  };
 }
 
 export async function GET(
@@ -173,23 +146,10 @@ export async function GET(
       "uri"
     ] as string | undefined) ?? null;
 
-  // 3. The Covenant attestation, when the asset carries AppData.
-  const appData = externalPlugins.find((p) => p["type"] === "AppData");
-  let attestation: AgentPassport["attestation"] = null;
-  if (appData) {
-    const payload = normalizePayload((appData["data"] ?? {}) as Record<string, unknown>);
-    if (payload && payload.schema === ATTESTATION_SCHEMA) {
-      const authority =
-        ((appData["authority"] as Record<string, unknown> | undefined)?.["address"] as
-          | string
-          | undefined) ?? null;
-      attestation = {
-        payload,
-        authority,
-        covenantAuthored: authority === COVENANT_DATA_AUTHORITY,
-      };
-    }
-  }
+  // 3. If the asset itself is a Covenant validation record (carries AppData),
+  // verify it. Agents have no AppData on themselves; an agent's record lives on
+  // a separate asset, surfaced via accountability below.
+  const attestation = appData(das) ? verifyAttestation(das, COVENANT_DATA_AUTHORITY) : null;
 
   // 4. The registration document, when the asset points at one over https.
   const jsonUri = (content["json_uri"] as string | undefined) ?? "";

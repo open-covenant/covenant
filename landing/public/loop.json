@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T02:37:32.434Z",
+  "updatedAt": "2026-06-29T02:57:36.251Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12200,
+    "events": 12205,
     "tasks": 1430,
-    "integrated": 1432
+    "integrated": 1433
   },
   "throughput": {
     "last24h": 32,
-    "last7d": 206,
-    "velocity": 29.4
+    "last7d": 207,
+    "velocity": 29.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 9
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1432
+      "total": 1433
     }
   ],
   "states": {
-    "integrated": 1424,
+    "integrated": 1425,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "llm-estimate-tokens-div-ceil-rounding-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T02:31:10.365Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T02:45:35.940Z",
+      "task": "llm-estimate-tokens-div-ceil-rounding-coverage",
+      "note": "Integrated as f38f704d. estimate_tokens_rounds_partial_tokens_up pins the div_ceil(4) ceiling at non-multiple-of-4 inputs (1 to 1, 5 to 2, 7"
+    },
     {
       "at": "2026-06-29T02:27:59.262Z",
       "task": "llm-response-body-cap-inclusive-boundary-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-28T21:51:30.223Z",
       "task": "landing-verify-anchor3-settlement-extraction-coverage",
       "note": "Committed f67984e5 (3 files). All gates green; 8 arms mutation-proven. Verify-route anchor extraction vein complete."
-    },
-    {
-      "at": "2026-06-28T21:44:49.738Z",
-      "task": "landing-verify-anchor2-audit-chain-extraction-coverage",
-      "note": "Committed 77da28fc (3 files). All gates green; 8 arms mutation-proven."
     }
   ]
 }

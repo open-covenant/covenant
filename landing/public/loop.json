@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T16:54:12.039Z",
+  "updatedAt": "2026-06-29T17:14:15.804Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12254,
-    "tasks": 1436,
-    "integrated": 1438
+    "events": 12263,
+    "tasks": 1437,
+    "integrated": 1439
   },
   "throughput": {
-    "last24h": 28,
-    "last7d": 203,
-    "velocity": 29
+    "last24h": 29,
+    "last7d": 204,
+    "velocity": 29.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 15
+      "count": 16
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-29",
-      "total": 1438
+      "total": 1439
     }
   ],
   "states": {
-    "integrated": 1430,
+    "integrated": 1431,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "stake-keeper-jupiter-read-body-capped-exact-cap-inclusive-bo",
+    "task": "hyre-http-read-capped-exact-cap-inclusive-boundary-coverage",
     "state": "in_progress",
-    "since": "2026-06-29T14:33:12.699Z"
+    "since": "2026-06-29T17:09:57.772Z"
   },
   "recent": [
+    {
+      "at": "2026-06-29T17:07:09.589Z",
+      "task": "stake-keeper-jupiter-read-body-capped-exact-cap-inclusive-bo",
+      "note": "Committed 2a70b60c on loop/main-track. 2 files changed (jupiter.rs +1 wiremock at-cap boundary test, README metric 3205->3206). All declared"
+    },
     {
       "at": "2026-06-29T14:21:27.689Z",
       "task": "sap-bridge-worker-read-capped-exact-fit-inclusive-boundary-c",
@@ -315,11 +320,6 @@
       "at": "2026-06-28T23:16:55.870Z",
       "task": "landing-stats-route-fallback-chain-coverage",
       "note": "Committed (test-only). Stats HUD route now has mutation-proven coverage of the GitHub-primary path, git+README fallback, snapshot-floor Math"
-    },
-    {
-      "at": "2026-06-28T23:09:27.227Z",
-      "task": "landing-agents-passport-route-failclosed-coverage",
-      "note": "Committed e2d04f52 (test-only, 202 lines). Agent-passport verifier GET now has mutation-proven fail-closed coverage: 400/502/404 gates, cove"
     }
   ]
 }

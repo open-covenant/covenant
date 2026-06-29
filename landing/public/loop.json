@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T17:34:20.110Z",
+  "updatedAt": "2026-06-29T17:54:24.259Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12272,
-    "tasks": 1438,
-    "integrated": 1440
+    "events": 12290,
+    "tasks": 1440,
+    "integrated": 1442
   },
   "throughput": {
-    "last24h": 30,
-    "last7d": 205,
-    "velocity": 29.3
+    "last24h": 32,
+    "last7d": 206,
+    "velocity": 29.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 17
+      "count": 19
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-29",
-      "total": 1440
+      "total": 1442
     }
   ],
   "states": {
-    "integrated": 1432,
+    "integrated": 1434,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "metaplex-signer-read-capped-exact-cap-inclusive-boundary-cov",
+    "task": "x402-http-read-capped-exact-cap-inclusive-boundary-coverage",
     "state": "in_progress",
-    "since": "2026-06-29T17:29:01.775Z"
+    "since": "2026-06-29T17:48:23.025Z"
   },
   "recent": [
+    {
+      "at": "2026-06-29T17:47:40.909Z",
+      "task": "metaplex-das-read-body-capped-exact-cap-inclusive-boundary-c",
+      "note": "Committed 40f5d7f6 on loop/main-track. 1 file changed (das.rs +1 at-cap test; README unchanged). All declared verification passed; both >max"
+    },
+    {
+      "at": "2026-06-29T17:35:26.604Z",
+      "task": "metaplex-signer-read-capped-exact-cap-inclusive-boundary-cov",
+      "note": "Committed 5208909c on loop/main-track. 2 files changed (main.rs +2 at-cap tests, README metric 3207->3209). All declared verification passed"
+    },
     {
       "at": "2026-06-29T17:21:09.290Z",
       "task": "hyre-http-read-capped-exact-cap-inclusive-boundary-coverage",
@@ -310,16 +320,6 @@
       "at": "2026-06-28T23:54:16.156Z",
       "task": "landing-middleware-host-routing-coverage",
       "note": "committed 461f0185 test-only middleware host-routing coverage; pushed to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-28T23:36:25.046Z",
-      "task": "landing-agent-stream-live-sse-route-coverage",
-      "note": "Committed (test-only). SSE live-feed route now has mutation-proven coverage of the connect framing, ring replay, post-connect fan-out, SSE h"
-    },
-    {
-      "at": "2026-06-28T23:30:03.846Z",
-      "task": "landing-agent-stream-route-snapshot-fallback-coverage",
-      "note": "Committed (test-only). agent-stream terminal route now has mutation-proven coverage of the >=12-commit richness boundary, the snapshot fallb"
     }
   ]
 }

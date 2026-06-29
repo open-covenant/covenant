@@ -10663,6 +10663,49 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn frame_round_trips_a_payload_of_exactly_max_frame_bytes() {
+        // MAX_FRAME is the INCLUSIVE cap: the module contract is that frames
+        // *over* MAX_FRAME bytes are rejected, so a frame whose payload is
+        // exactly MAX_FRAME bytes must traverse the wire. The over-cap tests
+        // (rejects_oversized_frame_header, write_frame_rejects_oversized_payload)
+        // both probe MAX_FRAME + 1, which a `len > MAX_FRAME` -> `len >= MAX_FRAME`
+        // slip on either side still rejects — so they cannot see the cap shrink
+        // by one byte and silently turn legitimate 8 MiB frames into FrameTooLarge.
+        // Pin the inclusive endpoint end-to-end: a value serializing to exactly
+        // MAX_FRAME bytes is written by write_frame and read back by read_frame.
+        let payload = "a".repeat(MAX_FRAME as usize - 2);
+        assert_eq!(
+            serde_json::to_vec(&payload).unwrap().len(),
+            MAX_FRAME as usize,
+            "fixture must serialize to exactly the cap so the inclusive boundary is the value under test",
+        );
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_frame(&mut buf, &payload).await.expect(
+            "a value serializing to exactly MAX_FRAME bytes must be written, not rejected as FrameTooLarge",
+        );
+        assert_eq!(
+            buf.len(),
+            4 + MAX_FRAME as usize,
+            "the framed bytes must be the 4-byte length prefix plus exactly MAX_FRAME payload bytes",
+        );
+        assert_eq!(
+            u32::from_be_bytes(buf[..4].try_into().unwrap()),
+            MAX_FRAME,
+            "the length prefix must carry exactly MAX_FRAME",
+        );
+
+        let mut reader = std::io::Cursor::new(buf);
+        let decoded: String = read_frame(&mut reader).await.expect(
+            "a length prefix of exactly MAX_FRAME must be read, not rejected as FrameTooLarge",
+        );
+        assert_eq!(
+            decoded, payload,
+            "the exactly-cap-sized payload must survive the write_frame -> read_frame round-trip intact",
+        );
+    }
+
     #[test]
     fn ipc_error_frame_too_large_display_message_pins_prefix_got_payload_and_max_frame_value() {
         let err = IpcError::FrameTooLarge { got: 9_999_999 };

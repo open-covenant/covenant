@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-29T01:16:52.106Z",
+  "updatedAt": "2026-06-29T01:36:55.844Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12178,
-    "tasks": 1427,
+    "events": 12182,
+    "tasks": 1428,
     "integrated": 1430
   },
   "throughput": {
-    "last24h": 39,
+    "last24h": 37,
     "last7d": 206,
     "velocity": 29.4
   },
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1422,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "x402-per-call-cap-inclusive-boundary-coverage",
+    "state": "in_progress",
+    "since": "2026-06-29T01:19:40.622Z"
+  },
   "recent": [
     {
       "at": "2026-06-29T01:00:30.844Z",

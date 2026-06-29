@@ -203,6 +203,18 @@ mod tests {
     }
 
     #[test]
+    fn pick_accepts_amount_exactly_at_cap() {
+        // The per-call cap is inclusive: an amount equal to the cap is the
+        // largest spend the operator authorized, so it must be picked, not
+        // rejected. Guards the `<=` upper bound against a `<` regression that
+        // would silently make the cap exclusive and drop an at-budget call.
+        let reqs = vec![req("solana:mainnet", "usdc-sol", "100000")];
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+        let picked = pick_requirement(&reqs, &c).expect("at-cap amount must be accepted");
+        assert_eq!(picked.amount, "100000");
+    }
+
+    #[test]
     fn pick_rejects_wrong_chain() {
         let reqs = vec![req("base:8453", "usdc-base", "80000")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);

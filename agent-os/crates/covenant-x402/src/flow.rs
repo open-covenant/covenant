@@ -226,6 +226,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preflight_accepts_advertised_price_exactly_at_cap() {
+        // The pre-flight cap is inclusive: a catalog price equal to the cap is
+        // in budget and must fall through to the live call, not short-circuit to
+        // NoMatch. Guards the `>` comparison against a `>=` regression that would
+        // reject an at-cap entry before the network and diverge the cheap
+        // pre-flight from the authoritative live-amount check.
+        let server = challenge_server("/atcap").await;
+        let entries = vec![serde_json::from_value(entry_json(
+            "Xona",
+            "atcap",
+            &format!("{}/atcap", server.uri()),
+            "100000",
+        ))
+        .unwrap()];
+        let catalog = Catalog::new(entries);
+        let resp = catalog
+            .discover_and_pay(
+                &Client::new(reqwest::Client::new()),
+                &MockSigner,
+                &req("atcap", 100_000),
+            )
+            .await
+            .expect("at-cap advertised price must pass pre-flight and pay");
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
     async fn server_title_disambiguates_shared_slug() {
         let server = challenge_server("/shared").await;
         let entries = vec![

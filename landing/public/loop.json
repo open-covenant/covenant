@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T17:14:15.804Z",
+  "updatedAt": "2026-06-29T17:34:20.110Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12263,
-    "tasks": 1437,
-    "integrated": 1439
+    "events": 12272,
+    "tasks": 1438,
+    "integrated": 1440
   },
   "throughput": {
-    "last24h": 29,
-    "last7d": 204,
-    "velocity": 29.1
+    "last24h": 30,
+    "last7d": 205,
+    "velocity": 29.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 16
+      "count": 17
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-29",
-      "total": 1439
+      "total": 1440
     }
   ],
   "states": {
-    "integrated": 1431,
+    "integrated": 1432,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "hyre-http-read-capped-exact-cap-inclusive-boundary-coverage",
+    "task": "metaplex-signer-read-capped-exact-cap-inclusive-boundary-cov",
     "state": "in_progress",
-    "since": "2026-06-29T17:09:57.772Z"
+    "since": "2026-06-29T17:29:01.775Z"
   },
   "recent": [
+    {
+      "at": "2026-06-29T17:21:09.290Z",
+      "task": "hyre-http-read-capped-exact-cap-inclusive-boundary-coverage",
+      "note": "Committed adb9c9f6 on loop/main-track. 2 files changed (http.rs +1 wiremock at-cap boundary test, README metric 3206->3207). All declared ve"
+    },
     {
       "at": "2026-06-29T17:07:09.589Z",
       "task": "stake-keeper-jupiter-read-body-capped-exact-cap-inclusive-bo",
@@ -315,11 +320,6 @@
       "at": "2026-06-28T23:30:03.846Z",
       "task": "landing-agent-stream-route-snapshot-fallback-coverage",
       "note": "Committed (test-only). agent-stream terminal route now has mutation-proven coverage of the >=12-commit richness boundary, the snapshot fallb"
-    },
-    {
-      "at": "2026-06-28T23:16:55.870Z",
-      "task": "landing-stats-route-fallback-chain-coverage",
-      "note": "Committed (test-only). Stats HUD route now has mutation-proven coverage of the GitHub-primary path, git+README fallback, snapshot-floor Math"
     }
   ]
 }

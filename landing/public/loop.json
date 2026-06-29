@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-29T22:37:15.612Z",
+  "updatedAt": "2026-06-29T22:57:43.478Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12353,
+    "events": 12358,
     "tasks": 1447,
-    "integrated": 1449
+    "integrated": 1450
   },
   "throughput": {
-    "last24h": 34,
+    "last24h": 32,
     "last7d": 209,
     "velocity": 29.9
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 26
+      "count": 27
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1449
+      "total": 1450
     }
   ],
   "states": {
-    "integrated": 1441,
+    "integrated": 1442,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "budget-refill-eta-ms-u64-overflow-clamp-boundary-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T22:27:36.531Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T22:55:46.632Z",
+      "task": "budget-refill-eta-ms-u64-overflow-clamp-boundary-coverage",
+      "note": "Shipped as 34999a6a, pushed f7e4ad4e..34999a6a to origin/loop/main-track. Pins refill_eta_ms u64-overflow clamp (lib.rs:374) at the tight on"
+    },
     {
       "at": "2026-06-29T21:44:10.662Z",
       "task": "autonomy-status-gaps-source-flag-and-classification-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T01:56:09.607Z",
       "task": "x402-per-call-cap-inclusive-boundary-coverage",
       "note": "Integrated as a81e9501. Inclusive per-call-cap boundary pinned: pick_accepts_amount_exactly_at_cap (client.rs, amount==cap accepted) + prefl"
-    },
-    {
-      "at": "2026-06-29T01:00:30.844Z",
-      "task": "landing-stats-parsers-extraction-coverage",
-      "note": "Integrated as b48f77ee. parseMetrics + ghHeaders extracted to _stats.ts; 6 unit tests pin full-match extraction, thousands-separator capture"
     }
   ]
 }

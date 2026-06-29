@@ -108,4 +108,26 @@ describe("contact route", () => {
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: "delivery failed" });
   });
+
+  it("trims whitespace and caps field length before relaying", async () => {
+    configured();
+    const f = stubFetch(true);
+    const res = await post({
+      name: "  Alice  ",
+      email: "  alice@example.com  ",
+      message: "x".repeat(6000),
+    });
+
+    expect(res.status).toBe(200);
+    expect(f).toHaveBeenCalledTimes(1);
+    const [, init] = f.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(init.body as string);
+    // .trim(): a padded email would fail the address regex (400) and a padded
+    // name would leak into the subject; both must arrive trimmed.
+    expect(payload.reply_to).toBe("alice@example.com");
+    expect(payload.subject).toBe("Covenant contact — Alice");
+    // .slice(0, max): the body is capped at MAX.message before it is forwarded.
+    const sentMessage = (payload.text as string).split("\n\n")[1];
+    expect(sentMessage).toBe("x".repeat(5000));
+  });
 });

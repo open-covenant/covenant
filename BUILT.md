@@ -21,7 +21,7 @@ The repository already contains concrete substrate for agentic operation:
 
 Audit (`covenant-audit`) is a cross-cutting accountability layer underlying Identity, Permissions, and Settlement — append-only JSONL events, local hash-chain integrity reports, retention controls, signed actions, and audit-root attestations.
 
-The agent-to-service payment rail over HTTP 402 (x402) is live today and is distinct from the internal-receipt settlement above: the daemon can pay for metered x402 resources outbound, and Covenant operates deployed x402 seller, facilitator, and escrow services that settle in USDC on Solana — selling Covenant-Verified attestations, on-chain identity passports, and reputation reads, with the seller's signing key published at `/.well-known/x402`. What is *not* production is the daemon-driven anchoring of internal resource receipts to the settlement program; the payment rail being live does not change that boundary.
+The agent-to-service payment rail over HTTP 402 (x402) is live today and is distinct from the internal-receipt settlement above: the daemon can pay for metered x402 resources outbound, and Covenant operates a deployed x402 seller that settles in USDC on Solana mainnet — selling Covenant-Verified attestations, on-chain identity passports, and reputation reads, with the seller's signing key published at `/.well-known/x402` — alongside an escrow service and an Ephemeral-Rollup credit facilitator (the facilitator settles ER credits on devnet). What is *not* production is the daemon-driven anchoring of internal resource receipts to the settlement program; the payment rail being live does not change that boundary.
 
 The loop also has practical enforcement:
 

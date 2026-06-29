@@ -51,7 +51,7 @@ const MILESTONES: Milestone[] = [
       "Public sandbox at sandbox.opencovenant.org",
       "Live progress streaming: watch an agent work in real time across the CLI, console, and HTTP gateway",
       "Isolated code execution: agents that write, run, and iterate on real code in a contained environment",
-      "Unified model provider: plug in Anthropic, OpenAI, DeepSeek, or local Ollama once; Covenant handles fallback, response caching, and cost tracking",
+      "Unified model provider: plug in Anthropic, OpenAI, DeepSeek, or local Ollama once, with automatic local fallback",
       "Mid-task save and resume when an agent reaches its resource budget",
       "On-chain agent identity and audit-root attestation on Solana mainnet, verifiable via the Covenant Verified check (Metaplex MPL Core)",
       "Settlement program live on Solana mainnet: $CVNT-to-credits, staking, slashing, and on-chain receipt anchoring transact on-chain; the daemon-driven per-intent settlement lifecycle is not yet production",

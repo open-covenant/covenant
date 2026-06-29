@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T20:15:26.425Z",
+  "updatedAt": "2026-06-29T20:36:27.024Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12326,
+    "events": 12331,
     "tasks": 1444,
-    "integrated": 1446
+    "integrated": 1447
   },
   "throughput": {
-    "last24h": 36,
-    "last7d": 207,
-    "velocity": 29.6
+    "last24h": 37,
+    "last7d": 208,
+    "velocity": 29.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 23
+      "count": 24
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1446
+      "total": 1447
     }
   ],
   "states": {
-    "integrated": 1438,
+    "integrated": 1439,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -196,7 +195,7 @@
     },
     {
       "name": "covenant",
-      "count": 104
+      "count": 105
     },
     {
       "name": "audit",
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "covenant-cli-read-signer-stream-capped-exact-fit-not-overflo",
-    "state": "in_progress",
-    "since": "2026-06-29T20:00:20.461Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T20:29:10.663Z",
+      "task": "covenant-cli-read-signer-stream-capped-exact-fit-not-overflo",
+      "note": "Committing the CLI read_signer_stream_capped exact-fit test + README metrics bump to loop/main-track."
+    },
     {
       "at": "2026-06-29T19:57:20.181Z",
       "task": "covenantd-cross-host-dedup-horizon-inclusive-retention-bound",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T00:41:37.694Z",
       "task": "landing-contact-clean-sanitizer-trim-cap-coverage",
       "note": "Integrated as ef1f86f7. One arm pins contact route clean() .trim() and .slice(0,max) (2/2 mutations killed); zero production change. Gates: "
-    },
-    {
-      "at": "2026-06-29T00:35:46.996Z",
-      "task": "landing-mutation-quality-nightly-records-extraction-coverage",
-      "note": "Integrated as 67902ba0. readNightlyRecords + NightlyRecord extracted to landing/app/lineage/mutation-quality/_records.ts (injectable dir), 4"
     }
   ]
 }

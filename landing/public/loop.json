@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-29T19:14:40.791Z",
+  "updatedAt": "2026-06-29T19:34:53.459Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12301,
+    "events": 12304,
     "tasks": 1441,
-    "integrated": 1443
+    "integrated": 1444
   },
   "throughput": {
-    "last24h": 33,
+    "last24h": 34,
     "last7d": 205,
     "velocity": 29.3
   },
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 20
+      "count": 21
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1443
+      "total": 1444
     }
   ],
   "states": {
-    "integrated": 1435,
+    "integrated": 1436,
     "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "covenantd-x402-read-capped-exact-cap-inclusive-boundary-cove",
-    "state": "cross_review",
-    "since": "2026-06-29T18:25:44.205Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T19:26:06.048Z",
+      "task": "covenantd-x402-read-capped-exact-cap-inclusive-boundary-cove",
+      "note": "Committing the at-cap inclusive boundary test for covenantd::x402::read_capped to loop/main-track"
+    },
     {
       "at": "2026-06-29T17:58:37.020Z",
       "task": "x402-http-read-capped-exact-cap-inclusive-boundary-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T00:10:05.737Z",
       "task": "landing-verify-page-redact-author-dedup",
       "note": "committed dedup; pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-29T00:03:36.324Z",
-      "task": "landing-agent-terminal-format-extraction-coverage",
-      "note": "committed extraction + coverage; pushing to origin/loop/main-track"
     }
   ]
 }

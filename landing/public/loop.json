@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T02:17:05.744Z",
+  "updatedAt": "2026-06-29T02:37:32.434Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12191,
-    "tasks": 1429,
-    "integrated": 1431
+    "events": 12200,
+    "tasks": 1430,
+    "integrated": 1432
   },
   "throughput": {
-    "last24h": 33,
-    "last7d": 205,
-    "velocity": 29.3
+    "last24h": 32,
+    "last7d": 206,
+    "velocity": 29.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 8
+      "count": 9
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-29",
-      "total": 1431
+      "total": 1432
     }
   ],
   "states": {
-    "integrated": 1423,
+    "integrated": 1424,
     "proposed": 1,
     "blocked": 4,
     "in_progress": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "llm-response-body-cap-inclusive-boundary-coverage",
+    "task": "llm-estimate-tokens-div-ceil-rounding-coverage",
     "state": "in_progress",
-    "since": "2026-06-29T02:09:21.115Z"
+    "since": "2026-06-29T02:31:10.365Z"
   },
   "recent": [
+    {
+      "at": "2026-06-29T02:27:59.262Z",
+      "task": "llm-response-body-cap-inclusive-boundary-coverage",
+      "note": "Integrated as 04826ef5. ollama_provider_reads_body_sized_exactly_at_cap serves a body sized exactly at the cap (cap == body.len()) and asser"
+    },
     {
       "at": "2026-06-29T01:56:09.607Z",
       "task": "x402-per-call-cap-inclusive-boundary-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-28T21:44:49.738Z",
       "task": "landing-verify-anchor2-audit-chain-extraction-coverage",
       "note": "Committed 77da28fc (3 files). All gates green; 8 arms mutation-proven."
-    },
-    {
-      "at": "2026-06-28T21:37:09.335Z",
-      "task": "landing-verify-anchor1-memo-extraction-coverage",
-      "note": "Committed eb7ab32f (3 files). All gates green; 8 arms mutation-proven (7 mutations killed)."
     }
   ]
 }

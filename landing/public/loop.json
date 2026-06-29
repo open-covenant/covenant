@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T08:43:38.861Z",
+  "updatedAt": "2026-06-29T09:03:44.977Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12218,
+    "events": 12223,
     "tasks": 1432,
-    "integrated": 1434
+    "integrated": 1435
   },
   "throughput": {
-    "last24h": 24,
-    "last7d": 207,
-    "velocity": 29.6
+    "last24h": 25,
+    "last7d": 208,
+    "velocity": 29.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 11
+      "count": 12
     }
   ],
   "cumulative": [
@@ -180,19 +180,18 @@
     },
     {
       "date": "06-29",
-      "total": 1434
+      "total": 1435
     }
   ],
   "states": {
-    "integrated": 1426,
+    "integrated": 1427,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
       "name": "ipc",
-      "count": 140
+      "count": 141
     },
     {
       "name": "covenant",
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "ipc-frame-max-frame-inclusive-boundary-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T04:32:20.036Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T08:53:04.175Z",
+      "task": "ipc-frame-max-frame-inclusive-boundary-coverage",
+      "note": "Integrated as 4c4f446f on loop/main-track. frame_round_trips_a_payload_of_exactly_max_frame_bytes serves a payload (\"a\".repeat(MAX_FRAME-2))"
+    },
     {
       "at": "2026-06-29T04:24:40.931Z",
       "task": "stake-keeper-sweep-split-residue-leg-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-28T22:38:16.952Z",
       "task": "landing-verify-route-get-orchestrator-coverage",
       "note": "Committed f6aafbbe (test+config only; route.ts unchanged). vitest.config.mts + route.test.ts; 6 mutation-proven GET arms. Pushing to origin/"
-    },
-    {
-      "at": "2026-06-28T22:10:14.796Z",
-      "task": "landing-verify-git-runner-cutover-extraction-coverage",
-      "note": "Integrated as 2f495212 on loop/main-track. Extracted runGit -> lib/verify/git.ts and predatesCutover -> lib/verify/cutover.ts (5 files, +157"
     }
   ]
 }

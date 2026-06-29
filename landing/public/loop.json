@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T11:28:36.385Z",
+  "updatedAt": "2026-06-29T11:49:28.879Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12227,
+    "events": 12232,
     "tasks": 1433,
-    "integrated": 1435
+    "integrated": 1436
   },
   "throughput": {
-    "last24h": 25,
-    "last7d": 207,
-    "velocity": 29.6
+    "last24h": 26,
+    "last7d": 208,
+    "velocity": 29.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 12
+      "count": 13
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-29",
-      "total": 1435
+      "total": 1436
     }
   ],
   "states": {
-    "integrated": 1427,
+    "integrated": 1428,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "hermes-drain-sse-frames-residual-buffer-inclusive-cap-covera",
-    "state": "in_progress",
-    "since": "2026-06-29T09:19:01.375Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T11:44:13.747Z",
+      "task": "hermes-drain-sse-frames-residual-buffer-inclusive-cap-covera",
+      "note": "Integrated as 5380ecf0 on loop/main-track. test-only +28 lines to hermes.rs lib tests + README metrics bump (3202->3203, generator-confirmed"
+    },
     {
       "at": "2026-06-29T08:53:04.175Z",
       "task": "ipc-frame-max-frame-inclusive-boundary-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-28T22:46:05.892Z",
       "task": "landing-agent-ingest-route-failclosed-coverage",
       "note": "Committed 68941884 (test-only; route.ts unchanged). 5 mutation-proven fail-closed arms. Pushing to origin/loop/main-track."
-    },
-    {
-      "at": "2026-06-28T22:38:16.952Z",
-      "task": "landing-verify-route-get-orchestrator-coverage",
-      "note": "Committed f6aafbbe (test+config only; route.ts unchanged). vitest.config.mts + route.test.ts; 6 mutation-proven GET arms. Pushing to origin/"
     }
   ]
 }

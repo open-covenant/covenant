@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-29T14:33:11.804Z",
+  "updatedAt": "2026-06-29T14:53:16.221Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12253,
+    "events": 12254,
     "tasks": 1436,
     "integrated": 1438
   },
@@ -187,7 +187,7 @@
     "integrated": 1430,
     "proposed": 1,
     "blocked": 4,
-    "planned": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -215,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "stake-keeper-jupiter-read-body-capped-exact-cap-inclusive-bo",
+    "state": "in_progress",
+    "since": "2026-06-29T14:33:12.699Z"
+  },
   "recent": [
     {
       "at": "2026-06-29T14:21:27.689Z",

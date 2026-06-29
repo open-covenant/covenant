@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T00:36:44.618Z",
+  "updatedAt": "2026-06-29T00:56:48.253Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12151,
-    "tasks": 1424,
-    "integrated": 1427
+    "events": 12173,
+    "tasks": 1427,
+    "integrated": 1429
   },
   "throughput": {
-    "last24h": 38,
-    "last7d": 204,
-    "velocity": 29.1
+    "last24h": 39,
+    "last7d": 205,
+    "velocity": 29.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 4
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-29",
-      "total": 1427
+      "total": 1429
     }
   ],
   "states": {
-    "integrated": 1419,
+    "integrated": 1421,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,22 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "landing-stats-parsers-extraction-coverage",
+    "state": "in_progress",
+    "since": "2026-06-29T00:55:41.141Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-29T00:52:42.401Z",
+      "task": "landing-agents-passport-helpers-extraction-coverage",
+      "note": "Integrated as a426064e. rpcUrl + normalizePayload + AttestationPayload extracted to _passport.ts; 10 unit tests pin RPC precedence chain + c"
+    },
+    {
+      "at": "2026-06-29T00:41:37.694Z",
+      "task": "landing-contact-clean-sanitizer-trim-cap-coverage",
+      "note": "Integrated as ef1f86f7. One arm pins contact route clean() .trim() and .slice(0,max) (2/2 mutations killed); zero production change. Gates: "
+    },
     {
       "at": "2026-06-29T00:35:46.996Z",
       "task": "landing-mutation-quality-nightly-records-extraction-coverage",
@@ -305,16 +320,6 @@
       "at": "2026-06-28T04:16:12.732Z",
       "task": "landing-verify-skill-run-extraction-coverage",
       "note": "Integrated in 44f42366 on loop/main-track: checkSkillRun + types extracted to landing/lib/verify/skillRun.ts (byte-identical), route rewired"
-    },
-    {
-      "at": "2026-06-28T04:08:03.333Z",
-      "task": "landing-verify-redact-author-extraction-coverage",
-      "note": "Integrated in 2221413a on loop/main-track: redactAuthor extracted to landing/lib/verify/author.ts (byte-identical), route rewired, now-unuse"
-    },
-    {
-      "at": "2026-06-28T03:49:05.356Z",
-      "task": "landing-agent-bus-singleton-fanout-ring-coverage",
-      "note": "Committing test file to loop/main-track."
     }
   ]
 }

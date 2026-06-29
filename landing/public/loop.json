@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-29T09:03:44.977Z",
+  "updatedAt": "2026-06-29T09:24:27.129Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12223,
-    "tasks": 1432,
+    "events": 12227,
+    "tasks": 1433,
     "integrated": 1435
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1427,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "hermes-drain-sse-frames-residual-buffer-inclusive-cap-covera",
+    "state": "in_progress",
+    "since": "2026-06-29T09:19:01.375Z"
+  },
   "recent": [
     {
       "at": "2026-06-29T08:53:04.175Z",

@@ -245,6 +245,27 @@ export default async function AgentPassportPage({
               evidenceLabel="Document"
             />
           )}
+          {isAgent && (
+            <Check
+              state={
+                p.accountability == null ? "yellow" : p.accountability.accountable ? "green" : "gray"
+              }
+              label="Accountability"
+              detail={
+                p.accountability == null
+                  ? "The validation-record lookup could not complete just now."
+                  : p.accountability.accountable
+                    ? `A Covenant validator has minted ${p.accountability.count} verified validation record${p.accountability.count === 1 ? "" : "s"} naming this agent as subject${p.accountability.latest?.recordedAt ? `, latest recorded ${new Date(p.accountability.latest.recordedAt * 1000).toISOString().slice(0, 10)}` : ""}. Each record's on-chain AppData authority is the Covenant validator — Core enforced that at write time — and it carries the ERC-8004 validation type, schema, and a 64-hex response hash. Anyone can recheck it over DAS with no Covenant infrastructure in the path.`
+                    : "No Covenant validation record names this agent as subject yet. Registration proves identity; a validation record is what makes the agent accountable."
+              }
+              evidenceHref={
+                p.accountability?.latest?.asset
+                  ? solscanAccountUrl(p.accountability.latest.asset)
+                  : undefined
+              }
+              evidenceLabel="Validation record"
+            />
+          )}
           {p.gate?.gated && (
             <Check
               state={p.gate.inPolicy === true ? "green" : p.gate.inPolicy === false ? "red" : "yellow"}

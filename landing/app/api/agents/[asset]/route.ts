@@ -18,6 +18,7 @@ import {
   COVENANT_DATA_AUTHORITY,
 } from "@/app/agents/_registry";
 import { readAuditGate, type AuditGate } from "@/app/agents/_gate";
+import { findAccountability, type Accountability } from "@/app/agents/_attest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,6 +65,8 @@ export type AgentPassport = {
   } | null;
   /** Covenant audit gate (Core Oracle plugin), when the asset carries one. */
   gate: AuditGate | null;
+  /** Validation records that name this asset as subject (agent accountability). */
+  accountability: Accountability | null;
 };
 
 function rpcUrl(): string {
@@ -123,11 +126,11 @@ export async function GET(
   let das: Record<string, unknown>;
   try {
     das = (await rpc("getAsset", { id: assetPk.toBase58() })) as Record<string, unknown>;
-  } catch {
-    return NextResponse.json(
-      { error: "asset lookup failed — DAS endpoint unavailable or asset not found" },
-      { status: 502 },
-    );
+  } catch (e) {
+    if (/not found/i.test(String(e))) {
+      return NextResponse.json({ error: "no asset at this address" }, { status: 404 });
+    }
+    return NextResponse.json({ error: "asset lookup failed — DAS endpoint unavailable" }, { status: 502 });
   }
   if (!das || das["interface"] !== "MplCoreAsset") {
     return NextResponse.json(
@@ -213,6 +216,15 @@ export async function GET(
   // 5. The Covenant audit gate (Core Oracle plugin → covenant-oracle program).
   const gate = await readAuditGate(rpc, externalPlugins, assetPk);
 
+  // 6. Accountability: validation records that name this asset as subject (the
+  // agent's record lives on a separate asset, not as AppData on the agent).
+  let accountability: Accountability | null = null;
+  try {
+    accountability = await findAccountability(rpc, assetPk.toBase58(), COVENANT_DATA_AUTHORITY);
+  } catch {
+    // leave null — the page renders accountability as an "unknown" state
+  }
+
   const passport: AgentPassport = {
     asset: {
       id: assetPk.toBase58(),
@@ -233,6 +245,7 @@ export async function GET(
     attestation,
     doc,
     gate,
+    accountability,
   };
 
   return NextResponse.json(passport, {

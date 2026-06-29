@@ -859,4 +859,70 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value.get("result").and_then(|r| r.as_str()), Some("ok"));
     }
+
+    #[tokio::test]
+    async fn read_capped_reads_a_declared_body_at_the_exact_cap_and_rejects_one_byte_over() {
+        // Both guards use `> max`, so a body sized exactly at the cap fits. The
+        // existing tests bracket from far away (5000/cap 64, 200/cap 64), where
+        // `> max` and `>= max` agree. At a Content-Length body of length N with
+        // cap N the pre-check (main.rs:356) passes (N is not > N) AND the
+        // accumulation guard (main.rs:362) reaches exactly N, so this accept
+        // drives both guards to their boundary and a `> -> >=` slip on either
+        // turns it into a spurious over-cap bail.
+        let body = vec![b'a'; 256];
+        let n = body.len();
+
+        let mut raw = format!("HTTP/1.1 200 OK\r\nContent-Length: {n}\r\n\r\n").into_bytes();
+        raw.extend_from_slice(&body);
+        let resp = reqwest::Client::new()
+            .get(&serve_once(raw))
+            .send()
+            .await
+            .unwrap();
+        let bytes = read_capped(resp, n)
+            .await
+            .expect("a declared body sized exactly at the cap fits and must read back whole");
+        assert_eq!(bytes, body);
+
+        let mut raw = format!("HTTP/1.1 200 OK\r\nContent-Length: {n}\r\n\r\n").into_bytes();
+        raw.extend_from_slice(&body);
+        let resp = reqwest::Client::new()
+            .get(&serve_once(raw))
+            .send()
+            .await
+            .unwrap();
+        let err = read_capped(resp, n - 1).await.unwrap_err().to_string();
+        assert!(err.contains("over the"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn read_capped_reads_a_chunked_body_at_the_exact_cap() {
+        // Chunked framing leaves Content-Length unset, so the pre-check is
+        // skipped and only the accumulation guard (main.rs:362) can stop the
+        // body — the realistic absent-header case the guard exists for, which
+        // read_capped_rejects_oversized_streamed_body only inspection-verifies
+        // away from the boundary (200/cap 64). A chunked body of length N read
+        // with cap N accumulates to exactly N, so a `> -> >=` slip on :362
+        // rejects a body that fits.
+        let body = vec![b'b'; 256];
+        let n = body.len();
+
+        let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        raw.extend_from_slice(format!("{:x}\r\n", n).as_bytes());
+        raw.extend_from_slice(&body);
+        raw.extend_from_slice(b"\r\n0\r\n\r\n");
+        let resp = reqwest::Client::new()
+            .get(&serve_once(raw))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            resp.content_length().is_none(),
+            "chunked body has no length"
+        );
+        let bytes = read_capped(resp, n)
+            .await
+            .expect("a chunked body accumulating to exactly the cap fits and must read back whole");
+        assert_eq!(bytes, body);
+    }
 }

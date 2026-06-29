@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T18:14:28.155Z",
+  "updatedAt": "2026-06-29T18:34:32.036Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12299,
+    "events": 12301,
     "tasks": 1441,
     "integrated": 1443
   },
   "throughput": {
     "last24h": 33,
-    "last7d": 207,
-    "velocity": 29.6
+    "last7d": 206,
+    "velocity": 29.4
   },
   "daily": [
     {
@@ -187,7 +187,7 @@
     "integrated": 1435,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "covenantd-x402-read-capped-exact-cap-inclusive-boundary-cove",
-    "state": "in_progress",
-    "since": "2026-06-29T17:59:27.360Z"
+    "state": "cross_review",
+    "since": "2026-06-29T18:25:44.205Z"
   },
   "recent": [
     {

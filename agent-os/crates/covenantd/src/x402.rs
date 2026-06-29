@@ -885,4 +885,51 @@ mod tests {
             "got {err:?}"
         );
     }
+
+    #[tokio::test]
+    async fn read_stream_capped_treats_an_exact_max_fill_as_an_exact_fit_not_overflow() {
+        // read_stream_capped reads through take(max + 1) and sets
+        // overflowed = buf.len() > max (x402.rs:218), so a signer stream of
+        // exactly max bytes is an exact fit (overflowed false, buffer returned
+        // whole) and only max + 1 is a truncated flood (overflowed true, buffer
+        // clamped to max) — the discriminator the extra read byte exists to
+        // enable. The signer cap tests bracket this from far away:
+        // build_payment_with_limits_rejects_oversized_signer_stdout floods far
+        // past the cap and subprocess_signer_returns_stdout_header sits far
+        // under, so neither lands on buf.len() == max, where a `> max` ->
+        // `>= max` slip flips an exact-max signer stdout to a spurious overflow
+        // that read_signer_output fails closed on with StdoutTooLarge, rejecting
+        // a legal worst-case envelope sized exactly at the cap. Pin the
+        // inclusive endpoint directly.
+        let max = 64;
+
+        let exact = vec![b'x'; max];
+        let mut reader = exact.as_slice();
+        let (buf, overflowed) = read_stream_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            !overflowed,
+            "a stream of exactly max bytes is an exact fit, not a flood"
+        );
+        assert_eq!(
+            buf, exact,
+            "an exact-fit body must be returned whole, not truncated"
+        );
+
+        let flood = vec![b'x'; max + 1];
+        let mut reader = flood.as_slice();
+        let (buf, overflowed) = read_stream_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            overflowed,
+            "a stream of max + 1 bytes is a truncated flood and must report overflow"
+        );
+        assert_eq!(
+            buf.len(),
+            max,
+            "an over-cap read must clamp the returned buffer to max"
+        );
+    }
 }

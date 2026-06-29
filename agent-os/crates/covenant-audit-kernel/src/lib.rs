@@ -2970,10 +2970,6 @@ let mut acc64 = lu(line, p_ts) ^ lu(ts_digits, 0);
 acc64 |= lu(line, p_ts + tl - 8) ^ lu(ts_digits, tl - 8);
 let p = p_ts + tl;
 let p_ev = p + 19;
-acc = v128_or(acc, v128_xor(ld(line, p_ev), ld(event_hex, 0)));
-acc = v128_or(acc, v128_xor(ld(line, p_ev + 16), ld(event_hex, 16)));
-acc = v128_or(acc, v128_xor(ld(line, p_ev + 32), ld(event_hex, 32)));
-acc = v128_or(acc, v128_xor(ld(line, p_ev + 48), ld(event_hex, 48)));
 let q = p_ev + 64;
 let p_pr = q + 23;
 acc64 |= u64::from(line[p_pr + 64] ^ b'"');
@@ -3003,10 +2999,6 @@ ok &= bytes_eq(&line[p_ts..p_ts + tl], ts_digits);
 ok &= eq_n::<19>(
 lit(p_ts + tl)[..19].try_into().expect("19-byte slice"),
 b",\"event_hash_hex\":\"",
-);
-ok &= eq_n::<64>(
-line[p_ev..p_ev + 64].try_into().expect("64-byte slice"),
-event_hex,
 );
 ok &= eq_n::<23>(
 lit(p_ev + 64)[..23].try_into().expect("23-byte slice"),

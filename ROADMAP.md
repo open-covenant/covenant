@@ -43,7 +43,7 @@ The runtime needs stronger isolation and clearer policy boundaries before it can
 - Multi-peer operation across authenticated hosts.
 - Public provenance through signed artifacts and transparency-log attestation.
 - Daemon-driven on-chain settlement and provider-payout escrow, built on the deployed Solana settlement program (the program is deployed on mainnet; credit mint, burn, treasury, staking, slashing, credit metering, and receipt-batch anchoring are implemented on-chain, but the economic lifecycle is not yet production). See [BUILT.md](./BUILT.md) for the honesty boundary.
-- The agent-to-service payment rail over HTTP 402 (x402) is already operating: Covenant runs live x402 seller, facilitator, and escrow services that settle in USDC on Solana, and the daemon can pay for metered x402 resources outbound. The remaining settlement work is the daemon-driven anchoring of internal resource receipts described above, not the payment rail itself.
+- The agent-to-service payment rail over HTTP 402 (x402) is already operating: Covenant runs a live x402 seller that settles in USDC on Solana mainnet, alongside an escrow service and an Ephemeral-Rollup credit facilitator, and the daemon can pay for metered x402 resources outbound. The remaining settlement work is the daemon-driven anchoring of internal resource receipts described above, not the payment rail itself.
 - SDKs for agent authors.
 - Installer and upgrade path for local machines.
 - Marketplace and registry infrastructure for authenticated agent networks.

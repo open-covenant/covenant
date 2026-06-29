@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T13:12:10.405Z",
+  "updatedAt": "2026-06-29T13:32:17.135Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12236,
+    "events": 12237,
     "tasks": 1434,
     "integrated": 1436
   },
   "throughput": {
     "last24h": 26,
-    "last7d": 206,
-    "velocity": 29.4
+    "last7d": 205,
+    "velocity": 29.3
   },
   "daily": [
     {
@@ -187,7 +187,7 @@
     "integrated": 1428,
     "proposed": 1,
     "blocked": 4,
-    "in_progress": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "tui-truncate-home-display-exact-budget-inclusive-endpoint-co",
-    "state": "in_progress",
-    "since": "2026-06-29T11:57:04.466Z"
+    "state": "self_review",
+    "since": "2026-06-29T13:31:36.650Z"
   },
   "recent": [
     {

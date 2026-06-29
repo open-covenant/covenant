@@ -17,18 +17,10 @@ import {
   COVENANT_COLLECTION,
   COVENANT_DATA_AUTHORITY,
 } from "@/app/agents/_registry";
+import { type AttestationPayload, normalizePayload, rpcUrl } from "./_passport";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type AttestationPayload = {
-  schema: string;
-  rootHashHex: string;
-  releaseTarget: string;
-  releaseSubject: string;
-  releaseScope: string;
-  recordedAt: number;
-};
 
 export type AgentPassport = {
   asset: {
@@ -63,15 +55,6 @@ export type AgentPassport = {
   } | null;
 };
 
-function rpcUrl(): string {
-  return (
-    process.env.COVENANT_SOLANA_MAINNET_RPC_URL ||
-    process.env.NEXT_PUBLIC_COVENANT_SOLANA_MAINNET_RPC_URL ||
-    process.env.NEXT_PUBLIC_COVENANT_SOLANA_RPC_URL ||
-    "https://api.mainnet-beta.solana.com"
-  );
-}
-
 async function rpc(method: string, params: unknown): Promise<unknown> {
   const res = await fetch(rpcUrl(), {
     method: "POST",
@@ -83,24 +66,6 @@ async function rpc(method: string, params: unknown): Promise<unknown> {
   const body = (await res.json()) as { result?: unknown; error?: { message?: string } };
   if (body.error) throw new Error(`rpc ${method}: ${body.error.message ?? "error"}`);
   return body.result;
-}
-
-// Helius indexes the AppData JSON with snake_cased keys; the on-chain bytes
-// are camelCase. Accept either so the passport never depends on an
-// indexer's casing choice.
-function normalizePayload(raw: Record<string, unknown>): AttestationPayload | null {
-  const pick = (camel: string, snake: string): unknown => raw[camel] ?? raw[snake];
-  const schema = pick("schema", "schema");
-  const root = pick("rootHashHex", "root_hash_hex");
-  if (typeof schema !== "string" || typeof root !== "string") return null;
-  return {
-    schema,
-    rootHashHex: root,
-    releaseTarget: String(pick("releaseTarget", "release_target") ?? ""),
-    releaseSubject: String(pick("releaseSubject", "release_subject") ?? ""),
-    releaseScope: String(pick("releaseScope", "release_scope") ?? ""),
-    recordedAt: Number(pick("recordedAt", "recorded_at") ?? 0),
-  };
 }
 
 export async function GET(

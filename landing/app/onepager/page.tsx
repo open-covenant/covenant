@@ -142,12 +142,13 @@ export default function OnePagerPage() {
         <div className="block">
           <p className="seclabel"><span className="n">04</span>Business model</p>
           <p>
-            <b>Covenant is infrastructure others build on.</b> Execution skills monetize as a{" "}
-            <b>per-action fee assessed at signing</b>, with a premium tier for verifiable receipts and neutral
-            attestation. Teams building their own agents and platforms <b>license the trust layer and its enterprise
-            features</b> directly. Covenant never touches a partner&rsquo;s payment rails or token, so revenue scales with
-            agent on-chain activity, the one metric every consumer agent roadmap is built to grow. $CVNT aligns the
-            network through real-yield staking from protocol fees.
+            <span className="lit">Covenant is infrastructure others build on.</span>{" "}Execution skills monetize as a{" "}
+            <span className="lit">per-action fee assessed at signing</span>, with a premium tier for verifiable receipts
+            and neutral attestation. Teams building their own agents and platforms{" "}
+            <span className="lit">license the trust layer and its enterprise features</span>{" "}directly. Covenant never
+            touches a partner&rsquo;s payment rails or token, so revenue scales with agent on-chain activity, the one
+            metric every consumer agent roadmap is built to grow. $CVNT aligns the network through real-yield staking
+            from protocol fees.
           </p>
         </div>
 

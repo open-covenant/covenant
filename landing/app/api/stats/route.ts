@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { findRepoRoot } from "@/lib/agentStream.mjs";
+import { ghHeaders, parseMetrics } from "./_stats";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,23 +19,6 @@ let cache: { at: number; body: string } | null = null;
 
 const git = (root: string, args: string[]) =>
   execFileSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).trim();
-
-function parseMetrics(md: string) {
-  return {
-    tests: md.match(/([\d,]+)\s+source-discovered Rust tests/i)?.[1] ?? null,
-    live: md.match(/([\d,]+)\s+live boundary tests/i)?.[1] ?? null,
-    crates: md.match(/(\d+)\s+Rust crates/i)?.[1] ?? null,
-  };
-}
-
-function ghHeaders() {
-  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-  return {
-    "user-agent": "covenant-hud",
-    accept: "application/vnd.github+json",
-    ...(token ? { authorization: `Bearer ${token}` } : {}),
-  };
-}
 
 // Read head + total commit count straight from GitHub so the strip tracks
 // origin/main regardless of when the site last deployed — the deployed checkout

@@ -136,7 +136,6 @@ export default function OnePagerPage() {
 
         <div className="foot">
           <span className="site"><span className="tag">{"</>"}</span>opencovenant.org</span>
-          <span>Prepared by Mizuki Hayashi, Covenant</span>
         </div>
       </div>
     </main>

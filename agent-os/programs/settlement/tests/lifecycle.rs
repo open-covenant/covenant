@@ -21,6 +21,47 @@ fn credit_buy_then_consume_tracks_balance() {
     assert_eq!(credit_balance(&env, &credits), 0);
 }
 
+// Each consume folds its receipt_hash into the credit account's provenance
+// root (root = sha256(root || receipt_hash)), so the account carries a
+// tamper-evident hash-chain of every metered action, committed to L1 with the
+// balance. This is the on-chain half of the audit/receipt-root-in-ER work.
+#[test]
+fn consume_chains_provenance_root_in_credit_account() {
+    use solana_sdk::hash::hashv;
+    let mut env = boot();
+    let credits = open_credit_account(&mut env);
+    let owner_covnt = funded_covnt(&mut env, 1_000);
+    buy_credits(&mut env, &credits, &owner_covnt, 10).expect("buy"); // 100 credits
+
+    // Genesis: the provenance root is 32 zero bytes.
+    assert_eq!(credit_provenance_root(&env, &credits), [0u8; 32]);
+
+    let r1 = [1u8; 32];
+    let r2 = [2u8; 32];
+    consume_credits_with(&mut env, &credits, 5, r1).expect("consume r1");
+    consume_credits_with(&mut env, &credits, 5, r2).expect("consume r2");
+
+    let genesis = [0u8; 32];
+    let root1 = hashv(&[&genesis, &r1]).to_bytes();
+    let expected = hashv(&[&root1, &r2]).to_bytes();
+    assert_eq!(credit_provenance_root(&env, &credits), expected);
+    assert_eq!(credit_balance(&env, &credits), 90);
+}
+
+// A legacy 49-byte credit account (no provenance_root) grows to the current
+// layout on migrate, preserving its balance and starting the root at genesis.
+// This is the upgrade path for accounts that predate the provenance field.
+#[test]
+fn migrate_credit_account_upgrades_legacy_layout() {
+    let mut env = boot();
+    let credits = plant_legacy_credit_account(&mut env, 4_242);
+    migrate_credit_account(&mut env, &credits).expect("migrate legacy credit account");
+
+    let acc_balance = credit_balance(&env, &credits); // only deserializes if realloc succeeded
+    assert_eq!(acc_balance, 4_242); // preserved
+    assert_eq!(credit_provenance_root(&env, &credits), [0u8; 32]); // genesis
+}
+
 // Regression for the re-stake lockout: before `unstake` closed the position,
 // a second stake to the same (agent, owner) PDA failed on `init`.
 #[test]

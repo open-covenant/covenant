@@ -185,6 +185,7 @@ pub fn plant_phantom_credit_account(env: &mut Env, owner: &Pubkey) -> Pubkey {
         owner: *owner,
         balance: 0,
         bump: 255,
+        provenance_root: [0u8; 32],
     }
     .try_serialize(&mut data)
     .unwrap();
@@ -210,6 +211,14 @@ pub fn credit_balance(env: &Env, credits: &Pubkey) -> u64 {
     CreditAccount::try_deserialize(&mut data)
         .expect("credit account")
         .balance
+}
+
+pub fn credit_provenance_root(env: &Env, credits: &Pubkey) -> [u8; 32] {
+    let acc = env.svm.get_account(credits).expect("credit account exists");
+    let mut data = acc.data();
+    CreditAccount::try_deserialize(&mut data)
+        .expect("credit account")
+        .provenance_root
 }
 
 pub fn register_agent(env: &mut Env, agent_key: &[u8; 32]) -> Pubkey {
@@ -648,10 +657,19 @@ pub fn consume_credits(
     credits: &Pubkey,
     amount: u64,
 ) -> Result<(), TransactionError> {
+    consume_credits_with(env, credits, amount, [9u8; 32])
+}
+
+pub fn consume_credits_with(
+    env: &mut Env,
+    credits: &Pubkey,
+    amount: u64,
+    receipt_hash: [u8; 32],
+) -> Result<(), TransactionError> {
     let owner = env.payer.pubkey();
     let data = ix::ConsumeCredits {
         amount,
-        receipt_hash: [9u8; 32],
+        receipt_hash,
     }
     .data();
     let metas = vec![
@@ -1052,6 +1070,57 @@ pub fn plant_legacy_config(env: &mut Env) {
             },
         )
         .unwrap();
+}
+
+pub fn migrate_credit_account(env: &mut Env, credits: &Pubkey) -> Result<(), TransactionError> {
+    let owner = env.payer.pubkey();
+    let data = ix::MigrateCreditAccount {}.data();
+    let metas = vec![
+        AccountMeta::new(*credits, false),
+        AccountMeta::new(owner, true),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[],
+    )
+}
+
+/// Plant a legacy 49-byte CreditAccount (no provenance_root) at the canonical
+/// `[b"credits", owner]` PDA to model a pre-migration account.
+pub fn plant_legacy_credit_account(env: &mut Env, balance: u64) -> Pubkey {
+    let owner = env.payer.pubkey();
+    let (credits, bump) = Pubkey::find_program_address(&[b"credits", owner.as_ref()], &ID);
+    let acc = CreditAccount {
+        owner,
+        balance,
+        bump,
+        provenance_root: [0u8; 32],
+    };
+    let mut full = Vec::new();
+    acc.try_serialize(&mut full).unwrap();
+    let legacy = full[..full.len() - 32].to_vec(); // drop the trailing provenance_root
+    let lamports = env.svm.minimum_balance_for_rent_exemption(legacy.len());
+    env.svm
+        .set_account(
+            credits,
+            Account {
+                lamports,
+                data: legacy,
+                owner: ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    credits
 }
 
 pub fn set_credits_per_covnt(env: &mut Env, value: u64) -> Result<(), TransactionError> {

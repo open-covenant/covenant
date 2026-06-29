@@ -847,4 +847,42 @@ mod tests {
             "got {err:?}"
         );
     }
+
+    #[tokio::test]
+    async fn read_capped_reads_a_body_at_the_exact_cap_and_rejects_one_byte_over() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        // read_capped guards memory with `> max` on both the Content-Length
+        // pre-check (x402.rs:496) and the running accumulation check (x402.rs:502),
+        // so a body sized exactly at the cap fits and must read back whole.
+        // paid_response_body_read_is_bounded only brackets the boundary from far
+        // away ("hello"/cap 64 under, 4096/cap 64 over) and its comment concedes
+        // the accumulation guard is inspection-verified, so a `> max -> >= max`
+        // slip on either guard survives it. Serve a body of known length N: at
+        // cap N the original accepts (N is not > N) while the mutant rejects, and
+        // at cap N-1 the body sits one byte over and is refused.
+        const BODY: &str = "covenant daemon x402 paid-call at-cap inclusive boundary fixture";
+        let n = BODY.len();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(BODY))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let resp = http.get(server.uri()).send().await.expect("request");
+        let body = read_capped(resp, n)
+            .await
+            .expect("a body sized exactly at the cap fits and must read back whole");
+        assert_eq!(body, BODY);
+
+        let resp = http.get(server.uri()).send().await.expect("request");
+        let err = read_capped(resp, n - 1)
+            .await
+            .expect_err("a body one byte over the cap must be rejected");
+        assert!(
+            matches!(err, X402DaemonError::ResponseTooLarge(_)),
+            "got {err:?}"
+        );
+    }
 }

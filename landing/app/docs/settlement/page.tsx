@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-const META_ARGS = ["settlement", "Settlement", 'Local receipts, credit accounting, and the planned on-chain settlement path.'] as const;
+const META_ARGS = ["settlement", "Settlement", 'Local receipts, credit accounting, and the on-chain settlement program, live on mainnet.'] as const;
 export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function SettlementPage() {
@@ -179,18 +179,33 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
 {"schema":"covenant.settlement.backfill.v1","row_count":12,"rollback_path":null,"dry_run":true}`}</code>
       </pre>
 
+      <h2>x402 payment rail</h2>
+      <p>
+        Distinct from the internal receipt flush above, the agent-to-service
+        payment rail over HTTP 402 (x402) is live. The daemon can pay for
+        metered x402 resources outbound, and Covenant operates deployed x402
+        seller, facilitator, and escrow services that settle in USDC on
+        Solana &mdash; selling Covenant-Verified attestations, on-chain
+        identity passports, and reputation reads, with the seller&rsquo;s
+        signing key published at <code>/.well-known/x402</code>. This is a
+        separate concern from anchoring internal resource receipts: the
+        payment rail being live does not make the receipt flush production.
+      </p>
+
       <h2>Release</h2>
       <p>
-        Local receipts and recent-receipt reads are implemented. On-chain
-        settlement is planned and scaffolded; it is not production and
-        should not be described as deployed.
+        Local receipts and recent-receipt reads are implemented. The Solana
+        settlement program is deployed and live on mainnet — $CVNT-to-credits,
+        staking, slashing, and on-chain receipt anchoring transact on-chain.
+        The daemon-driven per-intent settlement lifecycle that anchors internal
+        resource receipts is not yet production.
       </p>
 
       <h2>Related</h2>
       <ul>
         <li>
           <Link href="/architecture">Architecture</Link>: the
-          settlement scaffold in the broader system map.
+          settlement program in the broader system map.
         </li>
         <li>
           <Link href="/identity">Identity and keys</Link>: the

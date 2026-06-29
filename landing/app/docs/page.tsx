@@ -33,7 +33,7 @@ const TILES = [
   {
     href: "/architecture",
     title: "Architecture",
-    body: "Architecture of the daemon, runtime, local control plane, and settlement scaffold.",
+    body: "Architecture of the daemon, runtime, local control plane, and on-chain settlement program.",
   },
   {
     href: "/cli",

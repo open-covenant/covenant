@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 
-const META_ARGS = ["architecture", "System architecture", 'How the daemon, runtime, storage primitives, adapters, and settlement scaffold fit together.'] as const;
+const META_ARGS = ["architecture", "System architecture", 'How the daemon, runtime, storage primitives, adapters, and settlement program fit together.'] as const;
 export const metadata = buildDocsMetadata(...META_ARGS);
 
 export default function ArchitecturePage() {
@@ -568,13 +568,13 @@ export default function ArchitecturePage() {
         </tbody>
       </table>
 
-      <h2>Settlement scaffold</h2>
+      <h2>Settlement</h2>
       <p>
-        Covenant records local settlement receipts today. The repository
-        also contains an experimental Anchor program for the future Solana
-        settlement path described in <Link href="/settlement">Settlement</Link>.
-        Credit minting, burn reconciliation, oracle integration, and provider
-        payout flows are tracked as protocol hardening work.
+        Covenant records local settlement receipts today. The Solana settlement
+        program is deployed and live on mainnet — credit mint and burn, staking,
+        slashing, and on-chain receipt anchoring are implemented on-chain (see
+        <Link href="/settlement">Settlement</Link>). The daemon-driven per-intent
+        settlement lifecycle and provider-payout flows are not yet production.
       </p>
 
       <p>

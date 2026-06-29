@@ -30,7 +30,7 @@ pub mod x402;
 
 pub use client::AceDataClient;
 pub use config::AceDataConfig;
-pub use provenance::Provenance;
+pub use provenance::{Cost, Provenance, CREDIT_USD_RATE};
 pub use tools::{acedata_tools, IMAGE_TOOL, MUSIC_TOOL, PROVIDER, SEARCH_TOOL};
 pub use x402::X402Payer;
 

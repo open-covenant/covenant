@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T22:57:43.478Z",
+  "updatedAt": "2026-06-29T23:17:48.797Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12358,
-    "tasks": 1447,
-    "integrated": 1450
+    "events": 12368,
+    "tasks": 1448,
+    "integrated": 1451
   },
   "throughput": {
-    "last24h": 32,
-    "last7d": 209,
-    "velocity": 29.9
+    "last24h": 31,
+    "last7d": 210,
+    "velocity": 30
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 27
+      "count": 28
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-29",
-      "total": 1450
+      "total": 1451
     }
   ],
   "states": {
-    "integrated": 1442,
+    "integrated": 1443,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-29T23:13:48.758Z",
+      "task": "hatcher-connector-wstransport-backoff-jitter-coverage",
+      "note": "Shipped as cb5a2612, pushed 34999a6a..cb5a2612 to origin/loop/main-track. Pins WsTransport.scheduleReconnect full-jitter upper bound (wsTran"
+    },
     {
       "at": "2026-06-29T22:55:46.632Z",
       "task": "budget-refill-eta-ms-u64-overflow-clamp-boundary-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-29T02:27:59.262Z",
       "task": "llm-response-body-cap-inclusive-boundary-coverage",
       "note": "Integrated as 04826ef5. ollama_provider_reads_body_sized_exactly_at_cap serves a body sized exactly at the cap (cap == body.len()) and asser"
-    },
-    {
-      "at": "2026-06-29T01:56:09.607Z",
-      "task": "x402-per-call-cap-inclusive-boundary-coverage",
-      "note": "Integrated as a81e9501. Inclusive per-call-cap boundary pinned: pick_accepts_amount_exactly_at_cap (client.rs, amount==cap accepted) + prefl"
     }
   ]
 }

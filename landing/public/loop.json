@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T19:34:53.459Z",
+  "updatedAt": "2026-06-29T19:54:57.819Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12304,
-    "tasks": 1441,
-    "integrated": 1444
+    "events": 12317,
+    "tasks": 1443,
+    "integrated": 1445
   },
   "throughput": {
-    "last24h": 34,
-    "last7d": 205,
-    "velocity": 29.3
+    "last24h": 35,
+    "last7d": 206,
+    "velocity": 29.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 21
+      "count": 22
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "06-29",
-      "total": 1444
+      "total": 1445
     }
   ],
   "states": {
-    "integrated": 1436,
+    "integrated": 1437,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,8 +215,17 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "covenantd-cross-host-dedup-horizon-inclusive-retention-bound",
+    "state": "in_progress",
+    "since": "2026-06-29T19:50:05.728Z"
+  },
   "recent": [
+    {
+      "at": "2026-06-29T19:48:23.697Z",
+      "task": "covenantd-x402-read-stream-capped-exact-fit-not-overflow-cov",
+      "note": "Committing the read_stream_capped exact-fit test + README metrics bump to loop/main-track."
+    },
     {
       "at": "2026-06-29T19:26:06.048Z",
       "task": "covenantd-x402-read-capped-exact-cap-inclusive-boundary-cove",
@@ -310,11 +320,6 @@
       "at": "2026-06-29T00:17:13.147Z",
       "task": "landing-header-stats-uptime-extraction-coverage",
       "note": "committed extraction + coverage; pushing to origin/loop/main-track"
-    },
-    {
-      "at": "2026-06-29T00:10:05.737Z",
-      "task": "landing-verify-page-redact-author-dedup",
-      "note": "committed dedup; pushing to origin/loop/main-track"
     }
   ]
 }

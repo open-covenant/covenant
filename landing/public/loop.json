@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-29T04:17:51.550Z",
+  "updatedAt": "2026-06-29T04:37:59.972Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12211,
-    "tasks": 1431,
-    "integrated": 1433
+    "events": 12218,
+    "tasks": 1432,
+    "integrated": 1434
   },
   "throughput": {
-    "last24h": 23,
-    "last7d": 207,
-    "velocity": 29.6
+    "last24h": 24,
+    "last7d": 208,
+    "velocity": 29.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-29",
-      "count": 10
+      "count": 11
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-29",
-      "total": 1433
+      "total": 1434
     }
   ],
   "states": {
-    "integrated": 1425,
+    "integrated": 1426,
     "proposed": 1,
     "blocked": 4,
-    "cross_review": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "stake-keeper-sweep-split-residue-leg-coverage",
-    "state": "cross_review",
-    "since": "2026-06-29T04:13:34.723Z"
+    "task": "ipc-frame-max-frame-inclusive-boundary-coverage",
+    "state": "in_progress",
+    "since": "2026-06-29T04:32:20.036Z"
   },
   "recent": [
+    {
+      "at": "2026-06-29T04:24:40.931Z",
+      "task": "stake-keeper-sweep-split-residue-leg-coverage",
+      "note": "Integrated as faa29716 on loop/main-track. Test-only: strengthened split_absorbs_rounding_residue_into_subsidy from sum-only (tautological) "
+    },
     {
       "at": "2026-06-29T02:45:35.940Z",
       "task": "llm-estimate-tokens-div-ceil-rounding-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-28T22:10:14.796Z",
       "task": "landing-verify-git-runner-cutover-extraction-coverage",
       "note": "Integrated as 2f495212 on loop/main-track. Extracted runGit -> lib/verify/git.ts and predatesCutover -> lib/verify/cutover.ts (5 files, +157"
-    },
-    {
-      "at": "2026-06-28T21:51:30.223Z",
-      "task": "landing-verify-anchor3-settlement-extraction-coverage",
-      "note": "Committed f67984e5 (3 files). All gates green; 8 arms mutation-proven. Verify-route anchor extraction vein complete."
     }
   ]
 }

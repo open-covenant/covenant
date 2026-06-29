@@ -37,7 +37,6 @@ The runtime needs stronger isolation and clearer policy boundaries before it can
 - Secret access through daemon-mediated tools instead of direct environment exposure.
 - Capability scopes for agent-to-agent send, receive, respond, tool calls, memory writes, and external gateways.
 - Operator-visible provenance for every privileged action.
-- Unified model provider: configure Anthropic, OpenAI, DeepSeek, or local Ollama once, with daemon-managed ordered fallback, response caching, and per-call cost tracking.
 
 ## Later: Networked Agents and Settlement
 

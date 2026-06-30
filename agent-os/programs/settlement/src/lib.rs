@@ -312,13 +312,18 @@ pub mod settlement {
         Ok(())
     }
 
-    /// Slash an agent's bond for its on-chain actions. Unlike `slash_stake`, the
-    /// reason is not supplied by the caller: it is read from the agent's credit
-    /// account `provenance_root` (the verifiable hash-chain of what the agent
-    /// did, maintained gaslessly in the ER and committed to L1). The credit
-    /// account is bound to the agent by its operator (the `[b"credits", operator]`
-    /// PDA), so the penalty is provably anchored to the agent's own record rather
-    /// than an arbitrary claim.
+    /// Slash an agent's bond citing its on-chain actions. The reason is not
+    /// supplied by the caller: it is read from the `provenance_root` of the
+    /// operator's canonical credit account (`[b"credits", agent.operator]`), the
+    /// hash-chain `consume_credits` folds gaslessly in the ER and commits to L1.
+    /// So the reason is the operator's own committed record, not an arbitrary claim.
+    ///
+    /// Two limits the caller must know. The credit account must be undelegated:
+    /// `Account<CreditAccount>` cannot load while owned by the delegation program,
+    /// so an operator can defer this slash for up to the delegation timeout. And
+    /// the binding is to the operator's canonical credit account, not a per-agent
+    /// log, so it assumes the operator meters through that account. For a slash
+    /// that depends on neither, use `slash_stake`.
     pub fn slash_for_actions(ctx: Context<SlashForActions>, amount: u64) -> Result<()> {
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(amount > 0, CovenantError::ZeroAmount);
@@ -328,7 +333,10 @@ pub mod settlement {
             CovenantError::InsufficientStake
         );
 
+        // A slash "for actions" requires recorded actions: refuse to cite a
+        // genesis (never-folded) provenance root.
         let reason_hash = ctx.accounts.credits.provenance_root;
+        require!(reason_hash != [0u8; 32], CovenantError::NoRecordedActions);
         let agent_key = ctx.accounts.position.agent_key;
         let owner = ctx.accounts.position.owner;
         let signer_seeds: &[&[u8]] = &[
@@ -643,23 +651,11 @@ pub mod settlement {
 
     /// One-time migration of a legacy `CreditAccount` (predates `provenance_root`)
     /// to the current layout: grows the account by 32 bytes. `realloc` zero-fills
-    /// the new bytes, so the provenance root starts at genesis. Owner-gated by
-    /// reading the on-chain `owner` field directly (the legacy bytes cannot
-    /// deserialize into the new struct until the realloc completes). Idempotent.
+    /// the new bytes, so the provenance root starts at genesis. Owner-gated by the
+    /// `[b"credits", owner]` seed binding; idempotent (a no-op realloc on an
+    /// already-current account).
     pub fn migrate_credit_account(ctx: Context<MigrateCreditAccount>) -> Result<()> {
         let info = ctx.accounts.credits.to_account_info();
-        {
-            let data = info.try_borrow_data()?;
-            require!(data.len() >= 40, CovenantError::Unauthorized);
-            let onchain_owner =
-                Pubkey::try_from(&data[8..40]).map_err(|_| error!(CovenantError::Unauthorized))?;
-            require_keys_eq!(
-                onchain_owner,
-                ctx.accounts.owner.key(),
-                CovenantError::Unauthorized
-            );
-        }
-
         let new_len = 8 + CreditAccount::INIT_SPACE;
         if info.data_len() < new_len {
             let deficit = Rent::get()?
@@ -1370,7 +1366,8 @@ pub struct MigrateConfig<'info> {
 /// validated against the on-chain `owner` field in the handler.
 #[derive(Accounts)]
 pub struct MigrateCreditAccount<'info> {
-    /// CHECK: credit PDA; owner validated manually against the on-chain bytes.
+    /// CHECK: raw bytes (the legacy layout cannot deserialize until realloc); the
+    /// `[b"credits", owner]` seeds bind it to the signing owner.
     #[account(mut, seeds = [b"credits", owner.key().as_ref()], bump)]
     pub credits: UncheckedAccount<'info>,
     #[account(mut)]
@@ -1728,4 +1725,6 @@ pub enum CovenantError {
     TasksDisabled,
     #[msg("an explicit ER validator account is required to delegate")]
     ValidatorRequired,
+    #[msg("the agent has no recorded actions to slash for (provenance root is genesis)")]
+    NoRecordedActions,
 }

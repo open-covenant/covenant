@@ -1,0 +1,41 @@
+name: build-settlement
+
+# Reproducible build of the MAINNET settlement program (covenant_settlement_program,
+# program id cov9UDyp) on a native amd64 runner, so the deployable .so is produced
+# without the local qemu/rosetta stall. Uploads the .so + its executable hash as an
+# artifact to download and deploy. The sibling verify-er.yml builds the ephemeral
+# variant; this one builds what actually ships to mainnet.
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/magicblock-er]
+    paths:
+      - '.github/workflows/build-settlement.yml'
+      - 'agent-os/programs/settlement/src/lib.rs'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install solana-verify
+        run: cargo install solana-verify --version 0.5.0
+
+      - name: Reproducible build
+        working-directory: agent-os
+        run: |
+          solana-verify build "$PWD" \
+            --library-name covenant_settlement_program \
+            --base-image solanafoundation/solana-verifiable-build:3.1.14
+
+      - name: Executable hash
+        run: solana-verify get-executable-hash agent-os/target/deploy/covenant_settlement_program.so | tee hash.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: settlement-so
+          path: |
+            agent-os/target/deploy/covenant_settlement_program.so
+            hash.txt
+          if-no-files-found: error

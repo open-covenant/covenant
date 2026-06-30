@@ -104,6 +104,7 @@ pub mod settlement {
         credits.owner = ctx.accounts.owner.key();
         credits.balance = 0;
         credits.bump = ctx.bumps.credits;
+        credits.provenance_root = [0u8; 32];
 
         emit!(CreditAccountOpened {
             owner: credits.owner,
@@ -154,10 +155,21 @@ pub mod settlement {
 
         ctx.accounts.credits.balance -= amount;
 
+        // Fold the receipt into the account's provenance hash-chain. This runs in
+        // the ER per consume and commits to L1 with the balance, making the root a
+        // real-time, on-chain record of every metered action.
+        let provenance_root = anchor_lang::solana_program::hash::hashv(&[
+            &ctx.accounts.credits.provenance_root,
+            &receipt_hash,
+        ])
+        .to_bytes();
+        ctx.accounts.credits.provenance_root = provenance_root;
+
         emit!(CreditsConsumed {
             owner: ctx.accounts.owner.key(),
             amount,
             receipt_hash,
+            provenance_root,
         });
         Ok(())
     }
@@ -264,6 +276,67 @@ pub mod settlement {
             CovenantError::InsufficientStake
         );
 
+        let agent_key = ctx.accounts.position.agent_key;
+        let owner = ctx.accounts.position.owner;
+        let signer_seeds: &[&[u8]] = &[
+            b"stake",
+            agent_key.as_ref(),
+            owner.as_ref(),
+            &[ctx.accounts.position.bump],
+        ];
+        token_interface::transfer_checked(
+            ctx.accounts
+                .slash_transfer_ctx()
+                .with_signer(&[signer_seeds]),
+            amount,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
+
+        ctx.accounts.position.amount -= amount;
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_sub(amount)
+            .ok_or(CovenantError::InsufficientStake)?;
+        if ctx.accounts.position.amount == 0 {
+            ctx.accounts.position.active = false;
+        }
+
+        emit!(StakeSlashed {
+            agent_key,
+            owner,
+            amount,
+            reason_hash,
+        });
+        Ok(())
+    }
+
+    /// Slash an agent's bond citing its on-chain actions. The reason is not
+    /// supplied by the caller: it is read from the `provenance_root` of the
+    /// operator's canonical credit account (`[b"credits", agent.operator]`), the
+    /// hash-chain `consume_credits` folds gaslessly in the ER and commits to L1.
+    /// So the reason is the operator's own committed record, not an arbitrary claim.
+    ///
+    /// Two limits the caller must know. The credit account must be undelegated:
+    /// `Account<CreditAccount>` cannot load while owned by the delegation program,
+    /// so an operator can defer this slash for up to the delegation timeout. And
+    /// the binding is to the operator's canonical credit account, not a per-agent
+    /// log, so it assumes the operator meters through that account. For a slash
+    /// that depends on neither, use `slash_stake`.
+    pub fn slash_for_actions(ctx: Context<SlashForActions>, amount: u64) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(amount > 0, CovenantError::ZeroAmount);
+        require!(ctx.accounts.position.active, CovenantError::StakeInactive);
+        require!(
+            ctx.accounts.position.amount >= amount,
+            CovenantError::InsufficientStake
+        );
+
+        // A slash "for actions" requires recorded actions: refuse to cite a
+        // genesis (never-folded) provenance root.
+        let reason_hash = ctx.accounts.credits.provenance_root;
+        require!(reason_hash != [0u8; 32], CovenantError::NoRecordedActions);
         let agent_key = ctx.accounts.position.agent_key;
         let owner = ctx.accounts.position.owner;
         let signer_seeds: &[&[u8]] = &[
@@ -573,6 +646,35 @@ pub mod settlement {
         data[off..new_len].copy_from_slice(&min_stake_lock.to_le_bytes());
 
         emit!(ConfigMigrated { min_stake_lock });
+        Ok(())
+    }
+
+    /// One-time migration of a legacy `CreditAccount` (predates `provenance_root`)
+    /// to the current layout: grows the account by 32 bytes. `realloc` zero-fills
+    /// the new bytes, so the provenance root starts at genesis. Owner-gated by the
+    /// `[b"credits", owner]` seed binding; idempotent (a no-op realloc on an
+    /// already-current account).
+    pub fn migrate_credit_account(ctx: Context<MigrateCreditAccount>) -> Result<()> {
+        let info = ctx.accounts.credits.to_account_info();
+        let new_len = 8 + CreditAccount::INIT_SPACE;
+        if info.data_len() < new_len {
+            let deficit = Rent::get()?
+                .minimum_balance(new_len)
+                .saturating_sub(info.lamports());
+            if deficit > 0 {
+                anchor_lang::system_program::transfer(
+                    CpiContext::new(
+                        ctx.accounts.system_program.to_account_info(),
+                        anchor_lang::system_program::Transfer {
+                            from: ctx.accounts.owner.to_account_info(),
+                            to: info.clone(),
+                        },
+                    ),
+                    deficit,
+                )?;
+            }
+            info.realloc(new_len, true)?;
+        }
         Ok(())
     }
 
@@ -945,6 +1047,68 @@ impl<'info> SlashStake<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SlashForActions<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = slash_authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Box<Account<'info, Config>>,
+    pub slash_authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"agent", agent.agent_key.as_ref()],
+        bump = agent.bump,
+        constraint = agent.agent_key == position.agent_key @ CovenantError::AgentMismatch,
+    )]
+    pub agent: Box<Account<'info, Agent>>,
+    #[account(
+        mut,
+        seeds = [b"stake", position.agent_key.as_ref(), position.owner.as_ref()],
+        bump = position.bump,
+    )]
+    pub position: Box<Account<'info, StakePosition>>,
+    /// The agent's credit account, bound to the agent by its operator. Its
+    /// `provenance_root` is read as the slash reason, so the slash can only cite
+    /// the agent's own verifiable on-chain record.
+    #[account(
+        seeds = [b"credits", agent.operator.as_ref()],
+        bump = credits.bump,
+    )]
+    pub credits: Box<Account<'info, CreditAccount>>,
+    #[account(
+        mut,
+        constraint = stake_vault.key() == position.vault @ CovenantError::Unauthorized,
+        constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
+        constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub stake_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = slash_vault.key() == config.treasury @ CovenantError::Unauthorized,
+        constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub slash_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> SlashForActions<'info> {
+    fn slash_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.stake_vault.to_account_info(),
+                to: self.slash_vault.to_account_info(),
+                authority: self.position.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
 #[instruction(args: CreateTaskArgs)]
 pub struct CreateTask<'info> {
     #[account(
@@ -1197,6 +1361,20 @@ pub struct MigrateConfig<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Migrate a legacy `CreditAccount` to the current layout. Raw account because
+/// the legacy bytes do not fit the new struct until realloc; the owner is
+/// validated against the on-chain `owner` field in the handler.
+#[derive(Accounts)]
+pub struct MigrateCreditAccount<'info> {
+    /// CHECK: raw bytes (the legacy layout cannot deserialize until realloc); the
+    /// `[b"credits", owner]` seeds bind it to the signing owner.
+    #[account(mut, seeds = [b"credits", owner.key().as_ref()], bump)]
+    pub credits: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 /// Delegate the credit-account PDA to the ER. `#[delegate]` adds the
 /// `delegate_pda` helper plus the buffer/record/metadata accounts and the
 /// delegation + owner programs. The PDA is passed unchecked because delegation
@@ -1300,6 +1478,13 @@ pub struct CreditAccount {
     pub owner: Pubkey,
     pub balance: u64,
     pub bump: u8,
+    /// Rolling hash-chain root over every consumed `receipt_hash`:
+    /// `root = sha256(root || receipt_hash)`, genesis = 32 zero bytes. Updated
+    /// on each `consume_credits` (gaslessly in the ER) and committed to L1 with
+    /// the balance, so it is a real-time, on-chain provenance record of the
+    /// metered actions. Appended last so legacy accounts migrate by realloc
+    /// (see `migrate_credit_account`).
+    pub provenance_root: [u8; 32],
 }
 
 #[account]
@@ -1387,6 +1572,7 @@ pub struct CreditsConsumed {
     pub owner: Pubkey,
     pub amount: u64,
     pub receipt_hash: [u8; 32],
+    pub provenance_root: [u8; 32],
 }
 
 #[event]
@@ -1539,4 +1725,6 @@ pub enum CovenantError {
     TasksDisabled,
     #[msg("an explicit ER validator account is required to delegate")]
     ValidatorRequired,
+    #[msg("the agent has no recorded actions to slash for (provenance root is genesis)")]
+    NoRecordedActions,
 }

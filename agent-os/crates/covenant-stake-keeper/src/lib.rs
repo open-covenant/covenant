@@ -852,6 +852,32 @@ mod tests {
     }
 
     #[test]
+    fn config_rejects_bps_split_that_wraps_to_10000_as_u16() {
+        // The four split fields are u16, summed as u32 in validate()
+        // (lib.rs:204). The widening is the only thing stopping a sum past
+        // u16::MAX from wrapping back onto the 10_000 acceptance value:
+        // 65_535 + 10_001 == 75_536, and 75_536 - 65_536 == 10_000. Summed as
+        // u16 this aliases a valid split, so a keeper would accept a config and
+        // route swept surplus against ~655%/100%/0%/0% legs; widened to u32 it
+        // is 75_536 and rejected. base_cfg's heaviest other test sums to 17_499
+        // (fits u16), so this is the only case that exercises the widen.
+        let mut cfg = base_cfg();
+        cfg.stakers_bps = 65_535;
+        cfg.buylock_bps = 10_001;
+        cfg.treasury_bps = 0;
+        cfg.subsidy_bps = 0;
+        let msg = cfg
+            .validate()
+            .expect_err("u32 sum 75_536 != 10_000 must be rejected")
+            .to_string();
+        assert!(
+            msg.contains("must sum to 10000") && msg.contains("75536"),
+            "rejection must report the u32-widened sum 75536, proving the bps \
+             were not summed as u16 (which wraps to 10000 and accepts): {msg}"
+        );
+    }
+
+    #[test]
     fn config_rejects_zero_sweep_or_accrual_interval() {
         // The keeper builds its sweep and accrual tickers straight from
         // these fields via tokio::time::interval (lib.rs:269/279), which

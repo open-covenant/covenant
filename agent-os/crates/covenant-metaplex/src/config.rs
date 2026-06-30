@@ -7,7 +7,7 @@
 //!
 //! Defaults are read-only and devnet. A daemon that only flips
 //! `enabled = true` and points `das_url` at a DAS provider gets the
-//! read tools and nothing that can sign or spend — every write tool
+//! read tools and nothing that can sign or spend. Every write tool
 //! stays dark until a signer binary and RPC are configured.
 
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,8 @@ pub const MPL_CORE_PROGRAM_ID: &str = "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNh
 /// MPL Agent Identity registry (binds a PDA to a Core asset).
 pub const MPL_AGENT_IDENTITY_PROGRAM_ID: &str = "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p";
 /// MPL Agent Validation registry (attestation surface). Upstream is
-/// early/unfinalised — we align our schema with it but do not depend on
-/// it; raw MPL Core AppData is the v1 write path.
+/// early/unfinalised. We align our schema with it but do not depend on
+/// it; raw MPL Core AppData is the current write path.
 pub const MPL_AGENT_VALIDATION_PROGRAM_ID: &str = "VALREGY66A9ieJfFUNs5GrxFTy498KUoSU7TbmSePQi";
 /// MPL Agent Reputation registry (early/unfinalised upstream).
 pub const MPL_AGENT_REPUTATION_PROGRAM_ID: &str = "REPREG5c1gPHuHukEyANpksLdHFaJCiTrm6zJgNhRZR";
@@ -44,7 +44,7 @@ pub const ALLOWED_PROGRAM_IDS: &[&str] = &[
     MPL_BUBBLEGUM_PROGRAM_ID,
 ];
 
-/// Default cluster. Devnet on purpose — a misconfigured daemon must not
+/// Default cluster. Devnet on purpose. A misconfigured daemon must not
 /// write to mainnet by accident.
 pub const DEFAULT_CLUSTER: &str = "devnet";
 

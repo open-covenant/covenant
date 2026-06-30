@@ -3,7 +3,7 @@
 //!
 //! The daemon never holds the minting key or a solana-sdk dependency.
 //! It builds one of these requests, pipes it as JSON to the sidecar's
-//! stdin, and reads a [`SignerResponse`] back from stdout — the same
+//! stdin, and reads a [`SignerResponse`] back from stdout, the same
 //! isolation pattern the x402 funding-key signer uses.
 
 use serde::{Deserialize, Serialize};

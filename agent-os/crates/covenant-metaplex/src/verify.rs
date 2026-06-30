@@ -1,4 +1,4 @@
-//! "Covenant Verified" — DAS-only verification of agent accountability.
+//! "Covenant Verified": DAS-only verification of agent accountability.
 //!
 //! Anyone can run this against a public DAS endpoint with no Covenant
 //! infrastructure in the path: it reads an MPL Core asset's AppData and
@@ -78,6 +78,23 @@ fn field<'a>(data: &'a Value, snake: &str, camel: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
 }
 
+/// The AppData write authority (`data_authority`), the key MPL Core enforces
+/// for writes, and the only thing that makes authorship a chain fact. Helius
+/// nests it under `adapter_config`; a flat fallback covers other shapes. The
+/// plugin's top-level `authority` is the adapter's *config* authority, which a
+/// minter can set to any address without that address signing, so trusting it
+/// would let anyone forge a record under our key. Read the write authority
+/// only, and fail closed when it is absent.
+fn data_authority(plugin: &Value) -> Option<&str> {
+    plugin
+        .get("adapter_config")
+        .or_else(|| plugin.get("adapterConfig"))
+        .and_then(|c| c.get("data_authority").or_else(|| c.get("dataAuthority")))
+        .or_else(|| plugin.get("data_authority").or_else(|| plugin.get("dataAuthority")))
+        .and_then(|a| a.get("address"))
+        .and_then(Value::as_str)
+}
+
 /// Verify one DAS asset as a Covenant attestation against `expected_authority`.
 /// Pure: takes a DAS `getAsset` result (or one `items[]` entry). Never
 /// network. Collects every failure reason rather than short-circuiting, so a
@@ -98,11 +115,7 @@ pub fn verify_attestation(asset: &Value, expected_authority: &str) -> Attestatio
         };
     };
     let data = plugin.get("data").cloned().unwrap_or(Value::Null);
-    let authority = plugin
-        .get("authority")
-        .and_then(|a| a.get("address"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let authority = data_authority(plugin).map(str::to_string);
 
     if field(&data, "type", "type") != Some(ATTESTATION_TYPE) {
         reasons.push(format!("type is not {ATTESTATION_TYPE}"));
@@ -212,13 +225,16 @@ mod tests {
     const AUTH: &str = COVENANT_ATTESTATION_AUTHORITY;
     const AGENT: &str = "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc";
 
-    /// A DAS asset carrying a valid v2 attestation, snake_cased like Helius.
+    /// A DAS asset carrying a valid v2 attestation, snake_cased like Helius:
+    /// the write authority lives in `adapter_config.data_authority`, and the
+    /// adapter's own `authority` is a different (here, matching) key.
     fn das_attestation(authority: &str, validator: &str, subject: &str, schema: &str) -> Value {
         json!({
             "id": "7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH",
             "external_plugins": [{
                 "type": "AppData",
                 "authority": { "address": authority },
+                "adapter_config": { "schema": "Json", "data_authority": { "address": authority } },
                 "data": {
                     "type": ATTESTATION_TYPE,
                     "schema": schema,
@@ -258,7 +274,7 @@ mod tests {
     #[test]
     fn validator_must_mirror_authority() {
         // On-chain authority is Covenant's, but the payload's validator claims
-        // someone else — a spoofed/copied payload. Must fail.
+        // someone else, a spoofed/copied payload. Must fail.
         let a = das_attestation(
             AUTH,
             "So11111111111111111111111111111111111111112",
@@ -290,6 +306,7 @@ mod tests {
             "external_plugins": [{
                 "type": "AppData",
                 "authority": { "address": AUTH },
+                "adapterConfig": { "schema": "Json", "dataAuthority": { "address": AUTH } },
                 "data": {
                     "type": ATTESTATION_TYPE, "schema": ATTESTATION_SCHEMA,
                     "subject": { "asset": AGENT }, "validator": AUTH,
@@ -300,6 +317,25 @@ mod tests {
             }]
         });
         assert!(verify_attestation(&a, AUTH).verified);
+    }
+
+    #[test]
+    fn forged_adapter_authority_does_not_verify() {
+        // The forgery: a minter sets the adapter's `authority` to Covenant's key
+        // (cosmetic, needs no signature) but the real write authority
+        // (data_authority) is the attacker's, so the attacker controls the
+        // payload. Reading data_authority (not `authority`) rejects it.
+        let attacker = "So11111111111111111111111111111111111111112";
+        let mut a = das_attestation(AUTH, AUTH, AGENT, ATTESTATION_SCHEMA);
+        a["external_plugins"][0]["authority"]["address"] = json!(AUTH);
+        a["external_plugins"][0]["adapter_config"]["data_authority"]["address"] = json!(attacker);
+        a["external_plugins"][0]["data"]["validator"] = json!(AUTH);
+        let v = verify_attestation(&a, AUTH);
+        assert!(!v.verified, "a record whose data_authority is not Covenant must not verify");
+        assert!(v
+            .reasons
+            .iter()
+            .any(|r| r.contains("not the Covenant authority")));
     }
 
     #[test]

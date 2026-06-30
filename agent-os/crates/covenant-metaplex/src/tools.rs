@@ -318,8 +318,8 @@ impl WriteTool {
                 )
                 .with_subject(self.agent_asset.clone(), self.agent_registration.clone());
                 // `asset` (append to an existing attestation asset) is not
-                // wired yet — v1 always mints a fresh asset, so we never
-                // pass one and never advertise the arg.
+                // wired yet; the current path always mints a fresh asset, so
+                // we never pass one and never advertise the arg.
                 Ok(SignerRequest::AttestAuditRoot {
                     payload: Box::new(payload),
                     asset: None,
@@ -331,14 +331,20 @@ impl WriteTool {
                 })
             }
             "identity.register" => {
+                let agent_label = str_arg(args, "agentLabel")?;
+                let agent_pubkey = str_arg(args, "agentPubkey")?;
+                crate::request::validate_attestation_field("agentLabel", agent_label)
+                    .map_err(ToolError::InvalidArguments)?;
+                crate::request::validate_onchain_pubkey("agentPubkey", agent_pubkey)
+                    .map_err(ToolError::InvalidArguments)?;
                 let registration_uri = opt_str_arg(args, "registrationUri");
                 if let Some(uri) = &registration_uri {
                     crate::request::validate_registration_uri(uri)
                         .map_err(ToolError::InvalidArguments)?;
                 }
                 Ok(SignerRequest::RegisterIdentity {
-                    agent_label: str_arg(args, "agentLabel")?.to_string(),
-                    agent_pubkey: str_arg(args, "agentPubkey")?.to_string(),
+                    agent_label: agent_label.to_string(),
+                    agent_pubkey: agent_pubkey.to_string(),
                     asset: None,
                     registration_uri,
                 })

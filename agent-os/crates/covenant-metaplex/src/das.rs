@@ -1,7 +1,7 @@
 //! Digital Asset Standard (DAS) read client.
 //!
 //! DAS is Metaplex's unified JSON-RPC read interface over MPL Core,
-//! Token Metadata, and compressed (Bubblegum) assets — the same surface
+//! Token Metadata, and compressed (Bubblegum) assets, the same surface
 //! Helius / Triton / QuickNode expose. Reads are stateless and
 //! key-free: this client only ever POSTs a JSON-RPC envelope and returns
 //! the `result` value. No signing, no funds, nothing leaves the host but
@@ -24,18 +24,18 @@ pub enum DasError {
 /// future native indexer client) can stand in without HTTP.
 #[async_trait]
 pub trait DasClient: Send + Sync {
-    /// `getAsset` — one asset (NFT / cNFT / fungible) by id.
+    /// `getAsset`: one asset (NFT / cNFT / fungible) by id.
     async fn get_asset(&self, id: &str) -> Result<Value, DasError>;
-    /// `getAssetProof` — the merkle proof for a compressed asset.
+    /// `getAssetProof`: the merkle proof for a compressed asset.
     async fn get_asset_proof(&self, id: &str) -> Result<Value, DasError>;
-    /// `getAssetsByOwner` — page through a wallet's assets.
+    /// `getAssetsByOwner`: page through a wallet's assets.
     async fn get_assets_by_owner(
         &self,
         owner: &str,
         limit: u32,
         page: u32,
     ) -> Result<Value, DasError>;
-    /// `searchAssets` — pass-through of the caller's structured query.
+    /// `searchAssets`: pass-through of the caller's structured query.
     async fn search_assets(&self, params: Value) -> Result<Value, DasError>;
 }
 
@@ -52,7 +52,10 @@ impl HttpDasClient {
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
             endpoint: endpoint.into(),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(20))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 

@@ -23,11 +23,11 @@
 //! - exit 0 on success; non-zero with a message on stderr otherwise.
 //!
 //! Configuration (env, set by the daemon, read after `env_clear`):
-//! - `COVENANT_METAPLEX_KEYPAIR`  — minting keypair JSON path. Required.
-//! - `COVENANT_METAPLEX_RPC_URL`  — Solana RPC. Required.
-//! - `COVENANT_METAPLEX_CLUSTER`  — `devnet` | `mainnet-beta`. Default devnet.
-//! - `COVENANT_METAPLEX_COLLECTION` — MPL Core collection (optional).
-//! - `COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS` — refuse a write whose
+//! - `COVENANT_METAPLEX_KEYPAIR`: minting keypair JSON path. Required.
+//! - `COVENANT_METAPLEX_RPC_URL`: Solana RPC. Required.
+//! - `COVENANT_METAPLEX_CLUSTER`: `devnet` | `mainnet-beta`. Default devnet.
+//! - `COVENANT_METAPLEX_COLLECTION`: MPL Core collection (optional).
+//! - `COVENANT_METAPLEX_PER_ACTION_CAP_LAMPORTS`: refuse a write whose
 //!   estimated cost exceeds this. `0`/unset uses the built-in cap.
 
 use std::process::ExitCode;
@@ -128,6 +128,21 @@ async fn run() -> Result<SignerResponse> {
 
     let payer = load_keypair(&keypair_path)?;
 
+    // On mainnet the public verifier rejects any record whose on-chain
+    // authority is not the canonical Covenant key, and the signer stamps
+    // both data_authority and validator with its own pubkey. A misconfigured
+    // keypair would pay to mint records that fail that check, so refuse up
+    // front. Devnet/test keys are left free.
+    if cluster == "mainnet-beta"
+        && payer.pubkey().to_string() != covenant_metaplex::COVENANT_ATTESTATION_AUTHORITY
+    {
+        bail!(
+            "keypair {} is not the canonical Covenant attestation authority {} required on mainnet-beta",
+            payer.pubkey(),
+            covenant_metaplex::COVENANT_ATTESTATION_AUTHORITY
+        );
+    }
+
     let mut input = String::new();
     tokio::io::stdin().read_to_string(&mut input).await?;
     let request: SignerRequest = serde_json::from_str(input.trim())
@@ -144,7 +159,10 @@ async fn run() -> Result<SignerResponse> {
         );
     }
 
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let recent = latest_blockhash(&http, &rpc_url).await?;
     let tx = Transaction::new_signed_with_payer(
         &built.instructions,
@@ -274,6 +292,12 @@ fn build(request: &SignerRequest, payer: &Keypair) -> Result<BuiltTx> {
             if asset.is_some() {
                 bail!("binding an existing asset is not supported yet; omit `asset`");
             }
+            // Same trust boundary as the attest arm: stdin is untrusted, so
+            // every string inscribed on-chain is validated here before any
+            // network call, not just where the daemon happens to have checked.
+            covenant_metaplex::validate_attestation_field("agentLabel", agent_label)
+                .map_err(|e| anyhow!("{e}"))?;
+            parse_pubkey(agent_pubkey).context("agentPubkey")?;
             let collection = collection_from_env()?;
             let asset = Keypair::new();
             // Prefer a fetchable ERC-8004 registration document; fall back

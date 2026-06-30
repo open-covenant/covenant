@@ -3,7 +3,7 @@
 //! Exposes the Solana digital-asset layer to Covenant agents as a set of
 //! capability-gated `metaplex.*` MCP tools, split into two surfaces:
 //!
-//! - **reads** ([`das`]) run Digital Asset Standard (DAS) queries — no
+//! - **reads** ([`das`]) run Digital Asset Standard (DAS) queries. No
 //!   keys, no spend, nothing leaves the host but a JSON-RPC call.
 //! - **writes** ([`request`], [`tools::MetaplexSigner`]) anchor Covenant
 //!   audit roots / agent identity into MPL Core assets. The daemon never

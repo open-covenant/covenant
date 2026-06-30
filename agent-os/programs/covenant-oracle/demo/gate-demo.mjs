@@ -72,7 +72,19 @@ const setValidation = (subject, valid) =>
 const RESULT = { 0: 'Approved', 1: 'Rejected', 2: 'Pass' };
 async function readTransferVerdict(subject) {
   const acct = await conn.getAccountInfo(oraclePda(subject));
+  if (!acct || acct.data.length <= 10)
+    throw new Error('oracle account missing or too small to read the transfer verdict');
   return RESULT[acct.data[10]] ?? `raw(${acct.data[10]})`;
+}
+
+// This demo mints and transfers with the default local wallet, so refuse any
+// cluster but devnet. The genesis hash is authoritative; the URL is a fast path.
+const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+async function assertDevnet() {
+  if (/devnet/i.test(RPC)) return;
+  const genesis = await conn.getGenesisHash();
+  if (genesis !== DEVNET_GENESIS)
+    throw new Error(`refusing to run: RPC is not devnet (genesis ${genesis})`);
 }
 
 async function ownerOf(asset) {
@@ -92,6 +104,7 @@ const check = (label, ok) => {
 };
 
 async function main() {
+  await assertDevnet();
   console.log(`\nCovenant Oracle gating demo  (${RPC})`);
   console.log(`oracle program  ${ORACLE_PROGRAM.toBase58()}`);
   console.log(`authority       ${payer.publicKey.toBase58()}\n`);
@@ -149,7 +162,7 @@ async function main() {
   check('transfer succeeded while audit valid', allowed);
   check('owner moved to recipient', (await ownerOf(asset.publicKey)) === recipient);
 
-  console.log(`\n${failed ? 'DEMO FAILED' : 'DEMO PASSED'} — gate closes on invalid audit, opens on valid.\n`);
+  console.log(`\n${failed ? 'DEMO FAILED' : 'DEMO PASSED'}. Gate closes on invalid audit, opens on valid.\n`);
   console.log(`solscan asset:  https://solscan.io/token/${asset.publicKey}?cluster=devnet`);
   console.log(`solscan oracle: https://solscan.io/account/${pda.toBase58()}?cluster=devnet\n`);
   process.exit(failed ? 1 : 0);

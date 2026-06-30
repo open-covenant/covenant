@@ -66,6 +66,44 @@
       ]
     },
     {
+      "name": "set_authority",
+      "docs": [
+        "Hand the verdict authority to `new_authority`, e.g. to migrate a single",
+        "key onto a multisig before it can be lost or compromised. Authority-only.",
+        "The verdict and the gated asset are untouched; only who may flip the",
+        "verdict changes."
+      ],
+      "discriminator": [
+        133,
+        250,
+        37,
+        21,
+        110,
+        163,
+        26,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "oracle"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "set_validation",
       "docs": [
         "Push the live audit/policy verdict. `valid = false` sets `transfer`",
@@ -120,6 +158,19 @@
   ],
   "events": [
     {
+      "name": "AuthorityChanged",
+      "discriminator": [
+        31,
+        19,
+        174,
+        152,
+        4,
+        82,
+        215,
+        226
+      ]
+    },
+    {
       "name": "ValidationSet",
       "discriminator": [
         229,
@@ -134,6 +185,22 @@
     }
   ],
   "types": [
+    {
+      "name": "AuthorityChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "subject",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
     {
       "name": "ExternalValidationResult",
       "docs": [

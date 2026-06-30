@@ -1,27 +1,32 @@
-//! Covenant Oracle — runtime gating for MPL Core agent assets.
+//! Covenant Oracle: runtime gating for MPL Core agent assets.
 //!
 //! MPL Core's Oracle external plugin loads an external account during an
 //! asset's lifecycle events (create / transfer / burn / update) and reads an
 //! [`OracleValidation`] from it to approve, reject, or pass the event. This
 //! program owns one oracle account per subject agent and exposes a single
 //! authority-gated knob: flip the agent's `transfer` validation between
-//! `Pass` (audit valid — don't block) and `Rejected` (audit invalid / out of
-//! policy — veto the transfer).
+//! `Pass` (audit valid, don't block) and `Rejected` (audit invalid / out of
+//! policy, veto the transfer).
 //!
 //! Covenant pushes the live verdict here (`set_validation`), so an agent
 //! asset configured with this account as its Oracle can only move while its
 //! audit chain is valid and in policy. The on-chain rule is enforced by MPL
-//! Core itself — Covenant only supplies the signal.
+//! Core itself. Covenant only supplies the signal.
 //!
 //! The account is an Anchor account, so the asset's Oracle plugin uses
 //! `ValidationResultsOffset::Anchor` (offset 8) and `validation` is the first
-//! field — MPL Core reads exactly the [`OracleValidation`] bytes there. The
+//! field. MPL Core reads exactly the [`OracleValidation`] bytes there. The
 //! enum layouts below are byte-compatible with `mpl-core` 0.12.
 
 use anchor_lang::prelude::*;
 
 declare_id!("2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD");
 
+// Still deferred (needs a program upgrade + a fresh solana-verify run): bind
+// init to the subject. Requiring the subject asset's update authority to sign
+// init_oracle would stop a squatter from pre-creating the deterministic
+// ["oracle", subject] PDA. Until then the wiring asserts the existing PDA's
+// authority before trusting it (see demo/wire-gate.mjs).
 #[program]
 pub mod covenant_oracle_program {
     use super::*;
@@ -58,6 +63,20 @@ pub mod covenant_oracle_program {
         });
         Ok(())
     }
+
+    /// Hand the verdict authority to `new_authority`, e.g. to migrate a single
+    /// key onto a multisig before it can be lost or compromised. Authority-only.
+    /// The verdict and the gated asset are untouched; only who may flip the
+    /// verdict changes.
+    pub fn set_authority(ctx: Context<SetAuthority>, new_authority: Pubkey) -> Result<()> {
+        let oracle = &mut ctx.accounts.oracle;
+        oracle.authority = new_authority;
+        emit!(AuthorityChanged {
+            subject: oracle.subject,
+            new_authority,
+        });
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -78,6 +97,13 @@ pub struct InitOracle<'info> {
 
 #[derive(Accounts)]
 pub struct SetValidation<'info> {
+    #[account(mut, has_one = authority)]
+    pub oracle: Account<'info, OracleState>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SetAuthority<'info> {
     #[account(mut, has_one = authority)]
     pub oracle: Account<'info, OracleState>,
     pub authority: Signer<'info>,
@@ -104,6 +130,12 @@ impl OracleState {
 pub struct ValidationSet {
     pub subject: Pubkey,
     pub valid: bool,
+}
+
+#[event]
+pub struct AuthorityChanged {
+    pub subject: Pubkey,
+    pub new_authority: Pubkey,
 }
 
 /// Byte-compatible with `mpl_core::types::ExternalValidationResult`.
@@ -158,7 +190,7 @@ mod tests {
 
     // ExternalValidationResult: Approved=0, Rejected=1, Pass=2. OracleValidation:
     // Uninitialized=0, V1=1. These bytes are what MPL Core deserializes, so they
-    // are a hard contract with mpl-core 0.12 — assert them, don't trust them.
+    // are a hard contract with mpl-core 0.12. Assert them, don't trust them.
     #[test]
     fn valid_is_all_pass() {
         assert_eq!(OracleValidation::valid().try_to_vec().unwrap(), vec![1, 2, 2, 2, 2]);

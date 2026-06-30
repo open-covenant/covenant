@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-30T02:44:13.496Z",
+  "updatedAt": "2026-06-30T03:04:19.016Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12394,
+    "events": 12399,
     "tasks": 1452,
     "integrated": 1454
   },
   "throughput": {
-    "last24h": 22,
+    "last24h": 21,
     "last7d": 212,
     "velocity": 30.3
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1446,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "cross_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "stake-keeper-config-bps-split-u16-wrap-widening-coverage",
+    "state": "cross_review",
+    "since": "2026-06-30T02:46:07.249Z"
+  },
   "recent": [
     {
       "at": "2026-06-30T02:15:32.932Z",

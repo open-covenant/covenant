@@ -1625,6 +1625,7 @@ dependencies = [
  "covenant-permissions",
  "covenant-router",
  "covenant-runtime",
+ "covenant-said-bridge",
  "covenant-sap-bridge",
  "covenant-settlement",
  "covenant-sns",

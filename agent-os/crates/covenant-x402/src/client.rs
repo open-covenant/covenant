@@ -221,6 +221,32 @@ mod tests {
         assert!(pick_requirement(&reqs, &c).is_none());
     }
 
+    #[test]
+    fn pick_enforces_network_and_asset_scope_independently() {
+        // pick_rejects_wrong_chain differs in BOTH network and asset, so the
+        // `network != cap.network || asset != cap.asset` skip survives a ||->&&
+        // mutation (both-must-differ) and neither single-dimension arm is pinned.
+        // The capability's network and asset are independent scopes: an at-budget
+        // requirement that matches only one must still be skipped, never signed.
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+
+        // Right chain, wrong token: a usdc-sol capability must not pay a
+        // different Solana mint just because the network matches.
+        let wrong_asset = vec![req("solana:mainnet", "usdt-sol", "80000")];
+        assert!(
+            pick_requirement(&wrong_asset, &c).is_none(),
+            "matching network with a wrong asset must not be picked"
+        );
+
+        // Right token, wrong chain: a solana:mainnet capability must not pay a
+        // base-chain requirement that happens to share the asset label.
+        let wrong_network = vec![req("base:8453", "usdc-sol", "80000")];
+        assert!(
+            pick_requirement(&wrong_network, &c).is_none(),
+            "matching asset with a wrong network must not be picked"
+        );
+    }
+
     #[tokio::test]
     async fn slow_endpoint_times_out_instead_of_hanging() {
         let server = MockServer::start().await;

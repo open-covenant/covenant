@@ -83,13 +83,13 @@ async fn read_capped(response: reqwest::Response) -> Result<Vec<u8>> {
 async fn decode<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
     let status = response.status();
     if status == StatusCode::PAYMENT_REQUIRED {
-        let body = String::from_utf8_lossy(&read_capped(response).await.unwrap_or_default())
-            .into_owned();
+        let body =
+            String::from_utf8_lossy(&read_capped(response).await.unwrap_or_default()).into_owned();
         return Err(BridgeError::Http { status: 402, body });
     }
     if !status.is_success() {
-        let body = String::from_utf8_lossy(&read_capped(response).await.unwrap_or_default())
-            .into_owned();
+        let body =
+            String::from_utf8_lossy(&read_capped(response).await.unwrap_or_default()).into_owned();
         return Err(BridgeError::Http {
             status: status.as_u16(),
             body,

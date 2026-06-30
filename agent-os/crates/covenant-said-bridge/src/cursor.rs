@@ -76,8 +76,8 @@ impl AnchorCursor {
             )
             .map_err(|e| BridgeError::Invalid(format!("read max: {e}")))?;
         let Some(v) = max else { return Ok(0) };
-        let current =
-            u64::try_from(v).map_err(|_| BridgeError::Invalid(format!("negative anchor_index {v}")))?;
+        let current = u64::try_from(v)
+            .map_err(|_| BridgeError::Invalid(format!("negative anchor_index {v}")))?;
         current
             .checked_add(1)
             .ok_or_else(|| BridgeError::Invalid("anchor_index saturated u64".into()))

@@ -168,12 +168,18 @@ async fn xchain_inbox_maps_messages() {
     let req = server.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/inbox/solana/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+    assert_eq!(
+        req.path,
+        "/xchain/inbox/solana/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
     assert_eq!(inbox.messages.len(), 1);
     let msg = &inbox.messages[0];
     assert_eq!(msg.id, "m1");
     assert_eq!(msg.source_chain, "base");
-    assert_eq!(msg.target_address, "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+    assert_eq!(
+        msg.target_address,
+        "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
     assert_eq!(msg.created_at, Some(1700000000));
 }
 
@@ -191,7 +197,10 @@ async fn xchain_free_tier_maps_status() {
     let req = server.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+    assert_eq!(
+        req.path,
+        "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
     assert_eq!(status.used, 3);
     assert_eq!(status.remaining, 7);
     assert_eq!(status.limit, 10);
@@ -257,7 +266,10 @@ async fn rest_calls_require_enabled_before_network() {
     // closed with Disabled before any socket is opened.
     let bridge = SaidBridge::new(Config::disabled(Cluster::Devnet)).expect("bridge");
 
-    let err = bridge.lookup("AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb").await.expect_err("disabled");
+    let err = bridge
+        .lookup("AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb")
+        .await
+        .expect_err("disabled");
     assert!(
         matches!(err, BridgeError::Disabled),
         "expected Disabled, got {err:?}"

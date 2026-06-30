@@ -404,6 +404,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_per_call_cap_overrides_the_endpoint_price() {
+        // build_tool uses config.per_call_cap as the per-call ceiling when it
+        // is set (>0) and only falls back to the endpoint's published price
+        // when the config cap is 0 (tools.rs:229-233, config.rs:47-51). Every
+        // other test leaves the default cap at 0, so the override branch is
+        // unexercised: a regression that ignored config.per_call_cap and always
+        // used ep.price_micro_usdc would let a tool pay up to the published
+        // price regardless of the operator's configured (lower) ceiling. Pick a
+        // cap below the curve.mint price (10_000) so the two cannot alias.
+        let config = HyreConfig {
+            per_call_cap: 5_000,
+            ..HyreConfig::default()
+        };
+        let exec = Arc::new(MockExecutor::default());
+        let tools = tools_for(&config, exec.clone());
+        find(&tools, "hyre.trenches.curve.mint")
+            .call(serde_json::json!({ "mint": "So11111111111111111111111111111111111111112" }))
+            .await
+            .unwrap();
+        let req = exec.last.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            req.per_call_cap, 5_000,
+            "a configured per_call_cap must bound the call at the operator's \
+             ceiling, not be ignored in favor of the endpoint price (10_000)"
+        );
+    }
+
+    #[tokio::test]
     async fn missing_required_path_param_is_invalid_arguments() {
         let tools = tools_for(&HyreConfig::default(), Arc::new(MockExecutor::default()));
         let err = find(&tools, "hyre.trenches.curve.mint")

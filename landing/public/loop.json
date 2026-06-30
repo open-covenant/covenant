@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T04:46:32.761Z",
+  "updatedAt": "2026-06-30T05:07:46.894Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12421,
+    "events": 12429,
     "tasks": 1455,
-    "integrated": 1457
+    "integrated": 1458
   },
   "throughput": {
-    "last24h": 23,
-    "last7d": 215,
-    "velocity": 30.7
+    "last24h": 24,
+    "last7d": 216,
+    "velocity": 30.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-30",
-      "total": 1457
+      "total": 1458
     }
   ],
   "states": {
-    "integrated": 1449,
-    "proposed": 2,
+    "integrated": 1450,
+    "proposed": 1,
     "blocked": 4
   },
   "areas": [
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T04:59:29.637Z",
+      "task": "hyre-x402-to-requirements-network-forcing-normalisation-cove",
+      "note": "Integrated as test(covenant-hyre): pin to_requirements operator CAIP-2 network-forcing + output normalisation. README metric updated clean+1"
+    },
     {
       "at": "2026-06-30T04:21:00.239Z",
       "task": "hyre-tools-build-tool-configured-per-call-cap-override-cover",
@@ -310,11 +315,6 @@
       "at": "2026-06-29T17:07:09.589Z",
       "task": "stake-keeper-jupiter-read-body-capped-exact-cap-inclusive-bo",
       "note": "Committed 2a70b60c on loop/main-track. 2 files changed (jupiter.rs +1 wiremock at-cap boundary test, README metric 3205->3206). All declared"
-    },
-    {
-      "at": "2026-06-29T14:21:27.689Z",
-      "task": "sap-bridge-worker-read-capped-exact-fit-inclusive-boundary-c",
-      "note": "Integrated on loop/main-track as 7fbb3d93 (README metrics bump + the exact-fit read_capped unit test). Mutation-proven: buf.len() > max -> >"
     }
   ]
 }

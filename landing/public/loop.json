@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T06:53:03.347Z",
+  "updatedAt": "2026-06-30T07:13:47.000Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12460,
+    "events": 12465,
     "tasks": 1459,
-    "integrated": 1461
+    "integrated": 1462
   },
   "throughput": {
-    "last24h": 27,
-    "last7d": 219,
-    "velocity": 31.3
+    "last24h": 28,
+    "last7d": 220,
+    "velocity": 31.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 10
+      "count": 11
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-30",
-      "total": 1461
+      "total": 1462
     }
   ],
   "states": {
-    "integrated": 1453,
+    "integrated": 1454,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "hyre-tools-schema-required-body-field-coverage",
-    "state": "in_progress",
-    "since": "2026-06-30T06:50:02.741Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T07:00:54.460Z",
+      "task": "hyre-tools-schema-required-body-field-coverage",
+      "note": "Committed 6616b16b (tools test + README, 2 files by explicit path) and pushed 6ed81f36..6616b16b to origin/loop/main-track. All push identit"
+    },
     {
       "at": "2026-06-30T06:37:37.609Z",
       "task": "hyre-x402-network-matches-spelling-leniency-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T17:58:37.020Z",
       "task": "x402-http-read-capped-exact-cap-inclusive-boundary-coverage",
       "note": "Committed 363ac7ca on loop/main-track. 1 file changed (http.rs +1 at-cap test; README unchanged). All declared verification passed; both >ma"
-    },
-    {
-      "at": "2026-06-29T17:47:40.909Z",
-      "task": "metaplex-das-read-body-capped-exact-cap-inclusive-boundary-c",
-      "note": "Committed 40f5d7f6 on loop/main-track. 1 file changed (das.rs +1 at-cap test; README unchanged). All declared verification passed; both >max"
     }
   ]
 }

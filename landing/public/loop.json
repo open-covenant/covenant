@@ -1,21 +1,17 @@
 {
-  "updatedAt": "2026-06-29T23:39:06.688Z",
+  "updatedAt": "2026-06-30T00:00:02.611Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12368,
-    "tasks": 1448,
+    "events": 12372,
+    "tasks": 1449,
     "integrated": 1451
   },
   "throughput": {
-    "last24h": 29,
+    "last24h": 28,
     "last7d": 210,
     "velocity": 30
   },
   "daily": [
-    {
-      "date": "06-09",
-      "count": 0
-    },
     {
       "date": "06-10",
       "count": 0
@@ -95,13 +91,13 @@
     {
       "date": "06-29",
       "count": 28
+    },
+    {
+      "date": "06-30",
+      "count": 0
     }
   ],
   "cumulative": [
-    {
-      "date": "06-09",
-      "total": 959
-    },
     {
       "date": "06-10",
       "total": 959
@@ -181,12 +177,17 @@
     {
       "date": "06-29",
       "total": 1451
+    },
+    {
+      "date": "06-30",
+      "total": 1451
     }
   ],
   "states": {
     "integrated": 1443,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "mcp-validate-integer-fractional-float-rejection-coverage",
+    "state": "in_progress",
+    "since": "2026-06-29T23:56:01.235Z"
+  },
   "recent": [
     {
       "at": "2026-06-29T23:13:48.758Z",

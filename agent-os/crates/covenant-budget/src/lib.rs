@@ -2248,6 +2248,42 @@ mod tests {
     }
 
     #[test]
+    fn refill_clamps_overflowing_grant_to_capacity_before_cast() {
+        // The per-step grant is computed in u128 (add_u128 = elapsed *
+        // capacity / MS_PER_HOUR) then narrowed to u64 at lib.rs:348 via
+        // `add_u128.min(bucket.capacity as u128) as u64`. The .min() must
+        // run BEFORE the cast: a capacity near u64::MAX idle past an hour
+        // drives add_u128 over u64::MAX, where an unclamped `as u64` wraps
+        // and silently zeroes the grant. The downstream tokens.min(capacity)
+        // at lib.rs:352 cannot recover a grant already lost to the wrap.
+        //
+        // capacity 2^63, elapsed two hours -> add_u128 = 7_200_000 * 2^63 /
+        // 3_600_000 = 2^64 exactly, which casts to 0. With the clamp add is
+        // min(2^64, 2^63) = 2^63, filling the bucket and resetting the clock.
+        let mut b = Bucket {
+            display: "x@y".into(),
+            capacity: 1u64 << 63,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        refill(&mut b, 7_200_000);
+        assert_eq!(
+            b.tokens_remaining,
+            1u64 << 63,
+            "add_u128 == 2^64 must clamp to capacity before the u128->u64 \
+             cast; dropping the lib.rs:348 .min (or flipping it to .max) \
+             lets `as u64` wrap to 0, leaving a high-capacity bucket empty \
+             after an hour-plus idle so every spend is denied"
+        );
+        assert_eq!(
+            b.last_refill_ms, 7_200_000,
+            "a full bucket resets last_refill_ms to now; if the grant \
+             wrapped to 0 the bucket never reaches capacity and the clock \
+             stalls at last_refill_ms, compounding the under-refill"
+        );
+    }
+
+    #[test]
     fn refill_eta_zero_when_already_have_enough() {
         let b = Bucket {
             display: "x@y".into(),

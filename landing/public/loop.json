@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T00:20:07.984Z",
+  "updatedAt": "2026-06-30T00:40:12.245Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12372,
+    "events": 12376,
     "tasks": 1449,
-    "integrated": 1451
+    "integrated": 1452
   },
   "throughput": {
     "last24h": 25,
-    "last7d": 210,
-    "velocity": 30
+    "last7d": 211,
+    "velocity": 30.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-30",
-      "total": 1451
+      "total": 1452
     }
   ],
   "states": {
-    "integrated": 1443,
+    "integrated": 1444,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "mcp-validate-integer-fractional-float-rejection-coverage",
-    "state": "in_progress",
-    "since": "2026-06-29T23:56:01.235Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T00:21:19.210Z",
+      "task": "mcp-validate-integer-fractional-float-rejection-coverage",
+      "note": "Integrated as 045f9ef2 on loop/main-track."
+    },
     {
       "at": "2026-06-29T23:13:48.758Z",
       "task": "hatcher-connector-wstransport-backoff-jitter-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T02:45:35.940Z",
       "task": "llm-estimate-tokens-div-ceil-rounding-coverage",
       "note": "Integrated as f38f704d. estimate_tokens_rounds_partial_tokens_up pins the div_ceil(4) ceiling at non-multiple-of-4 inputs (1 to 1, 5 to 2, 7"
-    },
-    {
-      "at": "2026-06-29T02:27:59.262Z",
-      "task": "llm-response-body-cap-inclusive-boundary-coverage",
-      "note": "Integrated as 04826ef5. ollama_provider_reads_body_sized_exactly_at_cap serves a body sized exactly at the cap (cap == body.len()) and asser"
     }
   ]
 }

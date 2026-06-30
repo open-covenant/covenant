@@ -1,4 +1,4 @@
-// /agents — proof of agent. The index explains the trust model in three
+// /agents: proof of agent. The index explains the trust model in three
 // moves (registered, authored, reproducible) and hands the reader the
 // same verifier we use ourselves. The only color on these pages is earned
 // by a check passing.
@@ -15,7 +15,7 @@ import {
 } from "@/app/agents/_registry";
 
 export const metadata: Metadata = {
-  title: "Proof of agent — Covenant",
+  title: "Proof of agent: Covenant",
   description:
     "Covenant agents register on Metaplex's 014 Registry and anchor their audit roots as MPL Core attestations. Verify any of it in your browser.",
 };
@@ -29,12 +29,12 @@ const MOVES = [
   {
     term: "Authored",
     gloss:
-      "Attestations live in MPL Core AppData that only Covenant's signer may write. MPL Core enforces the authority at write time — authorship is a chain fact.",
+      "Attestations live in MPL Core AppData that only Covenant's signer may write. MPL Core enforces the authority at write time. Authorship is a chain fact.",
   },
   {
     term: "Reproducible",
     gloss:
-      "Each attested root recomputes, SHA-256 by SHA-256, from the published witness chain — in your browser, with no server verdict involved.",
+      "Each attested root recomputes, SHA-256 by SHA-256, from the published witness chain, in your browser, with no server verdict involved.",
   },
 ] as const;
 

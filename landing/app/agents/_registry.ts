@@ -4,9 +4,6 @@
 // MPL Agent identity registry ("014 Registry") program.
 export const AGENT_IDENTITY_PROGRAM = "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p";
 
-// MPL Core program — owns every Core asset account.
-export const MPL_CORE_PROGRAM = "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d";
-
 // The Covenant minting key: the only address allowed to write Covenant
 // attestation AppData. An attestation is Covenant-authored iff its AppData
 // authority is exactly this address.

@@ -17,8 +17,9 @@ export type AuditGate = {
   gatedEvents: string[];
   /** true = in policy (transferable), false = out of policy (vetoed), null = unread. */
   inPolicy: boolean | null;
-  /** The gating program is source-verified on-chain (pinned by programId). */
-  programVerified: boolean;
+  /** Gate is pinned to the gating program by programId; its source-verified build
+   *  status is checkable live (osecVerifyUrl). We pin per-request, not re-verify. */
+  programPinned: boolean;
 };
 
 type Rpc = (method: string, params: unknown) => Promise<unknown>;
@@ -31,14 +32,16 @@ export async function readAuditGate(
   const oracle = externalPlugins.find((p) => p["type"] === "Oracle");
   if (!oracle) return null;
 
-  const cfg = (oracle["adapter_config"] ?? {}) as Record<string, unknown>;
-  const baseAddress = (cfg["base_address"] as string | undefined) ?? null;
+  const cfg = ((oracle["adapter_config"] ?? oracle["adapterConfig"]) ?? {}) as Record<string, unknown>;
+  const baseAddress = ((cfg["base_address"] ?? cfg["baseAddress"]) as string | undefined) ?? null;
   const [pda] = PublicKey.findProgramAddressSync(
     [Buffer.from("oracle"), assetPk.toBytes()],
     new PublicKey(COVENANT_ORACLE_PROGRAM),
   );
   const gated = baseAddress === pda.toBase58();
-  const gatedEvents = Object.keys((oracle["lifecycle_checks"] ?? {}) as Record<string, unknown>);
+  const gatedEvents = Object.keys(
+    ((oracle["lifecycle_checks"] ?? oracle["lifecycleChecks"]) ?? {}) as Record<string, unknown>,
+  );
 
   let inPolicy: boolean | null = null;
   if (gated) {
@@ -46,16 +49,19 @@ export async function readAuditGate(
       const info = (await rpc("getAccountInfo", [
         pda.toBase58(),
         { encoding: "base64" },
-      ])) as { value: { data: [string, string] } | null } | null;
-      const b64 = info?.value?.data?.[0];
-      if (b64) {
+      ])) as { value: { data: [string, string]; owner: string } | null } | null;
+      // Only trust bytes from an account the oracle program actually owns; a
+      // PDA collision under another program would otherwise be read as a verdict.
+      if (info?.value?.owner === COVENANT_ORACLE_PROGRAM && info.value.data?.[0]) {
+        const buf = Buffer.from(info.value.data[0], "base64");
         // OracleState = disc(8) + OracleValidation::V1 { tag(1), create, transfer, burn, update }.
-        // The transfer verdict sits at byte 10: 2 = Pass (in policy), 1 = Rejected.
-        const v = Buffer.from(b64, "base64")[10];
-        inPolicy = v === 2 ? true : v === 1 ? false : null;
+        // Byte 8 is the enum tag (1 = V1); the transfer verdict is byte 10: 2 = Pass, 1 = Rejected.
+        if (buf.length >= 11 && buf[8] === 1) {
+          inPolicy = buf[10] === 2 ? true : buf[10] === 1 ? false : null;
+        }
       }
     } catch {
-      // leave inPolicy null — the gate renders an "unknown verdict" state
+      // leave inPolicy null so the gate renders an "unknown verdict" state
     }
   }
 
@@ -65,6 +71,6 @@ export async function readAuditGate(
     oraclePda: pda.toBase58(),
     gatedEvents,
     inPolicy,
-    programVerified: gated,
+    programPinned: gated,
   };
 }

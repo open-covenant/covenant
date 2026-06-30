@@ -2,7 +2,7 @@
 // the "Covenant Verified" check (/api/agents/[asset]/verify). A record is an MPL
 // Core AppData plugin whose on-chain data_authority is the Covenant validator;
 // MPL Core enforces that only that key can write it, so authorship is a chain
-// fact. The check is a pure function over public DAS output — no Covenant infra
+// fact. The check is a pure function over public DAS output, no Covenant infra
 // in the trust path. On-chain keys are camelCase; Helius re-cases to snake_case,
 // so every field is read either way.
 
@@ -26,12 +26,33 @@ export type Accountability = {
   accountable: boolean;
   count: number;
   latest: Verdict | null;
+  /** The page cap was hit on a full final page, so more records may exist. */
+  truncated: boolean;
 };
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 const field = (d: Record<string, unknown>, snake: string, camel: string): string | undefined =>
   str(d[snake]) ?? str(d[camel]);
 const isHex64 = (s: string) => /^[0-9a-f]{64}$/.test(s);
+
+const obj = (v: unknown): Record<string, unknown> | undefined =>
+  v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+
+// The AppData write authority (data_authority) is the key MPL Core enforces for
+// writes, so it is the only thing that proves authorship. Helius nests it under
+// adapter_config; a flat fallback covers other shapes. The plugin's top-level
+// `authority` is the adapter's config authority, which a minter can set to any
+// address without it signing, so trusting it would let anyone forge a record
+// under our key. Read the write authority only, and fail closed when absent.
+function writeAuthority(plugin: Record<string, unknown>): string | null {
+  const cfg = obj(plugin["adapter_config"]) ?? obj(plugin["adapterConfig"]);
+  const da =
+    obj(cfg?.["data_authority"]) ??
+    obj(cfg?.["dataAuthority"]) ??
+    obj(plugin["data_authority"]) ??
+    obj(plugin["dataAuthority"]);
+  return str(da?.["address"]) ?? null;
+}
 
 export function appData(asset: Record<string, unknown>): Record<string, unknown> | null {
   const plugins = (asset["external_plugins"] ?? []) as Array<Record<string, unknown>>;
@@ -54,8 +75,7 @@ export function verifyAttestation(asset: Record<string, unknown>, authority: str
     };
   }
   const data = (plugin["data"] ?? {}) as Record<string, unknown>;
-  const dataAuthority =
-    str((plugin["authority"] as Record<string, unknown> | undefined)?.["address"]) ?? null;
+  const dataAuthority = writeAuthority(plugin);
   const reasons: string[] = [];
 
   if (field(data, "type", "type") !== ATTESTATION_TYPE) reasons.push("type is not the ERC-8004 validation type");
@@ -97,8 +117,10 @@ export async function findAccountability(
   agent: string,
   authority: string,
 ): Promise<Accountability> {
+  const MAX_PAGES = 5;
   const verified: Verdict[] = [];
-  for (let page = 1; page <= 5; page += 1) {
+  let truncated = false;
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
     const resp = (await rpc("getAssetsByOwner", {
       ownerAddress: authority,
       page,
@@ -111,10 +133,11 @@ export async function findAccountability(
       if (v.verified && v.subjectAsset === agent) verified.push(v);
     }
     if (items.length < 1000) break;
+    if (page === MAX_PAGES) truncated = true; // full final page at the cap; more may exist
   }
   const latest = verified.reduce<Verdict | null>(
     (acc, v) => (acc && (acc.recordedAt ?? 0) >= (v.recordedAt ?? 0) ? acc : v),
     null,
   );
-  return { accountable: verified.length > 0, count: verified.length, latest };
+  return { accountable: verified.length > 0, count: verified.length, latest, truncated };
 }

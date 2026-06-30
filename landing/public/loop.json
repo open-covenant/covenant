@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T09:19:14.783Z",
+  "updatedAt": "2026-06-30T09:40:28.894Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12483,
+    "events": 12490,
     "tasks": 1462,
-    "integrated": 1464
+    "integrated": 1465
   },
   "throughput": {
-    "last24h": 29,
-    "last7d": 222,
-    "velocity": 31.7
+    "last24h": 30,
+    "last7d": 223,
+    "velocity": 31.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 13
+      "count": 14
     }
   ],
   "cumulative": [
@@ -180,12 +180,12 @@
     },
     {
       "date": "06-30",
-      "total": 1464
+      "total": 1465
     }
   ],
   "states": {
-    "integrated": 1456,
-    "proposed": 2,
+    "integrated": 1457,
+    "proposed": 1,
     "blocked": 4
   },
   "areas": [
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T09:32:16.032Z",
+      "task": "metaplex-signer-rpc-caller-parsing-coverage",
+      "note": "Committed fc76fde0 (test-only +119 in covenant-metaplex-signer/src/main.rs covering latest_blockhash/send_transaction/confirm_signature, REA"
+    },
     {
       "at": "2026-06-30T09:07:11.308Z",
       "task": "metaplex-signer-rpc-envelope-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-29T19:57:20.181Z",
       "task": "covenantd-cross-host-dedup-horizon-inclusive-retention-bound",
       "note": "Committing the claim_fresh at-horizon retention test + README metrics bump to loop/main-track."
-    },
-    {
-      "at": "2026-06-29T19:48:23.697Z",
-      "task": "covenantd-x402-read-stream-capped-exact-fit-not-overflow-cov",
-      "note": "Committing the read_stream_capped exact-fit test + README metrics bump to loop/main-track."
     }
   ]
 }

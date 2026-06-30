@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T04:05:32.996Z",
+  "updatedAt": "2026-06-30T04:25:40.799Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12408,
-    "tasks": 1453,
-    "integrated": 1455
+    "events": 12420,
+    "tasks": 1454,
+    "integrated": 1457
   },
   "throughput": {
-    "last24h": 22,
-    "last7d": 213,
-    "velocity": 30.4
+    "last24h": 23,
+    "last7d": 215,
+    "velocity": 30.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 4
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-30",
-      "total": 1455
+      "total": 1457
     }
   ],
   "states": {
-    "integrated": 1447,
+    "integrated": 1449,
     "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "hyre-manifest-usd-to-micro-checked-add-overflow-coverage",
-    "state": "cross_review",
-    "since": "2026-06-30T04:05:25.737Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T04:21:00.239Z",
+      "task": "hyre-tools-build-tool-configured-per-call-cap-override-cover",
+      "note": "Committed (test + README metrics 3219->3220), exactly two tracked files. Mutation-proven via standalone rustc harness (real honors configure"
+    },
+    {
+      "at": "2026-06-30T04:12:00.179Z",
+      "task": "hyre-manifest-usd-to-micro-checked-add-overflow-coverage",
+      "note": "Committed e363d74a (test + README metrics 3218->3219), exactly two tracked files. Mutation-proven via standalone rustc harness (real checked"
+    },
     {
       "at": "2026-06-30T03:45:09.561Z",
       "task": "stake-keeper-config-bps-split-u16-wrap-widening-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-06-29T14:21:27.689Z",
       "task": "sap-bridge-worker-read-capped-exact-fit-inclusive-boundary-c",
       "note": "Integrated on loop/main-track as 7fbb3d93 (README metrics bump + the exact-fit read_capped unit test). Mutation-proven: buf.len() > max -> >"
-    },
-    {
-      "at": "2026-06-29T13:34:44.812Z",
-      "task": "tui-truncate-home-display-exact-budget-inclusive-endpoint-co",
-      "note": "Integrated on loop/main-track as e349f5d9 (README metrics bump + the exact-budget unit test). Mutation-proven: the less-than-or-equal to str"
-    },
-    {
-      "at": "2026-06-29T11:44:13.747Z",
-      "task": "hermes-drain-sse-frames-residual-buffer-inclusive-cap-covera",
-      "note": "Integrated as 5380ecf0 on loop/main-track. test-only +28 lines to hermes.rs lib tests + README metrics bump (3202->3203, generator-confirmed"
     }
   ]
 }

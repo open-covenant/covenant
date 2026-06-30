@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-30T01:42:24.837Z",
+  "updatedAt": "2026-06-30T02:03:18.194Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12385,
+    "events": 12389,
     "tasks": 1451,
     "integrated": 1453
   },
   "throughput": {
-    "last24h": 23,
+    "last24h": 22,
     "last7d": 211,
     "velocity": 30.1
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1445,
-    "proposed": 2,
-    "blocked": 4
+    "proposed": 1,
+    "blocked": 4,
+    "self_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-refill-add-u128-truncation-clamp-boundary-coverage",
+    "state": "self_review",
+    "since": "2026-06-30T01:46:57.401Z"
+  },
   "recent": [
     {
       "at": "2026-06-30T01:20:54.371Z",

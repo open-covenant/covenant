@@ -333,10 +333,30 @@ pub fn slash_stake(
     slash_vault: &Pubkey,
     amount: u64,
 ) -> Result<(), TransactionError> {
+    slash_stake_with(
+        env,
+        agent_key,
+        position,
+        stake_vault,
+        slash_vault,
+        amount,
+        [0u8; 32],
+    )
+}
+
+pub fn slash_stake_with(
+    env: &mut Env,
+    agent_key: &[u8; 32],
+    position: &Pubkey,
+    stake_vault: &Pubkey,
+    slash_vault: &Pubkey,
+    amount: u64,
+    reason_hash: [u8; 32],
+) -> Result<(), TransactionError> {
     let agent = agent_pda(agent_key);
     let data = ix::SlashStake {
         amount,
-        reason_hash: [0u8; 32],
+        reason_hash,
     }
     .data();
     let metas = vec![

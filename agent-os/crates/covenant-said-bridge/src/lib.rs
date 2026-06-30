@@ -3,12 +3,11 @@
 //! SAID program: `5dpw6KEQPn248pnkkaYyWfHwu2nfb3LUMbTucb6LaA8G` (mainnet),
 //! `ESPreFucjVwtDmZbhtL3JLJ9VxCethNEYtosMQhkcurv` (devnet).
 //!
-//! Off-chain register, lookup, and cross-chain messaging hit
-//! `api.saidprotocol.com` in-process over REST. The four on-chain
-//! instructions (`register_agent`, `get_verified`, `submit_anchor`,
-//! `validate_work`) shell out to the TypeScript worker at
-//! `@covenant/said-bridge` and each one is gated behind its own
-//! `COVENANT_SAID_ALLOW_PAID_*` flag. All gates default off.
+//! Lookup and cross-chain messaging hit `api.saidprotocol.com` in-process
+//! over REST. The four on-chain instructions (`register_agent`,
+//! `get_verified`, `submit_anchor`, `validate_work`) shell out to the
+//! TypeScript worker at `@covenant/said-bridge`; each is gated behind its
+//! own `COVENANT_SAID_ALLOW_PAID_*` flag. All gates default off.
 
 #![deny(unsafe_code)]
 

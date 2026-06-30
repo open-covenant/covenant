@@ -152,9 +152,7 @@ where
         serde_json::from_value(env.data)
             .map_err(|e| BridgeError::Decode(format!("{e}: {line}")))
     } else {
-        let message = env
-            .error
-            .unwrap_or_else(|| "worker reported an error".into());
+        let message = env.error.unwrap_or_else(|| "worker error (no message)".into());
         let name = env
             .name
             .filter(|n| !n.is_empty())

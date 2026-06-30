@@ -1,9 +1,6 @@
-//! End-to-end coverage of the REST surface (off-chain `lookup` and the
-//! cross-chain inbox/free-tier/send calls) against a one-shot in-process
-//! HTTP server. Exercises the status-code branches in `rest::decode`
-//! (success, 402, other errors, undecodable body) and confirms each call
-//! reaches the right method/path and maps the JSON envelope onto its typed
-//! result — without a mock framework or touching the network.
+//! REST surface against an in-process one-shot HTTP server. Covers
+//! success, 402, generic 4xx/5xx, and undecodable body across `lookup`,
+//! `xchain_inbox`, `xchain_free_tier`, and `xchain_send`.
 
 use covenant_said_bridge::config::Cluster;
 use covenant_said_bridge::xchain::SendRequest;
@@ -18,11 +15,8 @@ struct Request {
     body: String,
 }
 
-/// One-shot HTTP server: binds an ephemeral loopback port, accepts a single
-/// connection, replies with `status` (a full status line like "404 Not
-/// Found") and `body`, then hands back the parsed request so the test can
-/// assert what the bridge actually sent. Returns the base URL to point the
-/// bridge at and the join handle carrying the captured request.
+/// One-shot loopback HTTP server. Returns (base URL, join handle with
+/// the parsed request the bridge sent).
 async fn serve_once(status: &'static str, body: &'static str) -> (String, JoinHandle<Request>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");

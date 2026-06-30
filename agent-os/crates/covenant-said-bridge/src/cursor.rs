@@ -64,7 +64,7 @@ impl AnchorCursor {
         Self::open(PathBuf::from(":memory:"))
     }
 
-    /// The next anchor index to claim. Returns 0 when the cursor is empty.
+    /// Next index to claim; 0 when the cursor is empty.
     pub fn next_index(&self) -> Result<u64> {
         let max: Option<i64> = self
             .conn
@@ -83,8 +83,8 @@ impl AnchorCursor {
             .ok_or_else(|| BridgeError::Invalid("anchor_index saturated u64".into()))
     }
 
-    /// The highest confirmed anchor index, or None if no anchors are
-    /// confirmed yet (regardless of pending rows).
+    /// Highest confirmed index, ignoring pending rows. None if nothing
+    /// has confirmed yet.
     pub fn last_confirmed_index(&self) -> Result<Option<u64>> {
         let max: Option<i64> = self
             .conn
@@ -98,8 +98,7 @@ impl AnchorCursor {
         Ok(max.map(|v| v as u64))
     }
 
-    /// Insert a claimed slot before submitting. Conflicts on the
-    /// `anchor_index` PK so a duplicate claim is impossible.
+    /// Insert a claim before submit. PK on `anchor_index` rejects duplicates.
     pub fn claim(&self, anchor: &PendingAnchor) -> Result<()> {
         self.conn
             .lock()

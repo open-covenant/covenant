@@ -1501,7 +1501,7 @@ impl Server {
         let home = self
             .home
             .as_ref()
-            .ok_or_else(|| "daemon home is not set; cannot resolve $COVENANT_HOME/said".to_string())?;
+            .ok_or_else(|| "$COVENANT_HOME is unset; cannot resolve said paths".to_string())?;
         let dir = home.join("said");
         Ok((dir.join("cursor.db"), dir.join("anchor_pending.jsonl")))
     }

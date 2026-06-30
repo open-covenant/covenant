@@ -1,16 +1,7 @@
-//! Covenantd-level dispatch coverage for the SAID bridge verbs. The
-//! offline arms — the unconfigured status snapshot, the "bridge not
-//! wired" guard shared by every bridge-backed verb, the anchor-status
-//! cursor read, and the fixture-mode anchor round-trip (claim, JSONL
-//! write, confirm, status reflection) — run without any socket. The
-//! REST envelope mappings (lookup, inbox, free-tier, send) drive a
-//! one-shot loopback listener so both the success decode and the
-//! verb-prefixed `http <status>` error mapping are exercised without
-//! the public SAID API. Paid on-chain verbs are covered at the
-//! closed-gate rejection and, via a shell-stub worker, the success
-//! field-copy onto each `Response::Said*` variant; the real worker
-//! subprocess and live REST against api.saidprotocol.com stay
-//! operator-gated and live in the `covenant-said-bridge` crate tests.
+//! Dispatch coverage for the SAID bridge verbs at the covenantd level.
+//! REST verbs run against a one-shot loopback listener; paid on-chain
+//! verbs run against a shell-stub worker. The real subprocess and the
+//! live SAID API stay in the `covenant-said-bridge` crate tests.
 
 use covenant_identity::LocalIdentity;
 use covenant_ipc::{Request, Response};
@@ -86,14 +77,9 @@ fn devnet_bridge(enabled: bool) -> SaidBridge {
     SaidBridge::new(Config::from_env(env)).unwrap()
 }
 
-/// Enabled bridge with every paid gate open and the worker subprocess
-/// replaced by a shell stub that drains stdin and prints `envelope_json`
-/// verbatim — the success shape `worker::invoke` parses. Mirrors the
-/// crate's `worker_roundtrip` stub so the paid on-chain success arms are
-/// exercised at the covenantd dispatch boundary without a real worker,
-/// signer, or paid transaction. `Config::from_env` can't carry the
-/// space-laden `sh -c` command (it splits `COVENANT_SAID_WORKER_CMD` on
-/// whitespace), so the config is built as a literal.
+/// Enabled bridge with every paid gate open, worker replaced by a shell
+/// stub that echoes `envelope_json` on stdout. Built as a literal because
+/// `Config::from_env` whitespace-splits `COVENANT_SAID_WORKER_CMD`.
 fn worker_stub_bridge(envelope_json: &str) -> SaidBridge {
     let script = format!("cat >/dev/null; printf '%s' '{envelope_json}'");
     let config = Config {
@@ -209,7 +195,7 @@ async fn said_anchor_status_without_home_errors() {
     assert_eq!(
         resp,
         Response::Error {
-            message: "daemon home is not set; cannot resolve $COVENANT_HOME/said".into(),
+            message: "$COVENANT_HOME is unset; cannot resolve said paths".into(),
         }
     );
 }

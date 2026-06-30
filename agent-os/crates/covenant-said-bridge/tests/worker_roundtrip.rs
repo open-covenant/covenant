@@ -142,7 +142,7 @@ async fn error_envelope_without_message_uses_default_text() {
     match err {
         BridgeError::Upstream { name, message } => {
             assert_eq!(name, "Worker");
-            assert_eq!(message, "worker reported an error");
+            assert_eq!(message, "worker error (no message)");
         }
         other => panic!("expected Upstream, got {other:?}"),
     }
@@ -165,8 +165,8 @@ async fn worker_timeout_surfaces_timeout_error() {
 
 #[tokio::test]
 async fn worker_silent_exit_surfaces_worker_error() {
-    // A worker that drains stdin and exits cleanly with no stdout — a
-    // crashed or misbuilt worker — must surface as Worker, not a decode
+    // A worker that drains stdin and exits cleanly with no stdout (a
+    // crashed or misbuilt build) must surface as Worker, not a decode
     // panic on an empty line.
     let bridge = bridge_with_worker(
         vec!["sh".into(), "-c".into(), "cat >/dev/null; exit 0".into()],
@@ -199,8 +199,8 @@ async fn worker_non_json_output_surfaces_worker_error() {
 #[tokio::test]
 async fn worker_log_then_envelope_uses_first_parseable_line() {
     // A worker that prints a log line first, then the envelope, must still
-    // be parsed correctly — the previous "last non-empty line" parser was
-    // brittle to trailing log spew. First parseable envelope wins.
+    // be parsed correctly. First parseable envelope wins; the previous
+    // last-non-empty-line parser was brittle to trailing log spew.
     let bridge = bridge_with_stub(
         "[info] connected to rpc\n{\"ok\":true,\"data\":{\"signature\":\"sig\",\"slot\":7}}",
     );
@@ -211,9 +211,9 @@ async fn worker_log_then_envelope_uses_first_parseable_line() {
 
 #[tokio::test]
 async fn worker_ok_envelope_with_wrong_data_shape_surfaces_decode() {
-    // ok:true but the data does not match the typed result — here a numeric
-    // signature where a string is required — must surface as Decode rather
-    // than a silent default or a panic.
+    // ok:true with data that doesn't match the typed result (numeric
+    // signature where a string is required) must surface as Decode, not
+    // a silent default or a panic.
     let bridge = bridge_with_stub(r#"{"ok":true,"data":{"signature":123}}"#);
     let err = bridge
         .get_verified()

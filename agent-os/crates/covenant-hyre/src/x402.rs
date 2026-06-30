@@ -520,6 +520,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn to_requirements_forces_operator_caip2_network_and_normalises_output() {
+        // to_requirements is the last step before the signer: it turns a
+        // selected 402 option into the PaymentRequirements the funding key
+        // signs. Its headline contract is that the network is FORCED to the
+        // operator's CAIP-2 rail (the caip2_network arg), never the short
+        // "solana" the untrusted challenge body carries — so a tampered or
+        // quirky upstream cannot steer the signed payment onto a different
+        // chain id. The rejection test above only asserts the happy path is
+        // Ok and never inspects the returned fields, so the forcing and the
+        // field normalisation are unpinned: a regression emitting
+        // accept.network instead of caip2_network would hand the signer the
+        // upstream's "solana" and every existing test would stay green.
+        let base = parse_challenge(LIVE_DEFI_TVL_402).expect("parse")[0].clone();
+        assert_eq!(
+            base.network, "solana",
+            "the live option carries the short network spelling, distinct from the CAIP-2 rail",
+        );
+
+        let req = to_requirements(&base, NETWORK).expect("the pinned live option normalises");
+
+        assert_eq!(
+            req.network, NETWORK,
+            "network must be forced to the operator CAIP-2 rail passed in, not the challenge's short \"solana\"",
+        );
+        assert_eq!(req.asset, ASSET, "the asset mint is carried through verbatim");
+        assert_eq!(req.pay_to, crate::config::PAY_TO, "payTo is the pinned Hyre payee");
+        assert_eq!(req.scheme, "exact", "the exact scheme is carried through");
+        assert_eq!(
+            req.amount, "10000",
+            "the exact atomic figure is carried through verbatim",
+        );
+        assert!(
+            (req.amount_usdc - 0.01).abs() < 1e-9,
+            "amount_usdc is the atomic amount over 1e6 (10000 -> 0.01 USDC), got {}",
+            req.amount_usdc,
+        );
+        assert_eq!(
+            req.extra.and_then(|e| e.fee_payer).as_deref(),
+            Some(crate::config::PAYAI_FEE_PAYER),
+            "the PayAI sponsor feePayer is carried into the signer input",
+        );
+    }
+
     #[tokio::test]
     async fn slow_upstream_times_out_instead_of_hanging() {
         let server = MockServer::start().await;

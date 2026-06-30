@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { uptime } from "./_headerStats";
+
 type Stats = {
   commits: number | null;
   head: string | null;
@@ -10,15 +12,6 @@ type Stats = {
   live: string | null;
   crates: string | null;
 };
-
-function uptime(sinceISO: string): string {
-  const ms = Date.now() - new Date(sinceISO).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const d = Math.floor(ms / 86_400_000);
-  const h = Math.floor(ms / 3_600_000) % 24;
-  const m = Math.floor(ms / 60_000) % 60;
-  return `${d}d ${h}h ${m}m`;
-}
 
 function Cell({
   label,
@@ -86,8 +79,7 @@ export function HeaderStats() {
   return (
     <div className="flex items-center gap-4">
       <Cell label="commits" value={num(s.commits)} />
-      {s.tests && <Cell label="tests" value={s.tests} />}
-      {s.live && <Cell label="live" value={s.live} />}
+      {s.live && <Cell label="live tests" value={s.live} />}
       {s.crates && <Cell label="crates" value={s.crates} />}
       <Cell label="up" value={uptime(s.alphaSince)} />
       <Cell

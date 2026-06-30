@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T02:03:18.194Z",
+  "updatedAt": "2026-06-30T02:23:24.842Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12389,
+    "events": 12393,
     "tasks": 1451,
-    "integrated": 1453
+    "integrated": 1454
   },
   "throughput": {
-    "last24h": 22,
-    "last7d": 211,
-    "velocity": 30.1
+    "last24h": 23,
+    "last7d": 212,
+    "velocity": 30.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-30",
-      "total": 1453
+      "total": 1454
     }
   ],
   "states": {
-    "integrated": 1445,
+    "integrated": 1446,
     "proposed": 1,
-    "blocked": 4,
-    "self_review": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "budget-refill-add-u128-truncation-clamp-boundary-coverage",
-    "state": "self_review",
-    "since": "2026-06-30T01:46:57.401Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T02:15:32.932Z",
+      "task": "budget-refill-add-u128-truncation-clamp-boundary-coverage",
+      "note": "Committing the test slice to loop/main-track: refill add-grant u128->u64 truncation clamp boundary coverage in covenant-budget src/lib.rs, R"
+    },
     {
       "at": "2026-06-30T01:20:54.371Z",
       "task": "llm-estimate-tokens-u32-saturation-clamp-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T08:53:04.175Z",
       "task": "ipc-frame-max-frame-inclusive-boundary-coverage",
       "note": "Integrated as 4c4f446f on loop/main-track. frame_round_trips_a_payload_of_exactly_max_frame_bytes serves a payload (\"a\".repeat(MAX_FRAME-2))"
-    },
-    {
-      "at": "2026-06-29T04:24:40.931Z",
-      "task": "stake-keeper-sweep-split-residue-leg-coverage",
-      "note": "Integrated as faa29716 on loop/main-track. Test-only: strengthened split_absorbs_rounding_residue_into_subsidy from sum-only (tautological) "
     }
   ]
 }

@@ -83,7 +83,8 @@ pub struct PaidGates {
 }
 
 impl PaidGates {
-    pub fn any(&self) -> bool {
+    #[cfg(test)]
+    fn any(&self) -> bool {
         self.register || self.verify || self.anchor || self.validate_work
     }
 
@@ -170,6 +171,11 @@ impl Config {
 
         let api_base_url = get("COVENANT_SAID_API_BASE_URL")
             .map(str::to_owned)
+            .filter(|s| {
+                url::Url::parse(s)
+                    .ok()
+                    .is_some_and(|u| matches!(u.scheme(), "http" | "https"))
+            })
             .unwrap_or_else(|| DEFAULT_SAID_API_BASE_URL.to_owned());
 
         let paid = PaidGates {

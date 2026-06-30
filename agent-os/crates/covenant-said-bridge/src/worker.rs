@@ -14,11 +14,14 @@ use std::process::Stdio;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use crate::config::Config;
 use crate::{BridgeError, Result};
+
+const MAX_WORKER_STDOUT_BYTES: usize = 1 << 20;
+const MAX_WORKER_STDERR_BYTES: usize = 1 << 18;
 
 #[derive(serde::Deserialize)]
 struct Envelope {
@@ -66,48 +69,97 @@ where
             .map_err(|e| BridgeError::Worker(format!("close stdin: {e}")))?;
     }
 
-    let output = match tokio::time::timeout(config.worker_timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(BridgeError::Worker(format!("wait: {e}"))),
-        Err(_) => {
-            return Err(BridgeError::Timeout {
-                secs: config.worker_timeout.as_secs(),
-            });
+    let mut child_stdout = child.stdout.take();
+    let mut child_stderr = child.stderr.take();
+    let read_streams = async {
+        let stdout_fut = async {
+            match child_stdout.as_mut() {
+                Some(s) => {
+                    let mut buf = Vec::new();
+                    s.take(MAX_WORKER_STDOUT_BYTES as u64 + 1)
+                        .read_to_end(&mut buf)
+                        .await
+                        .map_err(|e| BridgeError::Worker(format!("read stdout: {e}")))?;
+                    if buf.len() > MAX_WORKER_STDOUT_BYTES {
+                        return Err(BridgeError::Worker(format!(
+                            "worker stdout exceeds {MAX_WORKER_STDOUT_BYTES} bytes"
+                        )));
+                    }
+                    Ok(buf)
+                }
+                None => Ok(Vec::new()),
+            }
+        };
+        let stderr_fut = async {
+            match child_stderr.as_mut() {
+                Some(s) => {
+                    let mut buf = Vec::new();
+                    s.take(MAX_WORKER_STDERR_BYTES as u64 + 1)
+                        .read_to_end(&mut buf)
+                        .await
+                        .map_err(|e| BridgeError::Worker(format!("read stderr: {e}")))?;
+                    if buf.len() > MAX_WORKER_STDERR_BYTES {
+                        buf.truncate(MAX_WORKER_STDERR_BYTES);
+                    }
+                    Ok(buf)
+                }
+                None => Ok(Vec::new()),
+            }
+        };
+        let (stdout, stderr) = tokio::join!(stdout_fut, stderr_fut);
+        Ok::<_, BridgeError>((stdout?, stderr?))
+    };
+
+    let ((stdout_buf, stderr_buf), status) =
+        match tokio::time::timeout(config.worker_timeout, async {
+            let streams = read_streams.await?;
+            let status = child
+                .wait()
+                .await
+                .map_err(|e| BridgeError::Worker(format!("wait: {e}")))?;
+            Ok::<_, BridgeError>((streams, status))
+        })
+        .await
+        {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(BridgeError::Timeout {
+                    secs: config.worker_timeout.as_secs(),
+                });
+            }
+        };
+
+    let stdout = String::from_utf8_lossy(&stdout_buf);
+    let envelope = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .find_map(|l| serde_json::from_str::<Envelope>(l).ok().map(|e| (l, e)));
+
+    let (line, env) = match envelope {
+        Some(pair) => pair,
+        None => {
+            let stderr = String::from_utf8_lossy(&stderr_buf);
+            return Err(BridgeError::Worker(format!(
+                "worker produced no envelope (exit {status}, stderr: {})",
+                stderr.trim()
+            )));
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .map(str::trim)
-        .unwrap_or("");
-
-    if line.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(BridgeError::Worker(format!(
-            "worker produced no output (exit {}, stderr: {})",
-            output.status,
-            stderr.trim()
-        )));
-    }
-
-    let env: Envelope =
-        serde_json::from_str(line).map_err(|e| BridgeError::Decode(format!("{e}: {line}")))?;
-
     if env.ok {
-        serde_json::from_value(env.data).map_err(|e| BridgeError::Decode(e.to_string()))
+        serde_json::from_value(env.data)
+            .map_err(|e| BridgeError::Decode(format!("{e}: {line}")))
     } else {
         let message = env
             .error
             .unwrap_or_else(|| "worker reported an error".into());
-        match env.name {
-            Some(name) if !name.is_empty() && name != "Error" => {
-                Err(BridgeError::Upstream { name, message })
-            }
-            _ => Err(BridgeError::Rest(message)),
-        }
+        let name = env
+            .name
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Worker".into());
+        Err(BridgeError::Upstream { name, message })
     }
 }
 

@@ -90,7 +90,7 @@ fn enabled_bridge(api_base_url: String) -> SaidBridge {
 fn sample_send() -> SendRequest {
     SendRequest {
         source_chain: "solana".into(),
-        source_address: "Addr1".into(),
+        source_address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
         target_chain: "base".into(),
         target_address: "0xabc".into(),
         payload: serde_json::json!({ "ping": 1 }),
@@ -101,18 +101,21 @@ fn sample_send() -> SendRequest {
 async fn lookup_maps_success_envelope() {
     let (base, server) = serve_once(
         "200 OK",
-        r#"{"wallet":"Wallet111","owner":"Owner222","name":"scout","isVerified":true,"reputationScore":4.5,"feedbackCount":12,"activityCount":99,"metadataUri":"https://example.test/a.json","registeredAt":"2026-01-01T00:00:00Z"}"#,
+        r#"{"wallet":"AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb","owner":"Owner222","name":"scout","isVerified":true,"reputationScore":4.5,"feedbackCount":12,"activityCount":99,"metadataUri":"https://example.test/a.json","registeredAt":"2026-01-01T00:00:00Z"}"#,
     )
     .await;
     let agent = enabled_bridge(base)
-        .lookup("Wallet111")
+        .lookup("AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb")
         .await
         .expect("lookup");
     let req = server.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/api/agents/Wallet111");
-    assert_eq!(agent.wallet, "Wallet111");
+    assert_eq!(
+        req.path,
+        "/api/agents/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
+    assert_eq!(agent.wallet, "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     assert_eq!(agent.owner.as_deref(), Some("Owner222"));
     assert!(agent.is_verified);
     assert!((agent.reputation_score - 4.5).abs() < 1e-9);
@@ -128,7 +131,7 @@ async fn lookup_maps_success_envelope() {
 async fn lookup_surfaces_http_error_with_body() {
     let (base, server) = serve_once("404 Not Found", r#"{"error":"agent not found"}"#).await;
     let err = enabled_bridge(base)
-        .lookup("Missing")
+        .lookup("MissingABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmn")
         .await
         .expect_err("should 404");
     server.await.expect("server");
@@ -146,7 +149,7 @@ async fn lookup_surfaces_http_error_with_body() {
 async fn lookup_invalid_json_surfaces_decode() {
     let (base, server) = serve_once("200 OK", "not json").await;
     let err = enabled_bridge(base)
-        .lookup("Wallet111")
+        .lookup("AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb")
         .await
         .expect_err("should fail to decode");
     server.await.expect("server");
@@ -161,22 +164,22 @@ async fn lookup_invalid_json_surfaces_decode() {
 async fn xchain_inbox_maps_messages() {
     let (base, server) = serve_once(
         "200 OK",
-        r#"{"chain":"solana","address":"Addr1","messages":[{"id":"m1","sourceChain":"base","sourceAddress":"0xabc","targetChain":"solana","targetAddress":"Addr1","payload":{"hello":"world"},"createdAt":1700000000}]}"#,
+        r#"{"chain":"solana","address":"AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb","messages":[{"id":"m1","sourceChain":"base","sourceAddress":"0xabc","targetChain":"solana","targetAddress":"AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb","payload":{"hello":"world"},"createdAt":1700000000}]}"#,
     )
     .await;
     let inbox = enabled_bridge(base)
-        .xchain_inbox("solana", "Addr1")
+        .xchain_inbox("solana", "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb")
         .await
         .expect("inbox");
     let req = server.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/inbox/solana/Addr1");
+    assert_eq!(req.path, "/xchain/inbox/solana/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     assert_eq!(inbox.messages.len(), 1);
     let msg = &inbox.messages[0];
     assert_eq!(msg.id, "m1");
     assert_eq!(msg.source_chain, "base");
-    assert_eq!(msg.target_address, "Addr1");
+    assert_eq!(msg.target_address, "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     assert_eq!(msg.created_at, Some(1700000000));
 }
 
@@ -184,17 +187,17 @@ async fn xchain_inbox_maps_messages() {
 async fn xchain_free_tier_maps_status() {
     let (base, server) = serve_once(
         "200 OK",
-        r#"{"address":"Addr1","used":3,"remaining":7,"limit":10,"paidPrice":"0.01","paymentChains":[{"name":"base","network":"mainnet"}]}"#,
+        r#"{"address":"AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb","used":3,"remaining":7,"limit":10,"paidPrice":"0.01","paymentChains":[{"name":"base","network":"mainnet"}]}"#,
     )
     .await;
     let status = enabled_bridge(base)
-        .xchain_free_tier("Addr1")
+        .xchain_free_tier("AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb")
         .await
         .expect("free tier");
     let req = server.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/free-tier/Addr1");
+    assert_eq!(req.path, "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     assert_eq!(status.used, 3);
     assert_eq!(status.remaining, 7);
     assert_eq!(status.limit, 10);
@@ -260,7 +263,7 @@ async fn rest_calls_require_enabled_before_network() {
     // closed with Disabled before any socket is opened.
     let bridge = SaidBridge::new(Config::disabled(Cluster::Devnet)).expect("bridge");
 
-    let err = bridge.lookup("Wallet111").await.expect_err("disabled");
+    let err = bridge.lookup("AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb").await.expect_err("disabled");
     assert!(
         matches!(err, BridgeError::Disabled),
         "expected Disabled, got {err:?}"

@@ -10,6 +10,8 @@ use url::Url;
 
 use crate::{BridgeError, Result};
 
+const MAX_REST_BODY_BYTES: u64 = 1 << 20;
+
 pub(crate) fn build_client(timeout: Duration) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(timeout)
@@ -57,23 +59,44 @@ where
     decode(response).await
 }
 
+async fn read_capped(response: reqwest::Response) -> Result<Vec<u8>> {
+    if let Some(len) = response.content_length() {
+        if len > MAX_REST_BODY_BYTES {
+            return Err(BridgeError::Rest(format!(
+                "response body advertises {len} bytes, cap is {MAX_REST_BODY_BYTES}"
+            )));
+        }
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| BridgeError::Rest(format!("read body: {e}")))?;
+    if bytes.len() as u64 > MAX_REST_BODY_BYTES {
+        return Err(BridgeError::Rest(format!(
+            "response body is {} bytes, cap is {MAX_REST_BODY_BYTES}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes.to_vec())
+}
+
 async fn decode<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
     let status = response.status();
     if status == StatusCode::PAYMENT_REQUIRED {
-        let body = response.text().await.unwrap_or_default();
+        let body = String::from_utf8_lossy(&read_capped(response).await.unwrap_or_default())
+            .into_owned();
         return Err(BridgeError::Http { status: 402, body });
     }
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let body = String::from_utf8_lossy(&read_capped(response).await.unwrap_or_default())
+            .into_owned();
         return Err(BridgeError::Http {
             status: status.as_u16(),
             body,
         });
     }
-    response
-        .json::<T>()
-        .await
-        .map_err(|e| BridgeError::Decode(e.to_string()))
+    let body = read_capped(response).await?;
+    serde_json::from_slice::<T>(&body).map_err(|e| BridgeError::Decode(e.to_string()))
 }
 
 #[cfg(test)]

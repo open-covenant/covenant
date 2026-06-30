@@ -48,6 +48,7 @@ export interface BridgeOptions {
 interface SaidSdkLike {
   SAID: new (config?: { rpcUrl?: string; commitment?: string }) => SaidClientLike;
   Keypair: { fromSecretKey(secret: Uint8Array): SaidKeypairLike };
+  Connection: new (rpcUrl: string, commitment?: string) => SaidConnectionLike;
 }
 
 interface SaidKeypairLike {
@@ -64,14 +65,51 @@ interface SaidClientLike {
   verifyAgent(wallet: SaidKeypairLike): Promise<{ txSignature: string }>;
 }
 
+interface SaidConnectionLike {
+  getTransaction(
+    signature: string,
+    options: { commitment: string; maxSupportedTransactionVersion: number },
+  ): Promise<{ slot: number } | null>;
+}
+
 function loadSdk(): SaidSdkLike {
   const require = createRequire(import.meta.url);
   try {
     const sdk = require('said-sdk');
     const web3 = require('@solana/web3.js');
-    return { SAID: sdk.SAID, Keypair: web3.Keypair };
+    return { SAID: sdk.SAID, Keypair: web3.Keypair, Connection: web3.Connection };
   } catch (cause) {
     throw new SaidSdkUnavailableError(cause);
+  }
+}
+
+const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+
+function rpcTimeoutMs(): number {
+  const raw = process.env.COVENANT_SAID_RPC_TIMEOUT_MS;
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_RPC_TIMEOUT_MS;
+}
+
+function withTimeout<T>(op: string, promise: Promise<T>): Promise<T> {
+  const ms = rpcTimeoutMs();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new BridgeRpcTimeoutError(op, ms)),
+      ms,
+    );
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+export class BridgeRpcTimeoutError extends Error {
+  constructor(op: string, ms: number) {
+    super(`said bridge: ${op} timed out after ${ms}ms`);
+    this.name = 'BridgeRpcTimeoutError';
   }
 }
 
@@ -102,13 +140,18 @@ export class SaidBridge {
     return this.signer;
   }
 
-  private client(): { client: SaidClientLike; wallet: SaidKeypairLike } {
-    const { SAID, Keypair } = loadSdk();
+  private client(): {
+    client: SaidClientLike;
+    wallet: SaidKeypairLike;
+    connection: SaidConnectionLike;
+  } {
+    const { SAID, Keypair, Connection } = loadSdk();
     const signer = this.requireSigner('on-chain instruction');
     const wallet = Keypair.fromSecretKey(signer.secretKey);
     return {
       client: new SAID({ rpcUrl: this.config.rpcUrl, commitment: 'confirmed' }),
       wallet,
+      connection: new Connection(this.config.rpcUrl, 'confirmed'),
     };
   }
 
@@ -119,7 +162,7 @@ export class SaidBridge {
   }> {
     this.requirePaid('register', 'register-agent');
     const { client, wallet } = this.client();
-    const result = await client.registerAgent(wallet, args.metadataUri);
+    const result = await withTimeout('register-agent', client.registerAgent(wallet, args.metadataUri));
     return {
       agentPda: result.agentPDA,
       owner: wallet.publicKey.toBase58(),
@@ -129,9 +172,22 @@ export class SaidBridge {
 
   async getVerified(): Promise<{ signature: string; slot: number }> {
     this.requirePaid('verify', 'get-verified');
-    const { client, wallet } = this.client();
-    const result = await client.verifyAgent(wallet);
-    return { signature: result.txSignature, slot: 0 };
+    const { client, wallet, connection } = this.client();
+    const result = await withTimeout('get-verified', client.verifyAgent(wallet));
+    let slot = 0;
+    try {
+      const tx = await withTimeout(
+        'get-verified:getTransaction',
+        connection.getTransaction(result.txSignature, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        }),
+      );
+      if (tx?.slot != null) slot = tx.slot;
+    } catch {
+      // verification landed; the slot fetch is best-effort
+    }
+    return { signature: result.txSignature, slot };
   }
 
   async submitAnchor(_args: {

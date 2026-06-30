@@ -115,18 +115,22 @@ async fn error_envelope_with_named_error_becomes_upstream() {
 }
 
 #[tokio::test]
-async fn error_envelope_with_generic_name_stays_rest() {
-    // JS's default Error.name ("Error") and a missing name carry no class
-    // signal, so they collapse to Rest rather than a spurious Upstream.
-    for envelope in [
-        r#"{"ok":false,"error":"boom","name":"Error"}"#,
-        r#"{"ok":false,"error":"boom"}"#,
+async fn error_envelope_with_generic_name_stays_upstream() {
+    // JS's default Error.name ("Error") and a missing name still come from
+    // the worker, so they surface as Upstream with a Worker fallback name.
+    // Rest is reserved for the reqwest layer.
+    for (envelope, want_name) in [
+        (r#"{"ok":false,"error":"boom","name":"Error"}"#, "Error"),
+        (r#"{"ok":false,"error":"boom"}"#, "Worker"),
     ] {
         let bridge = bridge_with_stub(envelope);
         let err = bridge.get_verified().await.expect_err("should fail");
         match err {
-            BridgeError::Rest(msg) => assert_eq!(msg, "boom", "envelope {envelope}"),
-            other => panic!("expected Rest for {envelope}, got {other:?}"),
+            BridgeError::Upstream { name, message } => {
+                assert_eq!(name, want_name, "envelope {envelope}");
+                assert_eq!(message, "boom", "envelope {envelope}");
+            }
+            other => panic!("expected Upstream for {envelope}, got {other:?}"),
         }
     }
 }
@@ -136,8 +140,11 @@ async fn error_envelope_without_message_uses_default_text() {
     let bridge = bridge_with_stub(r#"{"ok":false}"#);
     let err = bridge.get_verified().await.expect_err("should fail");
     match err {
-        BridgeError::Rest(msg) => assert_eq!(msg, "worker reported an error"),
-        other => panic!("expected Rest, got {other:?}"),
+        BridgeError::Upstream { name, message } => {
+            assert_eq!(name, "Worker");
+            assert_eq!(message, "worker reported an error");
+        }
+        other => panic!("expected Upstream, got {other:?}"),
     }
 }
 
@@ -167,25 +174,39 @@ async fn worker_silent_exit_surfaces_worker_error() {
     );
     let err = bridge.get_verified().await.expect_err("should fail");
     assert!(
-        matches!(err, BridgeError::Worker(ref msg) if msg.contains("no output")),
-        "expected Worker(no output), got {err:?}"
+        matches!(err, BridgeError::Worker(ref msg) if msg.contains("no envelope")),
+        "expected Worker(no envelope), got {err:?}"
     );
 }
 
 #[tokio::test]
-async fn worker_non_json_output_surfaces_decode() {
-    // A misbuilt worker that prints a plain-text line (a stack trace or a
-    // log message) where an envelope is expected must surface as Decode,
-    // not panic or mis-route to another error class.
+async fn worker_non_json_output_surfaces_worker_error() {
+    // A misbuilt worker that prints only plain-text lines (a stack trace or a
+    // log message) and no envelope must surface as Worker(no envelope), not
+    // mis-route to Decode or panic. Decode is reserved for a real envelope
+    // whose typed payload does not match.
     let bridge = bridge_with_stub("worker crashed: TypeError");
     let err = bridge
         .get_verified()
         .await
-        .expect_err("should fail to decode");
+        .expect_err("should fail with worker error");
     assert!(
-        matches!(err, BridgeError::Decode(_)),
-        "expected Decode, got {err:?}"
+        matches!(err, BridgeError::Worker(ref msg) if msg.contains("no envelope")),
+        "expected Worker(no envelope), got {err:?}"
     );
+}
+
+#[tokio::test]
+async fn worker_log_then_envelope_uses_first_parseable_line() {
+    // A worker that prints a log line first, then the envelope, must still
+    // be parsed correctly — the previous "last non-empty line" parser was
+    // brittle to trailing log spew. First parseable envelope wins.
+    let bridge = bridge_with_stub(
+        "[info] connected to rpc\n{\"ok\":true,\"data\":{\"signature\":\"sig\",\"slot\":7}}",
+    );
+    let res = bridge.get_verified().await.expect("envelope wins over log");
+    assert_eq!(res.signature, "sig");
+    assert_eq!(res.slot, 7);
 }
 
 #[tokio::test]

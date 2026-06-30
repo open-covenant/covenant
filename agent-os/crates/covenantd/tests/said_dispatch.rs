@@ -187,8 +187,22 @@ async fn bridge_backed_verbs_without_bridge_report_not_wired() {
 }
 
 #[tokio::test]
-async fn said_anchor_status_without_home_errors() {
+async fn said_anchor_status_without_bridge_reports_not_wired() {
     let server = server(None, None);
+    let resp = server
+        .respond(Request::SaidAnchorStatus { recent_limit: 10 }, &peer())
+        .await;
+    assert_eq!(
+        resp,
+        Response::Error {
+            message: NOT_WIRED.into(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn said_anchor_status_without_home_errors() {
+    let server = server(None, Some(bridge_enabled()));
     let resp = server
         .respond(Request::SaidAnchorStatus { recent_limit: 10 }, &peer())
         .await;
@@ -203,7 +217,7 @@ async fn said_anchor_status_without_home_errors() {
 #[tokio::test]
 async fn said_anchor_status_with_home_reports_empty_cursor() {
     let dir = tempdir().unwrap();
-    let server = server(Some(dir.path().to_path_buf()), None);
+    let server = server(Some(dir.path().to_path_buf()), Some(bridge_enabled()));
     let resp = server
         .respond(Request::SaidAnchorStatus { recent_limit: 10 }, &peer())
         .await;
@@ -445,18 +459,26 @@ fn bridge_at(base: &str) -> SaidBridge {
     .unwrap()
 }
 
+fn bridge_enabled() -> SaidBridge {
+    SaidBridge::new(Config::from_env([
+        ("COVENANT_SOLANA_CLUSTER", "devnet"),
+        ("COVENANT_SAID_ENABLED", "1"),
+    ]))
+    .unwrap()
+}
+
 #[tokio::test]
 async fn said_lookup_maps_agent_onto_response() {
     let (base, http) = serve_once(
         "200 OK",
-        r#"{"wallet":"Wallet111","owner":"Owner222","name":"scout","isVerified":true,"reputationScore":4.5,"feedbackCount":12,"activityCount":99,"metadataUri":"https://example.test/a.json","registeredAt":"2026-01-01T00:00:00Z"}"#,
+        r#"{"wallet":"AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb","owner":"Owner222","name":"scout","isVerified":true,"reputationScore":4.5,"feedbackCount":12,"activityCount":99,"metadataUri":"https://example.test/a.json","registeredAt":"2026-01-01T00:00:00Z"}"#,
     )
     .await;
     let server = server(None, Some(bridge_at(&base)));
     let resp = server
         .respond(
             Request::SaidLookup {
-                wallet: "Wallet111".into(),
+                wallet: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
             },
             &peer(),
         )
@@ -464,11 +486,11 @@ async fn said_lookup_maps_agent_onto_response() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/api/agents/Wallet111");
+    assert_eq!(req.path, "/api/agents/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     assert_eq!(
         resp,
         Response::SaidAgent {
-            wallet: "Wallet111".into(),
+            wallet: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
             pda: None,
             owner: Some("Owner222".into()),
             name: Some("scout".into()),
@@ -488,7 +510,7 @@ async fn said_lookup_maps_agent_onto_response() {
 async fn said_inbox_maps_messages_onto_response() {
     let (base, http) = serve_once(
         "200 OK",
-        r#"{"chain":"solana","address":"Addr1","messages":[{"id":"m1","sourceChain":"base","sourceAddress":"0xabc","targetChain":"solana","targetAddress":"Addr1","payload":{"hello":"world"},"createdAt":1700000000}]}"#,
+        r#"{"chain":"solana","address":"AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb","messages":[{"id":"m1","sourceChain":"base","sourceAddress":"0xabc","targetChain":"solana","targetAddress":"AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb","payload":{"hello":"world"},"createdAt":1700000000}]}"#,
     )
     .await;
     let server = server(None, Some(bridge_at(&base)));
@@ -496,7 +518,7 @@ async fn said_inbox_maps_messages_onto_response() {
         .respond(
             Request::SaidInbox {
                 chain: "solana".into(),
-                address: "Addr1".into(),
+                address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
             },
             &peer(),
         )
@@ -504,7 +526,7 @@ async fn said_inbox_maps_messages_onto_response() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/inbox/solana/Addr1");
+    assert_eq!(req.path, "/xchain/inbox/solana/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     match resp {
         Response::SaidInbox {
             chain,
@@ -512,12 +534,12 @@ async fn said_inbox_maps_messages_onto_response() {
             messages,
         } => {
             assert_eq!(chain, "solana");
-            assert_eq!(address, "Addr1");
+            assert_eq!(address, "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
             assert_eq!(messages.len(), 1);
             let msg = &messages[0];
             assert_eq!(msg.id, "m1");
             assert_eq!(msg.source_chain, "base");
-            assert_eq!(msg.target_address, "Addr1");
+            assert_eq!(msg.target_address, "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
             assert_eq!(msg.created_at, Some(1700000000));
         }
         other => panic!("expected SaidInbox, got {other:?}"),
@@ -528,14 +550,14 @@ async fn said_inbox_maps_messages_onto_response() {
 async fn said_free_tier_maps_status_onto_response() {
     let (base, http) = serve_once(
         "200 OK",
-        r#"{"address":"Addr1","used":3,"remaining":7,"limit":10,"paidPrice":"0.01","paymentChains":[{"name":"base","network":"mainnet"}]}"#,
+        r#"{"address":"AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb","used":3,"remaining":7,"limit":10,"paidPrice":"0.01","paymentChains":[{"name":"base","network":"mainnet"}]}"#,
     )
     .await;
     let server = server(None, Some(bridge_at(&base)));
     let resp = server
         .respond(
             Request::SaidFreeTier {
-                address: "Addr1".into(),
+                address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
             },
             &peer(),
         )
@@ -543,11 +565,11 @@ async fn said_free_tier_maps_status_onto_response() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/free-tier/Addr1");
+    assert_eq!(req.path, "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     assert_eq!(
         resp,
         Response::SaidFreeTier {
-            address: "Addr1".into(),
+            address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
             used: 3,
             remaining: 7,
             limit: 10,
@@ -569,7 +591,7 @@ async fn said_send_posts_payload_and_maps_receipt() {
         .respond(
             Request::SaidSend {
                 source_chain: "solana".into(),
-                source_address: "Addr1".into(),
+                source_address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
                 target_chain: "base".into(),
                 target_address: "0xabc".into(),
                 payload_json: r#"{"ping":1}"#.into(),
@@ -603,7 +625,7 @@ async fn said_send_invalid_payload_json_is_rejected_before_network() {
         .respond(
             Request::SaidSend {
                 source_chain: "solana".into(),
-                source_address: "Addr1".into(),
+                source_address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
                 target_chain: "base".into(),
                 target_address: "0xabc".into(),
                 payload_json: "{not json".into(),
@@ -626,7 +648,7 @@ async fn said_lookup_http_error_maps_to_verb_prefixed_error() {
     let resp = server
         .respond(
             Request::SaidLookup {
-                wallet: "Missing111".into(),
+                wallet: "MissingABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmn".into(),
             },
             &peer(),
         )
@@ -634,7 +656,10 @@ async fn said_lookup_http_error_maps_to_verb_prefixed_error() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/api/agents/Missing111");
+    assert_eq!(
+        req.path,
+        "/api/agents/MissingABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmn"
+    );
     assert_eq!(
         resp,
         Response::Error {
@@ -651,7 +676,7 @@ async fn said_inbox_http_error_maps_to_verb_prefixed_error() {
         .respond(
             Request::SaidInbox {
                 chain: "dogecoin".into(),
-                address: "Addr1".into(),
+                address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
             },
             &peer(),
         )
@@ -659,7 +684,7 @@ async fn said_inbox_http_error_maps_to_verb_prefixed_error() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/inbox/dogecoin/Addr1");
+    assert_eq!(req.path, "/xchain/inbox/dogecoin/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     assert_eq!(
         resp,
         Response::Error {
@@ -676,7 +701,7 @@ async fn said_free_tier_payment_required_maps_to_verb_prefixed_error() {
     let resp = server
         .respond(
             Request::SaidFreeTier {
-                address: "Addr1".into(),
+                address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
             },
             &peer(),
         )
@@ -684,7 +709,7 @@ async fn said_free_tier_payment_required_maps_to_verb_prefixed_error() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/free-tier/Addr1");
+    assert_eq!(req.path, "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
     assert_eq!(
         resp,
         Response::Error {
@@ -701,7 +726,7 @@ async fn said_send_http_error_maps_to_verb_prefixed_error() {
         .respond(
             Request::SaidSend {
                 source_chain: "solana".into(),
-                source_address: "Addr1".into(),
+                source_address: "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb".into(),
                 target_chain: "base".into(),
                 target_address: "0xabc".into(),
                 payload_json: r#"{"ping":1}"#.into(),

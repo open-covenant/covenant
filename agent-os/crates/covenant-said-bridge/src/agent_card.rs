@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::client::SaidBridge;
+use crate::path::validate_pubkey;
 use crate::rest;
 use crate::Result;
 
@@ -39,6 +40,7 @@ pub struct AgentLookup {
 impl SaidBridge {
     pub async fn lookup(&self, wallet: &str) -> Result<AgentLookup> {
         self.require_enabled()?;
+        validate_pubkey("wallet", wallet)?;
         let client = rest::build_client(self.config().rest_timeout)?;
         let path = format!("/api/agents/{wallet}");
         rest::get_json(&client, &self.config().api_base_url, &path).await

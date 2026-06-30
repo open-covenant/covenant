@@ -18,13 +18,38 @@
 import { SaidBridge, resolveSaidConfig } from './index.js';
 import { loadKeypairFromFile } from './keypair.js';
 
+const MAX_STDIN_BYTES = 1 << 20;
+const DEFAULT_STDIN_TIMEOUT_MS = 10_000;
+
+function stdinTimeoutMs(): number {
+  const raw = process.env.COVENANT_SAID_STDIN_TIMEOUT_MS;
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_STDIN_TIMEOUT_MS;
+}
+
 async function readStdin(): Promise<string> {
   if (process.stdin.isTTY) return '';
+  let total = 0;
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString('utf8').trim();
+  const read = (async () => {
+    for await (const chunk of process.stdin) {
+      const buf = chunk as Buffer;
+      total += buf.length;
+      if (total > MAX_STDIN_BYTES) {
+        throw new Error(`said bridge worker: stdin exceeds ${MAX_STDIN_BYTES} bytes`);
+      }
+      chunks.push(buf);
+    }
+    return Buffer.concat(chunks).toString('utf8').trim();
+  })();
+  const ms = stdinTimeoutMs();
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(
+      () => reject(new Error(`said bridge worker: stdin read timed out after ${ms}ms`)),
+      ms,
+    ).unref(),
+  );
+  return Promise.race([read, timeout]);
 }
 
 async function parsePayload<T>(): Promise<T> {
@@ -37,14 +62,42 @@ async function parsePayload<T>(): Promise<T> {
   }
 }
 
+const URL_MAX = 200;
+
+function validateRegisterAgent(payload: unknown): { metadataUri: string } {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('register-agent: payload must be an object');
+  }
+  const uri = (payload as { metadataUri?: unknown }).metadataUri;
+  if (typeof uri !== 'string' || uri.length === 0) {
+    throw new Error('register-agent: metadataUri must be a non-empty string');
+  }
+  if (uri.length > URL_MAX) {
+    throw new Error(`register-agent: metadataUri exceeds ${URL_MAX} chars`);
+  }
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('non-http(s) protocol');
+    }
+  } catch (cause) {
+    throw new Error(`register-agent: metadataUri is not a valid http(s) URL`, { cause });
+  }
+  return { metadataUri: uri };
+}
+
 async function loadSigner(): Promise<Awaited<ReturnType<typeof loadKeypairFromFile>> | undefined> {
   const path = process.env.COVENANT_SAID_KEYPAIR;
   if (!path) return undefined;
   return loadKeypairFromFile(path);
 }
 
+function jsonReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? value.toString() : value;
+}
+
 function emit(data: unknown): void {
-  process.stdout.write(JSON.stringify({ ok: true, data }) + '\n');
+  process.stdout.write(JSON.stringify({ ok: true, data }, jsonReplacer) + '\n');
 }
 
 function fail(err: unknown): never {
@@ -57,7 +110,7 @@ function fail(err: unknown): never {
 async function dispatch(bridge: SaidBridge, command: string): Promise<unknown> {
   switch (command) {
     case 'register-agent':
-      return bridge.registerAgent(await parsePayload());
+      return bridge.registerAgent(validateRegisterAgent(await parsePayload()));
     case 'get-verified':
       return bridge.getVerified();
     case 'submit-anchor':

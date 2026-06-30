@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::client::SaidBridge;
+use crate::path::{validate_chain, validate_pubkey};
 use crate::rest;
 use crate::Result;
 
@@ -78,6 +79,8 @@ pub struct PaymentChain {
 impl SaidBridge {
     pub async fn xchain_inbox(&self, chain: &str, address: &str) -> Result<Inbox> {
         self.require_enabled()?;
+        validate_chain(chain)?;
+        validate_pubkey("address", address)?;
         let client = rest::build_client(self.config().rest_timeout)?;
         let path = format!("/xchain/inbox/{chain}/{address}");
         rest::get_json(&client, &self.config().api_base_url, &path).await
@@ -85,6 +88,7 @@ impl SaidBridge {
 
     pub async fn xchain_free_tier(&self, address: &str) -> Result<FreeTierStatus> {
         self.require_enabled()?;
+        validate_pubkey("address", address)?;
         let client = rest::build_client(self.config().rest_timeout)?;
         let path = format!("/xchain/free-tier/{address}");
         rest::get_json(&client, &self.config().api_base_url, &path).await

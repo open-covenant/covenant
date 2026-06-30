@@ -75,7 +75,12 @@ impl AnchorCursor {
                 |row| row.get(0),
             )
             .map_err(|e| BridgeError::Invalid(format!("read max: {e}")))?;
-        Ok(max.map(|v| (v as u64) + 1).unwrap_or(0))
+        let Some(v) = max else { return Ok(0) };
+        let current =
+            u64::try_from(v).map_err(|_| BridgeError::Invalid(format!("negative anchor_index {v}")))?;
+        current
+            .checked_add(1)
+            .ok_or_else(|| BridgeError::Invalid("anchor_index saturated u64".into()))
     }
 
     /// The highest confirmed anchor index, or None if no anchors are
@@ -117,13 +122,13 @@ impl AnchorCursor {
             .conn
             .lock()
             .execute(
-                "UPDATE said_anchor_cursor SET tx_sig = ?1, slot = ?2, submitted_at_ms = ?3 WHERE anchor_index = ?4",
+                "UPDATE said_anchor_cursor SET tx_sig = ?1, slot = ?2, submitted_at_ms = ?3 WHERE anchor_index = ?4 AND tx_sig IS NULL",
                 params![tx_sig, slot as i64, submitted_at_ms, anchor_index as i64],
             )
             .map_err(|e| BridgeError::Invalid(format!("confirm {anchor_index}: {e}")))?;
         if rows == 0 {
             return Err(BridgeError::Invalid(format!(
-                "confirm: no row at anchor_index {anchor_index}"
+                "confirm: no pending row at anchor_index {anchor_index}"
             )));
         }
         Ok(())
@@ -228,7 +233,24 @@ mod tests {
     fn confirm_missing_slot_errors() {
         let c = AnchorCursor::in_memory().unwrap();
         let err = c.confirm(42, "SIG", 1, 1).unwrap_err();
-        assert!(matches!(err, BridgeError::Invalid(m) if m.contains("no row")));
+        assert!(matches!(err, BridgeError::Invalid(m) if m.contains("no pending row")));
+    }
+
+    #[test]
+    fn double_confirm_does_not_overwrite() {
+        let c = AnchorCursor::in_memory().unwrap();
+        c.claim(&PendingAnchor {
+            anchor_index: 0,
+            start_audit_index: 0,
+            end_audit_index: 1,
+            merkle_root_hex: "ab".repeat(32),
+        })
+        .unwrap();
+        c.confirm(0, "FIRST", 1, 1).unwrap();
+        let err = c.confirm(0, "SECOND", 2, 2).unwrap_err();
+        assert!(matches!(err, BridgeError::Invalid(m) if m.contains("no pending row")));
+        let recent = c.recent(1).unwrap();
+        assert_eq!(recent[0].tx_sig, "FIRST");
     }
 
     #[test]

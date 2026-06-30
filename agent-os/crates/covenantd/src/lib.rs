@@ -221,6 +221,14 @@ pub fn said_bridge_config_from_env() -> SaidBridgeConfig {
     SaidBridgeConfig::from_env(std::env::vars())
 }
 
+fn said_keypair_present() -> bool {
+    let Ok(raw) = std::env::var("COVENANT_SAID_KEYPAIR") else {
+        return false;
+    };
+    let trimmed = raw.trim();
+    !trimmed.is_empty() && std::path::Path::new(trimmed).is_file()
+}
+
 /// Config for the autonomous SAP audit-root anchoring driver.
 ///
 /// Default OFF. When enabled (`COVENANT_SAP_AUTO_ATTEST=1`), the daemon
@@ -1474,9 +1482,7 @@ impl Server {
                     rpc_url: cfg.rpc_url.clone(),
                     api_base_url: cfg.api_base_url.clone(),
                     paid_gates: cfg.paid.summary(),
-                    has_signer: std::env::var("COVENANT_SAID_KEYPAIR")
-                        .map(|v| !v.trim().is_empty())
-                        .unwrap_or(false),
+                    has_signer: said_keypair_present(),
                 }
             }
             None => Response::SaidStatus {
@@ -1512,6 +1518,11 @@ impl Server {
                 message: "said bridge is not wired into this daemon".into(),
             };
         };
+        if !bridge.config().enabled {
+            return Response::Error {
+                message: "said anchor: said bridge is disabled".into(),
+            };
+        }
         let (cursor_path, fixture_path) = match self.said_paths() {
             Ok(p) => p,
             Err(e) => return Response::Error { message: e },
@@ -1520,7 +1531,7 @@ impl Server {
             Ok(c) => c,
             Err(e) => {
                 return Response::Error {
-                    message: format!("said anchor cursor open: {e}"),
+                    message: format!("said anchor: cursor open: {e}"),
                 }
             }
         };
@@ -1551,6 +1562,16 @@ impl Server {
     }
 
     pub(crate) fn said_anchor_status(&self, recent_limit: usize) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        if !bridge.config().enabled {
+            return Response::Error {
+                message: "said anchor-status: said bridge is disabled".into(),
+            };
+        }
         let (cursor_path, _) = match self.said_paths() {
             Ok(p) => p,
             Err(e) => return Response::Error { message: e },
@@ -1559,7 +1580,7 @@ impl Server {
             Ok(c) => c,
             Err(e) => {
                 return Response::Error {
-                    message: format!("said anchor cursor open: {e}"),
+                    message: format!("said anchor-status: cursor open: {e}"),
                 }
             }
         };
@@ -1567,7 +1588,7 @@ impl Server {
             Ok(v) => v,
             Err(e) => {
                 return Response::Error {
-                    message: format!("said cursor: {e}"),
+                    message: format!("said anchor-status: cursor: {e}"),
                 }
             }
         };
@@ -1575,7 +1596,7 @@ impl Server {
             Ok(v) => v,
             Err(e) => {
                 return Response::Error {
-                    message: format!("said cursor: {e}"),
+                    message: format!("said anchor-status: cursor: {e}"),
                 }
             }
         };
@@ -1583,7 +1604,7 @@ impl Server {
             Ok(v) => v.len() as u64,
             Err(e) => {
                 return Response::Error {
-                    message: format!("said cursor: {e}"),
+                    message: format!("said anchor-status: cursor: {e}"),
                 }
             }
         };
@@ -1602,7 +1623,7 @@ impl Server {
                 .collect(),
             Err(e) => {
                 return Response::Error {
-                    message: format!("said cursor: {e}"),
+                    message: format!("said anchor-status: cursor: {e}"),
                 }
             }
         };

@@ -47,8 +47,8 @@ pub enum AnchorMode {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .expect("system clock is before unix epoch")
+        .as_millis() as i64
 }
 
 fn validate_root_hex(hex: &str) -> Result<()> {
@@ -79,6 +79,17 @@ fn validate_range(req: &AnchorRequest) -> Result<()> {
     validate_root_hex(&req.merkle_root_hex)
 }
 
+fn reject_if_pending(cursor: &AnchorCursor) -> Result<()> {
+    let pending = cursor.pending()?;
+    if let Some(stuck) = pending.first() {
+        return Err(BridgeError::Invalid(format!(
+            "anchor cursor has pending claim at index {}; reconcile before submitting",
+            stuck.anchor_index
+        )));
+    }
+    Ok(())
+}
+
 impl SaidBridge {
     pub async fn anchor(
         &self,
@@ -106,6 +117,7 @@ impl SaidBridge {
         fixture_path: &PathBuf,
         request: AnchorRequest,
     ) -> Result<AnchorSubmission> {
+        reject_if_pending(cursor)?;
         let anchor_index = cursor.next_index()?;
         let pending = PendingAnchor {
             anchor_index,
@@ -123,7 +135,7 @@ impl SaidBridge {
             }
         }
 
-        let line = serde_json::to_string(&serde_json::json!({
+        let mut line = serde_json::to_string(&serde_json::json!({
             "anchor_index": anchor_index,
             "start_seq": request.start_audit_index,
             "end_seq": request.end_audit_index,
@@ -131,6 +143,7 @@ impl SaidBridge {
             "stamped_at_ms": now_ms(),
         }))
         .map_err(|e| BridgeError::Invalid(e.to_string()))?;
+        line.push('\n');
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -139,9 +152,6 @@ impl SaidBridge {
             .await
             .map_err(|e| BridgeError::Invalid(format!("open {}: {e}", fixture_path.display())))?;
         file.write_all(line.as_bytes())
-            .await
-            .map_err(|e| BridgeError::Invalid(format!("write {}: {e}", fixture_path.display())))?;
-        file.write_all(b"\n")
             .await
             .map_err(|e| BridgeError::Invalid(format!("write {}: {e}", fixture_path.display())))?;
         file.flush()
@@ -166,6 +176,7 @@ impl SaidBridge {
         cursor: &AnchorCursor,
         request: AnchorRequest,
     ) -> Result<AnchorSubmission> {
+        reject_if_pending(cursor)?;
         let anchor_index = cursor.next_index()?;
         let pending = PendingAnchor {
             anchor_index,
@@ -200,7 +211,16 @@ impl SaidBridge {
         };
         let result: WorkerResult = worker::invoke(self.config(), "submit-anchor", &payload).await?;
 
-        cursor.confirm(anchor_index, &result.tx_sig, result.slot, now_ms())?;
+        if let Err(e) = cursor.confirm(anchor_index, &result.tx_sig, result.slot, now_ms()) {
+            tracing::error!(
+                anchor_index,
+                tx_sig = %result.tx_sig,
+                slot = result.slot,
+                error = %e,
+                "said anchor: on-chain submit succeeded but cursor confirm failed; reconcile manually"
+            );
+            return Err(e);
+        }
 
         Ok(AnchorSubmission {
             anchor_index,

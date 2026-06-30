@@ -468,6 +468,55 @@ mod tests {
     }
 
     #[test]
+    fn parse_merges_path_item_level_shared_parameters_into_each_operation() {
+        // OpenAPI lets a path item declare `parameters` once for every
+        // operation under it — the natural home for a path template's
+        // `{mint}`. parse() models this by seeding each operation's parameter
+        // list with the path-item-level shared params (manifest.rs:110,124)
+        // before extending with the operation's own, then re-running the
+        // Authorization strip over the merged list (manifest.rs:126). The
+        // vendored manifest declares every parameter at the operation level, so
+        // a regression that ignored the shared list, or that stripped
+        // Authorization before the merge, would pass every other test while
+        // dropping a required path argument or leaking a daemon-supplied
+        // credential slot into a generated tool's schema.
+        let mut op = priced_op("0.010000");
+        op["parameters"] = serde_json::json!([
+            { "name": "curve_key", "in": "query", "required": false, "description": "Curve" },
+        ]);
+        let item = serde_json::json!({
+            "parameters": [
+                { "name": "mint", "in": "path", "required": true, "description": "Token mint" },
+                { "name": "Authorization", "in": "query", "required": false, "description": "MPP credential" },
+            ],
+            "get": op,
+        });
+        let json = doc(serde_json::json!({ "/trenches/curve/{mint}": item }));
+
+        let eps = parse(&json).unwrap();
+        let p = &eps[0].params;
+        assert_eq!(
+            p.len(),
+            2,
+            "the shared path param and the operation's query param survive; the \
+             path-item-level Authorization credential is stripped after the merge"
+        );
+        assert_eq!(
+            p[0].name, "mint",
+            "shared params are merged ahead of the operation's own"
+        );
+        assert_eq!(p[0].location, ParamIn::Path);
+        assert!(p[0].required, "a required shared path param stays required");
+        assert_eq!(p[1].name, "curve_key");
+        assert_eq!(p[1].location, ParamIn::Query);
+        assert!(
+            !p.iter().any(|x| x.name == "Authorization"),
+            "an Authorization credential declared at the path-item level must be \
+             stripped after the merge, never surfaced as a tool argument"
+        );
+    }
+
+    #[test]
     fn parse_reads_request_body_fields() {
         let mut op = priced_op("0.250000");
         op["requestBody"] = serde_json::json!({

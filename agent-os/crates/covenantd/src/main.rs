@@ -207,6 +207,23 @@ async fn main() -> Result<()> {
         }
         None => None,
     };
+    if let Some((reader, cfg)) = bento_from_env() {
+        let added = covenant_bento::bento_tools(reader, &cfg);
+        if added.is_empty() {
+            tracing::warn!(
+                "bento enabled but registered no tools (screening needs the guard sidecar, reputation needs a program id)"
+            );
+        } else {
+            info!(
+                count = added.len(),
+                rpc_url = %cfg.rpc_url,
+                protect = cfg.protect_enabled,
+                reputation = cfg.program_id.is_some(),
+                "bento firewall provider enabled (screen via sidecar; on-chain reads gated on layout)"
+            );
+            tools_vec.extend(added);
+        }
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -785,6 +802,74 @@ fn x402_dispatch_config_from_env() -> Option<covenantd::x402::X402Config> {
         signer_binary,
         signer_env,
     })
+}
+
+/// Build the Bento firewall provider from env, or None when the operator
+/// hasn't opted in. All off by default: the reputation reader needs a program
+/// id (and Bento's layout); screening needs the guard sidecar binary plus a
+/// keypair file path. The daemon forwards only paths (the keypair file and
+/// `PATH`) to the sidecar, never the key value, so `bento_tools` builds the
+/// guard from this config.
+fn bento_from_env() -> Option<(
+    std::sync::Arc<covenant_bento::BentoReader>,
+    covenant_bento::BentoConfig,
+)> {
+    let truthy = |k: &str| {
+        std::env::var(k)
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    };
+    if !truthy("COVENANT_BENTO_ENABLED") {
+        return None;
+    }
+    let mut cfg = covenant_bento::BentoConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_BENTO_RPC_URL") {
+        if !url.trim().is_empty() {
+            cfg.rpc_url = url;
+        }
+    }
+    if let Ok(pid) = std::env::var("COVENANT_BENTO_PROGRAM_ID") {
+        if !pid.trim().is_empty() {
+            cfg.program_id = Some(pid);
+        }
+    }
+    cfg.protect_enabled = truthy("COVENANT_BENTO_PROTECT_ENABLED");
+    if let Ok(bin) = std::env::var("COVENANT_BENTO_GUARD_BINARY") {
+        if !bin.trim().is_empty() {
+            cfg.guard_binary = Some(bin.into());
+        }
+    }
+    if let Ok(ms) = std::env::var("COVENANT_BENTO_GUARD_TIMEOUT_MS") {
+        if let Ok(ms) = ms.trim().parse::<u64>() {
+            cfg.guard_timeout_ms = ms;
+        }
+    }
+    // Forward only non-secret paths into the sidecar's cleared environment. The
+    // operator sets COVENANT_BENTO_KEYPAIR_PATH; the sidecar reads the key from
+    // that file under the name it expects (AGENT_WALLET_KEYPAIR_PATH), so the
+    // key value never enters the daemon, only the path does. PATH is forwarded
+    // so a `node` shebang resolves under env_clear.
+    if let Ok(p) = std::env::var("COVENANT_BENTO_KEYPAIR_PATH") {
+        if !p.trim().is_empty() {
+            cfg.guard_env
+                .push(("AGENT_WALLET_KEYPAIR_PATH".to_string(), p));
+        }
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        if !path.is_empty() {
+            cfg.guard_env.push(("PATH".to_string(), path));
+        }
+    }
+    if cfg.protect_enabled && cfg.guard_binary.is_none() {
+        tracing::warn!(
+            "COVENANT_BENTO_PROTECT_ENABLED set but COVENANT_BENTO_GUARD_BINARY is missing; screening disabled"
+        );
+    }
+    let reader = std::sync::Arc::new(covenant_bento::BentoReader::new(cfg.rpc_url.clone()));
+    Some((reader, cfg))
 }
 
 /// Enable the spend-authorization surface when the operator opts in.

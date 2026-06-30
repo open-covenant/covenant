@@ -1,0 +1,23 @@
+[package]
+name = "covenant-bento"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Bento Guard provider for Covenant. Pre-sign screening through Bento's firewall (via a Node sidecar) and a labeled on-chain reputation signal, both off by default."
+
+[dependencies]
+covenant-mcp = { path = "../covenant-mcp" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+tokio = { version = "1", features = ["process", "io-util"] }
+base64 = "0.22"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util"] }
+wiremock = "0.6"

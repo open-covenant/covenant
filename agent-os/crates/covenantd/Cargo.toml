@@ -36,6 +36,7 @@ covenant-hyre = { path = "../covenant-hyre" }
 covenant-metaplex = { path = "../covenant-metaplex" }
 covenant-sns = { path = "../covenant-sns" }
 covenant-acedata = { path = "../covenant-acedata" }
+covenant-bento = { path = "../covenant-bento" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }

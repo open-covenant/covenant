@@ -1028,4 +1028,123 @@ mod tests {
         .to_string();
         assert!(err.contains("no result"), "{err}");
     }
+
+    #[tokio::test]
+    async fn latest_blockhash_extracts_a_nondefault_blockhash() {
+        // The signer builds its transaction from this blockhash, so the
+        // value.blockhash extraction and base58 parse must round-trip a real
+        // hash. A non-default array proves the success path returns the wire
+        // value rather than a defaulted/zero hash.
+        let bh = Hash::new_from_array([7u8; 32]);
+        let url = serve_json(serde_json::json!({
+            "result": { "value": { "blockhash": bh.to_string() } }
+        }));
+        let got = latest_blockhash(&reqwest::Client::new(), &url)
+            .await
+            .expect("a well-formed value.blockhash yields the parsed hash");
+        assert_eq!(got, bh);
+    }
+
+    #[tokio::test]
+    async fn latest_blockhash_rejects_a_missing_blockhash() {
+        // A response that nests the blockhash outside `value` (one level too
+        // shallow) has no usable blockhash; the signer must bail rather than
+        // build a transaction from nothing.
+        let url = serve_json(serde_json::json!({
+            "result": { "blockhash": Hash::new_from_array([7u8; 32]).to_string() }
+        }));
+        let err = latest_blockhash(&reqwest::Client::new(), &url)
+            .await
+            .expect_err("a blockhash outside value is missing")
+            .to_string();
+        assert!(err.contains("missing blockhash"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn latest_blockhash_rejects_an_unparseable_blockhash() {
+        // A present-but-malformed blockhash (not 32-byte base58) must fail at
+        // the parse step rather than yielding a defaulted hash.
+        let url = serve_json(serde_json::json!({
+            "result": { "value": { "blockhash": "not-a-valid-base58-blockhash" } }
+        }));
+        let err = latest_blockhash(&reqwest::Client::new(), &url)
+            .await
+            .expect_err("a non-base58 blockhash cannot parse")
+            .to_string();
+        assert!(err.contains("parse blockhash"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn send_transaction_returns_the_signature_string() {
+        // sendTransaction's result is the signature string the daemon later
+        // confirms; the success path must return it verbatim.
+        let url = serve_json(serde_json::json!({
+            "result": "5xSigNatureStringFromTheClusterThatMustRoundTrip"
+        }));
+        let sig = send_transaction(&reqwest::Client::new(), &url, &Transaction::default())
+            .await
+            .expect("a string result is the signature");
+        assert_eq!(sig, "5xSigNatureStringFromTheClusterThatMustRoundTrip");
+    }
+
+    #[tokio::test]
+    async fn send_transaction_rejects_a_non_string_result() {
+        // A non-string result (here a number) must not be coerced into a
+        // signature; the signer bails rather than reporting a bogus signature
+        // that confirm_signature would then poll for a transaction never sent.
+        let url = serve_json(serde_json::json!({ "result": 12345 }));
+        let err = send_transaction(&reqwest::Client::new(), &url, &Transaction::default())
+            .await
+            .expect_err("a numeric result is not a signature string")
+            .to_string();
+        assert!(err.contains("not a signature string"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn confirm_signature_returns_ok_when_confirmed() {
+        // A first-poll status of "confirmed" with no err is a successful
+        // confirmation.
+        let url = serve_json(serde_json::json!({
+            "result": { "value": [ { "confirmationStatus": "confirmed" } ] }
+        }));
+        confirm_signature(&reqwest::Client::new(), &url, "TestSig1111")
+            .await
+            .expect("a confirmed status confirms");
+    }
+
+    #[tokio::test]
+    async fn confirm_signature_returns_ok_when_finalized() {
+        // "finalized" is the other accepted terminal status; pinning both
+        // operands keeps the `confirmed || finalized` check from collapsing to
+        // one literal.
+        let url = serve_json(serde_json::json!({
+            "result": { "value": [ { "confirmationStatus": "finalized" } ] }
+        }));
+        confirm_signature(&reqwest::Client::new(), &url, "TestSig2222")
+            .await
+            .expect("a finalized status confirms");
+    }
+
+    #[tokio::test]
+    async fn confirm_signature_bails_on_an_onchain_error() {
+        // An on-chain err must abort even when the status would otherwise read
+        // as finalized, so dropping the err check cannot let the signer report
+        // a failed transaction as confirmed. The signature is named so the
+        // operator can find it.
+        let url = serve_json(serde_json::json!({
+            "result": { "value": [ {
+                "err": { "InstructionError": [0, { "Custom": 1 }] },
+                "confirmationStatus": "finalized"
+            } ] }
+        }));
+        let err = confirm_signature(&reqwest::Client::new(), &url, "FailedSig9999")
+            .await
+            .expect_err("an on-chain err is a failed transaction")
+            .to_string();
+        assert!(err.contains("failed on-chain"), "{err}");
+        assert!(
+            err.contains("FailedSig9999"),
+            "the error names the signature: {err}"
+        );
+    }
 }

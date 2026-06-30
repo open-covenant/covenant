@@ -381,6 +381,36 @@ mod tests {
         assert_eq!(schema["additionalProperties"], Value::Bool(false));
     }
 
+    #[test]
+    fn schema_marks_required_post_body_field_required() {
+        // schema() advertises the tool's input contract to the MCP host,
+        // building the JSON Schema from BOTH the endpoint params
+        // (tools.rs:88-93) and its body fields (tools.rs:94-99).
+        // schema_marks_path_param_required_and_query_optional only exercises
+        // the params loop on a GET; the body-field loop is otherwise unpinned.
+        // hyre.ask is the high-level POST whose `query` is a required body
+        // field — a regression that dropped it from `properties` or `required`
+        // would let an MCP host accept a hyre.ask call with no query, billing a
+        // paid POST that resolve() then rejects instead of catching it up front.
+        let tools = tools_for(&HyreConfig::default(), Arc::new(MockExecutor::default()));
+        let schema = find(&tools, "hyre.ask").input_schema();
+
+        assert!(
+            schema["properties"].get("query").is_some(),
+            "a required body field must appear in the tool schema properties"
+        );
+        let required = schema["required"].as_array().expect("required is an array");
+        assert!(
+            required.iter().any(|v| v == "query"),
+            "a required POST body field must be marked required in the tool schema"
+        );
+        assert_eq!(
+            schema["additionalProperties"],
+            Value::Bool(false),
+            "the generated tool schema must reject arguments outside the published fields"
+        );
+    }
+
     #[tokio::test]
     async fn substitutes_path_param_and_carries_pricing() {
         let exec = Arc::new(MockExecutor::default());

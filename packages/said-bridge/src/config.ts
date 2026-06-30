@@ -84,7 +84,9 @@ export function resolveSaidConfig(env: NodeJS.ProcessEnv): SaidConfig {
       register: parseBool(env.COVENANT_SAID_ALLOW_PAID_REGISTER),
       verify: parseBool(env.COVENANT_SAID_ALLOW_PAID_VERIFY),
       anchor: parseBool(env.COVENANT_SAID_ALLOW_PAID_ANCHOR),
-      validateWork: parseBool(env.COVENANT_SAID_ALLOW_PAID_VALIDATE),
+      validateWork: parseBool(
+        env.COVENANT_SAID_ALLOW_PAID_VALIDATE_WORK ?? env.COVENANT_SAID_ALLOW_PAID_VALIDATE,
+      ),
     },
   };
 }

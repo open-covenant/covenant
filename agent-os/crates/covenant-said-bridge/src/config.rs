@@ -182,7 +182,10 @@ impl Config {
             register: parse_bool(get("COVENANT_SAID_ALLOW_PAID_REGISTER")),
             verify: parse_bool(get("COVENANT_SAID_ALLOW_PAID_VERIFY")),
             anchor: parse_bool(get("COVENANT_SAID_ALLOW_PAID_ANCHOR")),
-            validate_work: parse_bool(get("COVENANT_SAID_ALLOW_PAID_VALIDATE")),
+            validate_work: parse_bool(
+                get("COVENANT_SAID_ALLOW_PAID_VALIDATE_WORK")
+                    .or_else(|| get("COVENANT_SAID_ALLOW_PAID_VALIDATE")),
+            ),
         };
 
         let worker_command = get("COVENANT_SAID_WORKER_CMD")

@@ -52,28 +52,39 @@ async function readStdin(): Promise<string> {
   return Promise.race([read, timeout]);
 }
 
-async function parsePayload<T>(): Promise<T> {
-  const raw = await readStdin();
-  if (!raw) return {} as T;
-  try {
-    return JSON.parse(raw) as T;
-  } catch (cause) {
-    throw new Error('said bridge worker: stdin is not valid JSON', { cause });
+class BridgePayloadError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'BridgePayloadError';
+    if (cause !== undefined) (this as { cause?: unknown }).cause = cause;
   }
 }
 
 const URL_MAX = 200;
 
+function requireJsonPayload<T>(command: string, raw: string): T {
+  if (!raw) {
+    throw new BridgePayloadError(
+      `${command}: expected a JSON payload on stdin (got empty input)`,
+    );
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch (cause) {
+    throw new BridgePayloadError(`${command}: stdin is not valid JSON`, cause);
+  }
+}
+
 function validateRegisterAgent(payload: unknown): { metadataUri: string } {
   if (!payload || typeof payload !== 'object') {
-    throw new Error('register-agent: payload must be an object');
+    throw new BridgePayloadError('register-agent: payload must be an object');
   }
   const uri = (payload as { metadataUri?: unknown }).metadataUri;
   if (typeof uri !== 'string' || uri.length === 0) {
-    throw new Error('register-agent: metadataUri must be a non-empty string');
+    throw new BridgePayloadError('register-agent: metadataUri must be a non-empty string');
   }
   if (uri.length > URL_MAX) {
-    throw new Error(`register-agent: metadataUri exceeds ${URL_MAX} chars`);
+    throw new BridgePayloadError(`register-agent: metadataUri exceeds ${URL_MAX} chars`);
   }
   try {
     const parsed = new URL(uri);
@@ -81,7 +92,7 @@ function validateRegisterAgent(payload: unknown): { metadataUri: string } {
       throw new Error('non-http(s) protocol');
     }
   } catch (cause) {
-    throw new Error(`register-agent: metadataUri is not a valid http(s) URL`, { cause });
+    throw new BridgePayloadError('register-agent: metadataUri is not a valid http(s) URL', cause);
   }
   return { metadataUri: uri };
 }
@@ -90,6 +101,18 @@ async function loadSigner(): Promise<Awaited<ReturnType<typeof loadKeypairFromFi
   const path = process.env.COVENANT_SAID_KEYPAIR;
   if (!path) return undefined;
   return loadKeypairFromFile(path);
+}
+
+async function signerFileReadable(): Promise<boolean> {
+  const path = process.env.COVENANT_SAID_KEYPAIR?.trim();
+  if (!path) return false;
+  try {
+    const { statSync } = await import('node:fs');
+    const s = statSync(path);
+    return s.isFile();
+  } catch {
+    return false;
+  }
 }
 
 function jsonReplacer(_key: string, value: unknown): unknown {
@@ -109,14 +132,23 @@ function fail(err: unknown): never {
 
 async function dispatch(bridge: SaidBridge, command: string): Promise<unknown> {
   switch (command) {
-    case 'register-agent':
-      return bridge.registerAgent(validateRegisterAgent(await parsePayload()));
+    case 'register-agent': {
+      const raw = await readStdin();
+      const payload = requireJsonPayload<unknown>('register-agent', raw);
+      return bridge.registerAgent(validateRegisterAgent(payload));
+    }
     case 'get-verified':
       return bridge.getVerified();
-    case 'submit-anchor':
-      return bridge.submitAnchor(await parsePayload());
-    case 'validate-work':
-      return bridge.validateWork(await parsePayload());
+    case 'submit-anchor': {
+      const raw = await readStdin();
+      const payload = requireJsonPayload<unknown>('submit-anchor', raw);
+      return bridge.submitAnchor(payload as Parameters<SaidBridge['submitAnchor']>[0]);
+    }
+    case 'validate-work': {
+      const raw = await readStdin();
+      const payload = requireJsonPayload<unknown>('validate-work', raw);
+      return bridge.validateWork(payload as Parameters<SaidBridge['validateWork']>[0]);
+    }
     default:
       throw new Error(
         `unknown command '${command}'. Expected: status | register-agent | get-verified | ` +
@@ -132,7 +164,7 @@ async function main(): Promise<void> {
   if (command === 'status') {
     emit({
       ...config,
-      hasSigner: Boolean(process.env.COVENANT_SAID_KEYPAIR?.trim()),
+      hasSigner: await signerFileReadable(),
     });
     return;
   }

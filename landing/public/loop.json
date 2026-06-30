@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-06-30T07:13:47.000Z",
+  "updatedAt": "2026-06-30T07:18:44.602Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12465,
-    "tasks": 1459,
+    "events": 12469,
+    "tasks": 1460,
     "integrated": 1462
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1454,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "x402-pick-requirement-scope-isolation-coverage",
+    "state": "in_progress",
+    "since": "2026-06-30T07:17:04.148Z"
+  },
   "recent": [
     {
       "at": "2026-06-30T07:00:54.460Z",

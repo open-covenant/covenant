@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T07:34:15.663Z",
+  "updatedAt": "2026-06-30T07:55:27.150Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12471,
+    "events": 12474,
     "tasks": 1460,
-    "integrated": 1462
+    "integrated": 1463
   },
   "throughput": {
-    "last24h": 28,
-    "last7d": 220,
-    "velocity": 31.4
+    "last24h": 29,
+    "last7d": 221,
+    "velocity": 31.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 11
+      "count": 12
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-30",
-      "total": 1462
+      "total": 1463
     }
   ],
   "states": {
-    "integrated": 1454,
+    "integrated": 1455,
     "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "x402-pick-requirement-scope-isolation-coverage",
-    "state": "cross_review",
-    "since": "2026-06-30T07:33:43.536Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T07:40:24.360Z",
+      "task": "x402-pick-requirement-scope-isolation-coverage",
+      "note": "Committed ee7195a1: test(covenant-x402) pin pick_requirement network/asset scope isolation. 2 files (client.rs test + README 3225->3226), 27"
+    },
     {
       "at": "2026-06-30T07:00:54.460Z",
       "task": "hyre-tools-schema-required-body-field-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T19:26:06.048Z",
       "task": "covenantd-x402-read-capped-exact-cap-inclusive-boundary-cove",
       "note": "Committing the at-cap inclusive boundary test for covenantd::x402::read_capped to loop/main-track"
-    },
-    {
-      "at": "2026-06-29T17:58:37.020Z",
-      "task": "x402-http-read-capped-exact-cap-inclusive-boundary-coverage",
-      "note": "Committed 363ac7ca on loop/main-track. 1 file changed (http.rs +1 at-cap test; README unchanged). All declared verification passed; both >ma"
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T01:01:03.600Z",
+  "updatedAt": "2026-06-30T01:22:19.732Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12376,
-    "tasks": 1449,
-    "integrated": 1452
+    "events": 12384,
+    "tasks": 1450,
+    "integrated": 1453
   },
   "throughput": {
-    "last24h": 22,
-    "last7d": 210,
-    "velocity": 30
+    "last24h": 23,
+    "last7d": 211,
+    "velocity": 30.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "06-30",
-      "total": 1452
+      "total": 1453
     }
   ],
   "states": {
-    "integrated": 1444,
+    "integrated": 1445,
     "proposed": 1,
     "blocked": 4
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T01:20:54.371Z",
+      "task": "llm-estimate-tokens-u32-saturation-clamp-coverage",
+      "note": "Integrated as 45f3e561 on loop/main-track."
+    },
     {
       "at": "2026-06-30T00:21:19.210Z",
       "task": "mcp-validate-integer-fractional-float-rejection-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-06-29T04:24:40.931Z",
       "task": "stake-keeper-sweep-split-residue-leg-coverage",
       "note": "Integrated as faa29716 on loop/main-track. Test-only: strengthened split_absorbs_rounding_residue_into_subsidy from sum-only (tautological) "
-    },
-    {
-      "at": "2026-06-29T02:45:35.940Z",
-      "task": "llm-estimate-tokens-div-ceil-rounding-coverage",
-      "note": "Integrated as f38f704d. estimate_tokens_rounds_partial_tokens_up pins the div_ceil(4) ceiling at non-multiple-of-4 inputs (1 to 1, 5 to 2, 7"
     }
   ]
 }

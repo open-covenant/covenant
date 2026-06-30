@@ -312,6 +312,59 @@ pub mod settlement {
         Ok(())
     }
 
+    /// Slash an agent's bond for its on-chain actions. Unlike `slash_stake`, the
+    /// reason is not supplied by the caller: it is read from the agent's credit
+    /// account `provenance_root` (the verifiable hash-chain of what the agent
+    /// did, maintained gaslessly in the ER and committed to L1). The credit
+    /// account is bound to the agent by its operator (the `[b"credits", operator]`
+    /// PDA), so the penalty is provably anchored to the agent's own record rather
+    /// than an arbitrary claim.
+    pub fn slash_for_actions(ctx: Context<SlashForActions>, amount: u64) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(amount > 0, CovenantError::ZeroAmount);
+        require!(ctx.accounts.position.active, CovenantError::StakeInactive);
+        require!(
+            ctx.accounts.position.amount >= amount,
+            CovenantError::InsufficientStake
+        );
+
+        let reason_hash = ctx.accounts.credits.provenance_root;
+        let agent_key = ctx.accounts.position.agent_key;
+        let owner = ctx.accounts.position.owner;
+        let signer_seeds: &[&[u8]] = &[
+            b"stake",
+            agent_key.as_ref(),
+            owner.as_ref(),
+            &[ctx.accounts.position.bump],
+        ];
+        token_interface::transfer_checked(
+            ctx.accounts
+                .slash_transfer_ctx()
+                .with_signer(&[signer_seeds]),
+            amount,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
+
+        ctx.accounts.position.amount -= amount;
+        ctx.accounts.agent.stake = ctx
+            .accounts
+            .agent
+            .stake
+            .checked_sub(amount)
+            .ok_or(CovenantError::InsufficientStake)?;
+        if ctx.accounts.position.amount == 0 {
+            ctx.accounts.position.active = false;
+        }
+
+        emit!(StakeSlashed {
+            agent_key,
+            owner,
+            amount,
+            reason_hash,
+        });
+        Ok(())
+    }
+
     pub fn create_task(ctx: Context<CreateTask>, args: CreateTaskArgs) -> Result<()> {
         require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
@@ -984,6 +1037,68 @@ pub struct SlashStake<'info> {
 }
 
 impl<'info> SlashStake<'info> {
+    fn slash_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.stake_vault.to_account_info(),
+                to: self.slash_vault.to_account_info(),
+                authority: self.position.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct SlashForActions<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+        has_one = slash_authority @ CovenantError::Unauthorized,
+    )]
+    pub config: Box<Account<'info, Config>>,
+    pub slash_authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"agent", agent.agent_key.as_ref()],
+        bump = agent.bump,
+        constraint = agent.agent_key == position.agent_key @ CovenantError::AgentMismatch,
+    )]
+    pub agent: Box<Account<'info, Agent>>,
+    #[account(
+        mut,
+        seeds = [b"stake", position.agent_key.as_ref(), position.owner.as_ref()],
+        bump = position.bump,
+    )]
+    pub position: Box<Account<'info, StakePosition>>,
+    /// The agent's credit account, bound to the agent by its operator. Its
+    /// `provenance_root` is read as the slash reason, so the slash can only cite
+    /// the agent's own verifiable on-chain record.
+    #[account(
+        seeds = [b"credits", agent.operator.as_ref()],
+        bump = credits.bump,
+    )]
+    pub credits: Box<Account<'info, CreditAccount>>,
+    #[account(
+        mut,
+        constraint = stake_vault.key() == position.vault @ CovenantError::Unauthorized,
+        constraint = stake_vault.owner == position.key() @ CovenantError::Unauthorized,
+        constraint = stake_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub stake_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = slash_vault.key() == config.treasury @ CovenantError::Unauthorized,
+        constraint = slash_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub slash_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> SlashForActions<'info> {
     fn slash_transfer_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
         CpiContext::new(
             self.token_program.to_account_info(),

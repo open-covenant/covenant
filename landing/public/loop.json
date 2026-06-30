@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T06:32:10.082Z",
+  "updatedAt": "2026-06-30T06:53:03.347Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12453,
-    "tasks": 1458,
-    "integrated": 1460
+    "events": 12460,
+    "tasks": 1459,
+    "integrated": 1461
   },
   "throughput": {
-    "last24h": 26,
-    "last7d": 218,
-    "velocity": 31.1
+    "last24h": 27,
+    "last7d": 219,
+    "velocity": 31.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 9
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "06-30",
-      "total": 1460
+      "total": 1461
     }
   ],
   "states": {
-    "integrated": 1452,
+    "integrated": 1453,
     "proposed": 1,
     "blocked": 4,
-    "cross_review": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "hyre-x402-network-matches-spelling-leniency-coverage",
-    "state": "cross_review",
-    "since": "2026-06-30T06:31:27.673Z"
+    "task": "hyre-tools-schema-required-body-field-coverage",
+    "state": "in_progress",
+    "since": "2026-06-30T06:50:02.741Z"
   },
   "recent": [
+    {
+      "at": "2026-06-30T06:37:37.609Z",
+      "task": "hyre-x402-network-matches-spelling-leniency-coverage",
+      "note": "Committed 6ed81f36 (x402 test + README, 2 files by explicit path) and pushed d0a2a32a..6ed81f36 to origin/loop/main-track. All push identity"
+    },
     {
       "at": "2026-06-30T06:06:29.573Z",
       "task": "hyre-manifest-shared-path-parameters-merge-coverage",
@@ -315,11 +320,6 @@
       "at": "2026-06-29T17:47:40.909Z",
       "task": "metaplex-das-read-body-capped-exact-cap-inclusive-boundary-c",
       "note": "Committed 40f5d7f6 on loop/main-track. 1 file changed (das.rs +1 at-cap test; README unchanged). All declared verification passed; both >max"
-    },
-    {
-      "at": "2026-06-29T17:35:26.604Z",
-      "task": "metaplex-signer-read-capped-exact-cap-inclusive-boundary-cov",
-      "note": "Committed 5208909c on loop/main-track. 2 files changed (main.rs +2 at-cap tests, README metric 3207->3209). All declared verification passed"
     }
   ]
 }

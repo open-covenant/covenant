@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-06-30T03:24:24.296Z",
+  "updatedAt": "2026-06-30T03:44:29.936Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12399,
+    "events": 12401,
     "tasks": 1452,
     "integrated": 1454
   },
@@ -187,7 +187,7 @@
     "integrated": 1446,
     "proposed": 1,
     "blocked": 4,
-    "cross_review": 1
+    "ready": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "stake-keeper-config-bps-split-u16-wrap-widening-coverage",
-    "state": "cross_review",
-    "since": "2026-06-30T02:46:07.249Z"
+    "state": "ready",
+    "since": "2026-06-30T03:42:53.016Z"
   },
   "recent": [
     {

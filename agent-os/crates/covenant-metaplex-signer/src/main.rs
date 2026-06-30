@@ -925,4 +925,107 @@ mod tests {
             .expect("a chunked body accumulating to exactly the cap fits and must read back whole");
         assert_eq!(bytes, body);
     }
+
+    /// Serve a single canned JSON-RPC response body over one connection — the
+    /// envelope-level sibling of the raw-bytes `serve_once` the read_capped
+    /// tests use. The signer's `rpc` POSTs, but `serve_once` ignores the
+    /// request and replies with this body.
+    fn serve_json(body: serde_json::Value) -> String {
+        let body = serde_json::to_vec(&body).unwrap();
+        let mut raw =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        raw.extend_from_slice(&body);
+        serve_once(raw)
+    }
+
+    #[tokio::test]
+    async fn rpc_returns_the_result_value() {
+        // The signer's own JSON-RPC envelope handling is the trust boundary
+        // with the operator-configured remote RPC. The daemon-side das.rs
+        // client has full envelope coverage; this key-holding sidecar's `rpc`
+        // had none, so the success path is pinned here first.
+        let url = serve_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "covenant-metaplex-signer",
+            "result": { "value": { "blockhash": "11111111111111111111111111111111" } }
+        }));
+        let value = rpc(
+            &reqwest::Client::new(),
+            &url,
+            "getLatestBlockhash",
+            serde_json::json!([]),
+        )
+        .await
+        .expect("a result envelope yields the result value");
+        assert_eq!(
+            value,
+            serde_json::json!({ "value": { "blockhash": "11111111111111111111111111111111" } })
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_surfaces_a_jsonrpc_error_even_with_a_result_present() {
+        // A structured JSON-RPC error must abort even when a `result` field is
+        // also present, so dropping the error check cannot let the signer act
+        // on a half-failed response. The method name is carried so an operator
+        // can tell which call failed.
+        let url = serve_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "error": { "code": -32002, "message": "blockhash not found" },
+            "result": "would-be-acted-on-if-the-error-were-ignored"
+        }));
+        let err = rpc(
+            &reqwest::Client::new(),
+            &url,
+            "sendTransaction",
+            serde_json::json!([]),
+        )
+        .await
+        .expect_err("an error envelope must not read as success")
+        .to_string();
+        assert!(
+            err.contains("sendTransaction"),
+            "the error names the failing method: {err}"
+        );
+        assert!(
+            err.contains("blockhash not found"),
+            "the error carries the rpc error detail: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_treats_an_explicit_null_error_as_success() {
+        // Some providers always include the `error` key; a null error is not an
+        // error and must not discard a valid result. Without the `!is_null`
+        // filter the null error would bail and no write could ever land.
+        let url = serve_json(serde_json::json!({ "error": null, "result": "ok" }));
+        let value = rpc(
+            &reqwest::Client::new(),
+            &url,
+            "getLatestBlockhash",
+            serde_json::json!([]),
+        )
+        .await
+        .expect("a null error is not an error");
+        assert_eq!(value, serde_json::json!("ok"));
+    }
+
+    #[tokio::test]
+    async fn rpc_missing_result_is_an_error() {
+        // Unlike the daemon-side das client (which returns Null for a missing
+        // result), the signer treats an absent `result` as a hard error: it is
+        // about to build and send a transaction, so a resultless response must
+        // not be mistaken for an empty-but-ok value.
+        let url = serve_json(serde_json::json!({ "jsonrpc": "2.0", "id": "x" }));
+        let err = rpc(
+            &reqwest::Client::new(),
+            &url,
+            "getLatestBlockhash",
+            serde_json::json!([]),
+        )
+        .await
+        .expect_err("a response with no result is an error")
+        .to_string();
+        assert!(err.contains("no result"), "{err}");
+    }
 }

@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-06-30T08:37:37.315Z",
+  "updatedAt": "2026-06-30T08:58:35.880Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12476,
+    "events": 12480,
     "tasks": 1461,
     "integrated": 1463
   },
   "throughput": {
-    "last24h": 29,
+    "last24h": 28,
     "last7d": 221,
     "velocity": 31.6
   },
@@ -187,7 +187,7 @@
     "integrated": 1455,
     "proposed": 1,
     "blocked": 4,
-    "triaged": 1
+    "validation": 1
   },
   "areas": [
     {
@@ -215,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "metaplex-signer-rpc-envelope-coverage",
+    "state": "validation",
+    "since": "2026-06-30T08:55:37.852Z"
+  },
   "recent": [
     {
       "at": "2026-06-30T07:40:24.360Z",

@@ -725,6 +725,30 @@ mod tests {
     }
 
     #[test]
+    fn validate_arguments_integer_rejects_fractional_float() {
+        // The integer arm admits a whole float (5.0) via the `.fract() == 0.0`
+        // guard but must reject a fractional one. Dropping that guard so the
+        // predicate collapses to `value.as_f64().is_some()` widens `integer` to
+        // admit any float, and both sibling cases survive it: 5.0 is accepted
+        // either way and the string "5" has no f64 so is rejected either way.
+        // A fractional value is the only witness to the rounding boundary, and
+        // it gates the tool-call argument types feeding the tamper-evident chain.
+        let spec = ToolSpec {
+            name: "t".into(),
+            description: "d".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "n": { "type": "integer" } },
+            }),
+        };
+        let err = spec
+            .validate_arguments(&serde_json::json!({ "n": 5.5 }))
+            .expect_err("a float with a fractional part must not satisfy `integer`");
+        assert!(err.contains("field `n`"), "names the field: {err}");
+        assert!(err.contains("integer"), "names the expected type: {err}");
+    }
+
+    #[test]
     fn validate_arguments_rejects_each_simple_type_mismatch() {
         // json_value_matches_type's boolean/number/object/array/null arms gate
         // per-property types but, unlike string and integer, have no rejection

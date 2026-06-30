@@ -3387,14 +3387,37 @@ model = "nomic-embed-text"
         // both exact multiples of 4, where div_ceil(4) and a plain `/ 4` agree;
         // non-multiple inputs are what pin the ceiling and the divisor. A
         // div_ceil -> floor regression would under-count tokens and under-charge
-        // the budget. The .min(u32::MAX) clamp is left unpinned: it only bites on
-        // a multi-GB input.
+        // the budget. The .min(u32::MAX) saturation clamp is pinned separately by
+        // estimate_tokens_saturates_at_u32_max_instead_of_wrapping.
         assert_eq!(estimate_tokens(0), 0);
         assert_eq!(estimate_tokens(1), 1);
         assert_eq!(estimate_tokens(4), 1);
         assert_eq!(estimate_tokens(5), 2);
         assert_eq!(estimate_tokens(7), 2);
         assert_eq!(estimate_tokens(8), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_saturates_at_u32_max_instead_of_wrapping() {
+        // estimate_tokens takes a char count as usize, so on a 64-bit host
+        // div_ceil(4) can exceed u32::MAX. The .min(u32::MAX as usize) clamp keeps
+        // the `as u32` cast from wrapping a gigantic prompt back down to a tiny —
+        // or zero — token count, which would silently under-report cost through
+        // cost_record into the budget ledger. Drop the clamp and the cast wraps:
+        // the two over-cap inputs below land on 0, not u32::MAX.
+        let max = u32::MAX as usize;
+
+        // u32::MAX * 4 chars is the largest input whose div_ceil(4) lands exactly
+        // on u32::MAX: the natural ceiling meets the clamp with no gap, so clamped
+        // and unclamped agree here. One char more tips div_ceil over 2^32.
+        assert_eq!(estimate_tokens(max * 4), u32::MAX);
+
+        // First char count whose div_ceil(4) is 2^32; an unclamped cast wraps it
+        // to 0, reporting zero tokens for ~17 GB of input. The clamp holds u32::MAX.
+        assert_eq!(estimate_tokens(max * 4 + 1), u32::MAX);
+
+        // Fully saturated: usize::MAX chars also wrap to 0 without the clamp.
+        assert_eq!(estimate_tokens(usize::MAX), u32::MAX);
     }
 
     #[test]

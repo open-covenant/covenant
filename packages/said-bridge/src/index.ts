@@ -46,25 +46,22 @@ export interface BridgeOptions {
 }
 
 interface SaidSdkLike {
-  SAIDAgent: new (connection: unknown, wallet: unknown) => SaidAgentLike;
-  Connection: new (rpcUrl: string, commitment?: string) => unknown;
+  SAID: new (config?: { rpcUrl?: string; commitment?: string }) => SaidClientLike;
+  Keypair: { fromSecretKey(secret: Uint8Array): SaidKeypairLike };
 }
 
-interface SaidAgentLike {
-  register(metadataUri: string): Promise<{ agentPda: string; signature: string }>;
-  verify(): Promise<{ signature: string; slot?: number }>;
-  submitAnchor(args: {
-    anchorIndex: number | bigint;
-    startSeq: number | bigint;
-    endSeq: number | bigint;
-    merkleRootHex: string;
-  }): Promise<{ signature: string; slot?: number }>;
-  validateWork(args: {
-    agent: string;
-    taskHashHex: string;
-    passed: boolean;
-    evidenceUri: string;
-  }): Promise<{ validationPda: string; signature: string }>;
+interface SaidKeypairLike {
+  publicKey: { toBase58(): string };
+  secretKey: Uint8Array;
+}
+
+interface SaidClientLike {
+  registerAgent(
+    wallet: SaidKeypairLike,
+    metadataUri: string,
+    funder?: SaidKeypairLike,
+  ): Promise<{ agentPDA: string; txSignature: string }>;
+  verifyAgent(wallet: SaidKeypairLike): Promise<{ txSignature: string }>;
 }
 
 function loadSdk(): SaidSdkLike {
@@ -72,10 +69,7 @@ function loadSdk(): SaidSdkLike {
   try {
     const sdk = require('said-sdk');
     const web3 = require('@solana/web3.js');
-    return {
-      SAIDAgent: sdk.SAIDAgent,
-      Connection: web3.Connection,
-    };
+    return { SAID: sdk.SAID, Keypair: web3.Keypair };
   } catch (cause) {
     throw new SaidSdkUnavailableError(cause);
   }
@@ -108,10 +102,14 @@ export class SaidBridge {
     return this.signer;
   }
 
-  private agent(): SaidAgentLike {
-    const { SAIDAgent, Connection } = loadSdk();
-    const connection = new Connection(this.config.rpcUrl, 'confirmed');
-    return new SAIDAgent(connection, this.requireSigner('on-chain instruction'));
+  private client(): { client: SaidClientLike; wallet: SaidKeypairLike } {
+    const { SAID, Keypair } = loadSdk();
+    const signer = this.requireSigner('on-chain instruction');
+    const wallet = Keypair.fromSecretKey(signer.secretKey);
+    return {
+      client: new SAID({ rpcUrl: this.config.rpcUrl, commitment: 'confirmed' }),
+      wallet,
+    };
   }
 
   async registerAgent(args: { metadataUri: string }): Promise<{
@@ -120,54 +118,52 @@ export class SaidBridge {
     signature: string;
   }> {
     this.requirePaid('register', 'register-agent');
-    const signer = this.requireSigner('register-agent');
-    const agent = this.agent();
-    const result = await agent.register(args.metadataUri);
+    const { client, wallet } = this.client();
+    const result = await client.registerAgent(wallet, args.metadataUri);
     return {
-      agentPda: result.agentPda,
-      owner: signer.publicKey.toBase58(),
-      signature: result.signature,
+      agentPda: result.agentPDA,
+      owner: wallet.publicKey.toBase58(),
+      signature: result.txSignature,
     };
   }
 
   async getVerified(): Promise<{ signature: string; slot: number }> {
     this.requirePaid('verify', 'get-verified');
-    const agent = this.agent();
-    const result = await agent.verify();
-    return { signature: result.signature, slot: result.slot ?? 0 };
+    const { client, wallet } = this.client();
+    const result = await client.verifyAgent(wallet);
+    return { signature: result.txSignature, slot: 0 };
   }
 
-  async submitAnchor(args: {
+  async submitAnchor(_args: {
     anchorIndex: number;
     startSeq: number;
     endSeq: number;
     merkleRootHex: string;
   }): Promise<{ txSig: string; slot: number }> {
     this.requirePaid('anchor', 'submit-anchor');
-    const agent = this.agent();
-    const result = await agent.submitAnchor({
-      anchorIndex: args.anchorIndex,
-      startSeq: args.startSeq,
-      endSeq: args.endSeq,
-      merkleRootHex: args.merkleRootHex,
-    });
-    return { txSig: result.signature, slot: result.slot ?? 0 };
+    throw new BridgeUnsupportedError(
+      'submit-anchor',
+      'said-sdk 0.3.4 does not expose submitAnchor. Re-enable once the SAID program publishes the anchor instruction in its public SDK.',
+    );
   }
 
-  async validateWork(args: {
+  async validateWork(_args: {
     agent: string;
     taskHashHex: string;
     passed: boolean;
     evidenceUri: string;
   }): Promise<{ validationPda: string; validator: string; signature: string }> {
     this.requirePaid('validateWork', 'validate-work');
-    const signer = this.requireSigner('validate-work');
-    const agent = this.agent();
-    const result = await agent.validateWork(args);
-    return {
-      validationPda: result.validationPda,
-      validator: signer.publicKey.toBase58(),
-      signature: result.signature,
-    };
+    throw new BridgeUnsupportedError(
+      'validate-work',
+      'said-sdk 0.3.4 does not expose validateWork. Re-enable once the SAID program publishes the validation instruction in its public SDK.',
+    );
+  }
+}
+
+export class BridgeUnsupportedError extends Error {
+  constructor(op: string, detail: string) {
+    super(`said bridge: ${op} is not yet supported. ${detail}`);
+    this.name = 'BridgeUnsupportedError';
   }
 }

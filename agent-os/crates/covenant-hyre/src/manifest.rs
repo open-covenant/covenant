@@ -351,6 +351,26 @@ mod tests {
     }
 
     #[test]
+    fn usd_to_micro_rejects_fractional_price_that_overflows_the_micro_add() {
+        // usd_to_micro scales whole*10^6 then ADDS the six-decimal fraction
+        // (manifest.rs:248-251), with checked_mul AND checked_add both guarding
+        // overflow. The sibling overflow tests feed u128::MAX, which fails the
+        // checked_mul and short-circuits the .and_then, so the second guard
+        // (scaled.checked_add(frac)) never runs. Pick whole = u128::MAX/10^6:
+        // the multiply fits with 211_455 of headroom, but a ".999999" fraction
+        // (999_999 > 211_455) overflows the add. The real checked_add rejects;
+        // a wrapping_add would wrap to 788_543 and sign that garbage price.
+        let whole = u128::MAX / 1_000_000;
+        let usd = format!("{whole}.999999");
+        let err = usd_to_micro(&usd).unwrap_err();
+        assert!(
+            matches!(&err, HyreError::Manifest(m) if m.contains("overflow")),
+            "a fraction that overflows the micro-USDC add must be rejected, \
+             not wrapped to a tiny garbage price: {err:?}"
+        );
+    }
+
+    #[test]
     fn parse_rejects_overflowing_priced_endpoint() {
         // A remote provider can advertise any integer price string; one large
         // enough to overflow the atomic-USDC scaling must fail the refresh

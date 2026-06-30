@@ -24,6 +24,7 @@ members = [
     "crates/covenant-sns",
     "crates/covenant-acedata",
     "crates/covenant-sap-bridge",
+    "crates/covenant-said-bridge",
     "crates/covenant-stake-keeper",
     "crates/covenantd",
     "crates/covenant",

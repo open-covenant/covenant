@@ -1,6 +1,7 @@
 packages:
   - packages/config
   - packages/sap-bridge
+  - packages/said-bridge
   - packages/sdk
   - packages/sdk-ui
   - packages/ui

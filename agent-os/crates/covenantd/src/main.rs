@@ -207,6 +207,16 @@ async fn main() -> Result<()> {
         }
         None => None,
     };
+    if let Some((client, cfg)) = invoica_from_env() {
+        let added = covenant_invoica::invoica_tools(Arc::new(client), &cfg);
+        info!(
+            count = added.len(),
+            base_url = %cfg.base_url,
+            chain = %cfg.chain,
+            "invoica provider enabled (brokered key; tools capability-gated and audited, settlement on invoica's rail)"
+        );
+        tools_vec.extend(added);
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -912,6 +922,51 @@ fn acedata_from_env() -> Option<(
             }
         },
     }
+}
+
+/// Build the Invoica provider from env, or None when the operator hasn't opted
+/// in. The API key is read here (the only place) and handed to the client, so
+/// it never lands on the serializable config. All off by default.
+///
+/// - `COVENANT_INVOICA_ENABLED` truthy registers the tools
+/// - `COVENANT_INVOICA_API_KEY` the brokered Bearer key (required when enabled)
+/// - `COVENANT_INVOICA_BASE_URL` overrides the API host (optional)
+/// - `COVENANT_INVOICA_CHAIN` overrides the default settlement chain (optional)
+fn invoica_from_env() -> Option<(
+    covenant_invoica::InvoicaClient,
+    covenant_invoica::InvoicaConfig,
+)> {
+    let enabled = std::env::var("COVENANT_INVOICA_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let mut cfg = covenant_invoica::InvoicaConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_INVOICA_BASE_URL") {
+        if !url.trim().is_empty() {
+            cfg.base_url = url.trim().to_string();
+        }
+    }
+    if let Ok(chain) = std::env::var("COVENANT_INVOICA_CHAIN") {
+        if !chain.trim().is_empty() {
+            cfg.chain = chain.trim().to_string();
+        }
+    }
+    let api_key = match std::env::var("COVENANT_INVOICA_API_KEY") {
+        Ok(k) if !k.trim().is_empty() => k.trim().to_string(),
+        _ => {
+            tracing::warn!(
+                "COVENANT_INVOICA_ENABLED is set but COVENANT_INVOICA_API_KEY is missing; invoica disabled"
+            );
+            return None;
+        }
+    };
+    let client = covenant_invoica::InvoicaClient::new(cfg.base_url.clone(), api_key);
+    Some((client, cfg))
 }
 
 /// Build the Hyre provider config from env, or None when the operator

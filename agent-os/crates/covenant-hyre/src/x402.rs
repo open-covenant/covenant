@@ -393,6 +393,53 @@ mod tests {
     }
 
     #[test]
+    fn network_matches_is_lenient_across_short_and_caip2_spellings() {
+        // Hyre's 402 body and its discovery header disagree on the network
+        // spelling — the body says the short "solana" while the operator
+        // capability carries the CAIP-2 id — so network_matches accepts BOTH
+        // directions plus the exact case (x402.rs:145-147).
+        // select_matches_short_network_against_caip2_capability only exercises
+        // the body-short / want-CAIP-2 arm (x402.rs:146); the exact-equality
+        // arm (x402.rs:145) and the reverse body-CAIP-2 / want-short arm
+        // (x402.rs:147) are otherwise unpinned, so a regression dropping either
+        // would silently stop matching a legitimate option and the call would
+        // settle nothing. The negative cases pin the ':' delimiter: matching
+        // must be chain-id equality or a colon-delimited prefix, never a bare
+        // substring that would let a truncated or unrelated id pass.
+        let short = "solana";
+        let caip2 = crate::config::SOLANA_NETWORK;
+
+        assert!(network_matches(caip2, caip2), "identical CAIP-2 ids match");
+        assert!(network_matches(short, short), "identical short ids match");
+        assert!(
+            network_matches(short, caip2),
+            "a short body id matches a CAIP-2 operator capability"
+        );
+        assert!(
+            network_matches(caip2, short),
+            "a CAIP-2 body id matches a short operator capability"
+        );
+
+        let other = "ethereum:1";
+        assert!(
+            !network_matches(caip2, other),
+            "a solana option must not match an ethereum capability"
+        );
+        assert!(
+            !network_matches(other, caip2),
+            "an ethereum option must not match a solana capability"
+        );
+        assert!(
+            !network_matches("sol", caip2),
+            "a bare prefix without the ':' delimiter must not match a CAIP-2 id"
+        );
+        assert!(
+            !network_matches(caip2, "sol"),
+            "a CAIP-2 id must not match a bare prefix capability without the ':' delimiter"
+        );
+    }
+
+    #[test]
     fn select_rejects_over_cap_and_wrong_asset() {
         let accepts = parse_challenge(LIVE_DEFI_TVL_402).unwrap();
         assert!(

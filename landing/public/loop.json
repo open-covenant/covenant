@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-06-30T08:58:35.880Z",
+  "updatedAt": "2026-06-30T09:19:14.783Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12480,
-    "tasks": 1461,
-    "integrated": 1463
+    "events": 12483,
+    "tasks": 1462,
+    "integrated": 1464
   },
   "throughput": {
-    "last24h": 28,
-    "last7d": 221,
-    "velocity": 31.6
+    "last24h": 29,
+    "last7d": 222,
+    "velocity": 31.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "06-30",
-      "count": 12
+      "count": 13
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "06-30",
-      "total": 1463
+      "total": 1464
     }
   ],
   "states": {
-    "integrated": 1455,
-    "proposed": 1,
-    "blocked": 4,
-    "validation": 1
+    "integrated": 1456,
+    "proposed": 2,
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "metaplex-signer-rpc-envelope-coverage",
-    "state": "validation",
-    "since": "2026-06-30T08:55:37.852Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-06-30T09:07:11.308Z",
+      "task": "metaplex-signer-rpc-envelope-coverage",
+      "note": "Committed 6ee44f48 (test-only +103 in covenant-metaplex-signer/src/main.rs, README metrics 3226->3228 clean). 4 rpc envelope tests pass; scr"
+    },
     {
       "at": "2026-06-30T07:40:24.360Z",
       "task": "x402-pick-requirement-scope-isolation-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T19:48:23.697Z",
       "task": "covenantd-x402-read-stream-capped-exact-fit-not-overflow-cov",
       "note": "Committing the read_stream_capped exact-fit test + README metrics bump to loop/main-track."
-    },
-    {
-      "at": "2026-06-29T19:26:06.048Z",
-      "task": "covenantd-x402-read-capped-exact-cap-inclusive-boundary-cove",
-      "note": "Committing the at-cap inclusive boundary test for covenantd::x402::read_capped to loop/main-track"
     }
   ]
 }

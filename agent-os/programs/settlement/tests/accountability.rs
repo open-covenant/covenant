@@ -40,16 +40,20 @@ fn agent_accountability_bond_provenance_slash() {
     // 3. Slash, referencing the provenance root as the reason.
     let slash_vault = env.treasury;
     let vault_before = token_balance(&env, &slash_vault);
-    slash_stake_with(
+    // The program reads the reason straight from the agent's on-chain
+    // provenance_root (the `provenance` we just read) via the bound credit
+    // account, so the penalty is provably anchored to the agent's own record.
+    // There is no caller-supplied reason to forge.
+    slash_for_actions(
         &mut env,
         &AGENT,
         &position,
+        &credits,
         &stake_vault,
         &slash_vault,
         1_000,
-        provenance,
     )
-    .expect("slash the bond, citing the on-chain provenance");
+    .expect("slash the bond for its on-chain actions");
 
     assert_eq!(agent_stake(&env, &AGENT), 0, "bond fully slashed");
     assert_eq!(

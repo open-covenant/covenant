@@ -383,6 +383,45 @@ pub fn slash_stake_with(
     )
 }
 
+// Slash citing the agent's on-chain provenance: the program reads the reason
+// from the bound credit account's provenance_root, so there is no caller-supplied
+// reason_hash to pass.
+pub fn slash_for_actions(
+    env: &mut Env,
+    agent_key: &[u8; 32],
+    position: &Pubkey,
+    credits: &Pubkey,
+    stake_vault: &Pubkey,
+    slash_vault: &Pubkey,
+    amount: u64,
+) -> Result<(), TransactionError> {
+    let agent = agent_pda(agent_key);
+    let data = ix::SlashForActions { amount }.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new_readonly(env.slash_authority.pubkey(), true),
+        AccountMeta::new(agent, false),
+        AccountMeta::new(*position, false),
+        AccountMeta::new_readonly(*credits, false),
+        AccountMeta::new(*stake_vault, false),
+        AccountMeta::new(*slash_vault, false),
+        AccountMeta::new_readonly(env.mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    let slasher = env.slash_authority.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[&slasher],
+    )
+}
+
 pub fn token_balance(env: &Env, account: &Pubkey) -> u64 {
     let acc = env.svm.get_account(account).expect("token account exists");
     spl_token::state::Account::unpack(acc.data())

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T03:28:19.910Z",
+  "updatedAt": "2026-07-01T03:48:23.443Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12501,
+    "events": 12508,
     "tasks": 1464,
-    "integrated": 1466
+    "integrated": 1467
   },
   "throughput": {
     "last24h": 12,
-    "last7d": 178,
-    "velocity": 25.4
+    "last7d": 179,
+    "velocity": 25.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-01",
-      "total": 1466
+      "total": 1467
     }
   ],
   "states": {
-    "integrated": 1458,
+    "integrated": 1459,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-01",
-    "state": "in_progress",
-    "since": "2026-07-01T03:14:56.196Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T03:44:23.857Z",
+      "task": "multichain-01",
+      "note": "Committed 641a1109 to loop/main-track and pushed to origin: dual-shaped A2A AgentCard / ERC-8004 registration document in covenant-identity "
+    },
     {
       "at": "2026-07-01T02:49:48.121Z",
       "task": "multichain-00",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T21:05:50.943Z",
       "task": "cross-host-freshness-inclusive-boundary-coverage",
       "note": "committed 53624058 on loop/main-track: two at-boundary admit tests (age==CROSS_HOST_MAX_AGE_MS, lead==CROSS_HOST_MAX_SKEW_MS) both mutation-"
-    },
-    {
-      "at": "2026-06-29T20:29:10.663Z",
-      "task": "covenant-cli-read-signer-stream-capped-exact-fit-not-overflo",
-      "note": "Committing the CLI read_signer_stream_capped exact-fit test + README metrics bump to loop/main-track."
     }
   ]
 }

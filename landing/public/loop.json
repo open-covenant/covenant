@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T06:09:05.505Z",
+  "updatedAt": "2026-07-01T06:29:09.148Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12519,
+    "events": 12524,
     "tasks": 1466,
-    "integrated": 1468
+    "integrated": 1469
   },
   "throughput": {
-    "last24h": 8,
-    "last7d": 180,
-    "velocity": 25.7
+    "last24h": 9,
+    "last7d": 181,
+    "velocity": 25.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-01",
-      "total": 1468
+      "total": 1469
     }
   ],
   "states": {
-    "integrated": 1460,
+    "integrated": 1461,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-10",
-    "state": "in_progress",
-    "since": "2026-07-01T05:43:21.510Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T06:23:44.221Z",
+      "task": "multichain-10",
+      "note": "Committed 91957413 (10 files, +954/-2): covenant-evm-signer crate + repo-root README METRICS + agent-os README Crate Groups + surgical Cargo"
+    },
     {
       "at": "2026-07-01T05:23:37.635Z",
       "task": "multichain-02",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T22:55:46.632Z",
       "task": "budget-refill-eta-ms-u64-overflow-clamp-boundary-coverage",
       "note": "Shipped as 34999a6a, pushed f7e4ad4e..34999a6a to origin/loop/main-track. Pins refill_eta_ms u64-overflow clamp (lib.rs:374) at the tight on"
-    },
-    {
-      "at": "2026-06-29T21:44:10.662Z",
-      "task": "autonomy-status-gaps-source-flag-and-classification-coverage",
-      "note": "Integrated as f7e4ad4e (chore(autonomy): wire status-gaps reporter guard into the validation gate). Tracked: .gitignore + validate.sh. Logic"
     }
   ]
 }

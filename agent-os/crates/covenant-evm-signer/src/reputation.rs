@@ -20,6 +20,8 @@
 //! [EAS]: https://attest.org
 //! [Human Passport]: https://passport.human.tech
 
+use serde_json::Value;
+
 use crate::eth::{self, hex_decode_32, word_u256};
 use crate::uid::schema_uid;
 use crate::EvmSignerError;
@@ -189,6 +191,42 @@ pub fn reputation_schema_uid() -> [u8; 32] {
     schema_uid(REPUTATION_SCHEMA, &eth::ZERO_ADDRESS, true)
 }
 
+/// Parse a reputation projection from the wire JSON the sidecar and the relay
+/// staging binary both read. Accepts camelCase (the default) with snake_case
+/// fallbacks; the score and its decimal scale are read together so the two can
+/// never drift apart.
+pub fn parse_reputation_projection(v: &Value) -> Result<ReputationProjection, EvmSignerError> {
+    let u64_field = |names: &[&str]| -> Result<u64, EvmSignerError> {
+        names
+            .iter()
+            .find_map(|n| v.get(*n).and_then(Value::as_u64))
+            .ok_or_else(|| {
+                EvmSignerError::Reputation(format!("missing unsigned integer field '{}'", names[0]))
+            })
+    };
+    let str_field = |names: &[&str]| -> Result<&str, EvmSignerError> {
+        names
+            .iter()
+            .find_map(|n| v.get(*n).and_then(Value::as_str))
+            .ok_or_else(|| {
+                EvmSignerError::Reputation(format!("missing string field '{}'", names[0]))
+            })
+    };
+
+    let score = u32::try_from(u64_field(&["score"])?)
+        .map_err(|_| EvmSignerError::Reputation("'score' exceeds uint32".into()))?;
+    let decimals = u8::try_from(u64_field(&["scoreDecimals", "score_decimals"])?)
+        .map_err(|_| EvmSignerError::Reputation("'scoreDecimals' exceeds uint8".into()))?;
+
+    ReputationProjection::from_pda_hex(
+        ReputationScore::new(score, decimals),
+        str_field(&["sourceChain", "source_chain"])?.to_string(),
+        str_field(&["solanaAttestationPda", "solana_attestation_pda"])?,
+        u64_field(&["issuedAt", "issued_at"])?,
+        u64_field(&["expiry"])?,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,6 +346,35 @@ mod tests {
             "0x84738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc39"
         );
         assert_ne!(reputation_schema_uid(), crate::covenant_schema_uid());
+    }
+
+    #[test]
+    fn parse_reputation_projection_reads_camel_and_snake_case() {
+        use serde_json::json;
+        let camel = parse_reputation_projection(&json!({
+            "score": 9_500, "scoreDecimals": 4,
+            "sourceChain": SOLANA_MAINNET_CAIP2,
+            "solanaAttestationPda": "0xabababababababababababababababababababababababababababababababab",
+            "issuedAt": 1_700_000_000, "expiry": 1_800_000_000
+        }))
+        .unwrap();
+        assert_eq!((camel.score.score, camel.score.decimals), (9_500, 4));
+
+        let snake = parse_reputation_projection(&json!({
+            "score": 9_500, "score_decimals": 4,
+            "source_chain": SOLANA_MAINNET_CAIP2,
+            "solana_attestation_pda": "0xabababababababababababababababababababababababababababababababab",
+            "issued_at": 1_700_000_000, "expiry": 1_800_000_000
+        }))
+        .unwrap();
+        assert_eq!(snake.solana_attestation_pda, [0xAB; 32]);
+
+        // A missing field is reported, not defaulted.
+        assert!(parse_reputation_projection(&json!({
+            "score": 1, "scoreDecimals": 0, "sourceChain": "solana:x",
+            "issuedAt": 1, "expiry": 2
+        }))
+        .is_err());
     }
 
     #[test]

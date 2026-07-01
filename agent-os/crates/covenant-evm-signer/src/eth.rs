@@ -13,6 +13,14 @@ use sha3::{Digest, Keccak256};
 /// schema registered without a resolver.
 pub const ZERO_ADDRESS: [u8; 20] = [0u8; 20];
 
+/// The EAS contract, an OP-Stack predeploy at the same address across the
+/// Superchain — Base and Base Sepolia both host EAS here, differing only by
+/// `chainId`. Both the off-chain domain and the on-chain relayer point at it.
+pub const EAS_PREDEPLOY: [u8; 20] = [
+    0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x21,
+];
+
 pub fn keccak256(bytes: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     out.copy_from_slice(&Keccak256::digest(bytes));

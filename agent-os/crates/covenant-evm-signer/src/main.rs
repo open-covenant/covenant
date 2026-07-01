@@ -22,9 +22,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use covenant_attestation::VerifiableCredential;
-use covenant_evm_signer::{EasAttestationSigner, EasDomain, ReputationProjection, ReputationScore};
+use covenant_evm_signer::{parse_reputation_projection, EasAttestationSigner, EasDomain};
 use covenant_identity::Secp256k1IssuerKey;
-use serde_json::Value;
 
 type BoxError = Box<dyn std::error::Error>;
 
@@ -61,7 +60,9 @@ fn run() -> Result<String, BoxError> {
 
     let attestation = match mode.as_str() {
         "audit-root" => signer.attest(&VerifiableCredential::from_json(input.trim())?)?,
-        "reputation" => signer.attest_reputation(&reputation_from_json(&serde_json::from_str(input.trim())?)?)?,
+        "reputation" => {
+            signer.attest_reputation(&parse_reputation_projection(&serde_json::from_str(input.trim())?)?)?
+        }
         other => {
             return Err(format!(
                 "unsupported COVENANT_EVM_MODE '{other}': 'audit-root' or 'reputation'"
@@ -83,36 +84,6 @@ fn domain_for(chain: &str) -> Result<EasDomain, BoxError> {
         )
         .into()),
     }
-}
-
-/// Parse a reputation projection from the sidecar's stdin JSON. Accepts
-/// camelCase (the wire default) with snake_case fallbacks. The score and its
-/// decimal scale are read together so the two can never drift apart.
-fn reputation_from_json(v: &Value) -> Result<ReputationProjection, BoxError> {
-    let u64_field = |names: &[&str]| -> Result<u64, BoxError> {
-        names
-            .iter()
-            .find_map(|n| v.get(*n).and_then(Value::as_u64))
-            .ok_or_else(|| format!("missing unsigned integer field '{}'", names[0]).into())
-    };
-    let str_field = |names: &[&str]| -> Result<&str, BoxError> {
-        names
-            .iter()
-            .find_map(|n| v.get(*n).and_then(Value::as_str))
-            .ok_or_else(|| format!("missing string field '{}'", names[0]).into())
-    };
-
-    let score = u32::try_from(u64_field(&["score"])?).map_err(|_| "'score' exceeds uint32")?;
-    let decimals =
-        u8::try_from(u64_field(&["scoreDecimals", "score_decimals"])?).map_err(|_| "'scoreDecimals' exceeds uint8")?;
-
-    Ok(ReputationProjection::from_pda_hex(
-        ReputationScore::new(score, decimals),
-        str_field(&["sourceChain", "source_chain"])?.to_string(),
-        str_field(&["solanaAttestationPda", "solana_attestation_pda"])?,
-        u64_field(&["issuedAt", "issued_at"])?,
-        u64_field(&["expiry"])?,
-    )?)
 }
 
 #[cfg(test)]
@@ -138,7 +109,7 @@ mod tests {
             "issuedAt": 1_700_000_000,
             "expiry": 1_800_000_000
         });
-        let projection = reputation_from_json(&input).unwrap();
+        let projection = parse_reputation_projection(&input).unwrap();
         assert_eq!(projection.score.score, 9_500);
         assert_eq!(projection.score.decimals, 4);
         assert_eq!(projection.solana_attestation_pda, [0xAB; 32]);
@@ -146,14 +117,5 @@ mod tests {
         let signer = EasAttestationSigner::base_sepolia(Secp256k1IssuerKey::from_secret_bytes(&[9u8; 32]).unwrap());
         let att = signer.attest_reputation(&projection).unwrap();
         assert_eq!(att.recover_signer().unwrap(), att.signer);
-    }
-
-    #[test]
-    fn reputation_json_reports_missing_fields() {
-        let missing_pda = json!({
-            "score": 1, "scoreDecimals": 0,
-            "sourceChain": "solana:x", "issuedAt": 1, "expiry": 2
-        });
-        assert!(reputation_from_json(&missing_pda).is_err());
     }
 }

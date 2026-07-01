@@ -15,13 +15,19 @@
 //! authenticates both artifacts, with no bridge and no gas: an off-chain
 //! attestation is a signature, not a transaction.
 //!
-//! Scope: off-chain issuance only. On-chain broadcast / mainnet is a
-//! separate, operator-gated step; this crate never touches an RPC.
+//! Two more surfaces build on the same primitives, and neither signs nor
+//! submits: [`EasAttestationSigner::attest_reputation`] projects an
+//! audit-derived reputation score into an off-chain attestation, and
+//! [`stage_reputation_attestation`] builds the *unsigned* on-chain EAS `attest`
+//! transaction that writes that score for verifiers who must enforce
+//! in-contract. On-chain signing, broadcast, and mainnet stay operator-gated;
+//! the library holds no key and never touches an RPC.
 //!
 //! [EAS]: https://attest.org
 
 mod eip712;
 mod eth;
+mod relay;
 mod reputation;
 mod uid;
 
@@ -30,9 +36,13 @@ use covenant_identity::Secp256k1IssuerKey;
 use serde_json::{json, Value};
 
 pub use eip712::{recover_address, AttestMessage, EasDomain, DOMAIN_NAME, OFFCHAIN_VERSION};
+pub use relay::{
+    attest_selector, stage_reputation_attestation, RelayChain, RelayPolicy, RelayTransaction,
+    ATTEST_SIGNATURE, BASE_MAINNET, BASE_SEPOLIA, EAS_ABI_SOURCE_COMMIT,
+};
 pub use reputation::{
-    reputation_schema_uid, ReputationProjection, ReputationScore, REPUTATION_SCHEMA,
-    SOLANA_MAINNET_CAIP2,
+    parse_reputation_projection, reputation_schema_uid, ReputationProjection, ReputationScore,
+    REPUTATION_SCHEMA, SOLANA_MAINNET_CAIP2,
 };
 pub use uid::{offchain_uid, schema_uid};
 
@@ -45,10 +55,6 @@ pub const COVENANT_SCHEMA: &str = "bytes32 auditRoot,bytes32 credentialHash";
 /// EAS off-chain domain version its `version()` reports.
 const BASE_SEPOLIA_CHAIN_ID: u64 = 84_532;
 const BASE_SEPOLIA_EAS_VERSION: &str = "1.2.0";
-const BASE_SEPOLIA_EAS_ADDRESS: [u8; 20] = [
-    0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x21,
-];
 
 #[derive(Debug, thiserror::Error)]
 pub enum EvmSignerError {
@@ -62,6 +68,10 @@ pub enum EvmSignerError {
     Signature(String),
     #[error("reputation projection is invalid: {0}")]
     Reputation(String),
+    #[error("on-chain relaying to {0} is operator-gated; only Base Sepolia is autonomous")]
+    MainnetGated(&'static str),
+    #[error("attestation payload is {len} bytes, over the {max}-byte relay bound")]
+    PayloadTooLarge { len: usize, max: usize },
 }
 
 impl EasDomain {
@@ -70,7 +80,7 @@ impl EasDomain {
         Self {
             version: BASE_SEPOLIA_EAS_VERSION.to_string(),
             chain_id: BASE_SEPOLIA_CHAIN_ID,
-            verifying_contract: BASE_SEPOLIA_EAS_ADDRESS,
+            verifying_contract: eth::EAS_PREDEPLOY,
         }
     }
 }

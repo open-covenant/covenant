@@ -1,0 +1,17 @@
+{
+  "ts": "2026-07-01",
+  "program": "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y",
+  "agentKey": "438fd44f5e8bd60f7ffa3368b71fe652c2de204e5ff9f1e3b81f46c5f5004a3d",
+  "agentPda": "G2bMkQkGXTPv2rDLZpXqbn5fAehLqKujXWidcJbYHPwj",
+  "position": "6RWupBJmygUo7hyN1ic7DQwicYpgjDVjop8id8QKoSd3",
+  "credits": "DrawYGmdbQ7sULxzzczUqyZT2nmP8SZeYPuJzy6TNksj",
+  "provenanceCited": "2769ee46c8c7dc49e38737c8a3c6d0f57a48553d9b2af08d0bc82cf80ce88933",
+  "bonded": "5000",
+  "slashed": "1000",
+  "remaining": "4000",
+  "sigs": {
+    "register": "595gF5R4yLxLAk7GG6aeewxWmzW1Jwp5nBxfFeVKfWCpUBGdrBzPAshPXtkba3rwF5U5pVhpa9hqiuwDbGLCJufd",
+    "stake": "3224mKBZKtzVYDVgE6UVcqX3DeRGifD9WpeVSp2f831XbvbuzZTnvF3zupiDhYaZefQgFkVKvw4WChAT3mHspKv8",
+    "slash": "2yuN3CzDSJs8p6cWQKGKLVwXja7gbo5TzxxQoeuP6CBrSHbmYDi2LuZSNgSGKEVUt36CpadQB1hqpUEhwVjU5w4r"
+  }
+}

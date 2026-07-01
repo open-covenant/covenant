@@ -1,0 +1,50 @@
+{
+  "ts": "2026-07-01T11:57:21.858Z",
+  "program": "cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y",
+  "operator": "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM",
+  "credits": "DrawYGmdbQ7sULxzzczUqyZT2nmP8SZeYPuJzy6TNksj",
+  "er": "https://mainnet-tee.magicblock.app",
+  "validator": "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo",
+  "model": "claude-haiku-4-5",
+  "rootBefore": "0000000000000000000000000000000000000000000000000000000000000000",
+  "rootAfterL1": "2769ee46c8c7dc49e38737c8a3c6d0f57a48553d9b2af08d0bc82cf80ce88933",
+  "recomputed": "2769ee46c8c7dc49e38737c8a3c6d0f57a48553d9b2af08d0bc82cf80ce88933",
+  "provenanceVerified": true,
+  "work": [
+    {
+      "intent": "What is Covenant and what does this sandbox show?",
+      "reply": "Covenant is a framework for building AI agent systems with cryptographic signing and audit trails—every action gets logged and verified so you can trust what your agents actually did. This sandbox demonstrates how Covenant routes your requests through a signed capability system: your question hits the daemon, gets checked for permissions, gets dispatched to me (a Haiku-backed demo agent), and the whole exchange gets logged and signed. You can open the activity log to see exactly that happen. The real power emerges when you run Covenant locally and plug in your own specialized agents with custom capabilities—then you get auditability and control at scale.",
+      "receipt": "9515226c6cb6219575194926c879f0b07015196e42a8a3ab3c1cd85da36e33b6"
+    },
+    {
+      "intent": "Can you read my files or reach the internet from here?",
+      "reply": "No to both—I'm running in a sandboxed environment with no file access and no internet connectivity. I'm mainly here to demo how Covenant routes requests, checks capabilities, and logs everything with cryptographic signatures. If you want to see that in action, check the activity log for this exchange; all the steps are signed and auditable.",
+      "receipt": "4727b9737ad1538e1581f37bf512a723e32d585de311054ec445dadf0302124a"
+    },
+    {
+      "intent": "How would I verify this exchange actually happened?",
+      "reply": "Great question! You can open the **activity log** in your Covenant interface—it will show this entire exchange cryptographically signed by the daemon, proving I actually ran and replied. Each step (your request, the capability check, my response) gets logged and signed, so you have an immutable record that this happened in the sandbox.\n\nThat's one of Covenant's core features: every agent interaction is auditable. When you run Covenant locally with your own agents, you get the same signed logs for verification and compliance.",
+      "receipt": "f3766305b23f81c07ec9e710c68e947e5b2b7da422537b7edfee6b9278619f7e"
+    },
+    {
+      "intent": "What changes if I run Covenant locally with my own agent?",
+      "reply": "Running Covenant locally with your own agent unlocks the real power: you can connect it to your actual tools, data, and systems—databases, APIs, internal services—while keeping the same cryptographic signing and audit trail for every action. Instead of a demo with no capabilities, you get a fully auditable AI agent that can actually do meaningful work in your environment. You can also customize the agent's instructions, integrate it with your workflows, and control exactly what it has access to. The sandboxed demo here just shows the *routing and logging mechanism*—locally, you get that mechanism protecting real capabilities.",
+      "receipt": "d963f2eff7c1c3d5cbfb0f267366562217d526ea59350cfc0142986c12739247"
+    },
+    {
+      "intent": "In one sentence, what did you just prove?",
+      "reply": "I just proved that I can receive a system prompt, understand my constraints (sandboxed, no memory, signed logging), and respond appropriately—demonstrating how Covenant routes tasks through signed agents with audit trails.",
+      "receipt": "d391321e209787133d7cd10f9ffc90dd50dd4107eaa5ec04725a05018d23936d"
+    }
+  ],
+  "sigs": {
+    "meter": [
+      "3C5GcXioyZGYW6dZ9n6bcZ4rH9Ww3cEmqpopZ5VxfPesyh6nFo19RQ9uSSMdAiZzKXprimeykzy19w8hGWTJsF1n",
+      "4h2mY4nks1omrybwV8uZReeJzXKzosMCLUHi4eKKyQJJagtMYyMhk3A4EJerJ3RbK3k13DeYqDaeGLLXQhUioqYf",
+      "3NtvjfvR9s6aVbf4tCnZJYf5iPYUX5ns711xc1CBkHzPLYRkh26swfRcA4RAhxyDufuCYwmvPkTx344va7xfKdG1",
+      "5APCnuRUt1Jw4Bv8wTswrDZUMqWxaF3FUCRjPiJcwq6gfwyyEnEhHgD3ZP4gQsYGyXMbXhCRXgXcWrxEFQbL5Fhq",
+      "3uBYcwAC9EDTUuujuqse9mhdB65UpKJjqZJ8daEdbY71FAcPJaekL1KiVo4bMVt94hC4rJHeCU9tJ6iqTw8ymZ28"
+    ],
+    "undelegate": "9fASRWbyGGZJMa46GBPKBZ2ZW3SWxbtTDWB5uMCkjRQpHjk32ZPBiui9t1sJzWP8dkYsncf5jMbnRSrfexNrBEK"
+  }
+}

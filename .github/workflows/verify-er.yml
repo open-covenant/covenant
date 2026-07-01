@@ -2,12 +2,17 @@ name: verify-er
 
 # Reproducible build of the MagicBlock ER settlement program on a native amd64
 # runner (no qemu/rosetta), producing the verifiable .so to deploy + the
-# executable hash. Triggers when this file is pushed, or manually.
+# executable hash. Runs when the program source or _shared.rs copy changes (so
+# the drift-guard catches a stale copy), when this file changes, or manually.
 on:
   workflow_dispatch:
   push:
     branches: [feat/magicblock-er]
-    paths: ['.github/workflows/verify-er.yml']
+    paths:
+      - '.github/workflows/verify-er.yml'
+      - 'agent-os/programs/settlement/src/lib.rs'
+      - 'agent-os/programs/settlement-ephemeral/src/_shared.rs'
+      - 'agent-os/programs/settlement-ephemeral/Cargo.toml'
 
 jobs:
   build:

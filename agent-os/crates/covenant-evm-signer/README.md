@@ -38,6 +38,22 @@ Two boundaries are closed by construction:
 `stage-attest` is the key-free CLI: a reputation projection on stdin, the staged transaction JSON
 on stdout.
 
+## Name resolution (CCIP-Read, off-chain)
+
+EVM tooling resolves an ENS name to the Solana-canonical identity through a CCIP-Read (EIP-3668)
+gateway. `ResolverGateway::resolve_solana(request, solana_address, expires)` answers an
+`addr(node, 501)` query — the ENSIP-9 Solana record — and signs the response so an ENS
+`OffchainResolver`'s `resolveWithProof` callback recovers the signer and checks it against an
+on-chain allowlist.
+
+The digest is the ENS `SignatureVerifier` scheme — EIP-191 version `0x00`
+(`keccak256(0x1900 ‖ resolver ‖ expires ‖ keccak256(request) ‖ keccak256(result))`), not an
+EIP-712 typed-data hash. The gateway signs only `addr(node, 501)`: any other selector or coin type
+is refused, so its key cannot be steered into signing some other record. `CcipResponse` binds the
+resolver address, so a response signed for one resolver does not verify at another. Building and
+signing are autonomous; the ENS name, the deployed resolver, its signer allowlist, the gateway
+URL/DNS, and production key custody are operator-gated.
+
 ```bash
 echo '{"score":9500,"scoreDecimals":4,"sourceChain":"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
        "solanaAttestationPda":"0x…","issuedAt":1700000000,"expiry":1800000000}' \
@@ -55,6 +71,12 @@ Superchain (Base 8453 and Base Sepolia 84532 both host it), reporting `version()
 [`ethereum-attestation-service/eas-contracts@v1.3.0`](https://github.com/ethereum-attestation-service/eas-contracts/tree/0c51c77cccd68e19ddbfeb832f153e75fac1af19)
 (`EAS_ABI_SOURCE_COMMIT`); the `attest` selector `0xf17325e7` is derived from the signature, not
 hard-coded.
+
+The CCIP-Read response scheme is pinned from
+[`ensdomains/offchain-resolver@099b7e98`](https://github.com/ensdomains/offchain-resolver/tree/099b7e9827899efcf064e71b7125f7b4fc2e342f)
+(`OFFCHAIN_RESOLVER_COMMIT`), where the Solidity `SignatureVerifier` and the TypeScript gateway
+encode the same preimage; the `addr(bytes32,uint256)` (`0xf1cb7e06`) and `resolve(bytes,bytes)`
+(`0x9061b923`) selectors are derived from their signatures.
 
 ## Tests
 

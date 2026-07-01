@@ -29,6 +29,7 @@ mod eip712;
 mod eth;
 mod relay;
 mod reputation;
+mod resolver;
 mod uid;
 
 use covenant_attestation::VerifiableCredential;
@@ -43,6 +44,12 @@ pub use relay::{
 pub use reputation::{
     parse_reputation_projection, reputation_schema_uid, ReputationProjection, ReputationScore,
     REPUTATION_SCHEMA, SOLANA_MAINNET_CAIP2,
+};
+pub use resolver::{
+    addr_selector, ccip_signature_digest, encode_addr_call, encode_addr_result,
+    encode_resolve_call, encode_solana_addr_request, parse_addr_request, resolve_selector,
+    AddrQuery, CcipResponse, ResolverGateway, ADDR_SIGNATURE, OFFCHAIN_RESOLVER_COMMIT,
+    RESOLVE_SIGNATURE, SOLANA_COIN_TYPE,
 };
 pub use uid::{offchain_uid, schema_uid};
 
@@ -72,6 +79,10 @@ pub enum EvmSignerError {
     MainnetGated(&'static str),
     #[error("attestation payload is {len} bytes, over the {max}-byte relay bound")]
     PayloadTooLarge { len: usize, max: usize },
+    #[error("CCIP-Read gateway request is malformed: {0}")]
+    MalformedRequest(String),
+    #[error("this gateway resolves only Solana (coinType 501); refusing coinType {0}")]
+    UnsupportedCoinType(u64),
 }
 
 impl EasDomain {

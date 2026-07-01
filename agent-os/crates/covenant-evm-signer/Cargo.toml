@@ -1,7 +1,7 @@
 [package]
 name = "covenant-evm-signer"
 version = "0.1.0"
-description = "Turns a Covenant dual-signed audit-root VC into an EAS off-chain attestation (EIP-712, zero gas) that Base's trust stack can consume. The same secp256k1 issuer key that signs the VC's EVM proof signs the EAS attestation, so one ecrecover authenticates both. Off-chain only; mainnet broadcast is gated separately."
+description = "Signs Covenant statements as EAS off-chain attestations (EIP-712, zero gas) that Base's trust stack can consume: a dual-signed audit-root VC, and an audit-derived reputation score bound to its non-transferable Solana identity PDA. One ecrecover authenticates each. Off-chain only; mainnet broadcast is gated separately."
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -22,6 +22,7 @@
 
 mod eip712;
 mod eth;
+mod reputation;
 mod uid;
 
 use covenant_attestation::VerifiableCredential;
@@ -29,6 +30,10 @@ use covenant_identity::Secp256k1IssuerKey;
 use serde_json::{json, Value};
 
 pub use eip712::{recover_address, AttestMessage, EasDomain, DOMAIN_NAME, OFFCHAIN_VERSION};
+pub use reputation::{
+    reputation_schema_uid, ReputationProjection, ReputationScore, REPUTATION_SCHEMA,
+    SOLANA_MAINNET_CAIP2,
+};
 pub use uid::{offchain_uid, schema_uid};
 
 /// The EAS schema the Covenant audit-root attestation conforms to. Two
@@ -55,6 +60,8 @@ pub enum EvmSignerError {
     Field(String),
     #[error("secp256k1 recovery failed: {0}")]
     Signature(String),
+    #[error("reputation projection is invalid: {0}")]
+    Reputation(String),
 }
 
 impl EasDomain {
@@ -134,6 +141,46 @@ impl EasAttestationSigner {
             uid,
             signature,
             signer,
+        })
+    }
+
+    /// Sign an audit-derived reputation score as an EAS off-chain
+    /// attestation Base can verify. Unlike [`Self::attest`], there is no
+    /// input credential to match against: the score's authority *is* this
+    /// signer's key, so a verifier trusts the attestation by recovering the
+    /// issuer address it already knows.
+    ///
+    /// The attestation carries no EVM `recipient` — its identity binding is
+    /// the `solana_attestation_pda` in the payload, deliberately a
+    /// non-transferable Solana account rather than a sellable EVM token —
+    /// and its `expirationTime` mirrors the payload's `expiry`, so the same
+    /// bound is visible whether a verifier reads the EAS envelope or decodes
+    /// the schema data.
+    pub fn attest_reputation(
+        &self,
+        projection: &ReputationProjection,
+    ) -> Result<EasOffchainAttestation, EvmSignerError> {
+        let data = reputation::encode_data(projection)?;
+        let message = AttestMessage {
+            schema: reputation_schema_uid(),
+            recipient: eth::ZERO_ADDRESS,
+            time: projection.issued_at_unix,
+            expiration_time: projection.expiry_unix,
+            revocable: true,
+            ref_uid: [0u8; 32],
+            data,
+        };
+
+        let digest = eip712::digest(&self.domain, &message);
+        let signature = self.issuer.sign_eip712_digest(&digest);
+        let uid = offchain_uid(&message);
+
+        Ok(EasOffchainAttestation {
+            domain: self.domain.clone(),
+            message,
+            uid,
+            signature,
+            signer: self.issuer.address(),
         })
     }
 }
@@ -344,6 +391,126 @@ mod tests {
         let (secp, vc) = issuer_key_and_vc();
         let a = EasAttestationSigner::base_sepolia(secp.clone()).attest(&vc).unwrap();
         let b = EasAttestationSigner::base_sepolia(secp).attest(&vc).unwrap();
+        assert_eq!(a.to_json_string(), b.to_json_string());
+        assert_eq!(a.uid, b.uid);
+    }
+
+    const REPUTATION_PDA: [u8; 32] = [0xAB; 32];
+
+    fn reputation_projection() -> ReputationProjection {
+        ReputationProjection::new(
+            ReputationScore::from_ratio(95, 100, 4).unwrap(),
+            SOLANA_MAINNET_CAIP2,
+            REPUTATION_PDA,
+            1_700_000_000,
+            1_800_000_000,
+        )
+    }
+
+    fn reputation_signer() -> (Secp256k1IssuerKey, EasAttestationSigner) {
+        let secp = Secp256k1IssuerKey::from_secret_bytes(&[9u8; 32]).unwrap();
+        (secp.clone(), EasAttestationSigner::base_sepolia(secp))
+    }
+
+    #[test]
+    fn reputation_attestation_recovers_the_issuer() {
+        // The core contract on Base: ecrecover over the produced attestation
+        // returns the issuer's secp256k1 address, no bridge involved.
+        let (secp, signer) = reputation_signer();
+        let att = signer.attest_reputation(&reputation_projection()).unwrap();
+        assert_eq!(att.recover_signer().unwrap(), secp.address());
+        assert_eq!(att.signer, secp.address());
+    }
+
+    #[test]
+    fn reputation_is_bound_to_the_solana_pda_not_a_recipient() {
+        // Non-transferable by construction: no EVM recipient a token could
+        // ride on; the only identity in the payload is the Solana PDA.
+        let (_secp, signer) = reputation_signer();
+        let att = signer.attest_reputation(&reputation_projection()).unwrap();
+        assert_eq!(att.message.recipient, eth::ZERO_ADDRESS);
+        assert_eq!(&att.message.data[128..160], &REPUTATION_PDA);
+    }
+
+    #[test]
+    fn reputation_expiry_is_mirrored_onto_the_eas_envelope() {
+        // The EAS expirationTime and the schema's own expiry field must name
+        // the same instant, so a stale score expires whichever surface a
+        // verifier trusts.
+        let (_secp, signer) = reputation_signer();
+        let att = signer.attest_reputation(&reputation_projection()).unwrap();
+        assert_eq!(att.message.time, 1_700_000_000);
+        assert_eq!(att.message.expiration_time, 1_800_000_000);
+        let data_expiry = u64::from_be_bytes(att.message.data[2 * 32 + 24..2 * 32 + 32].try_into().unwrap());
+        assert_eq!(data_expiry, att.message.expiration_time);
+    }
+
+    #[test]
+    fn reputation_uses_its_own_schema() {
+        let (_secp, signer) = reputation_signer();
+        let att = signer.attest_reputation(&reputation_projection()).unwrap();
+        assert_eq!(att.message.schema, reputation_schema_uid());
+        assert_ne!(att.message.schema, covenant_schema_uid());
+    }
+
+    #[test]
+    fn reputation_refuses_an_unexpiring_or_unanchored_score() {
+        let (_secp, signer) = reputation_signer();
+        let mut stale = reputation_projection();
+        stale.expiry_unix = 0;
+        assert!(matches!(
+            signer.attest_reputation(&stale),
+            Err(EvmSignerError::Reputation(_))
+        ));
+
+        let mut unanchored = reputation_projection();
+        unanchored.solana_attestation_pda = [0u8; 32];
+        assert!(matches!(
+            signer.attest_reputation(&unanchored),
+            Err(EvmSignerError::Reputation(_))
+        ));
+    }
+
+    #[test]
+    fn reputation_json_round_trips_through_ecrecover() {
+        // The wire envelope verifies on its own terms: reparse message +
+        // domain + signature, recompute the digest, recover the named signer.
+        let (secp, signer) = reputation_signer();
+        let att = signer.attest_reputation(&reputation_projection()).unwrap();
+        let value = att.to_json();
+        let sig = &value["sig"];
+
+        assert_eq!(sig["message"]["schema"], eth::hex_0x(&reputation_schema_uid()));
+        assert_eq!(value["signer"], eth::hex_0x(&secp.address()));
+
+        let domain = EasDomain {
+            version: sig["domain"]["version"].as_str().unwrap().to_string(),
+            chain_id: sig["domain"]["chainId"].as_u64().unwrap(),
+            verifying_contract: eth::hex_decode_20(sig["domain"]["verifyingContract"].as_str().unwrap()).unwrap(),
+        };
+        let message = AttestMessage {
+            schema: eth::hex_decode_32(sig["message"]["schema"].as_str().unwrap()).unwrap(),
+            recipient: eth::hex_decode_20(sig["message"]["recipient"].as_str().unwrap()).unwrap(),
+            time: sig["message"]["time"].as_u64().unwrap(),
+            expiration_time: sig["message"]["expirationTime"].as_u64().unwrap(),
+            revocable: sig["message"]["revocable"].as_bool().unwrap(),
+            ref_uid: eth::hex_decode_32(sig["message"]["refUID"].as_str().unwrap()).unwrap(),
+            data: eth::hex_decode(sig["message"]["data"].as_str().unwrap()).unwrap(),
+        };
+        let mut signature = [0u8; 65];
+        signature[..32].copy_from_slice(&eth::hex_decode_32(sig["signature"]["r"].as_str().unwrap()).unwrap());
+        signature[32..64].copy_from_slice(&eth::hex_decode_32(sig["signature"]["s"].as_str().unwrap()).unwrap());
+        signature[64] = sig["signature"]["v"].as_u64().unwrap() as u8;
+
+        let digest = eip712::digest(&domain, &message);
+        assert_eq!(recover_address(&digest, &signature).unwrap(), secp.address());
+    }
+
+    #[test]
+    fn reputation_attestation_is_deterministic() {
+        let (_secp, signer) = reputation_signer();
+        let a = signer.attest_reputation(&reputation_projection()).unwrap();
+        let b = signer.attest_reputation(&reputation_projection()).unwrap();
         assert_eq!(a.to_json_string(), b.to_json_string());
         assert_eq!(a.uid, b.uid);
     }

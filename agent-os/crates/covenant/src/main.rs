@@ -5264,15 +5264,14 @@ async fn main() -> Result<()> {
                             has_signer,
                         } => {
                             if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "sap_status",
-                                    "enabled": enabled,
-                                    "cluster": cluster,
-                                    "program_id": program_id,
-                                    "rpc_url": rpc_url,
-                                    "explorer_url": explorer_url,
-                                    "has_signer": has_signer,
-                                });
+                                let value = sap_status_json(
+                                    enabled,
+                                    &cluster,
+                                    &program_id,
+                                    &rpc_url,
+                                    &explorer_url,
+                                    has_signer,
+                                );
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("enabled: {enabled}");
@@ -5320,11 +5319,7 @@ async fn main() -> Result<()> {
                             signature,
                         } => {
                             if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "sap_published_agent",
-                                    "agent_pda": agent_pda,
-                                    "signature": signature,
-                                });
+                                let value = sap_published_agent_json(&agent_pda, &signature);
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("agent_pda: {agent_pda}");
@@ -5395,11 +5390,7 @@ async fn main() -> Result<()> {
                             signature,
                         } => {
                             if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "sap_published_audit_root",
-                                    "ledger_pda": ledger_pda,
-                                    "signature": signature,
-                                });
+                                let value = sap_published_audit_root_json(&ledger_pda, &signature);
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("ledger_pda: {ledger_pda}");
@@ -5476,13 +5467,12 @@ async fn main() -> Result<()> {
                             signature,
                         } => {
                             if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "sap_published_attestation",
-                                    "attestation_pda": attestation_pda,
-                                    "attester": attester,
-                                    "agent_pda": agent_pda,
-                                    "signature": signature,
-                                });
+                                let value = sap_published_attestation_json(
+                                    &attestation_pda,
+                                    &attester,
+                                    &agent_pda,
+                                    &signature,
+                                );
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("attestation_pda: {attestation_pda}");
@@ -11598,4 +11588,276 @@ mod tests {
             "an over-cap read must clamp the returned buffer to max"
         );
     }
+
+    #[test]
+    fn sap_status_json_renders_stable_shape() {
+        let value = sap_status_json(
+            true,
+            "devnet",
+            "Prog111",
+            "https://rpc.example",
+            "https://exp.example",
+            true,
+        );
+        assert_eq!(value["kind"], "sap_status");
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["cluster"], "devnet");
+        assert_eq!(value["program_id"], "Prog111");
+        assert_eq!(value["rpc_url"], "https://rpc.example");
+        assert_eq!(value["explorer_url"], "https://exp.example");
+        assert_eq!(value["has_signer"], true);
+    }
+
+    #[test]
+    fn sap_status_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "cluster",
+            "enabled",
+            "explorer_url",
+            "has_signer",
+            "kind",
+            "program_id",
+            "rpc_url",
+        ];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("sap_status_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "sap_status_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("sap_status"));
+            assert!(
+                value["enabled"].is_boolean(),
+                "enabled must be a JSON boolean, not 0/1 or string: {value}",
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}",
+            );
+            assert!(
+                value["program_id"].is_string(),
+                "program_id must be a string: {value}",
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}",
+            );
+            assert!(
+                value["explorer_url"].is_string(),
+                "explorer_url must be a string: {value}",
+            );
+            assert!(
+                value["has_signer"].is_boolean(),
+                "has_signer must be a JSON boolean, not 0/1 or string: {value}",
+            );
+        }
+
+        assert_shape(&sap_status_json(
+            true,
+            "devnet",
+            "Prog111",
+            "https://rpc.example",
+            "https://exp.example",
+            true,
+        ));
+        assert_shape(&sap_status_json(false, "", "", "", "", false));
+    }
+
+    #[test]
+    fn sap_published_agent_json_renders_stable_shape() {
+        let value = sap_published_agent_json("AgentPda11", "Sig11");
+        assert_eq!(value["kind"], "sap_published_agent");
+        assert_eq!(value["agent_pda"], "AgentPda11");
+        assert_eq!(value["signature"], "Sig11");
+    }
+
+    #[test]
+    fn sap_published_agent_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["agent_pda", "kind", "signature"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("sap_published_agent_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "sap_published_agent_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("sap_published_agent"));
+            assert!(
+                value["agent_pda"].is_string(),
+                "agent_pda must be a string: {value}",
+            );
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}",
+            );
+        }
+
+        assert_shape(&sap_published_agent_json("AgentPda11", "Sig11"));
+        assert_shape(&sap_published_agent_json("", ""));
+    }
+
+    #[test]
+    fn sap_published_audit_root_json_renders_stable_shape() {
+        let value = sap_published_audit_root_json("LedgerPda22", "Sig22");
+        assert_eq!(value["kind"], "sap_published_audit_root");
+        assert_eq!(value["ledger_pda"], "LedgerPda22");
+        assert_eq!(value["signature"], "Sig22");
+    }
+
+    #[test]
+    fn sap_published_audit_root_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "ledger_pda", "signature"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("sap_published_audit_root_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "sap_published_audit_root_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("sap_published_audit_root"));
+            assert!(
+                value["ledger_pda"].is_string(),
+                "ledger_pda must be a string: {value}",
+            );
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}",
+            );
+        }
+
+        assert_shape(&sap_published_audit_root_json("LedgerPda22", "Sig22"));
+        assert_shape(&sap_published_audit_root_json("", ""));
+    }
+
+    #[test]
+    fn sap_published_attestation_json_renders_stable_shape() {
+        let value =
+            sap_published_attestation_json("AttPda33", "Attester33", "AgentPda11", "Sig33");
+        assert_eq!(value["kind"], "sap_published_attestation");
+        assert_eq!(value["attestation_pda"], "AttPda33");
+        assert_eq!(value["attester"], "Attester33");
+        assert_eq!(value["agent_pda"], "AgentPda11");
+        assert_eq!(value["signature"], "Sig33");
+    }
+
+    #[test]
+    fn sap_published_attestation_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] =
+            &["agent_pda", "attestation_pda", "attester", "kind", "signature"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("sap_published_attestation_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "sap_published_attestation_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("sap_published_attestation"));
+            assert!(
+                value["attestation_pda"].is_string(),
+                "attestation_pda must be a string: {value}",
+            );
+            assert!(
+                value["attester"].is_string(),
+                "attester must be a string: {value}",
+            );
+            assert!(
+                value["agent_pda"].is_string(),
+                "agent_pda must be a string: {value}",
+            );
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}",
+            );
+        }
+
+        assert_shape(&sap_published_attestation_json(
+            "AttPda33",
+            "Attester33",
+            "AgentPda11",
+            "Sig33",
+        ));
+        assert_shape(&sap_published_attestation_json("", "", "", ""));
+    }
+}
+
+// SAP `--json` envelope emitters. Kept below the test module so introducing
+// them does not renumber the name-anchored `main.rs:NNN` citations in
+// docs/ipc-and-http-gateway.md that the validate-*-line-refs.mjs guards pin.
+fn sap_status_json(
+    enabled: bool,
+    cluster: &str,
+    program_id: &str,
+    rpc_url: &str,
+    explorer_url: &str,
+    has_signer: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "sap_status",
+        "enabled": enabled,
+        "cluster": cluster,
+        "program_id": program_id,
+        "rpc_url": rpc_url,
+        "explorer_url": explorer_url,
+        "has_signer": has_signer,
+    })
+}
+
+fn sap_published_agent_json(agent_pda: &str, signature: &str) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "sap_published_agent",
+        "agent_pda": agent_pda,
+        "signature": signature,
+    })
+}
+
+fn sap_published_audit_root_json(ledger_pda: &str, signature: &str) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "sap_published_audit_root",
+        "ledger_pda": ledger_pda,
+        "signature": signature,
+    })
+}
+
+fn sap_published_attestation_json(
+    attestation_pda: &str,
+    attester: &str,
+    agent_pda: &str,
+    signature: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "sap_published_attestation",
+        "attestation_pda": attestation_pda,
+        "attester": attester,
+        "agent_pda": agent_pda,
+        "signature": signature,
+    })
 }

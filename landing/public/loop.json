@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T20:53:20.758Z",
+  "updatedAt": "2026-07-01T21:13:24.488Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12622,
-    "tasks": 1480,
-    "integrated": 1480
+    "events": 12629,
+    "tasks": 1481,
+    "integrated": 1481
   },
   "throughput": {
-    "last24h": 15,
-    "last7d": 192,
-    "velocity": 27.4
+    "last24h": 16,
+    "last7d": 193,
+    "velocity": 27.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 15
+      "count": 16
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "07-01",
-      "total": 1480
+      "total": 1481
     }
   ],
   "states": {
-    "integrated": 1472,
+    "integrated": 1473,
     "proposed": 1,
     "blocked": 6,
-    "in_progress": 1
+    "triaged": 1
   },
   "areas": [
     {
@@ -215,12 +215,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "status-local-daemon-and-cli-no-remaining-deferred-privileged",
-    "state": "in_progress",
-    "since": "2026-07-01T18:36:01.203Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T21:05:50.879Z",
+      "task": "status-local-daemon-and-cli-no-remaining-deferred-privileged",
+      "note": "Committed 47241a99 (9 files, +1110/-226) and pushed a4875fe0..47241a99 to origin/loop/main-track. Pre-push guards (current-git-identity, git"
+    },
     {
       "at": "2026-07-01T18:25:30.638Z",
       "task": "status-ipc-and-http-gateway-adr-0010-2026-05-17-v2-streaming",
@@ -315,11 +316,6 @@
       "at": "2026-06-30T07:00:54.460Z",
       "task": "hyre-tools-schema-required-body-field-coverage",
       "note": "Committed 6616b16b (tools test + README, 2 files by explicit path) and pushed 6ed81f36..6616b16b to origin/loop/main-track. All push identit"
-    },
-    {
-      "at": "2026-06-30T06:37:37.609Z",
-      "task": "hyre-x402-network-matches-spelling-leniency-coverage",
-      "note": "Committed 6ed81f36 (x402 test + README, 2 files by explicit path) and pushed d0a2a32a..6ed81f36 to origin/loop/main-track. All push identity"
     }
   ]
 }

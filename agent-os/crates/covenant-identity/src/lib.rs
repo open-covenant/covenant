@@ -12,6 +12,9 @@
 
 #![deny(unsafe_code)]
 
+mod binding;
+pub use binding::{BindingError, IdentityBinding, Secp256k1IssuerKey};
+
 use covenant_types::AgentId;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
@@ -30,6 +33,8 @@ pub enum IdentityError {
     Symlink { path: PathBuf },
     #[error("ed25519: {0}")]
     Crypto(#[from] ed25519_dalek::SignatureError),
+    #[error("secp256k1: {0}")]
+    Secp256k1(String),
 }
 
 pub struct LocalIdentity {
@@ -74,6 +79,19 @@ impl LocalIdentity {
         self.signing_key.sign(message)
     }
 
+    /// Bind this canonical ed25519 identity to a secp256k1 issuer key,
+    /// anchored to the agent's 32-byte audit root. The result is a
+    /// bidirectional [`IdentityBinding`] — the ed25519 key authorizes the
+    /// secp256k1 address and the secp256k1 key authorizes this ed25519
+    /// pubkey (EVM-`ecrecover`-verifiable). See [`binding`].
+    pub fn bind_issuer(
+        &self,
+        issuer: &Secp256k1IssuerKey,
+        audit_root: [u8; 32],
+    ) -> IdentityBinding {
+        IdentityBinding::create(&self.signing_key, issuer, audit_root)
+    }
+
     /// Load an existing identity from disk; create a new one and persist it
     /// if the file is missing. Default display is `user@local` (kept
     /// generic so logs and commits don't leak the operator's hostname).
@@ -109,7 +127,7 @@ impl LocalIdentity {
 }
 
 #[cfg(unix)]
-fn require_identity_key_secure(path: &Path) -> Result<(), IdentityError> {
+pub(crate) fn require_identity_key_secure(path: &Path) -> Result<(), IdentityError> {
     use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() {
@@ -132,23 +150,23 @@ fn require_identity_key_secure(path: &Path) -> Result<(), IdentityError> {
 }
 
 #[cfg(not(unix))]
-fn require_identity_key_secure(_path: &Path) -> Result<(), IdentityError> {
+pub(crate) fn require_identity_key_secure(_path: &Path) -> Result<(), IdentityError> {
     Ok(())
 }
 
 #[cfg(unix)]
-fn set_dir_mode_0700(path: &Path) -> std::io::Result<()> {
+pub(crate) fn set_dir_mode_0700(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
 }
 
 #[cfg(not(unix))]
-fn set_dir_mode_0700(_path: &Path) -> std::io::Result<()> {
+pub(crate) fn set_dir_mode_0700(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
 #[cfg(unix)]
-fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     if path.exists() {
         let _ = std::fs::remove_file(path);
@@ -163,7 +181,7 @@ fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)
 }
 
@@ -492,9 +510,10 @@ mod tests {
 
     #[test]
     fn identity_error_display_messages_pin_three_field_bearing_variant_format_strings() {
-        // IdentityError has five variants. Two wrap external errors via
-        // #[from] (Io, Crypto); the three field-bearing variants emit
-        // security-relevant operator-facing format strings that no
+        // IdentityError has six variants. Two wrap external errors via
+        // #[from] (Io, Crypto), one wraps a stringified secp256k1 scalar-
+        // decode failure (Secp256k1); the three field-bearing variants
+        // emit security-relevant operator-facing format strings that no
         // existing test inspects via Display.
         // load_or_create_rejects_wrong_size_file asserts BadSize via
         // `matches!` and ignores Display;

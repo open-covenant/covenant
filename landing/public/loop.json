@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-01T10:50:56.274Z",
+  "updatedAt": "2026-07-01T11:10:59.976Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12548,
-    "tasks": 1469,
+    "events": 12551,
+    "tasks": 1470,
     "integrated": 1472
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1464,
     "proposed": 1,
-    "blocked": 4
+    "blocked": 4,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "multichain-21",
+    "state": "in_progress",
+    "since": "2026-07-01T10:59:48.525Z"
+  },
   "recent": [
     {
       "at": "2026-07-01T10:43:22.094Z",

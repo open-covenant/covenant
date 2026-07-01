@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T09:10:15.055Z",
+  "updatedAt": "2026-07-01T09:30:19.002Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12527,
+    "events": 12532,
     "tasks": 1467,
-    "integrated": 1469
+    "integrated": 1470
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 181,
-    "velocity": 25.9
+    "last24h": 6,
+    "last7d": 182,
+    "velocity": 26
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-01",
-      "total": 1469
+      "total": 1470
     }
   ],
   "states": {
-    "integrated": 1461,
+    "integrated": 1462,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-11",
-    "state": "in_progress",
-    "since": "2026-07-01T06:41:17.724Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T09:17:14.866Z",
+      "task": "multichain-11",
+      "note": "Committed ab7960e3 (8 files, +872/-5) and pushed to origin/loop/main-track. Committed Cargo.lock verified consistent via fresh-worktree carg"
+    },
     {
       "at": "2026-07-01T06:23:44.221Z",
       "task": "multichain-10",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T23:13:48.758Z",
       "task": "hatcher-connector-wstransport-backoff-jitter-coverage",
       "note": "Shipped as cb5a2612, pushed 34999a6a..cb5a2612 to origin/loop/main-track. Pins WsTransport.scheduleReconnect full-jitter upper bound (wsTran"
-    },
-    {
-      "at": "2026-06-29T22:55:46.632Z",
-      "task": "budget-refill-eta-ms-u64-overflow-clamp-boundary-coverage",
-      "note": "Shipped as 34999a6a, pushed f7e4ad4e..34999a6a to origin/loop/main-track. Pins refill_eta_ms u64-overflow clamp (lib.rs:374) at the tight on"
     }
   ]
 }

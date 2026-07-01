@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-01T21:13:24.488Z",
+  "updatedAt": "2026-07-01T21:33:29.029Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12629,
+    "events": 12631,
     "tasks": 1481,
     "integrated": 1481
   },
@@ -187,7 +187,7 @@
     "integrated": 1473,
     "proposed": 1,
     "blocked": 6,
-    "triaged": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -215,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "status-local-settlement-receipts-backfill-mutator-landed-202",
+    "state": "in_progress",
+    "since": "2026-07-01T21:20:58.031Z"
+  },
   "recent": [
     {
       "at": "2026-07-01T21:05:50.879Z",

@@ -53,3 +53,15 @@ cd agent-os && cargo build --workspace --exclude covenant-settlement-program
 ```
 
 The `--exclude` is intentional — the settlement program uses the SBF compiler shipped with the Anchor toolchain, which is a separate build path from the workspace's native target.
+
+## Standalone EVM staging crate
+
+`agent-os/evm` (`covenant-erc8004-register`) has its own `[workspace]` and lockfile, so it is
+not built by the workspace `cargo build` and never perturbs the workspace dependency graph. It
+builds and dry-runs ERC-8004 Identity Registry calldata; it never signs or submits. Verify it
+directly:
+
+```bash
+cargo test --manifest-path agent-os/evm/Cargo.toml                      # offline
+cargo test --manifest-path agent-os/evm/Cargo.toml -- --ignored live_   # opt-in Base Sepolia dry-run
+```

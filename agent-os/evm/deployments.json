@@ -1,0 +1,20 @@
+{
+  "source": {
+    "repo": "erc-8004/erc-8004-contracts",
+    "commit": "68fc6765761a10fb26f0692df21c8a6f9d12b1be",
+    "abi": "abis/IdentityRegistry.json",
+    "retrieved": "2026-07-01"
+  },
+  "proxy": "IdentityRegistry is an upgradeable ERC-721 (CREATE2 vanity 0x8004...). The address is stable across chains; the implementation behind it can change, so re-verify the live contract against staged calldata immediately before submission.",
+  "identityRegistry": {
+    "8453": { "network": "Base", "address": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" },
+    "84532": { "network": "Base Sepolia", "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e" },
+    "11155111": { "network": "Ethereum Sepolia", "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e" }
+  },
+  "register": {
+    "signature": "register(string)",
+    "selector": "0xf2c298be",
+    "returns": "uint256 agentId",
+    "event": "Registered(uint256 indexed agentId, string agentURI, address indexed owner)"
+  }
+}

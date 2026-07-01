@@ -12,6 +12,7 @@ members = [
     "crates/covenant-llm",
     "crates/covenant-tools",
     "crates/covenant-identity",
+    "crates/covenant-attestation",
     "crates/covenant-audit",
     "crates/covenant-permissions",
     "crates/covenant-mcp",

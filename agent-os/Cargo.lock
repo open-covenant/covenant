@@ -1165,6 +1165,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-attestation"
+version = "0.1.0"
+dependencies = [
+ "bs58",
+ "covenant-audit",
+ "covenant-identity",
+ "covenant-types",
+ "ed25519-dalek 2.2.0",
+ "k256",
+ "rand 0.9.4",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "sha2 0.11.0",
+ "sha3",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "covenant-audit"
 version = "0.1.0"
 dependencies = [
@@ -1219,6 +1240,8 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "k256",
  "rand 0.9.4",
+ "serde",
+ "serde_jcs",
  "serde_json",
  "sha3",
  "tempfile",

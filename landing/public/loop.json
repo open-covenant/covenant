@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-01T12:31:15.673Z",
+  "updatedAt": "2026-07-01T12:51:43.533Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12552,
+    "events": 12553,
     "tasks": 1470,
     "integrated": 1472
   },
@@ -187,7 +187,7 @@
     "integrated": 1464,
     "proposed": 1,
     "blocked": 4,
-    "self_review": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "multichain-21",
-    "state": "self_review",
-    "since": "2026-07-01T12:16:45.415Z"
+    "state": "cross_review",
+    "since": "2026-07-01T12:33:42.243Z"
   },
   "recent": [
     {

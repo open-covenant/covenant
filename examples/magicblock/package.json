@@ -1,0 +1,12 @@
+{
+  "name": "covenant-magicblock-demo",
+  "private": true,
+  "type": "module",
+  "description": "Read-only mainnet demo of the Covenant trust layer over MagicBlock: discover a Covenant-verified ER and verify an agent's on-chain provenance. No keys, no funds.",
+  "scripts": {
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0"
+  }
+}

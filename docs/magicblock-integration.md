@@ -116,5 +116,18 @@ The drivers are in `agent-os/programs/settlement-ephemeral/spike/`:
 `reference-run.mjs` (agent work + provenance), `bond-slash.mjs` (bond + slash),
 `er-registry.mjs` and `pick-verified-er.mjs` (SAS attest, resolve, discover).
 
+## Try it
+
+[`examples/magicblock`](../examples/magicblock) is a read-only mainnet demo that
+reproduces the discovery and provenance checks above. It takes no keys and moves no
+funds.
+
+```
+cd examples/magicblock && npm install && node verify.mjs
+```
+
+It resolves which ERs are Covenant-verified from the router, then recomputes the
+reference agent's provenance root from its answers and checks it against the chain.
+
 For integration help, open an issue or reach out at
 [opencovenant.org/contact](https://opencovenant.org/contact).

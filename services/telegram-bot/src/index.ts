@@ -18,6 +18,9 @@ const RATE_LIMIT_PER_MIN = Number(process.env.TELEGRAM_RATE_LIMIT_PER_MIN ?? 5);
 // TELEGRAM_ANNOUNCE_CHAT_ID whenever a PositionCreated event lands on-chain.
 // It is independent of the command allowlist (it broadcasts, never replies).
 const ANNOUNCE_CHAT_ID = process.env.TELEGRAM_ANNOUNCE_CHAT_ID?.trim();
+// Per-event "NEW STAKE" posts. Set STAKE_ANNOUNCE_EVENTS=0 to run summary-only
+// (stake announcements handled elsewhere); the periodic summary still posts.
+const ANNOUNCE_EVENTS = (process.env.STAKE_ANNOUNCE_EVENTS ?? '1').trim() !== '0';
 const TOKEN_SYMBOL =
   process.env.COVENANT_TOKEN_SYMBOL ??
   process.env.NEXT_PUBLIC_COVENANT_TOKEN_SYMBOL ??
@@ -208,6 +211,7 @@ function maybeStartAnnouncer(bot: Bot): void {
   watcher = startStakeWatcher({
     network,
     send: async (html) => {
+      if (!ANNOUNCE_EVENTS) return;
       if (HEADER_PHOTO) {
         const photo =
           HEADER_PHOTO === 'bundled'

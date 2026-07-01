@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T12:51:43.533Z",
+  "updatedAt": "2026-07-01T13:11:47.076Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12553,
+    "events": 12556,
     "tasks": 1470,
-    "integrated": 1472
+    "integrated": 1473
   },
   "throughput": {
-    "last24h": 7,
-    "last7d": 184,
-    "velocity": 26.3
+    "last24h": 8,
+    "last7d": 185,
+    "velocity": 26.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 7
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-01",
-      "total": 1472
+      "total": 1473
     }
   ],
   "states": {
-    "integrated": 1464,
+    "integrated": 1465,
     "proposed": 1,
-    "blocked": 4,
-    "cross_review": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-21",
-    "state": "cross_review",
-    "since": "2026-07-01T12:33:42.243Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T13:02:14.095Z",
+      "task": "multichain-21",
+      "note": "Pushed 2848d2d9..950a3824 to origin/loop/main-track; all 4 pre-push guards ok (current-git-identity, github-cli-account, github-push-identit"
+    },
     {
       "at": "2026-07-01T10:43:22.094Z",
       "task": "multichain-20",
@@ -315,11 +315,6 @@
       "at": "2026-06-30T02:15:32.932Z",
       "task": "budget-refill-add-u128-truncation-clamp-boundary-coverage",
       "note": "Committing the test slice to loop/main-track: refill add-grant u128->u64 truncation clamp boundary coverage in covenant-budget src/lib.rs, R"
-    },
-    {
-      "at": "2026-06-30T01:20:54.371Z",
-      "task": "llm-estimate-tokens-u32-saturation-clamp-coverage",
-      "note": "Integrated as 45f3e561 on loop/main-track."
     }
   ]
 }

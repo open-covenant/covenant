@@ -1,0 +1,23 @@
+[package]
+name = "covenant-evm-signer"
+version = "0.1.0"
+description = "Turns a Covenant dual-signed audit-root VC into an EAS off-chain attestation (EIP-712, zero gas) that Base's trust stack can consume. The same secp256k1 issuer key that signs the VC's EVM proof signs the EAS attestation, so one ecrecover authenticates both. Off-chain only; mainnet broadcast is gated separately."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "covenant-evm-signer"
+path = "src/main.rs"
+
+[dependencies]
+covenant-identity = { path = "../covenant-identity" }
+covenant-attestation = { path = "../covenant-attestation" }
+k256 = { workspace = true }
+sha3 = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }

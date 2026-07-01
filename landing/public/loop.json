@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T02:48:12.584Z",
+  "updatedAt": "2026-07-01T03:08:16.289Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12493,
+    "events": 12498,
     "tasks": 1463,
-    "integrated": 1465
+    "integrated": 1466
   },
   "throughput": {
-    "last24h": 11,
-    "last7d": 177,
-    "velocity": 25.3
+    "last24h": 12,
+    "last7d": 178,
+    "velocity": 25.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-01",
-      "total": 1465
+      "total": 1466
     }
   ],
   "states": {
-    "integrated": 1457,
+    "integrated": 1458,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-00",
-    "state": "in_progress",
-    "since": "2026-07-01T00:11:09.359Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T02:49:48.121Z",
+      "task": "multichain-00",
+      "note": "Committed f2d0e407 to loop/main-track: Secp256k1IssuerKey + bidirectional IdentityBinding in covenant-identity (+k256/+sha3). 32 tests green"
+    },
     {
       "at": "2026-06-30T09:32:16.032Z",
       "task": "metaplex-signer-rpc-caller-parsing-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T20:29:10.663Z",
       "task": "covenant-cli-read-signer-stream-capped-exact-fit-not-overflo",
       "note": "Committing the CLI read_signer_stream_capped exact-fit test + README metrics bump to loop/main-track."
-    },
-    {
-      "at": "2026-06-29T19:57:20.181Z",
-      "task": "covenantd-cross-host-dedup-horizon-inclusive-retention-bound",
-      "note": "Committing the claim_fresh at-horizon retention test + README metrics bump to loop/main-track."
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T17:32:40.391Z",
+  "updatedAt": "2026-07-01T17:52:45.161Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12583,
-    "tasks": 1476,
-    "integrated": 1476
+    "events": 12592,
+    "tasks": 1477,
+    "integrated": 1477
   },
   "throughput": {
-    "last24h": 11,
-    "last7d": 188,
-    "velocity": 26.9
+    "last24h": 12,
+    "last7d": 189,
+    "velocity": 27
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 11
+      "count": 12
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-01",
-      "total": 1476
+      "total": 1477
     }
   ],
   "states": {
-    "integrated": 1468,
+    "integrated": 1469,
     "proposed": 2,
     "blocked": 6
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T17:51:28.605Z",
+      "task": "status-runtime-execution-defer-gvisor-required-check-promoti",
+      "note": "Committed 787562fa: agent-os/scripts/validate-gvisor-required-check-deferral.mjs (self-contained guard + always-on --self-test) + 1 validate"
+    },
     {
       "at": "2026-07-01T17:28:29.181Z",
       "task": "multichain-33",
@@ -310,11 +315,6 @@
       "at": "2026-06-30T04:59:29.637Z",
       "task": "hyre-x402-to-requirements-network-forcing-normalisation-cove",
       "note": "Integrated as test(covenant-hyre): pin to_requirements operator CAIP-2 network-forcing + output normalisation. README metric updated clean+1"
-    },
-    {
-      "at": "2026-06-30T04:21:00.239Z",
-      "task": "hyre-tools-build-tool-configured-per-call-cap-override-cover",
-      "note": "Committed (test + README metrics 3219->3220), exactly two tracked files. Mutation-proven via standalone rustc harness (real honors configure"
     }
   ]
 }

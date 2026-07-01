@@ -60,6 +60,7 @@ run node ./scripts/validate-sdk-compatibility.mjs
 run node ./scripts/validate-crate-groups-coverage.mjs
 run node ./scripts/validate-cvnt-solana-quarantine.mjs
 run node ./scripts/validate-gvisor-required-check-deferral.mjs
+run node ./scripts/validate-gvisor-live-test-target.mjs
 run node ./scripts/validate-autonomy-status-gaps.mjs
 run node ./scripts/validate-chain-tx-test-line-refs.mjs
 run node ./scripts/validate-receipt-list-line-refs.mjs

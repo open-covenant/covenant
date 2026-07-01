@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T14:52:07.220Z",
+  "updatedAt": "2026-07-01T15:12:11.788Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12568,
+    "events": 12572,
     "tasks": 1472,
-    "integrated": 1474
+    "integrated": 1475
   },
   "throughput": {
-    "last24h": 9,
-    "last7d": 186,
-    "velocity": 26.6
+    "last24h": 10,
+    "last7d": 187,
+    "velocity": 26.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 9
+      "count": 10
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-01",
-      "total": 1474
+      "total": 1475
     }
   ],
   "states": {
-    "integrated": 1466,
+    "integrated": 1467,
     "proposed": 1,
-    "blocked": 4,
-    "self_review": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-30",
-    "state": "self_review",
-    "since": "2026-07-01T14:31:09.884Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T14:59:48.566Z",
+      "task": "multichain-30",
+      "note": "Surgical commit e292e36f (5 files +865/-1: bond.rs, lib.rs, live_bond_verifier.rs, BondReceiptVerifier.sol, README) pushed to origin/loop/ma"
+    },
     {
       "at": "2026-07-01T13:43:34.155Z",
       "task": "multichain-22",
@@ -315,11 +315,6 @@
       "at": "2026-06-30T04:12:00.179Z",
       "task": "hyre-manifest-usd-to-micro-checked-add-overflow-coverage",
       "note": "Committed e363d74a (test + README metrics 3218->3219), exactly two tracked files. Mutation-proven via standalone rustc harness (real checked"
-    },
-    {
-      "at": "2026-06-30T03:45:09.561Z",
-      "task": "stake-keeper-config-bps-split-u16-wrap-widening-coverage",
-      "note": "Committed 570ee85e (test + README metrics 3217->3218), exactly two tracked files. Mutation-proven via standalone rustc harness; gitignored a"
     }
   ]
 }

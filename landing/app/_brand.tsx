@@ -23,7 +23,7 @@ export const NAV_LINKS = [
   { label: "about", href: "/about", external: false as const },
   { label: "blog", href: "/blog", external: false as const },
   { label: "buy", href: "/token", external: false as const },
-  { label: "stake", href: "/stake", external: false as const },
+  { label: "stake", href: "https://stake.opencovenant.org", external: true as const },
 ];
 
 export const FOOTER_LINKS = [

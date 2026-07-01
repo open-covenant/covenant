@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T10:30:52.505Z",
+  "updatedAt": "2026-07-01T10:50:56.274Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12543,
+    "events": 12548,
     "tasks": 1469,
-    "integrated": 1471
+    "integrated": 1472
   },
   "throughput": {
-    "last24h": 6,
-    "last7d": 183,
-    "velocity": 26.1
+    "last24h": 7,
+    "last7d": 184,
+    "velocity": 26.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 6
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-01",
-      "total": 1471
+      "total": 1472
     }
   ],
   "states": {
-    "integrated": 1463,
+    "integrated": 1464,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-20",
-    "state": "in_progress",
-    "since": "2026-07-01T10:26:14.002Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T10:43:22.094Z",
+      "task": "multichain-20",
+      "note": "INTEGRATED @ 2848d2d9 (pushed ff69d4bc..2848d2d9 loop/main-track; all push identity guards green). Committed: agent-os/evm/ (covenant-erc800"
+    },
     {
       "at": "2026-07-01T10:05:32.505Z",
       "task": "multichain-12",
@@ -315,11 +315,6 @@
       "at": "2026-06-30T01:20:54.371Z",
       "task": "llm-estimate-tokens-u32-saturation-clamp-coverage",
       "note": "Integrated as 45f3e561 on loop/main-track."
-    },
-    {
-      "at": "2026-06-30T00:21:19.210Z",
-      "task": "mcp-validate-integer-fractional-float-rejection-coverage",
-      "note": "Integrated as 045f9ef2 on loop/main-track."
     }
   ]
 }

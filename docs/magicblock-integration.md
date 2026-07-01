@@ -1,10 +1,9 @@
 # MagicBlock integration
 
-Covenant is a verifiable trust layer over MagicBlock's execution. MagicBlock runs
-agent work fast and private in ephemeral rollups (ERs); Covenant makes that work
-accountable. An agent bonds a slashable stake, every metered action folds into an
-on-chain provenance root, and any client can check that the rollup it runs on is a
-genuine, attested TDX enclave. Covenant sits alongside the execution layer and
+Covenant adds accountability to agent work that runs in MagicBlock ephemeral
+rollups (ERs). An agent bonds a slashable stake on L1, every metered action folds
+into an on-chain provenance root, and a client can check that the ER it runs on is
+a TDX enclave with a valid attestation. Covenant runs alongside execution and
 never touches custody or payments.
 
 Live on mainnet, OtterSec-verified:
@@ -22,7 +21,7 @@ Verify the deployed bytecode against the source at
 ## Architecture
 
 ```
-MagicBlock ER  ── executes agent work (fast, gasless, optionally private/TEE)
+MagicBlock ER  ── runs agent work (gasless, optionally private/TEE)
    │
    ├─ meter → consume_credits folds a receipt hash-chain into the credit
    │          account's provenance_root, gaslessly, committed to L1 on undelegate
@@ -32,16 +31,15 @@ MagicBlock ER  ── executes agent work (fast, gasless, optionally private/TEE
               covenant-tee verifies the Private ER's TDX enclave via DCAP
 ```
 
-The split is deliberate. Hot, non-custodial per-action state (counters, provenance
-roots) lives in the ER. Custody, staking, slashing, and treasury stay on L1 and
-never move.
+Per-action state (counters, provenance roots) lives in the ER, where it is hot and
+non-custodial. Custody, staking, slashing, and treasury stay on L1.
 
 ## 1. Discover a Covenant-verified ER
 
 The Magic Router returns a set of ERs, each identified by a validator pubkey.
 Covenant publishes a verified-ER attestation through the Solana Attestation
 Service, keyed to that validator identity. An agent picking where to run resolves
-the trust signal in one account read. No router change, no indexer.
+it in one account read. No router change, no indexer.
 
 ```js
 import { deriveCredentialPda, deriveSchemaPda, deriveAttestationPda,
@@ -60,8 +58,8 @@ const verified = acct.exists &&
 ```
 
 The attestation carries the enclave's DCAP result (TCB status, `mr_td`) and is
-signed by the Covenant issuer. A relying party trusts it by checking the signer is
-an authorized signer of the credential. Validator identities do not rotate, so the
+signed by the Covenant issuer. A reader trusts it by checking the signer is an
+authorized signer of the credential. Validator identities do not rotate, so the
 key is stable.
 
 ## 2. Meter work into an on-chain provenance root
@@ -74,10 +72,10 @@ delegated to the ER, and commits to L1 on undelegate:
 provenance_root = sha256(provenance_root || receipt_hash)   // genesis = 32 zero bytes
 ```
 
-Because the fold is deterministic, anyone can recompute it from the receipts and
-check it against the on-chain root. If a single action is altered, added, or
-dropped, the roots diverge. The receipt is yours to define: hash the actual work
-product (the intent and the agent's output) and the on-chain record *is* the work.
+The fold is deterministic, so anyone can recompute it from the receipts and compare
+against the on-chain root. Alter, add, or drop one action and the roots diverge.
+The receipt is yours to define: hash the work product (the intent and the agent's
+output) and the on-chain root becomes a record of what the agent did.
 
 ## 3. Bond an agent, slash against its record
 
@@ -87,27 +85,25 @@ stake(amount, lock_until)                                   // slashable CVNT po
 slash_for_actions(amount)                                   // reason = on-chain provenance_root
 ```
 
-`slash_for_actions` reads the reason straight from the agent's on-chain
-`provenance_root`, via the seed-bound credit account (`[b"credits", operator]`).
-There is no caller-supplied reason to forge; the penalty is anchored to the
-verifiable record of what the agent actually did.
+`slash_for_actions` reads the reason from the agent's on-chain `provenance_root`,
+via the seed-bound credit account (`[b"credits", operator]`). There is no
+caller-supplied reason to forge; the penalty is tied to the on-chain record.
 
 ## 4. Verify the enclave
 
 The `covenant-tee` crate (`agent-os/crates/covenant-tee`) pulls a TDX quote from a
 MagicBlock Private ER, verifies it with Intel DCAP against the Phala PCCS, and
 binds an agent plus its provenance root into the 64-byte quote challenge. The
-result is a signed Covenant attestation proving a specific agent's record came
-from a genuine, attested enclave. This is the same verification behind the
-verified-ER lookup in section 1.
+result is a signed Covenant attestation that ties the agent's record to the enclave
+it ran in. Section 1 uses the same verification.
 
 ## Reference deployment
 
 Proven end to end with our own agent. The Covenant demo agent (Haiku 4.5) answered
-five real prompts; each answer was metered on the verified ER (`mainnet-tee`), and
-the credit account's on-chain `provenance_root` equals the hash-chain of those
-exact answers. The agent is bonded with a 5000 CVNT stake, of which 1000 was
-slashed against that record.
+five prompts; each answer was metered on the verified ER (`mainnet-tee`), and the
+credit account's on-chain `provenance_root` equals the hash-chain of those exact
+answers. The agent holds a 5000 CVNT stake, of which 1000 was slashed against that
+record.
 
 | What | Value |
 |---|---|
@@ -120,6 +116,5 @@ The drivers are in `agent-os/programs/settlement-ephemeral/spike/`:
 `reference-run.mjs` (agent work + provenance), `bond-slash.mjs` (bond + slash),
 `er-registry.mjs` and `pick-verified-er.mjs` (SAS attest, resolve, discover).
 
-Building an agent on MagicBlock and want verifiable bonds, slashing, or the
-verified-ER lookup wired in? Open an issue or reach out at
+For integration help, open an issue or reach out at
 [opencovenant.org/contact](https://opencovenant.org/contact).

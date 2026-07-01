@@ -1,17 +1,16 @@
 {
-  "updatedAt": "2026-07-01T04:19:30.788Z",
+  "updatedAt": "2026-07-01T14:35:51.621Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
-    "scalar": 6.713,
-    "fuelCutPct": 85.1
+    "scalar": 6.555,
+    "fuelCutPct": 84.7
   },
   "tally": {
-    "Claude": 19,
-    "Grok": 1,
-    "Codex": 5,
-    "GLM": 2,
-    "rejectedRounds": 13
+    "Claude": 8,
+    "Grok": 0,
+    "Codex": 4,
+    "rejectedRounds": 8
   },
   "curve": [
     {
@@ -117,81 +116,6 @@
       "round": "k24",
       "scalar": 6.555,
       "proposer": "Codex"
-    },
-    {
-      "round": "k28",
-      "scalar": 6.559,
-      "proposer": "Codex"
-    },
-    {
-      "round": "k30",
-      "scalar": 6.563,
-      "proposer": "Grok"
-    },
-    {
-      "round": "k33",
-      "scalar": 6.583,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k34",
-      "scalar": 6.591,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k36",
-      "scalar": 6.612,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k37",
-      "scalar": 6.618,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k39",
-      "scalar": 6.621,
-      "proposer": "GLM"
-    },
-    {
-      "round": "k41",
-      "scalar": 6.633,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k42",
-      "scalar": 6.647,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k43",
-      "scalar": 6.656,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k44",
-      "scalar": 6.659,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k47",
-      "scalar": 6.666,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k48",
-      "scalar": 6.699,
-      "proposer": "GLM"
-    },
-    {
-      "round": "k49",
-      "scalar": 6.707,
-      "proposer": "Claude"
-    },
-    {
-      "round": "k50",
-      "scalar": 6.713,
-      "proposer": "Claude"
     }
   ],
   "solo": {
@@ -204,464 +128,42 @@
   },
   "rounds": [
     {
-      "round": "k52",
-      "display": "Round 43",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.713,
-          "incumbent": 6.713,
-          "gain": 0,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain 0 < margin 0.002"
-        }
-      ]
-    },
-    {
-      "round": "k51",
-      "display": "Round 42",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "GLM",
-          "model": "glm-5.2",
-          "scalar": 6.712,
-          "incumbent": 6.713,
-          "gain": -0.001,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain -0.001 < margin 0.002"
-        }
-      ]
-    },
-    {
-      "round": "k50",
-      "display": "Round 41",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.713,
-          "incumbent": 6.707,
-          "gain": 0.006,
-          "promoted": true,
-          "commit": "a6391d2877ef984c922e02e38c410ebc0de4a440",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k49",
-      "display": "Round 40",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.707,
-          "incumbent": 6.699,
-          "gain": 0.008,
-          "promoted": true,
-          "commit": "d83bf3ed195e4d6b21c1c3ddf7f46a87f625c210",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k48",
-      "display": "Round 39",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "GLM",
-          "model": "glm-5.2",
-          "scalar": 6.699,
-          "incumbent": 6.666,
-          "gain": 0.033,
-          "promoted": true,
-          "commit": "5ae85e7479d5f237c877c5adff249f1a264065e0",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k47",
-      "display": "Round 38",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "GLM",
-          "model": "glm-5.2",
-          "scalar": 6.662,
-          "incumbent": 6.659,
-          "gain": 0.003,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "lost tournament to fable (6.662 vs 6.666)"
-        },
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.666,
-          "incumbent": 6.659,
-          "gain": 0.007,
-          "promoted": true,
-          "commit": "c209b520cac7d17b02a29c0b3aa1fd747e198c3f",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k46",
-      "display": "Round 37",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.646,
-          "incumbent": 6.659,
-          "gain": -0.013,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain -0.013 < margin 0.002"
-        }
-      ]
-    },
-    {
-      "round": "k44",
-      "display": "Round 35",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.659,
-          "incumbent": 6.656,
-          "gain": 0.003,
-          "promoted": true,
-          "commit": "e51b73b16057d27b5c6e9fa929f324a7006154c7",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k43",
-      "display": "Round 34",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.656,
-          "incumbent": 6.647,
-          "gain": 0.009,
-          "promoted": true,
-          "commit": "be8351769be3fe9a42b618b2756ef3e5e2db5bd5",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k42",
-      "display": "Round 33",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.647,
-          "incumbent": 6.633,
-          "gain": 0.014,
-          "promoted": true,
-          "commit": "6c3baf705ebe3d4b3d772c2e3d5df64130a47479",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k41",
-      "display": "Round 32",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.633,
-          "incumbent": 6.621,
-          "gain": 0.012,
-          "promoted": true,
-          "commit": "7123bd847220e917949e9b3b1f6c58fa4631d832",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k40",
-      "display": "Round 31",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.621,
-          "incumbent": 6.621,
-          "gain": 0,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain 0 < margin 0.002"
-        }
-      ]
-    },
-    {
-      "round": "k39",
-      "display": "Round 30",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "GLM",
-          "model": "glm-5.2",
-          "scalar": 6.621,
-          "incumbent": 6.618,
-          "gain": 0.003,
-          "promoted": true,
-          "commit": "909c8e09be8171b4da1cde1cf268e228b5ac72cf",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k38",
-      "display": "Round 29",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.618,
-          "incumbent": 6.618,
-          "gain": 0,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain 0 < margin 0.002"
-        }
-      ]
-    },
-    {
-      "round": "k37",
-      "display": "Round 28",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.618,
-          "incumbent": 6.612,
-          "gain": 0.006,
-          "promoted": true,
-          "commit": "12327a635177e10b336df94986ef14e8af893837",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k36",
-      "display": "Round 27",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "GLM",
-          "model": "glm-5.2",
-          "scalar": 6.594,
-          "incumbent": 6.591,
-          "gain": 0.003,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "lost tournament to fable (6.594 vs 6.612)"
-        },
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.612,
-          "incumbent": 6.591,
-          "gain": 0.021,
-          "promoted": true,
-          "commit": "fc5e697ad8c6d0b9f7cd54918b2059e3e3212204",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k34",
-      "display": "Round 25",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.591,
-          "incumbent": 6.583,
-          "gain": 0.008,
-          "promoted": true,
-          "commit": "ee2d359a9b9371d2b52695b0d90f24f4dac5f96f",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k33",
-      "display": "Round 24",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Grok",
-          "model": "grok-4.3",
-          "scalar": 6.563,
-          "incumbent": 6.563,
-          "gain": 0,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "lost tournament to fable (6.563 vs 6.583)"
-        },
-        {
-          "proposer": "Claude",
-          "model": "claude-opus-4-8",
-          "scalar": 6.583,
-          "incumbent": 6.563,
-          "gain": 0.02,
-          "promoted": true,
-          "commit": "38d861fb24f79803f6949176ffee09d7fe7d4aea",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
-      "round": "k32",
-      "display": "Round 23",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Grok",
-          "model": "grok-4.3",
-          "scalar": 6.453,
-          "incumbent": 6.563,
-          "gain": -0.11,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain -0.11 < margin 0.002"
-        },
-        {
-          "proposer": "Codex",
-          "model": "gpt-5.5",
-          "scalar": 6.563,
-          "incumbent": 6.563,
-          "gain": 0,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain 0 < margin 0.002"
-        }
-      ]
-    },
-    {
-      "round": "k31",
-      "display": "Round 22",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Grok",
-          "model": "grok-4.3",
-          "scalar": 6.563,
-          "incumbent": 6.563,
-          "gain": 0,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain 0 < margin 0.002"
-        },
-        {
-          "proposer": "Codex",
-          "model": "gpt-5.5",
-          "scalar": 6.564,
-          "incumbent": 6.563,
-          "gain": 0.001,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "gain 0.001 < margin 0.002"
-        }
-      ]
-    },
-    {
-      "round": "k30",
-      "display": "Round 21",
-      "era": "tournament",
-      "entries": [
-        {
-          "proposer": "Codex",
-          "model": "gpt-5.5",
-          "scalar": 6.562,
-          "incumbent": 6.559,
-          "gain": 0.003,
-          "promoted": false,
-          "commit": null,
-          "handle": null,
-          "reason": "lost tournament to grok (6.562 vs 6.563)"
-        },
-        {
-          "proposer": "Grok",
-          "model": "grok-4.3",
-          "scalar": 6.563,
-          "incumbent": 6.559,
-          "gain": 0.004,
-          "promoted": true,
-          "commit": "bc304f73d3763c6e03c520c39bb38e6f65b8b711",
-          "handle": null,
-          "reason": null
-        }
-      ]
-    },
-    {
       "round": "k28",
       "display": "Round 19",
       "era": "tournament",
       "entries": [
         {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
           "proposer": "Codex",
           "model": "gpt-5.5",
-          "scalar": 6.559,
+          "scalar": 0,
           "incumbent": 6.555,
-          "gain": 0.004,
-          "promoted": true,
-          "commit": "4613f264",
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
           "handle": null,
-          "reason": null
+          "reason": "proposal failed: openai error: {\"error\":{\"message\":\"You exceeded your current quota, please check your plan and billing details. For more in"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1, model claude-fable-5): API Error: 400 [1211][Unknown Model, please check the model code."
         }
       ]
     },
@@ -671,6 +173,17 @@
       "era": "tournament",
       "entries": [
         {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
           "proposer": "Codex",
           "model": "gpt-5.5",
           "scalar": 6.559,
@@ -680,6 +193,17 @@
           "commit": null,
           "handle": null,
           "reason": "gain 0.004 < margin 0.005"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1, model claude-fable-5): Claude Fable 5 is currently unavailable. Learn more: https://www."
         }
       ]
     },
@@ -689,23 +213,16 @@
       "era": "tournament",
       "entries": [
         {
-          "proposer": "Codex",
-          "model": "gpt-5.5",
-          "scalar": 6.559,
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
           "incumbent": 6.555,
-          "gain": 0.004,
+          "gain": -6.555,
           "promoted": false,
           "commit": null,
           "handle": null,
-          "reason": "gain 0.004 < margin 0.005"
-        }
-      ]
-    },
-    {
-      "round": "k25",
-      "display": "Round 16",
-      "era": "tournament",
-      "entries": [
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
         {
           "proposer": "Codex",
           "model": "gpt-5.5",
@@ -716,6 +233,57 @@
           "commit": null,
           "handle": null,
           "reason": "gain 0.004 < margin 0.005"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): There's an issue with the selected model (claude-fable-5). It may not exist or you may "
+        }
+      ]
+    },
+    {
+      "round": "k25",
+      "display": "Round 16",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
+          "proposer": "Codex",
+          "model": "gpt-5.5",
+          "scalar": 6.559,
+          "incumbent": 6.555,
+          "gain": 0.004,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0.004 < margin 0.005"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.555,
+          "gain": -6.555,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): There's an issue with the selected model (claude-fable-5). It may not exist or you may "
         }
       ]
     },
@@ -724,6 +292,28 @@
       "display": "Round 15",
       "era": "tournament",
       "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.547,
+          "gain": -6.547,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.547,
+          "gain": -6.547,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): There's an issue with the selected model (claude-fable-5). It may not exist or you may "
+        },
         {
           "proposer": "Codex",
           "model": "gpt-5.5",
@@ -743,6 +333,17 @@
       "era": "tournament",
       "entries": [
         {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.547,
+          "gain": -6.547,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
           "proposer": "Codex",
           "model": "gpt-5.5",
           "scalar": 6.547,
@@ -752,6 +353,17 @@
           "commit": null,
           "handle": null,
           "reason": "gain 0 < margin 0.005"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.547,
+          "gain": -6.547,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): There's an issue with the selected model (claude-fable-5). It may not exist or you may "
         }
       ]
     },
@@ -760,6 +372,28 @@
       "display": "Round 13",
       "era": "tournament",
       "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.505,
+          "gain": -6.505,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.505,
+          "gain": -6.505,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): There's an issue with the selected model (claude-fable-5). It may not exist or you may "
+        },
         {
           "proposer": "Codex",
           "model": "gpt-5.5",
@@ -779,6 +413,17 @@
       "era": "tournament",
       "entries": [
         {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.505,
+          "gain": -6.505,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
           "proposer": "Codex",
           "model": "gpt-5.5",
           "scalar": 6.506,
@@ -788,6 +433,17 @@
           "commit": null,
           "handle": null,
           "reason": "gain 0.001 < margin 0.005"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.505,
+          "gain": -6.505,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): There's an issue with the selected model (claude-fable-5). It may not exist or you may "
         }
       ]
     },
@@ -796,6 +452,17 @@
       "display": "Round 11",
       "era": "tournament",
       "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.505,
+          "gain": -6.505,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
         {
           "proposer": "Codex",
           "model": "gpt-5.5",
@@ -806,6 +473,17 @@
           "commit": null,
           "handle": null,
           "reason": "gain -0.003 < margin 0.005"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.505,
+          "gain": -6.505,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): There's an issue with the selected model (claude-fable-5). It may not exist or you may "
         }
       ]
     },
@@ -814,6 +492,28 @@
       "display": "Round 10",
       "era": "tournament",
       "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.499,
+          "gain": -6.499,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.499,
+          "gain": -6.499,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): You've hit your session limit · resets 1:30am (Europe/Copenhagen)\n"
+        },
         {
           "proposer": "Codex",
           "model": "gpt-5.5",
@@ -832,6 +532,17 @@
       "display": "Round 9",
       "era": "tournament",
       "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.492,
+          "gain": -6.492,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
         {
           "proposer": "Codex",
           "model": "gpt-5.5",
@@ -861,6 +572,28 @@
       "display": "Round 8",
       "era": "tournament",
       "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 6.485,
+          "gain": -6.485,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: xai error: {\"code\":\"permission-denied\",\"error\":\"Your team 329f453d-2bbb-4525-8232-9c62687b341d has either used all availabl"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 6.485,
+          "gain": -6.485,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: claude proposer failed (attempt 1): You've hit your session limit · resets 4:50am (Europe/Copenhagen)\n"
+        },
         {
           "proposer": "Codex",
           "model": "gpt-5.5",
@@ -1103,6 +836,35 @@
           "commit": "54017d7cf628c3d4e434f0e928cb04487fb47535",
           "handle": null,
           "reason": null
+        }
+      ]
+    },
+    {
+      "round": "k9",
+      "display": "Shakedown",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "Grok",
+          "model": "grok-4.3",
+          "scalar": 0,
+          "incumbent": 4.426,
+          "gain": -4.426,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: proposer output is not a complete EVOLVE block: ```rust\n// EVOLVE-BLOCK-START\nmod imp {\n    use super::{ChainEntry, ChainRe"
+        },
+        {
+          "proposer": "Claude",
+          "model": "claude-fable-5",
+          "scalar": 0,
+          "incumbent": 4.426,
+          "gain": -4.426,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "proposal failed: proposer output is not a complete EVOLVE block: /// sha256(line) as lowercase hex; same block walk as the scalar\n        //"
         }
       ]
     },

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T18:12:48.924Z",
+  "updatedAt": "2026-07-01T18:32:52.648Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12610,
-    "tasks": 1479,
-    "integrated": 1479
+    "events": 12621,
+    "tasks": 1480,
+    "integrated": 1480
   },
   "throughput": {
-    "last24h": 14,
-    "last7d": 191,
-    "velocity": 27.3
+    "last24h": 15,
+    "last7d": 192,
+    "velocity": 27.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 14
+      "count": 15
     }
   ],
   "cumulative": [
@@ -180,13 +180,14 @@
     },
     {
       "date": "07-01",
-      "total": 1479
+      "total": 1480
     }
   ],
   "states": {
-    "integrated": 1471,
-    "proposed": 2,
-    "blocked": 6
+    "integrated": 1472,
+    "proposed": 1,
+    "blocked": 6,
+    "planned": 1
   },
   "areas": [
     {
@@ -216,6 +217,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T18:25:30.638Z",
+      "task": "status-ipc-and-http-gateway-adr-0010-2026-05-17-v2-streaming",
+      "note": "Committed a4875fe0 + pushed 8d43c682..a4875fe0 on loop/main-track. Surgical 2-file slice (guard + 1 validate.sh line); CI-safe (reads only c"
+    },
     {
       "at": "2026-07-01T18:00:25.512Z",
       "task": "status-budget-ledger-hard-preempt-is-implemented-tested-and",
@@ -310,11 +316,6 @@
       "at": "2026-06-30T06:37:37.609Z",
       "task": "hyre-x402-network-matches-spelling-leniency-coverage",
       "note": "Committed 6ed81f36 (x402 test + README, 2 files by explicit path) and pushed d0a2a32a..6ed81f36 to origin/loop/main-track. All push identity"
-    },
-    {
-      "at": "2026-06-30T06:06:29.573Z",
-      "task": "hyre-manifest-shared-path-parameters-merge-coverage",
-      "note": "Committed d0a2a32a (test + README, 2 files by explicit path) and pushed f9cb0f96..d0a2a32a to origin/loop/main-track. All push identity guar"
     }
   ]
 }

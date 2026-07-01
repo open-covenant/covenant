@@ -23,6 +23,7 @@
 //!
 //! [vcdm]: https://www.w3.org/TR/vc-data-model-2.0/
 
+mod bond;
 mod eddsa;
 mod eip712;
 mod multibase;
@@ -31,6 +32,8 @@ use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 
 use covenant_identity::Secp256k1IssuerKey;
+
+pub use bond::{BaseNetwork, BondError, BondReceipt, SignedBondReceipt, BPS_DENOMINATOR};
 
 /// Named error for every way an attestation can fail to issue or verify.
 /// Verification variants say which check failed so a reviewer can tell a

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-01T05:08:38.542Z",
+  "updatedAt": "2026-07-01T05:28:58.105Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12511,
+    "events": 12516,
     "tasks": 1465,
-    "integrated": 1467
+    "integrated": 1468
   },
   "throughput": {
     "last24h": 9,
-    "last7d": 179,
-    "velocity": 25.6
+    "last7d": 180,
+    "velocity": 25.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-01",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-01",
-      "total": 1467
+      "total": 1468
     }
   ],
   "states": {
-    "integrated": 1459,
+    "integrated": 1460,
     "proposed": 1,
-    "blocked": 4,
-    "in_progress": 1
+    "blocked": 4
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-02",
-    "state": "in_progress",
-    "since": "2026-07-01T04:08:44.540Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-01T05:23:37.635Z",
+      "task": "multichain-02",
+      "note": "Integrated as 81c9c384 (10 files, +1318). New covenant-attestation crate: dual-signed W3C VCDM 2.0 credential over a covenant-audit root (ed"
+    },
     {
       "at": "2026-07-01T03:44:23.857Z",
       "task": "multichain-01",
@@ -315,11 +315,6 @@
       "at": "2026-06-29T21:44:10.662Z",
       "task": "autonomy-status-gaps-source-flag-and-classification-coverage",
       "note": "Integrated as f7e4ad4e (chore(autonomy): wire status-gaps reporter guard into the validation gate). Tracked: .gitignore + validate.sh. Logic"
-    },
-    {
-      "at": "2026-06-29T21:05:50.943Z",
-      "task": "cross-host-freshness-inclusive-boundary-coverage",
-      "note": "committed 53624058 on loop/main-track: two at-boundary admit tests (age==CROSS_HOST_MAX_AGE_MS, lead==CROSS_HOST_MAX_SKEW_MS) both mutation-"
     }
   ]
 }

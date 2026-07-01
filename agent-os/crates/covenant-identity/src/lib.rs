@@ -15,6 +15,13 @@
 mod binding;
 pub use binding::{BindingError, IdentityBinding, Secp256k1IssuerKey};
 
+mod registration;
+pub use registration::{
+    AgentRegistration, Capabilities, CardSignature, Registration, RegistrationError,
+    RegistrationParams, Service, Skill, A2A_PROTOCOL_VERSION, A2A_SPEC_COMMIT,
+    DEFAULT_SUPPORTED_TRUST, ERC8004_REGISTRATION_TYPE, ERC8004_SPEC_COMMIT, SOLANA_MAINNET_CAIP2,
+};
+
 use covenant_types::AgentId;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
@@ -90,6 +97,24 @@ impl LocalIdentity {
         audit_root: [u8; 32],
     ) -> IdentityBinding {
         IdentityBinding::create(&self.signing_key, issuer, audit_root)
+    }
+
+    /// Build the unsigned dual-shaped A2A AgentCard / ERC-8004 registration
+    /// document for this identity, with the `did:pkh` subject bound to this
+    /// key's Solana address. See [`registration`].
+    pub fn registration_document(&self, params: &RegistrationParams) -> AgentRegistration {
+        AgentRegistration::build(&self.agent_id().pubkey_base58(), params)
+    }
+
+    /// Build the document and attach a detached JWS (EdDSA over the RFC
+    /// 8785 JCS body) signed by this identity's ed25519 key.
+    pub fn signed_registration_document(
+        &self,
+        params: &RegistrationParams,
+    ) -> Result<AgentRegistration, RegistrationError> {
+        let mut doc = self.registration_document(params);
+        doc.sign(&self.signing_key)?;
+        Ok(doc)
     }
 
     /// Load an existing identity from disk; create a new one and persist it
@@ -229,6 +254,30 @@ mod tests {
         let id = LocalIdentity::generate("user@local");
         let sig = id.sign(b"original");
         assert!(verify_with_pubkey(id.pubkey_bytes(), b"tampered", &sig).is_err());
+    }
+
+    #[test]
+    fn signed_registration_document_binds_real_pubkey_and_verifies() {
+        let id = LocalIdentity::generate("agent@local");
+        let params = RegistrationParams::solana_mainnet(
+            "covenant-agent",
+            "governed, accountable execution",
+            "https://covenant.example/agent.png",
+            "https://covenant.example/a2a",
+            "0.1.0",
+            "CovRegistry1111111111111111111111111111111",
+        );
+        let doc = id.signed_registration_document(&params).unwrap();
+        // Verifies under this identity's own ed25519 key via the crate helper.
+        let vk = verifying_key_from_bytes(id.pubkey_bytes()).unwrap();
+        doc.verify(&vk).unwrap();
+        // The did:pkh subject is this identity's canonical Solana address —
+        // cross-checks registration.rs's derivation against the real bs58.
+        let did = doc.services.iter().find(|s| s.name == "DID").unwrap();
+        assert!(did
+            .endpoint
+            .starts_with("did:pkh:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:"));
+        assert!(did.endpoint.ends_with(&id.agent_id().pubkey_base58()));
     }
 
     #[test]

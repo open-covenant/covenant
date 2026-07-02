@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-02T21:18:50.270Z",
+  "updatedAt": "2026-07-02T21:37:40.221Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12694,
+    "events": 12696,
     "tasks": 1488,
     "integrated": 1488
   },
@@ -187,7 +187,7 @@
     "integrated": 1480,
     "proposed": 1,
     "blocked": 6,
-    "in_progress": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "runtime-truncate-stderr-multibyte-boundary-coverage",
-    "state": "in_progress",
-    "since": "2026-07-02T18:56:36.324Z"
+    "state": "cross_review",
+    "since": "2026-07-02T21:35:18.195Z"
   },
   "recent": [
     {

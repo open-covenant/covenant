@@ -140,6 +140,7 @@ run node ./scripts/validate-covenant-mcp-tool-spec-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-tool-spec-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-content-enum-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-mcp-content-variant-list-line-refs.mjs
+run node ./scripts/validate-mcp-vendor-fixture-integrity.mjs
 run node ./scripts/validate-covenant-audit-struct-line-refs.mjs
 run node ./scripts/validate-covenant-audit-kind-annotation-line-refs.mjs
 run node ./scripts/validate-covenant-audit-event-field-list-line-refs.mjs

@@ -24,7 +24,7 @@ command and its MCP tools (`guard_status`, `guard_receipts`, `guard_verify`) let
 the agent read those receipts; they do not run agents themselves.
 
 - Claude Code manifest: `.claude-plugin/plugin.json`
-- Codex manifest: `.codex-plugin/plugin.json` (experimental — the Codex host
+- Codex manifest: `.codex-plugin/plugin.json` (experimental, the Codex host
   wiring is built but not yet live-verified)
 
 Apache-2.0 · https://opencovenant.org/guard

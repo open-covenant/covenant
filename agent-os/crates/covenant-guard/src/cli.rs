@@ -5,13 +5,13 @@ use crate::proxy::Host;
 use std::path::PathBuf;
 
 pub const USAGE: &str = "\
-covguard — run a coding agent unattended: capped, sandboxed, and receipted.
+covguard: run a coding agent unattended: capped, sandboxed, and receipted.
 
 USAGE:
     covguard run [OPTIONS] -- <agent> [agent args...]
     covguard verify <receipt.json>
     covguard receipts [list | show <id|last> | open <id|last>]
-    covguard card <id|last> [--png <out.png>]
+    covguard card [<id>|last] [--png <out.png>]
     covguard mcp                       Run as an MCP server (stdio) exposing guard tools
     covguard doctor
     covguard version
@@ -24,8 +24,11 @@ RUN OPTIONS:
                        credential out of the agent's environment. Omit to forward
                        the agent's own login (works with a Claude subscription).
     --host <claude|codex>  Which provider to meter (default: inferred from the
-                       agent). codex is experimental — the OpenAI wiring is built
+                       agent). codex is experimental: the OpenAI wiring is built
                        but not yet live-verified.
+    --allow-localhost  Let the agent reach any loopback port (e.g. a local dev
+                       server it starts). Default: egress is pinned to the proxy
+                       so the meter can't be tunneled past.
     --json             Print a machine-readable summary line on exit
 
 EXAMPLE:
@@ -40,6 +43,10 @@ pub struct RunConfig {
     pub inject_auth: Option<String>,
     /// Explicit provider; `None` means infer from the agent's name.
     pub host: Option<Host>,
+    /// Widen sandbox egress to all loopback ports (for agents that talk to a
+    /// local dev server they start). Off by default: egress is pinned to the
+    /// proxy port so the meter can't be tunneled past.
+    pub allow_localhost: bool,
     pub json: bool,
     pub agent_argv: Vec<String>,
 }
@@ -47,7 +54,7 @@ pub struct RunConfig {
 const DEFAULT_BUDGET: f64 = 10.0;
 const DEFAULT_WALL_SECS: u64 = 12 * 60 * 60;
 
-/// Parse `<DURATION>` — a bare number of seconds, or a number suffixed `s`,
+/// Parse `<DURATION>`, a bare number of seconds, or a number suffixed `s`,
 /// `m`, or `h`.
 pub fn parse_duration(s: &str) -> anyhow::Result<u64> {
     let s = s.trim();
@@ -60,8 +67,12 @@ pub fn parse_duration(s: &str) -> anyhow::Result<u64> {
     } else {
         (s, 1)
     };
-    let n: u64 = num.trim().parse().map_err(|_| anyhow::anyhow!("bad duration: {s}"))?;
-    Ok(n * mult)
+    let n: u64 = num
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad duration: {s}"))?;
+    n.checked_mul(mult)
+        .ok_or_else(|| anyhow::anyhow!("duration too large: {s}"))
 }
 
 /// Parse the argument list following `run`.
@@ -71,6 +82,7 @@ pub fn parse_run(args: &[String]) -> anyhow::Result<RunConfig> {
     let mut workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut inject_auth = None;
     let mut host = None;
+    let mut allow_localhost = false;
     let mut json = false;
 
     let mut i = 0;
@@ -82,27 +94,48 @@ pub fn parse_run(args: &[String]) -> anyhow::Result<RunConfig> {
                 break;
             }
             "--budget" => {
-                let v = args.get(i + 1).ok_or_else(|| anyhow::anyhow!("--budget needs a value"))?;
-                budget_usd = v.parse().map_err(|_| anyhow::anyhow!("bad --budget: {v}"))?;
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--budget needs a value"))?;
+                budget_usd = v
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("bad --budget: {v}"))?;
                 i += 2;
             }
             "--wall" => {
-                let v = args.get(i + 1).ok_or_else(|| anyhow::anyhow!("--wall needs a value"))?;
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--wall needs a value"))?;
                 wall_secs = parse_duration(v)?;
                 i += 2;
             }
             "--workspace" => {
-                let v = args.get(i + 1).ok_or_else(|| anyhow::anyhow!("--workspace needs a value"))?;
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--workspace needs a value"))?;
                 workspace = PathBuf::from(v);
                 i += 2;
             }
             "--auth-token" => {
-                let v = args.get(i + 1).ok_or_else(|| anyhow::anyhow!("--auth-token needs a value"))?;
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--auth-token needs a value"))?;
+                if v.is_empty() || v.chars().any(|c| c.is_control()) {
+                    anyhow::bail!(
+                        "--auth-token must be a non-empty token with no control characters"
+                    );
+                }
                 inject_auth = Some(format!("Bearer {v}"));
                 i += 2;
             }
+            "--allow-localhost" => {
+                allow_localhost = true;
+                i += 1;
+            }
             "--host" => {
-                let v = args.get(i + 1).ok_or_else(|| anyhow::anyhow!("--host needs a value"))?;
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--host needs a value"))?;
                 host = Some(match v.as_str() {
                     "claude" | "anthropic" => Host::Anthropic,
                     "codex" | "openai" => Host::OpenAI,
@@ -121,12 +154,24 @@ pub fn parse_run(args: &[String]) -> anyhow::Result<RunConfig> {
     if agent_argv.is_empty() {
         anyhow::bail!("no agent command given. Put it after `--`.\n\n{USAGE}");
     }
-    if budget_usd <= 0.0 {
-        anyhow::bail!("--budget must be positive");
+    if !budget_usd.is_finite() || budget_usd <= 0.0 {
+        anyhow::bail!("--budget must be a positive, finite dollar amount");
+    }
+    if !workspace.exists() {
+        anyhow::bail!("--workspace does not exist: {}", workspace.display());
     }
     let workspace = workspace.canonicalize().unwrap_or(workspace);
 
-    Ok(RunConfig { budget_usd, wall_secs, workspace, inject_auth, host, json, agent_argv })
+    Ok(RunConfig {
+        budget_usd,
+        wall_secs,
+        workspace,
+        inject_auth,
+        host,
+        allow_localhost,
+        json,
+        agent_argv,
+    })
 }
 
 #[cfg(test)]
@@ -148,7 +193,10 @@ mod tests {
 
     #[test]
     fn parses_a_full_run() {
-        let cfg = parse_run(&v(&["--budget", "5.5", "--wall", "30m", "--", "claude", "-p", "hi"])).unwrap();
+        let cfg = parse_run(&v(&[
+            "--budget", "5.5", "--wall", "30m", "--", "claude", "-p", "hi",
+        ]))
+        .unwrap();
         assert_eq!(cfg.budget_usd, 5.5);
         assert_eq!(cfg.wall_secs, 1800);
         assert_eq!(cfg.agent_argv, v(&["claude", "-p", "hi"]));
@@ -163,6 +211,19 @@ mod tests {
     #[test]
     fn rejects_nonpositive_budget() {
         assert!(parse_run(&v(&["--budget", "0", "--", "claude"])).is_err());
+    }
+
+    #[test]
+    fn rejects_non_finite_budget() {
+        // NaN/inf pass a naive `<= 0.0` check but disable the cap; must reject.
+        assert!(parse_run(&v(&["--budget", "nan", "--", "claude"])).is_err());
+        assert!(parse_run(&v(&["--budget", "inf", "--", "claude"])).is_err());
+        assert!(parse_run(&v(&["--budget", "1e999", "--", "claude"])).is_err());
+    }
+
+    #[test]
+    fn duration_overflow_errors() {
+        assert!(parse_duration("60000000000000000000h").is_err());
     }
 
     #[test]

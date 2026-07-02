@@ -24,14 +24,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            asset: covguard-linux-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
             asset: covguard-darwin-arm64
-          # Intel macOS is source-built for now (runner pool saturated), same as
-          # the covenant release matrix.
+          # macOS/arm64 only for now: the OS sandbox is macOS-specific, so a
+          # Linux binary would ship with a core ring missing. Linux arrives with
+          # the bubblewrap backend; Intel macOS builds from source.
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -139,6 +137,6 @@ jobs:
           set -euo pipefail
           gh release create "${TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "covguard ${TAG}" \
+            --title "${TAG}" \
             --notes "Signed release of the covguard binary. Verify with cosign using the .sig/.pem alongside each asset." \
             *.tar.gz *.sig *.pem checksums.txt

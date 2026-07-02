@@ -1,4 +1,4 @@
-//! The receipt — a signed, verifiable record of one guarded run.
+//! The receipt: a signed, verifiable record of one guarded run.
 //!
 //! The signed core carries everything worth trusting: what ran, what it cost
 //! against the cap, what it changed, and the root of the event chain. The
@@ -59,9 +59,11 @@ pub struct ReceiptCore {
     pub tokens: Tokens,
     pub per_model: Vec<ModelLine>,
     pub files_changed: Vec<FileChange>,
+    /// Commands the agent reported running, via hooks. Agent-reported, not
+    /// guard-observed: the proxy-measured spend and the git-measured file
+    /// changes are the fields that don't depend on the agent's honesty.
     pub commands: Vec<String>,
     pub network: Vec<String>,
-    pub denials: Vec<String>,
     pub chain_root: String,
     pub event_count: u64,
     pub signer_pubkey_b58: String,
@@ -78,12 +80,25 @@ fn canonical(core: &ReceiptCore) -> Vec<u8> {
     serde_jcs::to_vec(core).expect("jcs canonicalization of the receipt core")
 }
 
+/// The base58 public key covguard signs receipts with, loading or creating the
+/// local identity. None only if the key store can't be read or written. Use it
+/// to compare against a receipt's `signer` when checking your own runs.
+pub fn local_signer_pubkey() -> Option<String> {
+    let path = crate::home_dir().join("secrets").join("signing.key");
+    LocalIdentity::load_or_create(&path, "covenant-guard")
+        .ok()
+        .map(|id| bs58::encode(id.pubkey_bytes()).into_string())
+}
+
 /// Sign a core with the guard's identity, producing a complete receipt.
 pub fn sign(mut core: ReceiptCore, id: &LocalIdentity) -> Receipt {
     core.signer_pubkey_b58 = bs58::encode(id.pubkey_bytes()).into_string();
     let sig = id.sign(&canonical(&core));
     let signature_b58 = bs58::encode(sig.to_bytes()).into_string();
-    Receipt { core, signature_b58 }
+    Receipt {
+        core,
+        signature_b58,
+    }
 }
 
 /// Why a receipt failed to verify.
@@ -108,11 +123,15 @@ impl std::fmt::Display for VerifyError {
 }
 
 /// Check the signature over the receipt core. This is the minimum a reader
-/// needs — it confirms the contents were signed by the named key and haven't
+/// needs. It confirms the contents were signed by the named key and haven't
 /// changed since.
 pub fn verify_signature(receipt: &Receipt) -> Result<(), VerifyError> {
-    verify_b58(&receipt.core.signer_pubkey_b58, &canonical(&receipt.core), &receipt.signature_b58)
-        .map_err(|_| VerifyError::Signature)
+    verify_b58(
+        &receipt.core.signer_pubkey_b58,
+        &canonical(&receipt.core),
+        &receipt.signature_b58,
+    )
+    .map_err(|_| VerifyError::Signature)
 }
 
 /// Full check: signature, then that the receipt's `chain_root` really is the
@@ -131,10 +150,12 @@ pub fn verify_with_events(receipt: &Receipt, events: &[Entry]) -> Result<(), Ver
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
-/// Render the receipt as a self-contained HTML card — the shareable artifact.
+/// Render the receipt as a self-contained HTML card: the shareable artifact.
 /// Typography matches opencovenant.org: a system sans/mono pair, uppercase
 /// extralight headings on wide tracking, grayscale.
 pub fn to_html(receipt: &Receipt) -> String {
@@ -151,7 +172,7 @@ pub fn to_html(receipt: &Receipt) -> String {
         "completed" => "Ran clean, under cap.".to_string(),
         o if o.starts_with("killed:budget") => "Stopped at the cap.".to_string(),
         o if o.starts_with("killed:wall") => "Stopped at the time limit.".to_string(),
-        o => format!("Finished — {}.", esc(o)),
+        o => format!("Finished: {}.", esc(o)),
     };
 
     let files: String = if c.files_changed.is_empty() {
@@ -169,7 +190,7 @@ pub fn to_html(receipt: &Receipt) -> String {
     };
 
     let models: String = if c.per_model.is_empty() {
-        "<div class=\"muted\">—</div>".to_string()
+        "<div class=\"muted\">-</div>".to_string()
     } else {
         c.per_model
             .iter()
@@ -186,14 +207,6 @@ pub fn to_html(receipt: &Receipt) -> String {
         "none".to_string()
     } else {
         esc(&c.network.join(", "))
-    };
-    let denials = if c.denials.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "<div class=\"block\"><div class=\"label\">Policy denials</div><div class=\"muted\">{}</div></div>",
-            esc(&c.denials.join(", "))
-        )
     };
 
     format!(
@@ -251,12 +264,11 @@ h1 {{ margin:8px 0 4px; font-size:26px; font-weight:200; letter-spacing:-.01em; 
   </div>
   <div class="block"><div class="label">Files changed</div>{files}</div>
   {commands}
-  {denials}
   <div class="foot">
     <div class="label">Verified record</div>
     <div class="hash">chain {chain_root}</div>
     <div class="hash">signed by {pubkey}</div>
-    <div class="hash">covguard verify — re-checks this receipt from the events</div>
+    <div class="hash">covguard verify re-checks this receipt from the events</div>
   </div>
 </div></body></html>"#,
         run_id = esc(&c.run_id),
@@ -278,22 +290,21 @@ h1 {{ margin:8px 0 4px; font-size:26px; font-weight:200; letter-spacing:-.01em; 
             String::new()
         } else {
             format!(
-                "<div class=\"block\"><div class=\"label\">Commands ({})</div>{}</div>",
+                "<div class=\"block\"><div class=\"label\">Commands · agent-reported ({})</div>{}</div>",
                 c.commands.len(),
                 c.commands.iter().take(12).map(|x| format!("<div class=\"cmd\">{}</div>", esc(x))).collect::<String>()
             )
         },
-        denials = denials,
         chain_root = esc(&c.chain_root),
         pubkey = esc(&c.signer_pubkey_b58),
     )
 }
 
 fn short(s: &str, n: usize) -> String {
-    if s.len() <= n {
+    if s.chars().count() <= n {
         s.to_string()
     } else {
-        format!("{}…", &s[..n])
+        format!("{}…", s.chars().take(n).collect::<String>())
     }
 }
 
@@ -321,7 +332,11 @@ pub fn to_svg(receipt: &Receipt) -> String {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or(&c.workspace);
-    let net = if c.network.is_empty() { "none".to_string() } else { c.network.join(", ") };
+    let net = if c.network.is_empty() {
+        "none".to_string()
+    } else {
+        c.network.join(", ")
+    };
     let est = if c.spend_estimated { " (est.)" } else { "" };
     let sans = "font-family='Helvetica Neue, Helvetica, Arial, sans-serif'";
     let mono = "font-family='Menlo, Courier New, monospace'";
@@ -370,8 +385,8 @@ pub fn to_svg(receipt: &Receipt) -> String {
 }
 
 /// Rasterize an SVG card to a PNG at `path`, resolving text against system
-/// fonts. Kept separate from `to_svg` so a run never depends on the renderer —
-/// the SVG is always written; the PNG is on demand.
+/// fonts. Kept separate from `to_svg` so a run never depends on the renderer.
+/// The SVG is always written; the PNG is on demand.
 pub fn render_png(svg: &str, path: &std::path::Path) -> Result<(), String> {
     use resvg::{tiny_skia, usvg};
     let mut opt = usvg::Options::default();
@@ -404,12 +419,24 @@ mod tests {
             spent_usd: 0.15,
             spend_estimated: true,
             calls: 2,
-            tokens: Tokens { input: 100, output: 40, cache_read: 0, cache_creation: 0 },
-            per_model: vec![ModelLine { model: "claude-opus-4-8".into(), calls: 2, cost_usd: 0.15 }],
-            files_changed: vec![FileChange { path: "src/x.rs".into(), added: 3, removed: 1 }],
+            tokens: Tokens {
+                input: 100,
+                output: 40,
+                cache_read: 0,
+                cache_creation: 0,
+            },
+            per_model: vec![ModelLine {
+                model: "claude-opus-4-8".into(),
+                calls: 2,
+                cost_usd: 0.15,
+            }],
+            files_changed: vec![FileChange {
+                path: "src/x.rs".into(),
+                added: 3,
+                removed: 1,
+            }],
             commands: vec!["cargo test".into()],
             network: vec!["api.anthropic.com".into()],
-            denials: vec![],
             chain_root: crate::chain::GENESIS.into(),
             event_count: 3,
             signer_pubkey_b58: String::new(),

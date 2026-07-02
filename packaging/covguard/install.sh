@@ -1,5 +1,5 @@
 #!/bin/sh
-# covguard installer — one command to a guarded first run.
+# covguard installer, one command to a guarded first run.
 #
 #   curl -fsSL https://opencovenant.org/guard/install.sh | sh
 #
@@ -17,7 +17,7 @@ arch="$(uname -m)"
 case "$os" in
   Darwin) os=darwin ;;
   Linux)  os=linux ;;
-  *) die "unsupported OS '$os' — build from source: cargo install --path agent-os/crates/covenant-guard" ;;
+  *) die "unsupported OS '$os', build from source: cargo install --path agent-os/crates/covenant-guard" ;;
 esac
 case "$arch" in
   arm64|aarch64) arch=arm64 ;;
@@ -25,15 +25,17 @@ case "$arch" in
   *) die "unsupported arch '$arch'" ;;
 esac
 
-# Shipped targets: darwin-arm64 and linux-x86_64. Others build from source.
+# Shipped target: darwin-arm64. The OS sandbox is macOS-only for now, so other
+# platforms build from source (spend cap and receipt work; sandbox does not
+# until the Linux backend lands).
 asset="covguard-${os}-${arch}.tar.gz"
 case "${os}-${arch}" in
-  darwin-arm64|linux-x86_64) : ;;
-  *) die "no prebuilt binary for ${os}-${arch} yet — build from source: cargo install --path agent-os/crates/covenant-guard" ;;
+  darwin-arm64) : ;;
+  *) die "no prebuilt binary for ${os}-${arch} yet (macOS/arm64 only for now), build from source: cargo install --path agent-os/crates/covenant-guard" ;;
 esac
 
 say "finding the latest covguard release…"
-api="https://api.github.com/repos/${REPO}/releases"
+api="https://api.github.com/repos/${REPO}/releases?per_page=100"
 # Releases are returned newest-first; take the first asset matching this platform.
 url="$(curl -fsSL "$api" | grep -o "https://[^\"]*${asset}" | head -n1 || true)"
 [ -n "$url" ] || die "could not find a released ${asset} (set COVGUARD_REPO or build from source)"
@@ -42,22 +44,20 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 say "downloading $asset"
 curl -fsSL "$url" -o "$tmp/$asset"
-curl -fsSL "${url}.sha256" -o "$tmp/$asset.sha256" 2>/dev/null || true
 
-if [ -f "$tmp/$asset.sha256" ]; then
-  say "verifying checksum"
-  ( cd "$tmp" && \
-    if command -v shasum >/dev/null 2>&1; then
-      expected="$(awk '{print $1}' "$asset.sha256")"
-      actual="$(shasum -a 256 "$asset" | awk '{print $1}')"
-    else
-      expected="$(awk '{print $1}' "$asset.sha256")"
-      actual="$(sha256sum "$asset" | awk '{print $1}')"
-    fi
-    [ "$expected" = "$actual" ] || die "checksum mismatch — refusing to install" )
+# The release publishes a cosign-signed checksums.txt (lines: "<sha256>  <asset>").
+# Verification is not optional, fail closed if it's missing or doesn't match.
+say "verifying checksum"
+sums_url="${url%/*}/checksums.txt"
+curl -fsSL "$sums_url" -o "$tmp/checksums.txt" || die "no checksums.txt in the release, refusing to install"
+expected="$(awk -v a="$asset" '$2 == a {print $1}' "$tmp/checksums.txt")"
+[ -n "$expected" ] || die "no checksum for $asset in the release, refusing to install"
+if command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
 else
-  say "no checksum published; skipping verification"
+  actual="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
 fi
+[ "$expected" = "$actual" ] || die "checksum mismatch for $asset, refusing to install"
 
 tar -xzf "$tmp/$asset" -C "$tmp"
 bin="$(find "$tmp" -type f -name covguard | head -n1)"

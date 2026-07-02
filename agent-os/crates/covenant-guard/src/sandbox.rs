@@ -1,11 +1,11 @@
-//! The OS sandbox — blast-radius containment, and the reason the cap can't be
+//! The OS sandbox: blast-radius containment, and the reason the cap can't be
 //! bypassed.
 //!
 //! On macOS the agent runs under a generated Seatbelt profile: writes are
 //! confined to the workspace and the session temp dir, the agent's own config
 //! files are read-only (so it can't rewire the base URL or disable the guard's
 //! hooks), key material is unreadable, and all network egress is denied except
-//! loopback — which is the only path to the metering proxy. Later-matching deny
+//! loopback, which is the only path to the metering proxy. Later-matching deny
 //! rules win in Seatbelt, so the config-write carve-outs override the broader
 //! `~/.claude` write allowance.
 //!
@@ -32,10 +32,13 @@ const SEATBELT_PROFILE: &str = r#"(version 1)
 ; so it can't take down the guard that supervises it
 (deny signal (target others))
 
-; network: loopback only, in both directions. The agent's sole route to the
-; model API is the guard's proxy on 127.0.0.1
+; network: the agent's only outbound route is the guard's proxy. PROXY_HOSTPORT
+; is `localhost:<port>` by default (so a loopback relay can't be used to tunnel
+; past the meter, and a parallel run's proxy can't be borrowed), or `localhost:*`
+; when --allow-localhost is set for tasks that talk to a local dev server.
+; Inbound stays open so the agent can bind its own servers.
 (deny network-outbound (remote ip))
-(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote ip (param "PROXY_HOSTPORT")))
 (deny network-inbound (local ip))
 (allow network-inbound (local ip "localhost:*"))
 
@@ -55,7 +58,7 @@ const SEATBELT_PROFILE: &str = r#"(version 1)
   (regex #"^/dev/ttys?[0-9]*$")
 )
 
-; carve-out: the agent may not edit its own policy — settings, hook config, or
+; carve-out: the agent may not edit its own policy: settings, hook config, or
 ; installed plugins. This is what makes the proxy and the sandbox unbypassable
 ; from inside the run.
 (deny file-write*
@@ -64,13 +67,22 @@ const SEATBELT_PROFILE: &str = r#"(version 1)
   (subpath (param "AGENT_PLUGINS"))
 )
 
-; reads: key material and the guard's own state stay dark
+; reads: key material and the guard's own state stay dark. Default-allow reads
+; with a denylist of the common credential stores: the agent needs to read the
+; repo and toolchain, but not tokens.
 (deny file-read*
   (subpath (param "SSH_DIR"))
   (subpath (param "AWS_DIR"))
   (subpath (param "GNUPG_DIR"))
   (subpath (param "SOLANA_DIR"))
   (subpath (param "GUARD_STATE"))
+  (subpath (param "GH_CONFIG"))
+  (subpath (param "DOCKER_DIR"))
+  (subpath (param "KUBE_DIR"))
+  (subpath (param "GCLOUD_DIR"))
+  (literal (param "NETRC"))
+  (literal (param "GIT_CRED"))
+  (literal (param "NPMRC"))
 )
 "#;
 
@@ -95,7 +107,12 @@ pub fn write_profile(dir: &Path) -> std::io::Result<PathBuf> {
 /// On macOS this is `sandbox-exec -f <profile> -D KEY=VAL... <agent...>`. On
 /// other platforms it returns an error unless `COVGUARD_NO_SANDBOX=1` is set,
 /// in which case it returns the agent argv unchanged (and the caller warns).
-pub fn wrap(layout: &SandboxLayout, profile_path: &Path, agent_argv: &[String]) -> anyhow::Result<Vec<String>> {
+pub fn wrap(
+    layout: &SandboxLayout,
+    profile_path: &Path,
+    proxy_hostport: &str,
+    agent_argv: &[String],
+) -> anyhow::Result<Vec<String>> {
     if !cfg!(target_os = "macos") {
         if std::env::var("COVGUARD_NO_SANDBOX").as_deref() == Ok("1") {
             return Ok(agent_argv.to_vec());
@@ -122,7 +139,10 @@ pub fn wrap(layout: &SandboxLayout, profile_path: &Path, agent_argv: &[String]) 
         p("-D"),
         d("GUARD_STATE", &layout.guard_state),
         p("-D"),
-        format!("DARWIN_TMP={}", std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into())),
+        format!(
+            "DARWIN_TMP={}",
+            std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into())
+        ),
         p("-D"),
         dh("DARWIN_CACHE", "Library/Caches"),
         p("-D"),
@@ -143,6 +163,22 @@ pub fn wrap(layout: &SandboxLayout, profile_path: &Path, agent_argv: &[String]) 
         dh("GNUPG_DIR", ".gnupg"),
         p("-D"),
         dh("SOLANA_DIR", ".config/solana"),
+        p("-D"),
+        format!("PROXY_HOSTPORT={proxy_hostport}"),
+        p("-D"),
+        dh("GH_CONFIG", ".config/gh"),
+        p("-D"),
+        dh("GCLOUD_DIR", ".config/gcloud"),
+        p("-D"),
+        dh("DOCKER_DIR", ".docker"),
+        p("-D"),
+        dh("KUBE_DIR", ".kube"),
+        p("-D"),
+        dh("NETRC", ".netrc"),
+        p("-D"),
+        dh("GIT_CRED", ".git-credentials"),
+        p("-D"),
+        dh("NPMRC", ".npmrc"),
     ];
     argv.extend(agent_argv.iter().cloned());
     Ok(argv)
@@ -160,8 +196,12 @@ mod tests {
         assert!(SEATBELT_PROFILE.contains("AGENT_SETTINGS"));
         assert!(SEATBELT_PROFILE.contains("SSH_DIR"));
         // The loopback allowance must come after the ip deny (last match wins).
-        let deny = SEATBELT_PROFILE.find("(deny network-outbound (remote ip))").unwrap();
-        let allow = SEATBELT_PROFILE.find("(allow network-outbound (remote ip \"localhost:*\"))").unwrap();
+        let deny = SEATBELT_PROFILE
+            .find("(deny network-outbound (remote ip))")
+            .unwrap();
+        let allow = SEATBELT_PROFILE
+            .find("(allow network-outbound (remote ip (param \"PROXY_HOSTPORT\")))")
+            .unwrap();
         assert!(allow > deny, "loopback allow must follow the ip deny");
     }
 
@@ -173,9 +213,16 @@ mod tests {
             session_tmp: PathBuf::from("/tmp/ws/.tmp"),
             guard_state: PathBuf::from("/tmp/guard"),
         };
-        let argv = wrap(&layout, Path::new("/tmp/guard.sb"), &["claude".into(), "-p".into()]).unwrap();
+        let argv = wrap(
+            &layout,
+            Path::new("/tmp/guard.sb"),
+            "localhost:8080",
+            &["claude".into(), "-p".into()],
+        )
+        .unwrap();
         assert_eq!(argv[0], "sandbox-exec");
         assert_eq!(argv.last().unwrap(), "-p");
         assert!(argv.iter().any(|a| a.starts_with("WORKSPACE=")));
+        assert!(argv.iter().any(|a| a == "PROXY_HOSTPORT=localhost:8080"));
     }
 }

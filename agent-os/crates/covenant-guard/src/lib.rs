@@ -1,4 +1,4 @@
-//! covguard — let a coding agent run unattended.
+//! covguard: let a coding agent run unattended.
 //!
 //! The guard runs as the parent process, outside the sandbox the agent lives
 //! in. It holds three things the agent cannot reach around:

@@ -1,4 +1,4 @@
-//! A minimal Model Context Protocol server over stdio — so an agent (or a
+//! A minimal Model Context Protocol server over stdio, so an agent (or a
 //! Claude/Codex plugin) can read the guard's state through a standard interface.
 //!
 //! The tools are deliberately read-only: check the last run, list receipts,
@@ -19,7 +19,9 @@ fn receipts_dir() -> std::path::PathBuf {
 
 fn resolve_id(which: &str) -> Option<String> {
     if which == "last" {
-        std::fs::read_to_string(receipts_dir().join("last")).ok().map(|s| s.trim().to_string())
+        std::fs::read_to_string(receipts_dir().join("last"))
+            .ok()
+            .map(|s| s.trim().to_string())
     } else {
         Some(which.to_string())
     }
@@ -32,15 +34,23 @@ fn load_receipt(id: &str) -> Option<(Receipt, std::path::PathBuf)> {
     Some((r, dir))
 }
 
-fn load_events(dir: &std::path::Path) -> Option<Vec<Entry>> {
-    let text = std::fs::read_to_string(dir.join("events.jsonl")).ok()?;
+fn load_events(dir: &std::path::Path) -> Result<Option<Vec<Entry>>, String> {
+    let text = match std::fs::read_to_string(dir.join("events.jsonl")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot read events: {e}")),
+    };
     let mut out = Vec::new();
-    for line in text.lines() {
-        if !line.trim().is_empty() {
-            out.push(serde_json::from_str::<Entry>(line).ok()?);
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Entry>(line) {
+            Ok(entry) => out.push(entry),
+            Err(e) => return Err(format!("events.jsonl line {} is malformed: {e}", i + 1)),
         }
     }
-    Some(out)
+    Ok(Some(out))
 }
 
 fn tool_defs() -> Value {
@@ -57,7 +67,7 @@ fn tool_defs() -> Value {
         },
         {
             "name": "guard_verify",
-            "description": "Verify a guarded run's receipt — signature and event chain. Pass a run id, or 'last'.",
+            "description": "Verify a guarded run's receipt: signature and event chain. Pass a run id, or 'last'.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "run": { "type": "string", "description": "Run id or 'last'" } },
@@ -75,7 +85,7 @@ fn text_result(text: String) -> Value {
 fn summarize(r: &Receipt) -> String {
     let c = &r.core;
     format!(
-        "{} — {}\nspend ${:.2} of ${:.2} cap{}\nturns {} · files {} · {:.0}s\nrun {}",
+        "{}, {}\nspend ${:.2} of ${:.2} cap{}\nturns {} · files {} · {:.0}s\nrun {}",
         c.tool,
         c.outcome,
         c.spent_usd,
@@ -107,7 +117,10 @@ fn call_tool(name: &str, args: &Value) -> Value {
             let text = if rows.is_empty() {
                 "no guarded runs yet".to_string()
             } else {
-                rows.into_iter().map(|(_, s)| s).collect::<Vec<_>>().join("\n\n")
+                rows.into_iter()
+                    .map(|(_, s)| s)
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
             };
             text_result(text)
         }
@@ -116,21 +129,24 @@ fn call_tool(name: &str, args: &Value) -> Value {
             match resolve_id(which).and_then(|id| load_receipt(&id)) {
                 Some((r, dir)) => {
                     let verdict = match load_events(&dir) {
-                        Some(events) => match receipt::verify_with_events(&r, &events) {
-                            Ok(()) => format!("PASS — signature valid, {} events chain to the signed root", events.len()),
-                            Err(e) => format!("FAIL — {e}"),
+                        Ok(Some(events)) => match receipt::verify_with_events(&r, &events) {
+                            Ok(()) => format!("PASS: signature valid, {} events chain to the signed root", events.len()),
+                            Err(e) => format!("FAIL: {e}"),
                         },
-                        None => match receipt::verify_signature(&r) {
-                            Ok(()) => "PASS — signature valid (event log not found; chain not re-checked)".to_string(),
-                            Err(e) => format!("FAIL — {e}"),
+                        Ok(None) => match receipt::verify_signature(&r) {
+                            Ok(()) => "PASS: signature valid (no event log alongside the receipt; chain not re-checked)".to_string(),
+                            Err(e) => format!("FAIL: {e}"),
                         },
+                        Err(e) => format!("FAIL: {e}"),
                     };
                     text_result(format!("{verdict}\n{}", summarize(&r)))
                 }
                 None => text_result(format!("no receipt for '{which}'")),
             }
         }
-        _ => json!({ "content": [{ "type": "text", "text": format!("unknown tool: {name}") }], "isError": true }),
+        _ => {
+            json!({ "content": [{ "type": "text", "text": format!("unknown tool: {name}") }], "isError": true })
+        }
     }
 }
 
@@ -145,12 +161,8 @@ fn err(id: Value, code: i64, message: &str) -> Value {
 /// Handle one request. Returns `None` for notifications (no id / no reply).
 fn handle(req: &Value) -> Option<Value> {
     let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
-    let id = req.get("id").cloned();
     // Notifications carry no id and get no response.
-    if id.is_none() {
-        return None;
-    }
-    let id = id.unwrap();
+    let id = req.get("id").cloned()?;
     match method {
         "initialize" => {
             let ver = req
@@ -185,7 +197,16 @@ pub fn serve() -> anyhow::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
-        let line = line?;
+        // A single undecodable byte must not tear down the session; reply with
+        // a parse error and keep going, matching the malformed-JSON path.
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => {
+                writeln!(stdout, "{}", err(Value::Null, -32700, "parse error"))?;
+                stdout.flush()?;
+                continue;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -221,7 +242,12 @@ mod tests {
     fn tools_list_has_the_three_tools() {
         let req = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
         let reply = handle(&req).unwrap();
-        let names: Vec<String> = reply["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+        let names: Vec<String> = reply["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
         assert!(names.contains(&"guard_status".to_string()));
         assert!(names.contains(&"guard_verify".to_string()));
     }

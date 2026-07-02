@@ -1,7 +1,7 @@
 {
   "name": "covenant-guard",
   "version": "0.1.0",
-  "description": "Run Claude Code unattended: cap the spend, sandbox execution, and get a signed receipt — enforced from outside the agent's own process by the covguard binary.",
+  "description": "Run Claude Code unattended: cap the spend, sandbox execution, and get a signed receipt, enforced from outside the agent's own process by the covguard binary.",
   "author": { "name": "Covenant", "url": "https://opencovenant.org" },
   "homepage": "https://opencovenant.org/guard",
   "repository": "https://github.com/open-covenant/covenant",

@@ -2,7 +2,7 @@
 //! it, so a receipt built from the chain can be checked after the fact: change
 //! any past event and every hash from that point breaks.
 //!
-//! The chain is deliberately small and self-contained — one file, one hash
+//! The chain is deliberately small and self-contained: one file, one hash
 //! function, a `verify` that a reader can follow without trusting us.
 
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ pub struct Entry {
     pub hash: String,
 }
 
-/// The bytes that get hashed — the entry without its own hash. Kept as a
+/// The bytes that get hashed: the entry without its own hash. Kept as a
 /// separate struct so signing and verification hash exactly the same shape.
 #[derive(Serialize)]
 struct Preimage<'a> {
@@ -35,7 +35,13 @@ struct Preimage<'a> {
 }
 
 fn hash_entry(seq: u64, ts_ms: u64, kind: &str, data: &serde_json::Value, prev: &str) -> String {
-    let pre = Preimage { seq, ts_ms, kind, data, prev };
+    let pre = Preimage {
+        seq,
+        ts_ms,
+        kind,
+        data,
+        prev,
+    };
     let canonical = serde_jcs::to_vec(&pre).expect("jcs canonicalization of a plain struct");
     let digest = Sha256::digest(&canonical);
     hex(&digest)
@@ -68,14 +74,29 @@ impl Chain {
     pub fn append(&self, ts_ms: u64, kind: &str, data: serde_json::Value) -> String {
         let mut v = self.inner.lock().unwrap();
         let seq = v.len() as u64;
-        let prev = v.last().map(|e| e.hash.clone()).unwrap_or_else(|| GENESIS.to_string());
+        let prev = v
+            .last()
+            .map(|e| e.hash.clone())
+            .unwrap_or_else(|| GENESIS.to_string());
         let hash = hash_entry(seq, ts_ms, kind, &data, &prev);
-        v.push(Entry { seq, ts_ms, kind: kind.to_string(), data, prev, hash: hash.clone() });
+        v.push(Entry {
+            seq,
+            ts_ms,
+            kind: kind.to_string(),
+            data,
+            prev,
+            hash: hash.clone(),
+        });
         hash
     }
 
     pub fn head(&self) -> String {
-        self.inner.lock().unwrap().last().map(|e| e.hash.clone()).unwrap_or_else(|| GENESIS.to_string())
+        self.inner
+            .lock()
+            .unwrap()
+            .last()
+            .map(|e| e.hash.clone())
+            .unwrap_or_else(|| GENESIS.to_string())
     }
 
     pub fn len(&self) -> u64 {
@@ -151,7 +172,7 @@ mod tests {
         c.append(1, "run_start", json!({"agent": "claude"}));
         c.append(2, "api_call", json!({"cost_usd": 0.12}));
         let mut entries = c.snapshot();
-        // Rewrite a committed cost — the kind of edit a receipt has to catch.
+        // Rewrite a committed cost, the kind of edit a receipt has to catch.
         entries[1].data = json!({"cost_usd": 0.00});
         assert!(matches!(verify(&entries), Err(ChainError::Hash { at: 1 })));
     }

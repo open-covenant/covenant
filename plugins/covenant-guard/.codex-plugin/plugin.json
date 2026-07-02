@@ -1,7 +1,7 @@
 {
   "name": "covenant-guard",
   "version": "0.1.0",
-  "description": "Run Codex unattended: cap the spend, sandbox execution, and get a signed receipt — enforced from outside the agent by the covguard binary.",
+  "description": "Run Codex unattended: cap the spend, sandbox execution, and get a signed receipt, enforced from outside the agent by the covguard binary.",
   "homepage": "https://opencovenant.org/guard",
   "license": "Apache-2.0",
   "mcp_servers": {

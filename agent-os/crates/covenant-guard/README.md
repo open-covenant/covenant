@@ -8,7 +8,7 @@ covguard run --budget 10 -- claude -p "fix the flaky tests" --dangerously-skip-p
 ```
 
 `covguard` runs as the parent process, outside the sandbox the agent lives in.
-That position is the whole design — it lets the guard hold the credential, meter
+That position is the whole design: it lets the guard hold the credential, meter
 the spend, and pull the plug, none of which the agent can reach around.
 
 ## Three rings
@@ -18,14 +18,12 @@ the spend, and pull the plug, none of which the agent can reach around.
   and its usage is counted as the response streams. When spend crosses the cap
   the proxy stops forwarding and the guard kills the agent's process group.
   Overshoot is bounded to the one call in flight. This works in headless and
-  interactive runs, and covers subscription/OAuth sessions — cases the agent's
-  own budget flag does not.
+  interactive runs, and covers subscription/OAuth sessions that a built-in budget flag does not.
 - **OS sandbox, so a bad command can't wreck the machine.** On macOS the agent
   runs under a generated Seatbelt profile: writes confined to the workspace,
   the agent's own config files read-only (so it can't rewire the base URL or
   disable the guard's hooks), key material unreadable, and all network egress
-  denied except the loopback proxy. This is what makes the cap unbypassable —
-  there is no route to the API that skips the meter. (Linux via bubblewrap is
+  denied except the loopback proxy. This is what makes the cap unbypassable: there is no route to the API that skips the meter. (Linux via bubblewrap is
   next.)
 - **A signed receipt you can check after the fact.** Every event lands on a
   SHA-256 hash chain; on exit the guard writes a receipt carrying the spend
@@ -37,10 +35,16 @@ the spend, and pull the plug, none of which the agent can reach around.
 
 ```
 covguard run [--budget USD] [--wall 12h] [--workspace DIR] -- <agent> [args...]
-covguard verify <receipt.json>
+covguard verify <receipt.json> [--signer <pubkey>]
 covguard receipts [list | show <id|last> | open <id|last>]
+covguard card [<id>|last] [--png out.png]
+covguard mcp
 covguard doctor
 ```
+
+`covguard run` takes more flags (`--host`, `--allow-localhost`, `--auth-token`,
+`--json`); see `covguard --help`. `covguard mcp` runs a stdio MCP server exposing
+read-only tools (`guard_status`, `guard_receipts`, `guard_verify`) to an agent.
 
 Defaults: `--budget 10.00`, `--wall 12h`. State (signing key, receipts) lives in
 `~/.covenant-guard`; override with `COVGUARD_HOME`.

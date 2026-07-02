@@ -1,9 +1,10 @@
-//! The spend ledger — the cap, enforced from outside the agent.
+//! The spend ledger: the cap, enforced from outside the agent.
 //!
 //! Every metered call is committed here. When committed spend crosses the
 //! budget the ledger latches `killed` and wakes the run orchestrator, which
-//! signals the agent's process group. Because the proxy debits as each model
-//! response streams, overshoot is bounded to the one call in flight.
+//! signals the agent's process group. The proxy also refuses new metered calls
+//! once the latch is set, so overshoot is bounded to the calls already
+//! streaming when the cap trips, not the whole run.
 
 use crate::pricing::{cost_usd, Usage};
 use std::collections::BTreeMap;
@@ -55,7 +56,7 @@ impl Ledger {
 
     /// Commit one call's usage. Returns the new cumulative spend. If this call
     /// takes the run over budget, the ledger latches killed and wakes any
-    /// waiter — the caller (the proxy) should stop forwarding the stream.
+    /// waiter; the caller (the proxy) should stop forwarding the stream.
     pub fn commit(&self, model: &str, usage: &Usage) -> f64 {
         let cost = cost_usd(model, usage);
         let cumulative = {
@@ -67,7 +68,7 @@ impl Ledger {
             m.input += usage.input;
             m.output += usage.output;
             m.cache_read += usage.cache_read;
-            m.cache_creation += usage.cache_creation;
+            m.cache_creation += usage.cache_creation + usage.cache_creation_1h;
             m.cost_usd += cost;
             t.spent_usd
         };
@@ -101,11 +102,18 @@ impl Ledger {
 
     /// Resolves once the ledger trips. Used by the run orchestrator to react
     /// the moment the cap is hit rather than polling.
+    ///
+    /// The waiter is enrolled before the flag is read: `notify_waiters()` stores
+    /// no permit, so a `trip()` racing between the read and the enrollment would
+    /// otherwise be lost and the waiter would park forever.
     pub async fn killed(&self) {
+        let n = self.wake.notified();
+        tokio::pin!(n);
+        n.as_mut().enable();
         if self.is_killed() {
             return;
         }
-        self.wake.notified().await;
+        n.await;
     }
 
     pub fn spent(&self) -> f64 {
@@ -119,6 +127,24 @@ impl Ledger {
     pub fn per_model(&self) -> BTreeMap<String, ModelTotals> {
         self.totals.lock().unwrap().per_model.clone()
     }
+
+    /// Consistent view of spend, call count, and per-model totals under a single
+    /// lock, so a late commit can't make the receipt's fields disagree.
+    pub fn snapshot(&self) -> Snapshot {
+        let t = self.totals.lock().unwrap();
+        Snapshot {
+            spent_usd: t.spent_usd,
+            calls: t.calls,
+            per_model: t.per_model.clone(),
+        }
+    }
+}
+
+/// A point-in-time copy of the ledger totals.
+pub struct Snapshot {
+    pub spent_usd: f64,
+    pub calls: u64,
+    pub per_model: BTreeMap<String, ModelTotals>,
 }
 
 #[cfg(test)]
@@ -126,7 +152,11 @@ mod tests {
     use super::*;
 
     fn usage(input: u64, output: u64) -> Usage {
-        Usage { input, output, ..Default::default() }
+        Usage {
+            input,
+            output,
+            ..Default::default()
+        }
     }
 
     #[test]

@@ -13,8 +13,8 @@ platform, verifies its checksum, and drops `covguard` on the PATH. Host it at
 curl -fsSL https://opencovenant.org/guard/install.sh | sh
 ```
 
-Shipped targets: `darwin-arm64`, `linux-x86_64`. Other platforms build from
-source.
+Shipped target: `darwin-arm64` (macOS/arm64). The OS sandbox is macOS-specific,
+so other platforms build from source until the Linux backend lands.
 
 ## 2. Homebrew
 
@@ -37,9 +37,11 @@ cargo install --path agent-os/crates/covenant-guard
 1. Bump `version` in `agent-os/crates/covenant-guard/Cargo.toml` and this
    formula.
 2. Tag: `git tag covguard-v0.1.0 && git push origin covguard-v0.1.0`.
-3. `release-guard.yml` builds `darwin-arm64` + `linux-x86_64`, cosign-signs each
-   tarball and `checksums.txt`, and publishes the release.
-4. Read the two `*.tar.gz.sha256` values from the release and paste them into
-   the formula's `REPLACE_WITH_*` slots; push the tap.
+3. `release-guard.yml` builds `darwin-arm64`, cosign-signs the tarball and
+   `checksums.txt`, and publishes the release.
+4. Copy the `covguard-darwin-arm64.tar.gz` sha256 from the release's
+   `checksums.txt` into the formula's `REPLACE_WITH_DARWIN_ARM64_SHA256` slot;
+   push the tap.
 
-`install.sh` needs no manual step — it reads the checksums from the release.
+`install.sh` needs no manual step: it reads and verifies against
+`checksums.txt` from the release.

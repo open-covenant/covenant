@@ -11,19 +11,13 @@ class CovenantGuard < Formula
   version "0.1.0"
   license "Apache-2.0"
 
-  on_macos do
-    on_arm do
-      url "https://github.com/open-covenant/covenant/releases/download/covguard-v#{version}/covguard-darwin-arm64.tar.gz"
-      sha256 "REPLACE_WITH_DARWIN_ARM64_SHA256"
-    end
-  end
+  # macOS/arm64 only for now, the OS sandbox is macOS-specific. Intel Macs and
+  # Linux build from source until the bubblewrap backend lands.
+  depends_on arch: :arm64
+  depends_on :macos
 
-  on_linux do
-    on_intel do
-      url "https://github.com/open-covenant/covenant/releases/download/covguard-v#{version}/covguard-linux-x86_64.tar.gz"
-      sha256 "REPLACE_WITH_LINUX_X86_64_SHA256"
-    end
-  end
+  url "https://github.com/open-covenant/covenant/releases/download/covguard-v#{version}/covguard-darwin-arm64.tar.gz"
+  sha256 "REPLACE_WITH_DARWIN_ARM64_SHA256"
 
   def install
     bin.install "covguard"

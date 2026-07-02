@@ -31,10 +31,19 @@ export function middleware(req: NextRequest) {
     return NextResponse.rewrite(rewritten);
   }
 
-  if (STAKE_HOST.test(host) && path === "/") {
-    const rewritten = url.clone();
-    rewritten.pathname = "/stake";
-    return NextResponse.rewrite(rewritten);
+  if (STAKE_HOST.test(host)) {
+    if (path === "/stake" || path.startsWith("/stake/")) {
+      const cleaned = path.replace(/^\/stake/, "") || "/";
+      return NextResponse.redirect(
+        new URL(`${proto}://${host}${cleaned}${url.search}`),
+        308,
+      );
+    }
+    if (path === "/") {
+      const rewritten = url.clone();
+      rewritten.pathname = "/stake";
+      return NextResponse.rewrite(rewritten);
+    }
   }
 
   if (path === "/docs" || path.startsWith("/docs/")) {

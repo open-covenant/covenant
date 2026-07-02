@@ -5,12 +5,13 @@ import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import { Menu, X } from "lucide-react";
-import { GithubIcon, XIcon } from "./_brand";
+import { GithubIcon, TelegramIcon, XIcon } from "./_brand";
 
 type NavItem = { label: string; href: string; external?: boolean };
 
 const SOCIAL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   X: XIcon,
+  Telegram: TelegramIcon,
   GitHub: GithubIcon,
 };
 

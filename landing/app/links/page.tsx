@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import Image from "next/image";
-import { SiteHeader } from "../SiteHeader";
 import { SiteFooter } from "../SiteFooter";
 import { CopyAddress } from "../CopyAddress";
-import { RELEASE_STATUS, TAGLINE, X_URL, GITHUB_URL } from "../_brand";
+import { GithubIcon, TelegramIcon, XIcon, X_URL, GITHUB_URL, TELEGRAM_URL } from "../_brand";
 
 const CVNT_MINT = "2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump";
 
@@ -102,30 +101,48 @@ function LinkButton({ item, primary = false }: { item: LinkItem; primary?: boole
 export default function LinksPage() {
   return (
     <main id="main-content" className="relative min-h-screen overflow-x-hidden bg-[#030303]">
-      <SiteHeader />
-
-      <div className="page-container">
+      <div className="page-container" style={{ paddingTop: "calc(3.5rem + env(safe-area-inset-top))" }}>
         <div className="mx-auto flex w-full max-w-md flex-col items-center">
-          <Image src="/logomark.svg" alt="" aria-hidden width={52} height={52} priority className="opacity-90" />
-
-          <h1 className="mt-7">
+          <h1>
             <Image
-              src="/wordmark.png"
+              src="/logo.svg"
               alt="Covenant"
-              width={600}
-              height={127}
+              width={255}
+              height={54}
               priority
               className="h-auto w-60 opacity-95"
             />
           </h1>
 
-          <p className="mt-4 max-w-xs text-balance text-center text-[13px] font-light leading-relaxed text-neutral-400">
-            {TAGLINE}
-          </p>
-
-          <span className="mt-5 rounded-full border border-neutral-800 px-3 py-1 text-[10px] uppercase tracking-[0.3em] text-neutral-400">
-            {RELEASE_STATUS}
-          </span>
+          <div className="mt-6 flex items-center gap-2">
+            <a
+              href={X_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Covenant on X"
+              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+            >
+              <XIcon className="h-5 w-5" />
+            </a>
+            <a
+              href={TELEGRAM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Covenant on Telegram"
+              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+            >
+              <TelegramIcon className="h-5 w-5" />
+            </a>
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Covenant on GitHub"
+              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+            >
+              <GithubIcon className="h-5 w-5" />
+            </a>
+          </div>
 
           <div className="mt-10 flex w-full flex-col gap-2.5">
             {PRIMARY.map((item) => (

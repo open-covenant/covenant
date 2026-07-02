@@ -4,6 +4,7 @@
 
 export const X_URL = "https://x.com/OpenCovenant";
 export const GITHUB_URL = "https://github.com/open-covenant/covenant";
+export const TELEGRAM_URL = "https://t.me/+4zEexbN94E1hOWY0";
 export const TAGLINE = "Open infrastructure for agent-native computing";
 export const RELEASE_STATUS = "ALPHA LIVE";
 
@@ -42,6 +43,7 @@ export const FOOTER_LINKS = [
 // header doesn't collide with the centered logo.
 export const SOCIAL_LINKS = [
   { label: "X", href: "https://x.com/OpenCovenant", external: true as const },
+  { label: "Telegram", href: TELEGRAM_URL, external: true as const },
   { label: "GitHub", href: "https://github.com/open-covenant/covenant", external: true as const },
 ];
 
@@ -54,6 +56,19 @@ export function XIcon({ className }: { className?: string }) {
       fill="currentColor"
     >
       <path d="M17.53 3H20.5l-6.49 7.41L21.75 21h-6.18l-4.84-6.34L5.16 21H2.18l6.94-7.93L1.75 3h6.34l4.38 5.79L17.53 3Zm-1.08 16.2h1.71L7.66 4.7H5.83l10.62 14.5Z" />
+    </svg>
+  );
+}
+
+export function TelegramIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+    >
+      <path d="M21.94 4.51 18.9 19.2c-.23 1.02-.84 1.27-1.7.79l-4.7-3.47-2.27 2.18c-.25.25-.46.46-.94.46l.34-4.78 8.7-7.86c.38-.34-.08-.53-.59-.19L6.98 13.2 2.34 11.74c-1.01-.32-1.03-1.01.21-1.5l18.13-6.99c.84-.31 1.58.19 1.26 1.26Z" />
     </svg>
   );
 }

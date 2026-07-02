@@ -7,6 +7,8 @@ import {
   GITHUB_URL,
   NAV_LINKS,
   SOCIAL_LINKS,
+  TelegramIcon,
+  TELEGRAM_URL,
   XIcon,
   X_URL,
 } from "./_brand";
@@ -74,6 +76,15 @@ export function SiteHeader() {
               className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
             >
               <XIcon className="h-4 w-4" />
+            </a>
+            <a
+              href={TELEGRAM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Covenant on Telegram"
+              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+            >
+              <TelegramIcon className="h-4 w-4" />
             </a>
             <a
               href={GITHUB_URL}

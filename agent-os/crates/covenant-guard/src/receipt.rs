@@ -265,10 +265,10 @@ h1 {{ margin:8px 0 4px; font-size:26px; font-weight:200; letter-spacing:-.01em; 
   <div class="block"><div class="label">Files changed</div>{files}</div>
   {commands}
   <div class="foot">
-    <div class="label">Verified record</div>
+    <div class="label">Verified record · capped · sandboxed · signed</div>
     <div class="hash">chain {chain_root}</div>
     <div class="hash">signed by {pubkey}</div>
-    <div class="hash">covguard verify re-checks this receipt from the events</div>
+    <div class="hash">covguard verify re-checks this receipt from the events · opencovenant.org/guard</div>
   </div>
 </div></body></html>"#,
         run_id = esc(&c.run_id),
@@ -355,6 +355,7 @@ pub fn to_svg(receipt: &Receipt) -> String {
 <rect width='1200' height='630' fill='#e9e9e7'/>
 <rect x='60' y='48' width='1080' height='534' fill='#fafafa' stroke='#d4d4d2'/>
 <text x='100' y='118' {mono} font-size='19' fill='#777' letter-spacing='7'>COVENANT GUARD · RECEIPT</text>
+<text x='1100' y='118' text-anchor='end' {mono} font-size='15' fill='#9a9a9a' letter-spacing='3'>CAPPED · SANDBOXED · SIGNED</text>
 <text x='100' y='188' {sans} font-size='52' font-weight='200' fill='#111'>{headline}</text>
 <text x='100' y='224' {mono} font-size='19' fill='#666'>{tool} · {ws}</text>
 <text x='100' y='300' {mono} font-size='16' fill='#999' letter-spacing='3'>SPEND{est}</text>
@@ -364,6 +365,7 @@ pub fn to_svg(receipt: &Receipt) -> String {
 <rect x='100' y='392' width='{bar_w}' height='8' fill='{bar_fill}'/>
 {turns}{files}{dur}{netstat}
 <text x='100' y='556' {mono} font-size='14' fill='#555'>chain {root} · signed {signer} · covguard verify</text>
+<text x='1100' y='556' text-anchor='end' {mono} font-size='15' fill='#888'>opencovenant.org/guard</text>
 </svg>"#,
         headline = esc(headline),
         tool = esc(&c.tool),

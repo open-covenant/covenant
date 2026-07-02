@@ -61,6 +61,7 @@ run node ./scripts/validate-crate-groups-coverage.mjs
 run node ./scripts/validate-cvnt-solana-quarantine.mjs
 run node ./scripts/validate-gvisor-required-check-deferral.mjs
 run node ./scripts/validate-gvisor-live-test-target.mjs
+run node ./scripts/validate-gvisor-live-runner-doc-contract.mjs
 run node ./scripts/validate-daemon-subprocess-recover-before-tick.mjs
 run node ./scripts/validate-ipc-v2-migration-doc-fixtures.mjs
 run node ./scripts/validate-autonomy-status-gaps.mjs

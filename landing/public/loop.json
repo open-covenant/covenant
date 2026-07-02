@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-02T17:37:19.223Z",
+  "updatedAt": "2026-07-02T17:57:23.134Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12663,
-    "tasks": 1484,
-    "integrated": 1485
+    "events": 12672,
+    "tasks": 1485,
+    "integrated": 1486
   },
   "throughput": {
-    "last24h": 9,
-    "last7d": 197,
-    "velocity": 28.1
+    "last24h": 8,
+    "last7d": 198,
+    "velocity": 28.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-02",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-02",
-      "total": 1485
+      "total": 1486
     }
   ],
   "states": {
-    "integrated": 1477,
+    "integrated": 1478,
     "proposed": 1,
     "blocked": 6
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-02T17:47:04.067Z",
+      "task": "status-budget-ledger-projection-preempt-env-doc-contract",
+      "note": "Committed 78ab0a99 (feat(scripts): bind the budget projection/preempt doc to the daemon source), 2 files +239 = new agent-os/scripts/validat"
+    },
     {
       "at": "2026-07-02T17:25:22.339Z",
       "task": "status-runtime-execution-required-check-promotion-deferred-t",
@@ -310,11 +315,6 @@
       "at": "2026-07-01T03:44:23.857Z",
       "task": "multichain-01",
       "note": "Committed 641a1109 to loop/main-track and pushed to origin: dual-shaped A2A AgentCard / ERC-8004 registration document in covenant-identity "
-    },
-    {
-      "at": "2026-07-01T02:49:48.121Z",
-      "task": "multichain-00",
-      "note": "Committed f2d0e407 to loop/main-track: Secp256k1IssuerKey + bidirectional IdentityBinding in covenant-identity (+k256/+sha3). 32 tests green"
     }
   ]
 }

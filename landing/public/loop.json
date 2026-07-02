@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-02T16:37:05.200Z",
+  "updatedAt": "2026-07-02T16:57:10.838Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12633,
-    "tasks": 1481,
-    "integrated": 1481
+    "events": 12640,
+    "tasks": 1482,
+    "integrated": 1482
   },
   "throughput": {
-    "last24h": 6,
-    "last7d": 193,
-    "velocity": 27.6
+    "last24h": 7,
+    "last7d": 194,
+    "velocity": 27.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-02",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "07-02",
-      "total": 1481
+      "total": 1482
     }
   ],
   "states": {
-    "integrated": 1473,
+    "integrated": 1474,
     "proposed": 1,
     "blocked": 6,
-    "cross_review": 1
+    "in_progress": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "status-local-settlement-receipts-backfill-mutator-landed-202",
-    "state": "cross_review",
-    "since": "2026-07-02T15:24:16.637Z"
+    "task": "status-mcp-tools-server-time-vendor-fixture-wired-adr-0009",
+    "state": "in_progress",
+    "since": "2026-07-02T16:52:20.826Z"
   },
   "recent": [
+    {
+      "at": "2026-07-02T16:44:33.888Z",
+      "task": "status-local-settlement-receipts-backfill-mutator-landed-202",
+      "note": "Committed 621b78e9 (test(covenant): cover settlement backfill-receipts plain-text dry-run render), single tracked file crates/covenantd/test"
+    },
     {
       "at": "2026-07-01T21:05:50.879Z",
       "task": "status-local-daemon-and-cli-no-remaining-deferred-privileged",
@@ -315,11 +320,6 @@
       "at": "2026-06-30T07:40:24.360Z",
       "task": "x402-pick-requirement-scope-isolation-coverage",
       "note": "Committed ee7195a1: test(covenant-x402) pin pick_requirement network/asset scope isolation. 2 files (client.rs test + README 3225->3226), 27"
-    },
-    {
-      "at": "2026-06-30T07:00:54.460Z",
-      "task": "hyre-tools-schema-required-body-field-coverage",
-      "note": "Committed 6616b16b (tools test + README, 2 files by explicit path) and pushed 6ed81f36..6616b16b to origin/loop/main-track. All push identit"
     }
   ]
 }

@@ -1,0 +1,36 @@
+[package]
+name = "covenant-guard"
+version = "0.1.0"
+description = "Run a coding agent unattended. covguard caps the spend, sandboxes execution, and signs a receipt of everything the agent did — enforced from outside the agent's own process."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "covguard"
+path = "src/main.rs"
+
+[lib]
+name = "covenant_guard"
+path = "src/lib.rs"
+
+[dependencies]
+covenant-identity = { path = "../covenant-identity" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_jcs = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
+axum = { workspace = true }
+sha2 = { workspace = true }
+futures = { workspace = true }
+libc = { workspace = true }
+bs58 = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

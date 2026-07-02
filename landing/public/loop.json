@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-07-02T17:57:23.134Z",
+  "updatedAt": "2026-07-02T18:17:27.019Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12672,
-    "tasks": 1485,
+    "events": 12676,
+    "tasks": 1486,
     "integrated": 1486
   },
   "throughput": {
-    "last24h": 8,
+    "last24h": 7,
     "last7d": 198,
     "velocity": 28.3
   },
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1478,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "capability-consume-uses-duplicate-signature-dedup-coverage",
+    "state": "in_progress",
+    "since": "2026-07-02T18:14:32.959Z"
+  },
   "recent": [
     {
       "at": "2026-07-02T17:47:04.067Z",

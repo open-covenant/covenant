@@ -8,7 +8,9 @@ export interface SessionPayload {
   expiresAt: number;
 }
 
-export function sessionSecret(raw = process.env.SESSION_SECRET): Uint8Array {
+export function sessionSecret(
+  raw = typeof process !== 'undefined' ? process.env.SESSION_SECRET : undefined,
+): Uint8Array {
   if (!raw) {
     throw new Error('SESSION_SECRET is required');
   }

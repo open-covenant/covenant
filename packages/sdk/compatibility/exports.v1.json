@@ -1,6 +1,6 @@
 {
   "schema": "covenant.sdk-exports.v1",
-  "package": "@covenant/sdk",
+  "package": "@covenant-org/sdk",
   "stability": "workspace_alpha",
   "source_exports": [
     "./auth/session.js",
@@ -10,6 +10,7 @@
     "./solana/accounts.js",
     "./solana/instructions.js",
     "./solana/network.js",
+    "./solana/serialize.js",
     "./solana/stake.js"
   ]
 }

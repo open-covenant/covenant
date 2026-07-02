@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { covenantBrand } from '@covenant/config/brand';
+import { COVENANT_TOKEN_SYMBOL } from '../config.js';
 import {
   hash32FromText,
   prepareAnchorReceiptBatchInstruction,
@@ -60,6 +60,7 @@ describe('Solana instruction descriptors', () => {
         owner: addr('5'),
         ownerCovntAccount: addr('6'),
         stakeVault: addr('7'),
+        covntMint: addr('8'),
         amountCovnt: '1000',
         lockUntil: '1750000000',
       }),
@@ -73,13 +74,14 @@ describe('Solana instruction descriptors', () => {
       { name: 'owner', address: addr('5'), signer: true, writable: true },
       { name: 'owner_covnt', address: addr('6'), signer: false, writable: true },
       { name: 'stake_vault', address: addr('7'), signer: false, writable: true },
+      { name: 'covnt_mint', address: addr('8'), signer: false, writable: false },
       { name: 'token_program', address: TOKEN_PROGRAM, signer: false, writable: false },
       { name: 'system_program', address: SYSTEM_PROGRAM, signer: false, writable: false },
     ]);
     expect(ix.data).toEqual({
       amount_covnt: '1000',
       lock_until: '1750000000',
-      token_symbol: covenantBrand.token.symbol,
+      token_symbol: COVENANT_TOKEN_SYMBOL,
     });
   });
 
@@ -91,6 +93,7 @@ describe('Solana instruction descriptors', () => {
         owner: addr('4'),
         ownerCovntAccount: addr('5'),
         treasury: addr('6'),
+        covntMint: addr('7'),
         amountCovnt: '42',
       }),
     );
@@ -102,6 +105,7 @@ describe('Solana instruction descriptors', () => {
       { name: 'owner', address: addr('4'), signer: true, writable: true },
       { name: 'owner_covnt', address: addr('5'), signer: false, writable: true },
       { name: 'treasury', address: addr('6'), signer: false, writable: true },
+      { name: 'covnt_mint', address: addr('7'), signer: false, writable: false },
       { name: 'token_program', address: TOKEN_PROGRAM, signer: false, writable: false },
     ]);
     expect(ix.data).toEqual({ amount_covnt: '42' });
@@ -116,6 +120,7 @@ describe('Solana instruction descriptors', () => {
         client: addr('5'),
         clientCovntAccount: addr('6'),
         escrowVault: addr('7'),
+        covntMint: addr('9'),
         provider: addr('8'),
         taskId: hash32FromText('task-id'),
         amountCovnt: '500',
@@ -133,6 +138,7 @@ describe('Solana instruction descriptors', () => {
       { name: 'client', address: addr('5'), signer: true, writable: true },
       { name: 'client_covnt', address: addr('6'), signer: false, writable: true },
       { name: 'escrow_vault', address: addr('7'), signer: false, writable: true },
+      { name: 'covnt_mint', address: addr('9'), signer: false, writable: false },
       { name: 'token_program', address: TOKEN_PROGRAM, signer: false, writable: false },
       { name: 'system_program', address: SYSTEM_PROGRAM, signer: false, writable: false },
     ]);
@@ -154,6 +160,7 @@ describe('Solana instruction descriptors', () => {
         client: addr('4'),
         escrowVault: addr('5'),
         providerCovntAccount: addr('6'),
+        covntMint: addr('7'),
         resultHash: hash32FromText('result'),
         receiptHash: hash32FromText('receipt'),
       }),
@@ -166,6 +173,7 @@ describe('Solana instruction descriptors', () => {
       { name: 'client', address: addr('4'), signer: true, writable: false },
       { name: 'escrow_vault', address: addr('5'), signer: false, writable: true },
       { name: 'provider_covnt', address: addr('6'), signer: false, writable: true },
+      { name: 'covnt_mint', address: addr('7'), signer: false, writable: false },
       { name: 'token_program', address: TOKEN_PROGRAM, signer: false, writable: false },
     ]);
     expect(ix.data).toEqual({

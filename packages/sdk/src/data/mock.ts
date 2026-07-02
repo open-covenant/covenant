@@ -1,4 +1,4 @@
-import { covenantBrand } from '@covenant/config/brand';
+import { COVENANT_TOKEN_SYMBOL } from '../config.js';
 import type { SolanaAddress, Hash32 } from '../solana/accounts.js';
 import { hash32FromText } from '../solana/instructions.js';
 import type { TaskStatus } from '../domain/task.js';
@@ -115,7 +115,7 @@ export const MOCK_TASKS: TaskDetail[] = [
     clientAddress: CLIENT,
     paymentMint: COVNT_MINT,
     paymentAmount: '125000000',
-    paymentSymbol: covenantBrand.token.symbol,
+    paymentSymbol: COVENANT_TOKEN_SYMBOL,
     status: 'verified',
     signature: '5uA7rQ9mZQ7tJ4o8h4q9LkT7o6r8mQ2p5z6x7c8v9b1n2m3q4w5e6r7t8y9u',
     programId: PROGRAM_ID,
@@ -131,7 +131,7 @@ export const MOCK_TASKS: TaskDetail[] = [
     clientAddress: CLIENT,
     paymentMint: COVNT_MINT,
     paymentAmount: '84000000',
-    paymentSymbol: covenantBrand.token.symbol,
+    paymentSymbol: COVENANT_TOKEN_SYMBOL,
     status: 'funded',
     signature: '3mQ7rQ9mZQ7tJ4o8h4q9LkT7o6r8mQ2p5z6x7c8v9b1n2m3q4w5e6r7t8y',
     programId: PROGRAM_ID,

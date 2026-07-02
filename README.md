@@ -60,6 +60,16 @@ pnpm dev   # http://localhost:3000
 
 The console proxies the daemon's HTTP gateway, injects the operator bearer token server-side, and renders every dispatch as a verifiable trace through the hash-chained audit log. See [examples/hello-agent](./examples/hello-agent/) for the agent walkthrough, [docs/demo.md](./docs/demo.md) for a CLI transcript, and [deploy/README.md](./deploy/README.md) for shipping the console as a public sandbox on Render.
 
+## TypeScript SDK
+
+Agent authors building on the deployed Solana settlement program can install [`@covenant-org/sdk`](https://www.npmjs.com/package/@covenant-org/sdk) from npm:
+
+```bash
+npm install @covenant-org/sdk @solana/web3.js
+```
+
+It turns every Covenant instruction (agent registration, $CVNT staking, task escrow, credit purchase, receipt anchoring) into a signed `@solana/web3.js` transaction, with the wire bytes encoded from the on-chain program IDLs so they cannot drift from what the program accepts. Apache-2.0, one runtime dependency. Source lives in [`packages/sdk`](./packages/sdk/).
+
 ## Why Covenant
 
 Software agents are moving from interactive assistance toward long-running engineering work. That shift changes the infrastructure problem. Agents need durable context, explicit authority, reliable tool access, recovery after interruption, and a record of what happened.

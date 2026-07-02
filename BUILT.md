@@ -84,7 +84,7 @@ Covenant does not currently claim:
 - production multi-peer operation across untrusted hosts;
 - on-chain settlement in production;
 - public benchmarked self-improvement;
-- release-ready installer or SDK ecosystem.
+- a release-ready installer, or a multi-language SDK ecosystem beyond the published TypeScript `@covenant-org/sdk`.
 
 Those are roadmap items. The current system is a working local substrate with strong primitives in some areas and deliberately marked gaps in others.
 

@@ -14,11 +14,38 @@ fn credit_buy_then_consume_tracks_balance() {
     buy_credits(&mut env, &credits, &owner_covnt, 5).expect("buy");
     assert_eq!(credit_balance(&env, &credits), 50); // credits_per_covnt = 10
 
-    consume_credits(&mut env, &credits, 30).expect("consume");
+    consume_credits(&mut env, &credits, 30, [1u8; 32]).expect("consume");
     assert_eq!(credit_balance(&env, &credits), 20);
 
-    consume_credits(&mut env, &credits, 20).expect("consume rest");
+    consume_credits(&mut env, &credits, 20, [2u8; 32]).expect("consume rest");
     assert_eq!(credit_balance(&env, &credits), 0);
+}
+
+// On-chain replay protection: re-submitting the same (owner, receipt_hash)
+// fails on the `init` of the receipt marker, so a replayed consume cannot
+// double-debit. After the marker is closed (rent reclaimed), the seed frees
+// up again — closing is an explicit post-settlement action.
+#[test]
+fn consume_credits_replay_is_rejected_then_reclaimable() {
+    let mut env = boot();
+    let credits = open_credit_account(&mut env);
+    let owner_covnt = funded_covnt(&mut env, 1_000);
+    buy_credits(&mut env, &credits, &owner_covnt, 10).expect("buy"); // 100 credits
+
+    let rh = [7u8; 32];
+    consume_credits(&mut env, &credits, 40, rh).expect("first consume");
+    assert_eq!(credit_balance(&env, &credits), 60);
+
+    // Replay with the same receipt_hash must fail and must not debit again.
+    bump_blockhash(&mut env);
+    consume_credits(&mut env, &credits, 40, rh).expect_err("replay must be rejected");
+    assert_eq!(credit_balance(&env, &credits), 60, "no double debit on replay");
+
+    // Once the marker is closed, the seed is free again.
+    close_receipt(&mut env, rh).expect("close receipt");
+    bump_blockhash(&mut env);
+    consume_credits(&mut env, &credits, 10, rh).expect("re-consume after close");
+    assert_eq!(credit_balance(&env, &credits), 50);
 }
 
 // Regression for the re-stake lockout: before `unstake` closed the position,
@@ -99,14 +126,14 @@ fn task_create_and_release_pays_provider() {
     );
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc).expect("create_task");
+    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, 3_600, &tc).expect("create_task");
     assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
     assert_eq!(token_balance(&env, &tc.client_covnt), 400);
 
     release_task(&mut env, &tc, &provider_covnt).expect("release");
     assert_eq!(token_balance(&env, &provider_covnt), 600);
     assert_eq!(token_balance(&env, &tc.escrow_vault), 0);
-    assert_eq!(task_status(&env, &tc.task), 2); // TASK_RELEASED
+    assert_eq!(task_status(&env, &tc.task), ST_RELEASED);
 }
 
 #[cfg(feature = "task-escrow")]
@@ -118,12 +145,12 @@ fn task_refund_after_deadline_returns_client() {
     let provider = Keypair::new().pubkey();
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider, 600, 5_000, &tc).expect("create_task");
+    create_task(&mut env, &AGENT, &task_id, &provider, 600, 5_000, 3_600, &tc).expect("create_task");
 
     warp_unix(&mut env, 6_000); // past the deadline
     refund_task(&mut env, &tc).expect("refund");
     assert_eq!(token_balance(&env, &tc.client_covnt), 1_000); // fully refunded
-    assert_eq!(task_status(&env, &tc.task), 3); // TASK_REFUNDED
+    assert_eq!(task_status(&env, &tc.task), ST_REFUNDED);
 }
 
 #[test]

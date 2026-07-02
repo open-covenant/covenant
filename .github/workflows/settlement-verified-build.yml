@@ -1,0 +1,46 @@
+name: settlement-verified-build
+
+# Reproducible solana-verify build of the settlement program WITH the
+# task-escrow feature (the redesigned escrow + consume replay guard), run in CI
+# because the verifiable build needs Docker. Produces the canonical .so + hash
+# as artifacts so the mainnet upgrade can be deployed from a verified artifact.
+# Runs on push to the integration branch (so it fires without needing the
+# workflow on the default branch) and on manual dispatch.
+on:
+  push:
+    branches: [feat/onchain-settlement-live]
+    paths:
+      - ".github/workflows/settlement-verified-build.yml"
+      - "agent-os/programs/settlement/**"
+  workflow_dispatch:
+
+jobs:
+  verified-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install solana-verify
+        run: cargo install solana-verify --locked
+
+      - name: Reproducible build (--features task-escrow)
+        run: |
+          solana-verify build \
+            --base-image solanafoundation/solana-verifiable-build:3.1.14 \
+            --library-name covenant_settlement_program \
+            -- --features task-escrow
+
+      - name: Executable hash
+        run: |
+          solana-verify get-executable-hash \
+            agent-os/target/deploy/covenant_settlement_program.so | tee settlement-hash.txt
+          ls -l agent-os/target/deploy/covenant_settlement_program.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: settlement-verified-so
+          path: |
+            agent-os/target/deploy/covenant_settlement_program.so
+            settlement-hash.txt
+          if-no-files-found: error

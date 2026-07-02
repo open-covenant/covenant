@@ -612,6 +612,27 @@ mod tests {
     }
 
     #[test]
+    fn base64url_rejects_noncanonical_trailing_bits() {
+        // A final base64url group carries unused low bits that a canonical
+        // encoding leaves zero. Each twin below shares its length and alphabet
+        // with a valid encoding, so neither the length nor the alphabet guard
+        // fires — only the `acc != 0` check separates them. Accepting the
+        // non-canonical form would let two distinct strings decode to the same
+        // bytes, i.e. signature malleability in the JWS `protected`/`signature`
+        // fields this decoder feeds.
+        assert_eq!(base64url_decode("Zg").unwrap(), vec![0x66]);
+        assert!(
+            base64url_decode("Zh").is_err(),
+            "2-char group with a nonzero trailing bit must be rejected",
+        );
+        assert_eq!(base64url_decode("Zm8").unwrap(), b"fo");
+        assert!(
+            base64url_decode("Zm9").is_err(),
+            "3-char group with nonzero trailing bits must be rejected",
+        );
+    }
+
+    #[test]
     fn spec_commits_are_pinned() {
         // The fixture: if an upstream spec revision changes the shape, this
         // pin plus the field-name assertions above force a deliberate update.

@@ -11,7 +11,7 @@ export type CovenantSolanaNetworkConfig = ResolvedCovenantSolanaNetwork;
 export function resolveSolanaNetwork(overrides: NetworkOverrides = {}): CovenantSolanaNetworkConfig {
   const network = resolveCovenantNetwork(undefined, overrides);
   assertSolanaAddress(network.programId, 'program id');
-  if (network.covntMint) assertSolanaAddress(network.covntMint, 'COVNT mint');
+  if (network.covntMint) assertSolanaAddress(network.covntMint, 'CVNT mint');
   return network;
 }
 

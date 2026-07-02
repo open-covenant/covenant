@@ -1,7 +1,7 @@
 # @covenant-org/sdk
 
 TypeScript SDK for the [Covenant](https://opencovenant.org) protocol on Solana. Build and sign
-the on-chain instructions (agent registration, `$COVNT` staking, task escrow, credit purchase,
+the on-chain instructions (agent registration, `$CVNT` staking, task escrow, credit purchase,
 receipt anchoring), plus session-token verification and discovery types.
 
 ## Install
@@ -48,9 +48,9 @@ The account addresses (the `*_PDA`s above) are derived from the protocol program
 protocol docs for their seeds. The builders take pre-resolved addresses and do not derive PDAs
 for you.
 
-## Token instructions need the COVNT mint
+## Token instructions need the CVNT mint
 
-`stake`, `buy_credits`, `create_task`, and `release_task` move `$COVNT`, so each requires the
+`stake`, `buy_credits`, `create_task`, and `release_task` move `$CVNT`, so each requires the
 token mint as a `covntMint` field. Source it from your deployment or the `COVNT_MINT` env var;
 `resolveSolanaNetwork().covntMint` is `null` until you set it.
 
@@ -82,7 +82,7 @@ read for browser builds):
 | Cluster (`devnet` default) | `{ cluster: 'mainnet' }` | `COVENANT_SOLANA_CLUSTER` |
 | RPC URL | `{ rpcUrl }` | `COVENANT_SOLANA_RPC_URL` |
 | Protocol program id | `{ programId }` | `COVENANT_PROTOCOL_PROGRAM_ID` |
-| COVNT mint | `{ covntMint }` | `COVNT_MINT` |
+| CVNT mint | `{ covntMint }` | `COVNT_MINT` |
 
 ```typescript
 const mainnet = resolveSolanaNetwork({ cluster: 'mainnet' });

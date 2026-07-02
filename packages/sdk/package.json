@@ -1,6 +1,6 @@
 {
   "name": "@covenant-org/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK for Covenant's Solana-native protocol surface",
   "license": "Apache-2.0",
   "repository": {
@@ -36,9 +36,7 @@
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "clean": "rm -rf dist tsconfig.tsbuildinfo",
-    "prepublishOnly": "npm run typecheck && npm run test",
-    "prepare": "npm run clean && npm run build"
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
     "@noble/hashes": "^1.5.0",

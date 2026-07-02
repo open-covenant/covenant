@@ -136,7 +136,7 @@ export const MOCK_TASKS: TaskDetail[] = [
     signature: '3mQ7rQ9mZQ7tJ4o8h4q9LkT7o6r8mQ2p5z6x7c8v9b1n2m3q4w5e6r7t8y',
     programId: PROGRAM_ID,
     deadline: new Date(Date.now() + 72 * 3600_000).toISOString(),
-    description: 'Publish COVNT credit burn and stake digest.',
+    description: 'Publish CVNT credit burn and stake digest.',
     criteriaHash: hash32FromText('criteria.settlement'),
     receiptHash: hash32FromText('receipt.settlement'),
     resultHash: hash32FromText('result.settlement'),

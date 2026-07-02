@@ -135,4 +135,4 @@ export function explorerHref(
 export const COVENANT_TOKEN_SYMBOL: string =
   (typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_COVENANT_TOKEN_SYMBOL : undefined) ??
   processEnv().COVENANT_TOKEN_SYMBOL ??
-  'COVNT';
+  'CVNT';

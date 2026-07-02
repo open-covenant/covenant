@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-01T15:17:56.613Z",
+  "updatedAt": "2026-07-02T21:37:40.108Z",
   "task": "audit-kernel-fuel",
   "baselineFuel": 5867618602,
   "incumbent": {
@@ -11,7 +11,7 @@
     "Grok": 1,
     "Codex": 5,
     "GLM": 3,
-    "rejectedRounds": 13
+    "rejectedRounds": 14
   },
   "curve": [
     {
@@ -208,6 +208,24 @@
     "ships": 1
   },
   "rounds": [
+    {
+      "round": "k54",
+      "display": "Round 45",
+      "era": "tournament",
+      "entries": [
+        {
+          "proposer": "GLM",
+          "model": "glm-5.2",
+          "scalar": 6.718,
+          "incumbent": 6.718,
+          "gain": 0,
+          "promoted": false,
+          "commit": null,
+          "handle": null,
+          "reason": "gain 0 < margin 0.002"
+        }
+      ]
+    },
     {
       "round": "k53",
       "display": "Round 44",

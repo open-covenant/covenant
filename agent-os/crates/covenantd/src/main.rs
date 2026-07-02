@@ -304,8 +304,8 @@ async fn main() -> Result<()> {
     );
 
     let said_config = covenantd::said_bridge_config_from_env();
-    let said_bridge = covenant_said_bridge::SaidBridge::new(said_config.clone())
-        .context("build SAID bridge")?;
+    let said_bridge =
+        covenant_said_bridge::SaidBridge::new(said_config.clone()).context("build SAID bridge")?;
     info!(
         enabled = said_config.enabled,
         cluster = said_config.cluster.as_str(),

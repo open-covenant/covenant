@@ -58,8 +58,8 @@ use covenant_permissions::{
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::{AgentResult, Runner};
-use covenant_sap_bridge::{Config as SapBridgeConfig, SapBridge};
 use covenant_said_bridge::{Config as SaidBridgeConfig, SaidBridge};
+use covenant_sap_bridge::{Config as SapBridgeConfig, SapBridge};
 use covenant_settlement::{
     build_receipt_batch, derive_batch_id, intent_dispatch_credits, memory_write_credits,
     ChainConfirmation, Settlement,

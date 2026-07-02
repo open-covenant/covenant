@@ -472,7 +472,10 @@ async fn said_lookup_maps_agent_onto_response() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/api/agents/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+    assert_eq!(
+        req.path,
+        "/api/agents/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
     assert_eq!(
         resp,
         Response::SaidAgent {
@@ -512,7 +515,10 @@ async fn said_inbox_maps_messages_onto_response() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/inbox/solana/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+    assert_eq!(
+        req.path,
+        "/xchain/inbox/solana/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
     match resp {
         Response::SaidInbox {
             chain,
@@ -525,7 +531,10 @@ async fn said_inbox_maps_messages_onto_response() {
             let msg = &messages[0];
             assert_eq!(msg.id, "m1");
             assert_eq!(msg.source_chain, "base");
-            assert_eq!(msg.target_address, "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+            assert_eq!(
+                msg.target_address,
+                "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+            );
             assert_eq!(msg.created_at, Some(1700000000));
         }
         other => panic!("expected SaidInbox, got {other:?}"),
@@ -551,7 +560,10 @@ async fn said_free_tier_maps_status_onto_response() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+    assert_eq!(
+        req.path,
+        "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
     assert_eq!(
         resp,
         Response::SaidFreeTier {
@@ -670,7 +682,10 @@ async fn said_inbox_http_error_maps_to_verb_prefixed_error() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/inbox/dogecoin/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+    assert_eq!(
+        req.path,
+        "/xchain/inbox/dogecoin/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
     assert_eq!(
         resp,
         Response::Error {
@@ -695,7 +710,10 @@ async fn said_free_tier_payment_required_maps_to_verb_prefixed_error() {
     let req = http.await.expect("server");
 
     assert_eq!(req.method, "GET");
-    assert_eq!(req.path, "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb");
+    assert_eq!(
+        req.path,
+        "/xchain/free-tier/AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"
+    );
     assert_eq!(
         resp,
         Response::Error {

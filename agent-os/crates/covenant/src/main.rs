@@ -5653,11 +5653,8 @@ async fn main() -> Result<()> {
                     let metadata_uri = metadata_uri.ok_or_else(|| {
                         anyhow::anyhow!("covenant said register requires --metadata-uri <URL>")
                     })?;
-                    write_frame(
-                        &mut stream,
-                        &Request::SaidRegisterOnChain { metadata_uri },
-                    )
-                    .await?;
+                    write_frame(&mut stream, &Request::SaidRegisterOnChain { metadata_uri })
+                        .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::SaidOnChainRegistered {
                             agent_pda,
@@ -5734,9 +5731,10 @@ async fn main() -> Result<()> {
                             "--failed" => passed = Some(false),
                             "--evidence" => {
                                 i += 1;
-                                evidence_uri = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--evidence needs a URI")
-                                })?);
+                                evidence_uri =
+                                    Some(args.get(i).cloned().ok_or_else(|| {
+                                        anyhow::anyhow!("--evidence needs a URI")
+                                    })?);
                             }
                             "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
@@ -5797,9 +5795,10 @@ async fn main() -> Result<()> {
                         match args[i].as_str() {
                             "--wallet" => {
                                 i += 1;
-                                wallet = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--wallet needs an address")
-                                })?);
+                                wallet =
+                                    Some(args.get(i).cloned().ok_or_else(|| {
+                                        anyhow::anyhow!("--wallet needs an address")
+                                    })?);
                             }
                             "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
@@ -5902,8 +5901,8 @@ async fn main() -> Result<()> {
                     }
                     let start = start
                         .ok_or_else(|| anyhow::anyhow!("covenant said anchor requires --start"))?;
-                    let end = end
-                        .ok_or_else(|| anyhow::anyhow!("covenant said anchor requires --end"))?;
+                    let end =
+                        end.ok_or_else(|| anyhow::anyhow!("covenant said anchor requires --end"))?;
                     let root = root.ok_or_else(|| {
                         anyhow::anyhow!("covenant said anchor requires --root <HEX64>")
                     })?;
@@ -5969,9 +5968,10 @@ async fn main() -> Result<()> {
                             }
                             "--address" | "--wallet" => {
                                 i += 1;
-                                address = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--address needs a value")
-                                })?);
+                                address =
+                                    Some(args.get(i).cloned().ok_or_else(|| {
+                                        anyhow::anyhow!("--address needs a value")
+                                    })?);
                             }
                             "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
@@ -5983,7 +5983,11 @@ async fn main() -> Result<()> {
                     })?;
                     write_frame(&mut stream, &Request::SaidInbox { chain, address }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
-                        Response::SaidInbox { chain, address, messages } => {
+                        Response::SaidInbox {
+                            chain,
+                            address,
+                            messages,
+                        } => {
                             if as_json {
                                 let value = serde_json::json!({
                                     "kind": "said_inbox",
@@ -6020,9 +6024,10 @@ async fn main() -> Result<()> {
                         match args[i].as_str() {
                             "--address" | "--wallet" => {
                                 i += 1;
-                                address = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--address needs a value")
-                                })?);
+                                address =
+                                    Some(args.get(i).cloned().ok_or_else(|| {
+                                        anyhow::anyhow!("--address needs a value")
+                                    })?);
                             }
                             "--json" => as_json = true,
                             other => bail!("unknown flag '{other}'"),
@@ -6079,10 +6084,9 @@ async fn main() -> Result<()> {
                         match args[i].as_str() {
                             "--source-chain" => {
                                 i += 1;
-                                source_chain = args
-                                    .get(i)
-                                    .cloned()
-                                    .ok_or_else(|| anyhow::anyhow!("--source-chain needs a value"))?;
+                                source_chain = args.get(i).cloned().ok_or_else(|| {
+                                    anyhow::anyhow!("--source-chain needs a value")
+                                })?;
                             }
                             "--source-address" | "--from" => {
                                 i += 1;
@@ -6132,7 +6136,9 @@ async fn main() -> Result<()> {
                         (Some(s), _) => s,
                         (None, Some(path)) => std::fs::read_to_string(&path)
                             .with_context(|| format!("read payload from {path}"))?,
-                        (None, None) => bail!("covenant said send requires --payload or --payload-file"),
+                        (None, None) => {
+                            bail!("covenant said send requires --payload or --payload-file")
+                        }
                     };
                     let _: serde_json::Value = serde_json::from_str(&payload_json)
                         .context("payload must be valid JSON")?;
@@ -6148,7 +6154,11 @@ async fn main() -> Result<()> {
                     )
                     .await?;
                     match read_frame::<_, Response>(&mut stream).await? {
-                        Response::SaidSent { message_id, free_tier_remaining, delivered_at } => {
+                        Response::SaidSent {
+                            message_id,
+                            free_tier_remaining,
+                            delivered_at,
+                        } => {
                             if as_json {
                                 let value = serde_json::json!({
                                     "kind": "said_sent",
@@ -6196,11 +6206,7 @@ async fn main() -> Result<()> {
                         }
                         i += 1;
                     }
-                    write_frame(
-                        &mut stream,
-                        &Request::SaidAnchorStatus { recent_limit },
-                    )
-                    .await?;
+                    write_frame(&mut stream, &Request::SaidAnchorStatus { recent_limit }).await?;
                     match read_frame::<_, Response>(&mut stream).await? {
                         Response::SaidAnchorStatus {
                             next_index,

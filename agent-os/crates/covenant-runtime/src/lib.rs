@@ -4390,4 +4390,97 @@ cpu_ms_per_task = 5000
             "one byte over the cap must be clipped and marked, bracketing the keep-arm: {truncated}",
         );
     }
+
+    #[test]
+    fn truncate_stderr_advances_past_a_two_byte_char_split_by_the_cut() {
+        // Both sibling truncation tests feed pure-ASCII buffers, where every
+        // byte index is already a char boundary, so the is_char_boundary
+        // advance in truncate_stderr_for_diagnostics never runs. Craft an
+        // over-cap buffer whose len-MAX_LEN cut lands on the continuation byte
+        // of a 2-byte `é`: a raw drain(..len-MAX_LEN) would panic mid-char
+        // (String::drain requires a char boundary) — a DoS via untrusted agent
+        // stderr — so the advance to the next boundary must fire, drop the
+        // straddling char whole, and resume the retained tail at a whole char.
+        const MAX_LEN: usize = 4096;
+
+        // Size the tail to MAX_LEN-1 so the cut lands on the second byte of the
+        // `é` in front of it; open the tail with a 3-byte `€` to prove the body
+        // resumes at a whole multibyte char, not a dangling continuation byte.
+        let marker = "TAIL-MARKER";
+        let pad = "b".repeat(MAX_LEN - 1 - "€".len() - marker.len());
+        let tail = format!("€{pad}{marker}");
+        assert_eq!(tail.len(), MAX_LEN - 1);
+
+        let over_cap = format!("XXé{tail}");
+        let cut = over_cap.len() - MAX_LEN;
+        assert!(
+            !over_cap.is_char_boundary(cut),
+            "precondition: the cut must land mid-char to exercise the boundary advance",
+        );
+
+        let truncated = truncate_stderr_for_diagnostics(over_cap);
+
+        let body = truncated
+            .strip_prefix("...(truncated)\n")
+            .expect("the clipped head must be marked with the truncation prefix");
+        assert_eq!(
+            body, tail,
+            "the straddling `é` must be dropped whole so the body resumes at the tail's first char",
+        );
+        assert_eq!(
+            body.chars().next(),
+            Some('€'),
+            "the retained body must resume at a whole char, not a dangling continuation byte",
+        );
+        assert!(
+            truncated.ends_with(marker),
+            "the operator-actionable tail must survive the cut",
+        );
+        assert!(
+            !truncated.contains('\u{FFFD}'),
+            "a byte-offset cut must not leave a replacement char from a split code point: {truncated:?}",
+        );
+    }
+
+    #[test]
+    fn truncate_stderr_advances_over_multiple_continuation_bytes_to_the_next_boundary() {
+        // Sharpen the two-byte sibling: land the cut on the FIRST of a 3-byte
+        // char's two continuation bytes so the boundary search must step over
+        // TWO non-boundary bytes to reach the next char. Guards a
+        // `drop_until + 1` shortcut that assumes every split is a 2-byte char
+        // and would leave the drain mid-char on a 3- or 4-byte split.
+        const MAX_LEN: usize = 4096;
+
+        let marker = "TAIL-MARKER";
+        let pad = "b".repeat(MAX_LEN - 2 - "é".len() - marker.len());
+        let tail = format!("é{pad}{marker}");
+        assert_eq!(tail.len(), MAX_LEN - 2);
+
+        let over_cap = format!("Z€{tail}");
+        let cut = over_cap.len() - MAX_LEN;
+        assert!(
+            !over_cap.is_char_boundary(cut) && !over_cap.is_char_boundary(cut + 1),
+            "precondition: the cut must land on the first of two continuation bytes",
+        );
+
+        let truncated = truncate_stderr_for_diagnostics(over_cap);
+
+        let body = truncated
+            .strip_prefix("...(truncated)\n")
+            .expect("the clipped head must be marked with the truncation prefix");
+        assert_eq!(
+            body, tail,
+            "the 3-byte char straddling the cut must be dropped whole across both continuation bytes",
+        );
+        assert_eq!(
+            body.chars().next(),
+            Some('é'),
+            "the retained body must resume at a whole char after skipping two continuation bytes",
+        );
+        assert!(truncated.ends_with(marker));
+        assert!(
+            !truncated.contains('\u{FFFD}'),
+            "a byte-offset cut must not leave a replacement char from a split code point: {truncated:?}",
+        );
+    }
 }

@@ -42,6 +42,6 @@ describe('resolveSolanaNetwork', () => {
 
   it('fails closed when a present COVNT mint is not a Solana address', () => {
     process.env.COVNT_MINT = 'definitely-not-base58!!';
-    expect(() => resolveSolanaNetwork()).toThrow('COVNT mint must be a Solana base58 address');
+    expect(() => resolveSolanaNetwork()).toThrow('CVNT mint must be a Solana base58 address');
   });
 });

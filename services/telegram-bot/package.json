@@ -13,7 +13,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@covenant/sdk": "workspace:*",
+    "@covenant-org/sdk": "workspace:*",
     "fastify": "5.8.5",
     "grammy": "1.42.0"
   },

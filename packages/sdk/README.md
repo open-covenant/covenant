@@ -1,64 +1,114 @@
-# @covenant/sdk
+# @covenant-org/sdk
 
-TypeScript SDK for Covenant Protocol on Solana. The root surface prepares
-Solana-native account ids, instruction descriptors, and wallet-facing payloads
-for the `$COVNT` protocol program.
+TypeScript SDK for the [Covenant](https://opencovenant.org) protocol on Solana. Build and sign
+the on-chain instructions (agent registration, `$CVNT` staking, task escrow, credit purchase,
+receipt anchoring), plus address helpers, PDA seeds, and cluster resolution.
 
 ## Install
 
 ```bash
-pnpm add @covenant/sdk
+npm add @covenant-org/sdk @solana/web3.js
 ```
 
-Not yet published to npm. Use `workspace:*` within the monorepo.
+`@solana/web3.js` (v1) is a peer dependency, so bring your own version.
 
-## Stability
+## Quick start
 
-This package is a workspace-alpha SDK surface. The root export map, `compatibility/exports.v1.json`, and `compatibility/instructions.v1.json` fixtures pin the current Solana account-order, instruction-data keys, and exported helpers against drift, but public npm publication, generated protocol binding compatibility, and semver support windows are not approved yet.
-
-## Quick Start
+Every builder returns a wallet-agnostic descriptor. `toTransactionInstructions` turns it into
+real, signable `TransactionInstruction`s (an 8-byte Anchor discriminator plus Borsh-encoded args
+from the on-chain program IDLs), ready to drop into a transaction and sign with any wallet.
 
 ```typescript
+import { Connection, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import {
   hash32FromText,
-  prepareAnchorReceiptBatchInstruction,
   prepareRegisterAgentInstruction,
   resolveSolanaNetwork,
-} from '@covenant/sdk';
+  toTransactionInstructions,
+} from '@covenant-org/sdk';
 
-const network = resolveSolanaNetwork();
+const operator = Keypair.generate();
+const network = resolveSolanaNetwork(); // devnet by default; see Configuration
+const connection = new Connection(network.rpcUrl, 'confirmed');
 
-const register = prepareRegisterAgentInstruction({
-  configAccount: '11111111111111111111111111111111',
-  operator: '11111111111111111111111111111111',
-  agentAccount: '11111111111111111111111111111111',
-  agentKey: hash32FromText('covenant.agent.alpha'),
-  metadataHash: hash32FromText('https://opencovenant.org/agents/alpha.json'),
+const bundle = prepareRegisterAgentInstruction({
+  configAccount: CONFIG_PDA,
+  operator: operator.publicKey.toBase58(),
+  agentAccount: AGENT_PDA,
+  agentKey: hash32FromText('my-agent'),
+  metadataHash: hash32FromText('https://example.com/agents/my-agent.json'),
   capabilityHash: hash32FromText('research,settlement'),
 });
 
-const receiptBatch = prepareAnchorReceiptBatchInstruction({
-  configAccount: '11111111111111111111111111111111',
-  authority: '11111111111111111111111111111111',
-  batchAccount: '11111111111111111111111111111111',
-  batchId: hash32FromText('receipt-batch-1'),
-  merkleRoot: hash32FromText('receipt-batch-1'),
-  receiptCount: 12,
-});
+const tx = new Transaction().add(...toTransactionInstructions(bundle));
+await sendAndConfirmTransaction(connection, tx, [operator]);
 ```
 
-`network`, `register`, and `receiptBatch` are plain descriptors today. Wallet
-adapter serialization belongs in the next SDK layer after the Anchor IDL is
-generated from the Solana program.
+The account addresses (the `*_PDA`s above) are derived from the protocol program; see the
+protocol docs for their seeds. The builders take pre-resolved addresses and do not derive PDAs
+for you.
 
-## Modules
+## Token instructions need the CVNT mint
 
-| Module | Description |
-|--------|-------------|
-| `solana/network` | Solana cluster and protocol-program configuration |
-| `solana/accounts` | Solana address and hash helpers |
-| `solana/instructions` | instruction-prep helpers for protocol writes |
-| `auth/session` | Session token management |
-| `discovery/types` | Solana protocol event payloads |
-| `domain/task` | TaskStatus lifecycle enum (funded → proof_submitted → verified → released, plus disputed) |
-| `data/mock` | local fixtures for apps and services |
+`stake`, `buy_credits`, `create_task`, and `release_task` move `$CVNT`, so each requires the
+token mint as a `covntMint` field. Source it from your deployment or the `COVNT_MINT` env var;
+`resolveSolanaNetwork().covntMint` is `null` until you set it.
+
+```typescript
+import { prepareStakeInstruction, toTransactionInstructions } from '@covenant-org/sdk';
+
+const bundle = prepareStakeInstruction({
+  configAccount: CONFIG_PDA,
+  agentAccount: AGENT_PDA,
+  positionAccount: POSITION_PDA,
+  owner: operator.publicKey.toBase58(),
+  ownerCovntAccount: OWNER_COVNT_ATA,
+  stakeVault: STAKE_VAULT,
+  covntMint: COVNT_MINT,
+  amountCovnt: '1000000000',
+  lockUntil: String(Math.floor(Date.now() / 1000) + 30 * 86400),
+});
+const [ix] = toTransactionInstructions(bundle);
+```
+
+## Configuration
+
+`resolveSolanaNetwork(overrides?)` resolves the cluster, RPC/WS URLs, protocol program id, and
+mint. Pass overrides directly, or set environment variables (a `NEXT_PUBLIC_`-prefixed form is
+read for browser builds):
+
+| Setting | Override | Env |
+| --- | --- | --- |
+| Cluster (`devnet` default) | `{ cluster: 'mainnet' }` | `COVENANT_SOLANA_CLUSTER` |
+| RPC URL | `{ rpcUrl }` | `COVENANT_SOLANA_RPC_URL` |
+| Protocol program id | `{ programId }` | `COVENANT_PROTOCOL_PROGRAM_ID` |
+| CVNT mint | `{ covntMint }` | `COVNT_MINT` |
+
+```typescript
+const mainnet = resolveSolanaNetwork({ cluster: 'mainnet' });
+```
+
+## Surface
+
+| Area | Exports |
+| --- | --- |
+| Settlement instructions | `prepareRegisterAgentInstruction`, `prepareStakeInstruction`, `prepareBuyCreditsInstruction`, `prepareCreateTaskInstruction`, `prepareReleaseTaskInstruction`, `prepareAnchorReceiptBatchInstruction` |
+| Stake-program instructions | `prepareStakeInitializeInstruction`, `prepareStakeCreatePositionInstruction`, `prepareStakeIncreaseAmountInstruction`, `prepareStakeClaimInstruction`, `prepareStakeClosePositionInstruction`, plus the fee-router, pause, and authority admin builders |
+| Serialization | `toTransactionInstruction`, `toTransactionInstructions` |
+| Accounts and hashing | `isSolanaAddress`, `assertSolanaAddress`, `assertHash32`, `hash32FromText`, `ACCOUNT_SEEDS` |
+| Network | `resolveSolanaNetwork`, `solanaExplorerHref` |
+| Discovery and tasks | `DiscoveryEventRecord`, `DiscoveryStats`, `TASK_STATUS_VALUES`, `TaskStatus` |
+
+Everything imports from the package root. Instruction data is encoded from the program IDLs
+(settlement `cov9UDyp...`, stake `CstkpU2q...`), so the wire bytes cannot drift from what the
+on-chain program accepts.
+
+## Stability
+
+`0.1.0`, alpha. `compatibility/exports.v1.json` and `compatibility/instructions.v1.json` pin the
+exported surface and each instruction's account order and data keys against accidental drift.
+Semver support windows are not yet guaranteed, so pin an exact version.
+
+## License
+
+Apache-2.0.

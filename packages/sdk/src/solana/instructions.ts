@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
-import { covenantBrand } from '@covenant/config/brand';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
+import { COVENANT_TOKEN_SYMBOL } from '../config.js';
 import {
   assertHash32,
   assertSolanaAddress,
@@ -45,6 +46,7 @@ export interface StakeInput {
   positionAccount: SolanaAddress;
   ownerCovntAccount: SolanaAddress;
   stakeVault: SolanaAddress;
+  covntMint: SolanaAddress;
   amountCovnt: string;
   lockUntil: string;
 }
@@ -55,6 +57,7 @@ export interface BuyCreditsInput {
   creditAccount: SolanaAddress;
   ownerCovntAccount: SolanaAddress;
   treasury: SolanaAddress;
+  covntMint: SolanaAddress;
   amountCovnt: string;
 }
 
@@ -65,6 +68,7 @@ export interface CreateTaskInput {
   taskAccount: SolanaAddress;
   clientCovntAccount: SolanaAddress;
   escrowVault: SolanaAddress;
+  covntMint: SolanaAddress;
   provider: SolanaAddress;
   taskId: Hash32;
   amountCovnt: string;
@@ -79,6 +83,7 @@ export interface ReleaseTaskInput {
   taskAccount: SolanaAddress;
   escrowVault: SolanaAddress;
   providerCovntAccount: SolanaAddress;
+  covntMint: SolanaAddress;
   resultHash: Hash32;
   receiptHash: Hash32;
 }
@@ -96,7 +101,7 @@ const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
 export function hash32FromText(value: string): Hash32 {
-  return createHash('sha256').update(value).digest('hex');
+  return bytesToHex(sha256(new TextEncoder().encode(value)));
 }
 
 export function prepareRegisterAgentInstruction(input: RegisterAgentInput): PreparedSolanaBundle {
@@ -130,13 +135,14 @@ export function prepareStakeInstruction(input: StakeInput): PreparedSolanaBundle
       meta('owner', input.owner, true, true),
       meta('owner_covnt', input.ownerCovntAccount, false, true),
       meta('stake_vault', input.stakeVault, false, true),
+      meta('covnt_mint', input.covntMint, false, false),
       meta('token_program', TOKEN_PROGRAM_ID, false, false),
       meta('system_program', SYSTEM_PROGRAM_ID, false, false),
     ],
     data: {
       amount_covnt: input.amountCovnt,
       lock_until: input.lockUntil,
-      token_symbol: covenantBrand.token.symbol,
+      token_symbol: COVENANT_TOKEN_SYMBOL,
     },
   });
 }
@@ -152,6 +158,7 @@ export function prepareBuyCreditsInstruction(input: BuyCreditsInput): PreparedSo
       meta('owner', input.owner, true, true),
       meta('owner_covnt', input.ownerCovntAccount, false, true),
       meta('treasury', input.treasury, false, true),
+      meta('covnt_mint', input.covntMint, false, false),
       meta('token_program', TOKEN_PROGRAM_ID, false, false),
     ],
     data: {
@@ -172,6 +179,7 @@ export function prepareCreateTaskInstruction(input: CreateTaskInput): PreparedSo
       meta('client', input.client, true, true),
       meta('client_covnt', input.clientCovntAccount, false, true),
       meta('escrow_vault', input.escrowVault, false, true),
+      meta('covnt_mint', input.covntMint, false, false),
       meta('token_program', TOKEN_PROGRAM_ID, false, false),
       meta('system_program', SYSTEM_PROGRAM_ID, false, false),
     ],
@@ -197,6 +205,7 @@ export function prepareReleaseTaskInstruction(input: ReleaseTaskInput): Prepared
       meta('client', input.client, true, false),
       meta('escrow_vault', input.escrowVault, false, true),
       meta('provider_covnt', input.providerCovntAccount, false, true),
+      meta('covnt_mint', input.covntMint, false, false),
       meta('token_program', TOKEN_PROGRAM_ID, false, false),
     ],
     data: {

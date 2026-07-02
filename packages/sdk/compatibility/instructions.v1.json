@@ -1,6 +1,6 @@
 {
   "schema": "covenant.sdk-instructions.v1",
-  "package": "@covenant/sdk",
+  "package": "@covenant-org/sdk",
   "stability": "workspace_alpha",
   "instructions": [
     {
@@ -17,6 +17,7 @@
         "owner",
         "owner_covnt",
         "stake_vault",
+        "covnt_mint",
         "token_program",
         "system_program"
       ],
@@ -24,7 +25,7 @@
     },
     {
       "name": "buy_credits",
-      "accounts": ["config", "credits", "owner", "owner_covnt", "treasury", "token_program"],
+      "accounts": ["config", "credits", "owner", "owner_covnt", "treasury", "covnt_mint", "token_program"],
       "data_keys": ["amount_covnt"]
     },
     {
@@ -36,6 +37,7 @@
         "client",
         "client_covnt",
         "escrow_vault",
+        "covnt_mint",
         "token_program",
         "system_program"
       ],
@@ -43,7 +45,7 @@
     },
     {
       "name": "release_task",
-      "accounts": ["config", "task", "client", "escrow_vault", "provider_covnt", "token_program"],
+      "accounts": ["config", "task", "client", "escrow_vault", "provider_covnt", "covnt_mint", "token_program"],
       "data_keys": ["receipt_hash", "result_hash"]
     },
     {

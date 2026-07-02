@@ -1,7 +1,4 @@
-import { covenantBrand } from '@covenant/config/brand';
-import type { SolanaAddress, Hash32 } from '../solana/accounts.js';
-import { hash32FromText } from '../solana/instructions.js';
-import type { TaskStatus } from '../domain/task.js';
+import { hash32FromText, type Hash32, type SolanaAddress, type TaskStatus } from '@covenant-org/sdk';
 
 export interface ReputationDims {
   execution: number;
@@ -115,7 +112,7 @@ export const MOCK_TASKS: TaskDetail[] = [
     clientAddress: CLIENT,
     paymentMint: COVNT_MINT,
     paymentAmount: '125000000',
-    paymentSymbol: covenantBrand.token.symbol,
+    paymentSymbol: 'CVNT',
     status: 'verified',
     signature: '5uA7rQ9mZQ7tJ4o8h4q9LkT7o6r8mQ2p5z6x7c8v9b1n2m3q4w5e6r7t8y9u',
     programId: PROGRAM_ID,
@@ -131,12 +128,12 @@ export const MOCK_TASKS: TaskDetail[] = [
     clientAddress: CLIENT,
     paymentMint: COVNT_MINT,
     paymentAmount: '84000000',
-    paymentSymbol: covenantBrand.token.symbol,
+    paymentSymbol: 'CVNT',
     status: 'funded',
     signature: '3mQ7rQ9mZQ7tJ4o8h4q9LkT7o6r8mQ2p5z6x7c8v9b1n2m3q4w5e6r7t8y',
     programId: PROGRAM_ID,
     deadline: new Date(Date.now() + 72 * 3600_000).toISOString(),
-    description: 'Publish COVNT credit burn and stake digest.',
+    description: 'Publish CVNT credit burn and stake digest.',
     criteriaHash: hash32FromText('criteria.settlement'),
     receiptHash: hash32FromText('receipt.settlement'),
     resultHash: hash32FromText('result.settlement'),

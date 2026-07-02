@@ -79,7 +79,7 @@ export default function SettlementPage() {
         </li>
         <li>
           <code>buy_credits(amount_covnt)</code>: transfer{" "}
-          <code>$COVNT</code> into the treasury in exchange for
+          <code>$CVNT</code> into the treasury in exchange for
           credits at the configured rate.
         </li>
         <li>

@@ -72,13 +72,16 @@ const SEATBELT_PROFILE: &str = r#"(version 1)
 (deny network-inbound (local ip))
 (allow network-inbound (local ip "localhost:*"))
 
-; writes: workspace, this run's temp, the per-user Darwin dirs the agent needs,
-; and the agent's own state dir (but see the config carve-out below)
+; writes: workspace, this run's temp, the shared and per-user temp dirs (a coding
+; agent runs tools that scribble there, and Claude Code keeps its per-project
+; shell state under /private/tmp), the Darwin cache, and the agent's own state.
 (deny file-write*)
 (allow file-write*
   (subpath (param "WORKSPACE"))
   (subpath (param "SESSION_TMP"))
   (subpath (param "DARWIN_TMP"))
+  (subpath "/private/tmp")
+  (subpath "/private/var/tmp")
   (subpath (param "DARWIN_CACHE"))
   (subpath (param "AGENT_STATE"))
   (literal (param "AGENT_STATE_JSON"))
@@ -88,13 +91,15 @@ const SEATBELT_PROFILE: &str = r#"(version 1)
   (regex #"^/dev/ttys?[0-9]*$")
 )
 
-; carve-out: the agent may not edit its own policy: settings, hook config, or
-; installed plugins. This is what makes the proxy and the sandbox unbypassable
-; from inside the run.
+; carve-out (last match wins): the agent may not edit its own policy (settings,
+; hook config, plugins) or the guard's secrets. This is what keeps the proxy and
+; the sandbox unbypassable from inside the run, even with the broad temp allow
+; above (a secrets dir placed under /tmp stays read- and write-denied).
 (deny file-write*
   (literal (param "AGENT_SETTINGS"))
   (literal (param "AGENT_SETTINGS_LOCAL"))
   (subpath (param "AGENT_PLUGINS"))
+  (subpath (param "GUARD_STATE"))
 )
 
 ; reads: key material and the guard's own state stay dark. Default-allow reads

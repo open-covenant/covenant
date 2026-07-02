@@ -322,6 +322,14 @@ pub fn to_svg(receipt: &Receipt) -> String {
     let over = c.outcome.starts_with("killed");
     let bar_w = (pct / 100.0 * 1000.0).round();
     let bar_fill = if over { "#111111" } else { "#555555" };
+    // When spend crossed the cap, mark where the cap sat so the bounded overshoot
+    // reads as honest (cap line + a hair past it), not a suspiciously exact stop.
+    let cap_tick = if c.spent_usd > c.budget_usd && c.budget_usd > 0.0 {
+        let tx = 100.0 + (c.budget_usd / c.spent_usd) * 1000.0;
+        format!("<rect x='{tx:.0}' y='385' width='2' height='22' fill='#b4b4b4'/>")
+    } else {
+        String::new()
+    };
     let headline = match c.outcome.as_str() {
         "completed" => "Ran clean, under cap.",
         o if o.starts_with("killed:budget") => "Stopped at the spend cap.",
@@ -363,6 +371,7 @@ pub fn to_svg(receipt: &Receipt) -> String {
 <text x='{spent_end}' y='366' {sans} font-size='30' font-weight='200' fill='#8a8a8a'>of ${budget:.2} cap</text>
 <rect x='100' y='392' width='1000' height='8' fill='#e0e0de'/>
 <rect x='100' y='392' width='{bar_w}' height='8' fill='{bar_fill}'/>
+{cap_tick}
 {turns}{files}{dur}{netstat}
 <text x='100' y='556' {mono} font-size='14' fill='#555'>chain {root} · signed {signer} · covguard verify</text>
 <text x='1100' y='556' text-anchor='end' {mono} font-size='15' fill='#888'>opencovenant.org/guard</text>
@@ -377,6 +386,7 @@ pub fn to_svg(receipt: &Receipt) -> String {
         budget = c.budget_usd,
         bar_w = bar_w,
         bar_fill = bar_fill,
+        cap_tick = cap_tick,
         turns = stat(100, "turns", &c.calls.to_string()),
         files = stat(360, "files", &c.files_changed.len().to_string()),
         dur = stat(560, "duration", &format!("{:.0}s", c.duration_s)),

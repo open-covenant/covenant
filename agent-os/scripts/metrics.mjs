@@ -6,15 +6,21 @@
 // validate.sh gate catches stale numbers.
 // Pass --write to rewrite the block in place.
 //
-// Counts mirror the public conventions:
-//   * crates       — agent-os/crates/<name>/Cargo.toml with [package]
-//   * Rust lines   — non-blank lines under agent-os/{crates,agents,programs}
-//                    *.rs files, excluding target/
+// Counts read git-tracked sources at working-tree content, so untracked
+// scratch crates and files never move the public numbers, while a dirty
+// tracked edit is counted as it will commit:
+//   * crates       — tracked agent-os/crates/<name>/Cargo.toml with [package]
+//   * Rust lines   — non-blank lines in tracked *.rs under
+//                    agent-os/{crates,agents,programs}
 //   * tests        — #[test] / #[tokio::test] functions (same state machine
 //                    as scripts/test-stats.sh, so the two surfaces agree)
 //   * live tests   — of the above, those whose fn name starts with `live_`
+//
+// A tracked-but-unreadable file (e.g. deleted without committing the
+// deletion) fails the run instead of silently undercounting.
 
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,62 +32,59 @@ const README = join(REPO, "README.md");
 const START = "<!-- METRICS:START -->";
 const END = "<!-- METRICS:END -->";
 
-function* walkRustSources(root) {
-  let entries;
+function trackedFiles() {
+  let out;
   try {
-    entries = readdirSync(root, { withFileTypes: true });
-  } catch {
-    return;
+    out = execFileSync("git", ["ls-files", "-z", "--", "crates", "agents", "programs"], {
+      cwd: AGENT_OS,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  } catch (err) {
+    console.error(`metrics: git ls-files failed: ${err.message}`);
+    process.exit(1);
   }
-  for (const entry of entries) {
-    if (entry.name === "target" || entry.name === "node_modules") continue;
-    const path = join(root, entry.name);
-    if (entry.isDirectory()) {
-      yield* walkRustSources(path);
-    } else if (entry.isFile() && entry.name.endsWith(".rs")) {
-      yield path;
-    }
+  return out.toString("utf8").split("\0").filter(Boolean);
+}
+
+function readTracked(path) {
+  try {
+    return readFileSync(join(AGENT_OS, path), "utf8");
+  } catch (err) {
+    console.error(`metrics: tracked file is unreadable: agent-os/${path} (${err.code ?? err.message})`);
+    console.error("metrics: restore the file or commit its deletion; refusing to undercount");
+    process.exit(1);
   }
 }
 
-function countCrates() {
-  const cratesDir = join(AGENT_OS, "crates");
+function countCrates(tracked) {
   let count = 0;
-  for (const entry of readdirSync(cratesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const manifest = join(cratesDir, entry.name, "Cargo.toml");
-    try {
-      const text = readFileSync(manifest, "utf8");
-      if (/^\s*\[package\]/m.test(text)) count++;
-    } catch {
-      // missing or unreadable manifest — not a crate
-    }
+  for (const path of tracked) {
+    if (!/^crates\/[^/]+\/Cargo\.toml$/.test(path)) continue;
+    if (/^\s*\[package\]/m.test(readTracked(path))) count++;
   }
   return count;
 }
 
-function scanRust() {
+function scanRust(tracked) {
   let lines = 0;
   const tests = new Set();
-  for (const dirName of ["crates", "agents", "programs"]) {
-    const root = join(AGENT_OS, dirName);
-    for (const file of walkRustSources(root)) {
-      const src = readFileSync(file, "utf8").split("\n");
-      let armed = false;
-      for (const raw of src) {
-        if (raw.trim() !== "") lines++;
-        if (/#\[(tokio::)?test\]/.test(raw)) {
-          armed = true;
-          continue;
-        }
-        if (!armed) continue;
-        const fnMatch = raw.match(/fn\s+([A-Za-z_][A-Za-z0-9_]*)/);
-        if (fnMatch) {
-          tests.add(fnMatch[1]);
-          armed = false;
-        } else if (!/^\s*#/.test(raw)) {
-          armed = false;
-        }
+  for (const file of tracked) {
+    if (!file.endsWith(".rs")) continue;
+    const src = readTracked(file).split("\n");
+    let armed = false;
+    for (const raw of src) {
+      if (raw.trim() !== "") lines++;
+      if (/#\[(tokio::)?test\]/.test(raw)) {
+        armed = true;
+        continue;
+      }
+      if (!armed) continue;
+      const fnMatch = raw.match(/fn\s+([A-Za-z_][A-Za-z0-9_]*)/);
+      if (fnMatch) {
+        tests.add(fnMatch[1]);
+        armed = false;
+      } else if (!/^\s*#/.test(raw)) {
+        armed = false;
       }
     }
   }
@@ -115,7 +118,8 @@ if (!range) {
   process.exit(1);
 }
 
-const counts = { crates: countCrates(), ...scanRust() };
+const tracked = trackedFiles();
+const counts = { crates: countCrates(tracked), ...scanRust(tracked) };
 const rendered = renderBlock(counts);
 const next = text.slice(0, range.start) + rendered + text.slice(range.end);
 

@@ -4641,6 +4641,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_consume_uses_charges_a_duplicated_signature_once_per_batch() {
+        let store = InMemoryCapabilityStore::new();
+        let sig = [7u8; 64];
+
+        // A batch that repeats one signature must charge it once, not once per
+        // copy: the dedup arm (`if !seen.insert(..) { continue }`) is what stops
+        // a duplicated request from debiting a max_uses:2 grant twice in a single
+        // call and spending its whole budget at once.
+        assert_eq!(
+            store
+                .consume_uses(&[
+                    BudgetConsumeRequest {
+                        signature: sig,
+                        max_uses: 2,
+                    },
+                    BudgetConsumeRequest {
+                        signature: sig,
+                        max_uses: 2,
+                    },
+                ])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+
+        // Exactly one unit was consumed, so a second real use still fits. Without
+        // the dedup this call would already be Exhausted.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "the duplicate batch must consume one unit, leaving budget for one more",
+        );
+
+        // And the budget is exactly spent at used == max_uses, not over-spent.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: sig,
+                max_uses: 2,
+                used: 2,
+            }]),
+        );
+    }
+
+    #[tokio::test]
     async fn consume_uses_empty_request_consumes_nothing() {
         let store = InMemoryCapabilityStore::new();
         assert_eq!(
@@ -4676,6 +4733,60 @@ mod tests {
                 max_uses: 1,
                 used: 1,
             }])
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_charges_a_duplicated_signature_once_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let sig = [13u8; 64];
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        assert_eq!(
+            s.consume_uses(&[
+                BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                },
+                BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                },
+            ])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        drop(s);
+
+        // The durable ledger must hold exactly one UseRecord for the duplicated
+        // batch. A fresh store replays the count from uses.jsonl, so a second
+        // real use still fits and only the third exhausts the max_uses:2 budget.
+        // Two appended lines would leave the reopened budget already spent.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        assert_eq!(
+            s2.consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "a duplicated request must append one UseRecord, not two",
+        );
+        assert_eq!(
+            s2.consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: sig,
+                max_uses: 2,
+                used: 2,
+            }]),
         );
     }
 

@@ -1,4 +1,3 @@
-export * from './auth/session.js';
 export * from './discovery/types.js';
 export * from './domain/task.js';
 export * from './solana/accounts.js';

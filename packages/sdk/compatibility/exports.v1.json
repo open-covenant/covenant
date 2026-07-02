@@ -3,7 +3,6 @@
   "package": "@covenant-org/sdk",
   "stability": "workspace_alpha",
   "source_exports": [
-    "./auth/session.js",
     "./discovery/types.js",
     "./domain/task.js",
     "./solana/accounts.js",

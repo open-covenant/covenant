@@ -2,7 +2,7 @@
 
 TypeScript SDK for the [Covenant](https://opencovenant.org) protocol on Solana. Build and sign
 the on-chain instructions (agent registration, `$CVNT` staking, task escrow, credit purchase,
-receipt anchoring), plus session-token verification and discovery types.
+receipt anchoring), plus address helpers, PDA seeds, and cluster resolution.
 
 ## Install
 
@@ -97,9 +97,7 @@ const mainnet = resolveSolanaNetwork({ cluster: 'mainnet' });
 | Serialization | `toTransactionInstruction`, `toTransactionInstructions` |
 | Accounts and hashing | `isSolanaAddress`, `assertSolanaAddress`, `assertHash32`, `hash32FromText`, `ACCOUNT_SEEDS` |
 | Network | `resolveSolanaNetwork`, `solanaExplorerHref` |
-| Session auth | `verifySessionJwt`, `sessionSecret` |
 | Discovery and tasks | `DiscoveryEventRecord`, `DiscoveryStats`, `TASK_STATUS_VALUES`, `TaskStatus` |
-| Fixtures (development only) | `MOCK_AGENTS`, `MOCK_TASKS`, and the other `data/mock` helpers |
 
 Everything imports from the package root. Instruction data is encoded from the program IDLs
 (settlement `cov9UDyp...`, stake `CstkpU2q...`), so the wire bytes cannot drift from what the

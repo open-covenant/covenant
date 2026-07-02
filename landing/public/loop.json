@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-02T18:37:30.740Z",
+  "updatedAt": "2026-07-02T18:57:34.754Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12676,
-    "tasks": 1486,
-    "integrated": 1486
+    "events": 12694,
+    "tasks": 1488,
+    "integrated": 1488
   },
   "throughput": {
-    "last24h": 6,
-    "last7d": 198,
-    "velocity": 28.3
+    "last24h": 8,
+    "last7d": 200,
+    "velocity": 28.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-02",
-      "count": 5
+      "count": 7
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-02",
-      "total": 1486
+      "total": 1488
     }
   ],
   "states": {
-    "integrated": 1478,
+    "integrated": 1480,
     "proposed": 1,
     "blocked": 6,
     "in_progress": 1
@@ -216,11 +216,21 @@
     }
   ],
   "inFlight": {
-    "task": "capability-consume-uses-duplicate-signature-dedup-coverage",
+    "task": "runtime-truncate-stderr-multibyte-boundary-coverage",
     "state": "in_progress",
-    "since": "2026-07-02T18:14:32.959Z"
+    "since": "2026-07-02T18:56:36.324Z"
   },
   "recent": [
+    {
+      "at": "2026-07-02T18:54:27.650Z",
+      "task": "identity-base64url-noncanonical-trailing-bits-coverage",
+      "note": "Committed 5fd301b9 (single-file surgical, +21 test-only) and pushed to origin/loop/main-track. Pins the base64url acc!=0 canonical-encoding "
+    },
+    {
+      "at": "2026-07-02T18:45:43.734Z",
+      "task": "capability-consume-uses-duplicate-signature-dedup-coverage",
+      "note": "Committed 7ad33e85 (single-file surgical, +111 test-only) and pushed to origin/loop/main-track (78ab0a99..7ad33e85). All push identity guard"
+    },
     {
       "at": "2026-07-02T17:47:04.067Z",
       "task": "status-budget-ledger-projection-preempt-env-doc-contract",
@@ -310,16 +320,6 @@
       "at": "2026-07-01T06:23:44.221Z",
       "task": "multichain-10",
       "note": "Committed 91957413 (10 files, +954/-2): covenant-evm-signer crate + repo-root README METRICS + agent-os README Crate Groups + surgical Cargo"
-    },
-    {
-      "at": "2026-07-01T05:23:37.635Z",
-      "task": "multichain-02",
-      "note": "Integrated as 81c9c384 (10 files, +1318). New covenant-attestation crate: dual-signed W3C VCDM 2.0 credential over a covenant-audit root (ed"
-    },
-    {
-      "at": "2026-07-01T03:44:23.857Z",
-      "task": "multichain-01",
-      "note": "Committed 641a1109 to loop/main-track and pushed to origin: dual-shaped A2A AgentCard / ERC-8004 registration document in covenant-identity "
     }
   ]
 }

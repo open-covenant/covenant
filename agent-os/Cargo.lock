@@ -1546,6 +1546,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-vantara"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bs58",
+ "covenant-mcp",
+ "ed25519-dalek 2.2.0",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "covenant-x402"
 version = "0.0.0"
 dependencies = [
@@ -1612,6 +1631,7 @@ dependencies = [
  "covenant-settlement",
  "covenant-sns",
  "covenant-types",
+ "covenant-vantara",
  "covenant-x402",
  "dotenvy",
  "futures",

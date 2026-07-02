@@ -207,6 +207,15 @@ async fn main() -> Result<()> {
         }
         None => None,
     };
+    if let Some((client, cfg)) = vantara_from_env() {
+        let added = covenant_vantara::vantara_tools(Arc::new(client), &cfg);
+        if added.is_empty() {
+            tracing::warn!("vantara enabled but allowlist registered no tools");
+        } else {
+            info!(count = added.len(), base_url = %cfg.base_url, "vantara connector enabled");
+            tools_vec.extend(added);
+        }
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -912,6 +921,21 @@ fn acedata_from_env() -> Option<(
             }
         },
     }
+}
+
+/// Build the Vantara connector from env, or None when the operator hasn't
+/// opted in. Reads only — the explorer feeds are public, so there is no key
+/// or signer to configure.
+fn vantara_from_env() -> Option<(
+    covenant_vantara::VantaraClient,
+    covenant_vantara::VantaraConfig,
+)> {
+    let cfg = covenant_vantara::VantaraConfig::from_env();
+    if !cfg.enabled {
+        return None;
+    }
+    let client = covenant_vantara::VantaraClient::new(cfg.base_url.clone());
+    Some((client, cfg))
 }
 
 /// Build the Hyre provider config from env, or None when the operator

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-02T17:17:14.840Z",
+  "updatedAt": "2026-07-02T17:37:19.223Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12653,
-    "tasks": 1483,
-    "integrated": 1483
+    "events": 12663,
+    "tasks": 1484,
+    "integrated": 1485
   },
   "throughput": {
-    "last24h": 8,
-    "last7d": 195,
-    "velocity": 27.9
+    "last24h": 9,
+    "last7d": 197,
+    "velocity": 28.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-02",
-      "count": 2
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-02",
-      "total": 1483
+      "total": 1485
     }
   ],
   "states": {
-    "integrated": 1475,
+    "integrated": 1477,
     "proposed": 1,
-    "blocked": 6,
-    "ready": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "status-memory-store-backfill-mutator-landed-2026-05-17-scope",
-    "state": "ready",
-    "since": "2026-07-02T17:17:02.934Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-02T17:25:22.339Z",
+      "task": "status-runtime-execution-required-check-promotion-deferred-t",
+      "note": "Committed 2f1f7d2a (feat(scripts): bind the gvisor live-runner doc to its test and CI command), 2 files +209 = new agent-os/scripts/validate"
+    },
+    {
+      "at": "2026-07-02T17:17:39.487Z",
+      "task": "status-memory-store-backfill-mutator-landed-2026-05-17-scope",
+      "note": "Committed f1e98e4e (test(covenant): cover memory backfill plain-text dry-run render), 1 file +42/-2 = only agent-os/crates/covenantd/tests/l"
+    },
     {
       "at": "2026-07-02T16:58:15.546Z",
       "task": "status-mcp-tools-server-time-vendor-fixture-wired-adr-0009",
@@ -310,16 +315,6 @@
       "at": "2026-07-01T02:49:48.121Z",
       "task": "multichain-00",
       "note": "Committed f2d0e407 to loop/main-track: Secp256k1IssuerKey + bidirectional IdentityBinding in covenant-identity (+k256/+sha3). 32 tests green"
-    },
-    {
-      "at": "2026-06-30T09:32:16.032Z",
-      "task": "metaplex-signer-rpc-caller-parsing-coverage",
-      "note": "Committed fc76fde0 (test-only +119 in covenant-metaplex-signer/src/main.rs covering latest_blockhash/send_transaction/confirm_signature, REA"
-    },
-    {
-      "at": "2026-06-30T09:07:11.308Z",
-      "task": "metaplex-signer-rpc-envelope-coverage",
-      "note": "Committed 6ee44f48 (test-only +103 in covenant-metaplex-signer/src/main.rs, README metrics 3226->3228 clean). 4 rpc envelope tests pass; scr"
     }
   ]
 }

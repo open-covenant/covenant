@@ -18,6 +18,7 @@ async fn main() -> ExitCode {
         "receipts" => cmd_receipts(rest),
         "card" => cmd_card(rest),
         "mcp" => covenant_guard::mcp::serve().map(|_| 0),
+        "__relay" => cmd_relay(rest).await,
         "doctor" => cmd_doctor(),
         "version" | "--version" | "-V" => {
             println!("covguard {}", env!("CARGO_PKG_VERSION"));
@@ -46,6 +47,18 @@ async fn cmd_run(args: &[String]) -> anyhow::Result<i32> {
     let cfg = cli::parse_run(args)?;
     let outcome = run::run(cfg).await?;
     Ok(outcome.exit_code)
+}
+
+/// Internal: the in-sandbox side of the Linux egress bridge. Not for direct use.
+async fn cmd_relay(args: &[String]) -> anyhow::Result<i32> {
+    let listen = args
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("usage: covguard __relay <listen> <sock>"))?;
+    let sock = args
+        .get(1)
+        .ok_or_else(|| anyhow::anyhow!("usage: covguard __relay <listen> <sock>"))?;
+    covenant_guard::relay::run_relay(listen, Path::new(sock)).await?;
+    Ok(0)
 }
 
 /// Load the event log next to a receipt. `Ok(None)` means genuinely absent (a
@@ -308,11 +321,23 @@ fn cmd_doctor() -> anyhow::Result<i32> {
             },
         );
         ok &= sb;
+    } else if cfg!(target_os = "linux") {
+        let bw = which_on_path("bwrap");
+        check(
+            "os sandbox (bubblewrap)",
+            bw,
+            if bw {
+                ""
+            } else {
+                "install bubblewrap (apt install bubblewrap)"
+            },
+        );
+        ok &= bw;
     } else {
         check(
             "os sandbox",
             false,
-            "macOS-only in this build; set COVGUARD_NO_SANDBOX=1 to run without it",
+            "unsupported platform; set COVGUARD_NO_SANDBOX=1 to run without it",
         );
     }
 

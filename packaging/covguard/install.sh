@@ -25,13 +25,12 @@ case "$arch" in
   *) die "unsupported arch '$arch'" ;;
 esac
 
-# Shipped target: darwin-arm64. The OS sandbox is macOS-only for now, so other
-# platforms build from source (spend cap and receipt work; sandbox does not
-# until the Linux backend lands).
+# Shipped targets: darwin-arm64 and linux-x86_64. Other platforms build from
+# source. The Linux sandbox needs bubblewrap installed (apt install bubblewrap).
 asset="covguard-${os}-${arch}.tar.gz"
 case "${os}-${arch}" in
-  darwin-arm64) : ;;
-  *) die "no prebuilt binary for ${os}-${arch} yet (macOS/arm64 only for now), build from source: cargo install --path agent-os/crates/covenant-guard" ;;
+  darwin-arm64|linux-x86_64) : ;;
+  *) die "no prebuilt binary for ${os}-${arch} yet; build from source: cargo install --path agent-os/crates/covenant-guard" ;;
 esac
 
 say "finding the latest covguard release…"
@@ -75,6 +74,9 @@ case ":$PATH:" in
   *":$dest:"*) : ;;
   *) say "add $dest to your PATH: export PATH=\"$dest:\$PATH\"" ;;
 esac
+if [ "$os" = linux ] && ! command -v bwrap >/dev/null 2>&1; then
+  say "note:  the Linux sandbox needs bubblewrap: apt install bubblewrap (or dnf install bubblewrap)"
+fi
 printf '\n'
 say "next:  covguard doctor"
 say "then:  covguard run --budget 10 -- claude -p \"...\" --dangerously-skip-permissions"

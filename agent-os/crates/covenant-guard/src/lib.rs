@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod pricing;
 pub mod proxy;
 pub mod receipt;
+pub mod relay;
 pub mod run;
 pub mod sandbox;
 

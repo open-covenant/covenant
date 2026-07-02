@@ -256,15 +256,35 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<Outcome> {
         session_tmp: session_tmp.clone(),
         guard_state: secrets_dir.clone(),
     };
-    // Egress is pinned to the proxy port so the agent can't tunnel past the
-    // meter via another loopback service; --allow-localhost widens it.
-    let proxy_hostport = if cfg.allow_localhost {
-        "localhost:*".to_string()
-    } else {
-        format!("localhost:{port}")
-    };
     let profile = sandbox::write_profile(&state_dir)?;
-    let sandboxed = sandbox::wrap(&layout, &profile, &proxy_hostport, &agent_argv)?;
+    let bridge_sock = session_tmp.join("net").join("bridge.sock");
+    let covguard_exe =
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("covguard"));
+    // On Linux the agent's network namespace is isolated; its only route to the
+    // proxy is a unix-socket bridge run on the host for the life of the run. On
+    // macOS the Seatbelt profile pins the proxy port directly.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::fs::create_dir_all(home.join(".cache"));
+        let claude_json = home.join(".claude.json");
+        if !claude_json.exists() {
+            let _ = std::fs::write(&claude_json, "{}\n");
+        }
+        let bsock = bridge_sock.clone();
+        tokio::spawn(async move {
+            let _ = crate::relay::run_bridge(&bsock, port).await;
+        });
+    }
+    let plan = sandbox::Plan {
+        layout: &layout,
+        proxy_port: port,
+        allow_localhost: cfg.allow_localhost,
+        agent_argv: &agent_argv,
+        macos_profile: &profile,
+        bridge_sock: &bridge_sock,
+        covguard_exe: &covguard_exe,
+    };
+    let sandboxed = sandbox::wrap(&plan)?;
     if !sandbox::is_supported() {
         eprintln!("covguard: OS sandbox unavailable on this platform; running without blast-radius containment (spend cap and receipt still apply).");
     }

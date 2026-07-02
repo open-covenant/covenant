@@ -41,9 +41,9 @@ curl -fsSL https://opencovenant.org/guard/install.sh | sh
 covguard doctor
 ```
 
-Also available via `brew install open-covenant/tap/covenant-guard` (macOS/arm64),
-or build from source with `cargo install --path agent-os/crates/covenant-guard`.
-macOS today; Linux is close behind.
+Also available via `brew install open-covenant/tap/covenant-guard`, or build
+from source with `cargo install --path agent-os/crates/covenant-guard`. macOS
+and Linux; the Linux sandbox needs bubblewrap installed.
 
 ## Commands
 

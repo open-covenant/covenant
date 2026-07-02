@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-02T16:57:10.838Z",
+  "updatedAt": "2026-07-02T17:17:14.840Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12640,
-    "tasks": 1482,
-    "integrated": 1482
+    "events": 12653,
+    "tasks": 1483,
+    "integrated": 1483
   },
   "throughput": {
-    "last24h": 7,
-    "last7d": 194,
-    "velocity": 27.7
+    "last24h": 8,
+    "last7d": 195,
+    "velocity": 27.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-02",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,14 @@
     },
     {
       "date": "07-02",
-      "total": 1482
+      "total": 1483
     }
   ],
   "states": {
-    "integrated": 1474,
+    "integrated": 1475,
     "proposed": 1,
     "blocked": 6,
-    "in_progress": 1
+    "ready": 1
   },
   "areas": [
     {
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "status-mcp-tools-server-time-vendor-fixture-wired-adr-0009",
-    "state": "in_progress",
-    "since": "2026-07-02T16:52:20.826Z"
+    "task": "status-memory-store-backfill-mutator-landed-2026-05-17-scope",
+    "state": "ready",
+    "since": "2026-07-02T17:17:02.934Z"
   },
   "recent": [
+    {
+      "at": "2026-07-02T16:58:15.546Z",
+      "task": "status-mcp-tools-server-time-vendor-fixture-wired-adr-0009",
+      "note": "Committed 0127b6b8 (feat(scripts): guard mcp-server-time vendor fixture against its recorded tree hash), 2 files (+228): new agent-os/script"
+    },
     {
       "at": "2026-07-02T16:44:33.888Z",
       "task": "status-local-settlement-receipts-backfill-mutator-landed-202",
@@ -315,11 +320,6 @@
       "at": "2026-06-30T09:07:11.308Z",
       "task": "metaplex-signer-rpc-envelope-coverage",
       "note": "Committed 6ee44f48 (test-only +103 in covenant-metaplex-signer/src/main.rs, README metrics 3226->3228 clean). 4 rpc envelope tests pass; scr"
-    },
-    {
-      "at": "2026-06-30T07:40:24.360Z",
-      "task": "x402-pick-requirement-scope-isolation-coverage",
-      "note": "Committed ee7195a1: test(covenant-x402) pin pick_requirement network/asset scope isolation. 2 files (client.rs test + README 3225->3226), 27"
     }
   ]
 }

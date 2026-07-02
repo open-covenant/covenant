@@ -1,6 +1,7 @@
 //! Command-line surface. Hand-rolled to match the repo's CLI style and to keep
 //! the guard binary free of a heavy argument-parser dependency.
 
+use crate::proxy::Host;
 use std::path::PathBuf;
 
 pub const USAGE: &str = "\
@@ -10,6 +11,8 @@ USAGE:
     covguard run [OPTIONS] -- <agent> [agent args...]
     covguard verify <receipt.json>
     covguard receipts [list | show <id|last> | open <id|last>]
+    covguard card <id|last> [--png <out.png>]
+    covguard mcp                       Run as an MCP server (stdio) exposing guard tools
     covguard doctor
     covguard version
 
@@ -20,6 +23,9 @@ RUN OPTIONS:
     --auth-token <T>   Hold this token in the proxy and inject it; keeps the
                        credential out of the agent's environment. Omit to forward
                        the agent's own login (works with a Claude subscription).
+    --host <claude|codex>  Which provider to meter (default: inferred from the
+                       agent). codex is experimental — the OpenAI wiring is built
+                       but not yet live-verified.
     --json             Print a machine-readable summary line on exit
 
 EXAMPLE:
@@ -32,6 +38,8 @@ pub struct RunConfig {
     pub wall_secs: u64,
     pub workspace: PathBuf,
     pub inject_auth: Option<String>,
+    /// Explicit provider; `None` means infer from the agent's name.
+    pub host: Option<Host>,
     pub json: bool,
     pub agent_argv: Vec<String>,
 }
@@ -62,6 +70,7 @@ pub fn parse_run(args: &[String]) -> anyhow::Result<RunConfig> {
     let mut wall_secs = DEFAULT_WALL_SECS;
     let mut workspace = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut inject_auth = None;
+    let mut host = None;
     let mut json = false;
 
     let mut i = 0;
@@ -92,6 +101,15 @@ pub fn parse_run(args: &[String]) -> anyhow::Result<RunConfig> {
                 inject_auth = Some(format!("Bearer {v}"));
                 i += 2;
             }
+            "--host" => {
+                let v = args.get(i + 1).ok_or_else(|| anyhow::anyhow!("--host needs a value"))?;
+                host = Some(match v.as_str() {
+                    "claude" | "anthropic" => Host::Anthropic,
+                    "codex" | "openai" => Host::OpenAI,
+                    other => anyhow::bail!("unknown --host '{other}' (expected claude|codex)"),
+                });
+                i += 2;
+            }
             "--json" => {
                 json = true;
                 i += 1;
@@ -108,7 +126,7 @@ pub fn parse_run(args: &[String]) -> anyhow::Result<RunConfig> {
     }
     let workspace = workspace.canonicalize().unwrap_or(workspace);
 
-    Ok(RunConfig { budget_usd, wall_secs, workspace, inject_auth, json, agent_argv })
+    Ok(RunConfig { budget_usd, wall_secs, workspace, inject_auth, host, json, agent_argv })
 }
 
 #[cfg(test)]

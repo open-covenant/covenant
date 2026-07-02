@@ -25,12 +25,42 @@ use futures::{SinkExt, StreamExt};
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-const UPSTREAM: &str = "https://api.anthropic.com";
 const BODY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Which provider the proxy forwards to. Selected per run from the agent being
+/// guarded — Claude Code talks to Anthropic, Codex to OpenAI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Host {
+    Anthropic,
+    OpenAI,
+}
+
+impl Host {
+    pub fn base(&self) -> &'static str {
+        match self {
+            Host::Anthropic => "https://api.anthropic.com",
+            Host::OpenAI => "https://api.openai.com",
+        }
+    }
+    pub fn host(&self) -> &'static str {
+        match self {
+            Host::Anthropic => "api.anthropic.com",
+            Host::OpenAI => "api.openai.com",
+        }
+    }
+    /// The request paths whose responses carry usage worth metering.
+    fn meters(&self, path: &str) -> bool {
+        match self {
+            Host::Anthropic => path.starts_with("/v1/messages"),
+            Host::OpenAI => path.starts_with("/v1/responses") || path.starts_with("/v1/chat/completions"),
+        }
+    }
+}
 
 /// Shared proxy state. Cloned (via `Arc`) into every request handler.
 pub struct Proxy {
     client: reqwest::Client,
+    host: Host,
     upstream: String,
     upstream_host: String,
     /// `Some(header_value)` injects this `Authorization` on every request and
@@ -42,14 +72,15 @@ pub struct Proxy {
 }
 
 impl Proxy {
-    pub fn new(ledger: Arc<Ledger>, chain: Arc<Chain>, inject: Option<String>) -> Arc<Self> {
+    pub fn new(ledger: Arc<Ledger>, chain: Arc<Chain>, inject: Option<String>, host: Host) -> Arc<Self> {
         let client = reqwest::Client::builder()
             .build()
             .expect("reqwest client with default (rustls) config");
         Arc::new(Self {
             client,
-            upstream: UPSTREAM.to_string(),
-            upstream_host: "api.anthropic.com".to_string(),
+            host,
+            upstream: host.base().to_string(),
+            upstream_host: host.host().to_string(),
             inject,
             ledger,
             chain,
@@ -163,7 +194,7 @@ async fn forward(State(proxy): State<Arc<Proxy>>, req: axum::extract::Request) -
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| parts.uri.path().to_string());
-    let meter = path_q.starts_with("/v1/messages");
+    let meter = proxy.host.meters(&path_q);
 
     let body_bytes = match axum::body::to_bytes(body, BODY_LIMIT).await {
         Ok(b) => b,
@@ -282,17 +313,20 @@ impl SseUsage {
             let line = line.trim();
             let Some(data) = line.strip_prefix("data:") else { continue };
             let Ok(v) = serde_json::from_str::<serde_json::Value>(data.trim()) else { continue };
+            let u64at = |val: &serde_json::Value, key: &str| val.get(key).and_then(|x| x.as_u64()).unwrap_or(0);
             match v.get("type").and_then(|t| t.as_str()) {
+                // Anthropic Messages API: usage arrives across message_start
+                // (input/cache) and message_delta (output), sealed at stop.
                 Some("message_start") => {
                     self.open = true;
                     self.usage = Usage::default();
                     if let Some(m) = v.get("message") {
                         self.model = m.get("model").and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
                         if let Some(u) = m.get("usage") {
-                            self.usage.input = u.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
-                            self.usage.cache_read = u.get("cache_read_input_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
-                            self.usage.cache_creation = u.get("cache_creation_input_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
-                            self.usage.output = u.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+                            self.usage.input = u64at(u, "input_tokens");
+                            self.usage.cache_read = u64at(u, "cache_read_input_tokens");
+                            self.usage.cache_creation = u64at(u, "cache_creation_input_tokens");
+                            self.usage.output = u64at(u, "output_tokens");
                         }
                     }
                 }
@@ -307,7 +341,40 @@ impl SseUsage {
                         self.open = false;
                     }
                 }
-                _ => {}
+                // OpenAI Responses API (Codex's wire): one terminal event carries
+                // the whole turn's usage.
+                Some("response.completed") => {
+                    if let Some(r) = v.get("response") {
+                        let model = r.get("model").and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
+                        if let Some(u) = r.get("usage") {
+                            let cached = u.get("input_tokens_details").and_then(|d| d.get("cached_tokens")).and_then(|x| x.as_u64()).unwrap_or(0);
+                            let usage = Usage {
+                                input: u64at(u, "input_tokens").saturating_sub(cached),
+                                output: u64at(u, "output_tokens"),
+                                cache_read: cached,
+                                cache_creation: 0,
+                            };
+                            out.push((model, usage));
+                        }
+                    }
+                }
+                _ => {
+                    // OpenAI Chat Completions: the final chunk carries usage when
+                    // the client asked for it (stream_options.include_usage).
+                    if v.get("object").and_then(|o| o.as_str()) == Some("chat.completion.chunk") {
+                        if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
+                            let model = v.get("model").and_then(|x| x.as_str()).unwrap_or("unknown").to_string();
+                            let cached = u.get("prompt_tokens_details").and_then(|d| d.get("cached_tokens")).and_then(|x| x.as_u64()).unwrap_or(0);
+                            let usage = Usage {
+                                input: u64at(u, "prompt_tokens").saturating_sub(cached),
+                                output: u64at(u, "completion_tokens"),
+                                cache_read: cached,
+                                cache_creation: 0,
+                            };
+                            out.push((model, usage));
+                        }
+                    }
+                }
             }
         }
         out
@@ -338,6 +405,38 @@ mod tests {
     fn non_sse_body_yields_nothing() {
         let mut p = SseUsage::new();
         assert!(p.push(b"{\"error\":\"not a stream\"}\n").is_empty());
+    }
+
+    #[test]
+    fn parses_openai_responses_usage() {
+        let mut p = SseUsage::new();
+        let s = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.5\",\"usage\":{\"input_tokens\":500,\"output_tokens\":120,\"input_tokens_details\":{\"cached_tokens\":200}}}}\n\n";
+        let out = p.push(s.as_bytes());
+        assert_eq!(out.len(), 1);
+        let (model, u) = &out[0];
+        assert_eq!(model, "gpt-5.5");
+        assert_eq!(u.input, 300); // 500 total − 200 cached
+        assert_eq!(u.cache_read, 200);
+        assert_eq!(u.output, 120);
+    }
+
+    #[test]
+    fn parses_openai_chat_completions_final_chunk() {
+        let mut p = SseUsage::new();
+        let s = "data: {\"object\":\"chat.completion.chunk\",\"model\":\"gpt-5.5\",\"usage\":{\"prompt_tokens\":80,\"completion_tokens\":20}}\n";
+        let out = p.push(s.as_bytes());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1.input, 80);
+        assert_eq!(out[0].1.output, 20);
+    }
+
+    #[test]
+    fn host_meter_paths() {
+        assert!(Host::Anthropic.meters("/v1/messages?beta=true"));
+        assert!(!Host::Anthropic.meters("/v1/models"));
+        assert!(Host::OpenAI.meters("/v1/responses"));
+        assert!(Host::OpenAI.meters("/v1/chat/completions"));
+        assert!(!Host::OpenAI.meters("/v1/models"));
     }
 
     #[test]

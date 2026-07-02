@@ -289,6 +289,101 @@ h1 {{ margin:8px 0 4px; font-size:26px; font-weight:200; letter-spacing:-.01em; 
     )
 }
 
+fn short(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..n])
+    }
+}
+
+/// Render the receipt as a 1200×630 social card (SVG). This is the artifact
+/// meant to be screenshotted and shared: the money row is the hero, the rest is
+/// supporting evidence. Fonts are named so a headless renderer resolves them to
+/// system faces; the same file opens crisp in any browser.
+pub fn to_svg(receipt: &Receipt) -> String {
+    let c = &receipt.core;
+    let pct = if c.budget_usd > 0.0 {
+        ((c.spent_usd / c.budget_usd) * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let over = c.outcome.starts_with("killed");
+    let bar_w = (pct / 100.0 * 1000.0).round();
+    let bar_fill = if over { "#111111" } else { "#555555" };
+    let headline = match c.outcome.as_str() {
+        "completed" => "Ran clean, under cap.",
+        o if o.starts_with("killed:budget") => "Stopped at the spend cap.",
+        o if o.starts_with("killed:wall") => "Stopped at the time limit.",
+        _ => "Run complete.",
+    };
+    let ws_name = std::path::Path::new(&c.workspace)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&c.workspace);
+    let net = if c.network.is_empty() { "none".to_string() } else { c.network.join(", ") };
+    let est = if c.spend_estimated { " (est.)" } else { "" };
+    let sans = "font-family='Helvetica Neue, Helvetica, Arial, sans-serif'";
+    let mono = "font-family='Menlo, Courier New, monospace'";
+
+    let stat = |x: i32, label: &str, value: &str| {
+        format!(
+            "<text x='{x}' y='476' {mono} font-size='16' fill='#999' letter-spacing='2'>{}</text>\
+             <text x='{x}' y='508' {sans} font-size='30' font-weight='300' fill='#111'>{}</text>",
+            esc(&label.to_uppercase()),
+            esc(value)
+        )
+    };
+
+    format!(
+        r#"<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='630' viewBox='0 0 1200 630'>
+<rect width='1200' height='630' fill='#e9e9e7'/>
+<rect x='60' y='48' width='1080' height='534' fill='#fafafa' stroke='#d4d4d2'/>
+<text x='100' y='118' {mono} font-size='19' fill='#777' letter-spacing='7'>COVENANT GUARD · RECEIPT</text>
+<text x='100' y='188' {sans} font-size='52' font-weight='200' fill='#111'>{headline}</text>
+<text x='100' y='224' {mono} font-size='19' fill='#666'>{tool} · {ws}</text>
+<text x='100' y='300' {mono} font-size='16' fill='#999' letter-spacing='3'>SPEND{est}</text>
+<text x='100' y='366' {sans} font-size='74' font-weight='200' fill='#111'>${spent:.2}</text>
+<text x='{spent_end}' y='366' {sans} font-size='30' font-weight='200' fill='#8a8a8a'>of ${budget:.2} cap</text>
+<rect x='100' y='392' width='1000' height='8' fill='#e0e0de'/>
+<rect x='100' y='392' width='{bar_w}' height='8' fill='{bar_fill}'/>
+{turns}{files}{dur}{netstat}
+<text x='100' y='556' {mono} font-size='14' fill='#555'>chain {root} · signed {signer} · covguard verify</text>
+</svg>"#,
+        headline = esc(headline),
+        tool = esc(&c.tool),
+        ws = esc(ws_name),
+        est = est,
+        spent = c.spent_usd,
+        // Nudge the "of $cap" label to sit after the big number.
+        spent_end = 100 + 130 + format!("{:.2}", c.spent_usd).len() as i32 * 40,
+        budget = c.budget_usd,
+        bar_w = bar_w,
+        bar_fill = bar_fill,
+        turns = stat(100, "turns", &c.calls.to_string()),
+        files = stat(360, "files", &c.files_changed.len().to_string()),
+        dur = stat(560, "duration", &format!("{:.0}s", c.duration_s)),
+        netstat = stat(760, "network", &net),
+        root = esc(&short(&c.chain_root, 12)),
+        signer = esc(&short(&c.signer_pubkey_b58, 8)),
+    )
+}
+
+/// Rasterize an SVG card to a PNG at `path`, resolving text against system
+/// fonts. Kept separate from `to_svg` so a run never depends on the renderer —
+/// the SVG is always written; the PNG is on demand.
+pub fn render_png(svg: &str, path: &std::path::Path) -> Result<(), String> {
+    use resvg::{tiny_skia, usvg};
+    let mut opt = usvg::Options::default();
+    opt.fontdb_mut().load_system_fonts();
+    let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| format!("parse svg: {e}"))?;
+    let size = tree.size().to_int_size();
+    let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())
+        .ok_or_else(|| "zero-size pixmap".to_string())?;
+    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
+    pixmap.save_png(path).map_err(|e| format!("write png: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +441,17 @@ mod tests {
         assert!(html.contains("$0.15"));
         assert!(html.contains("of $10.00 cap"));
         assert!(html.contains("Covenant Guard"));
+    }
+
+    #[test]
+    fn svg_card_is_well_formed_and_shows_money() {
+        let id = LocalIdentity::generate("covenant-guard");
+        let r = sign(sample_core(), &id);
+        let svg = to_svg(&r);
+        assert!(svg.starts_with("<svg"));
+        assert!(svg.trim_end().ends_with("</svg>"));
+        assert!(svg.contains("$0.15"));
+        assert!(svg.contains("of $10.00 cap"));
+        assert!(svg.contains("COVENANT GUARD"));
     }
 }

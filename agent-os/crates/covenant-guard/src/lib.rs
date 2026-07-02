@@ -14,6 +14,7 @@
 pub mod chain;
 pub mod cli;
 pub mod ledger;
+pub mod mcp;
 pub mod pricing;
 pub mod proxy;
 pub mod receipt;

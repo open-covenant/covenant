@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'test -n \"$GUARD_HOOK_URL\" || printf \"%s\\n\" \"covenant-guard: this session is not running under covguard — spend is uncapped and execution is unsandboxed. To guard it: covguard run --budget 10 -- claude ...  (https://opencovenant.org/guard)\" >&2; exit 0'"
+          }
+        ]
+      }
+    ]
+  }
+}

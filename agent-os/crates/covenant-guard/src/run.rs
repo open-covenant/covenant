@@ -7,7 +7,7 @@
 use crate::chain::Chain;
 use crate::cli::RunConfig;
 use crate::ledger::Ledger;
-use crate::proxy::Proxy;
+use crate::proxy::{Host, Proxy};
 use crate::receipt::{self, FileChange, ModelLine, ReceiptCore, Tokens};
 use crate::sandbox::{self, SandboxLayout};
 use covenant_identity::LocalIdentity;
@@ -91,6 +91,24 @@ fn write_hook_settings(dir: &Path, hook_url: &str) -> std::io::Result<std::path:
     Ok(path)
 }
 
+/// Write a Codex config that routes the model provider through the proxy, and
+/// return the `CODEX_HOME` directory holding it. Codex reads `config.toml` from
+/// there; the metering proxy forwards to OpenAI. Experimental.
+fn write_codex_config(session_tmp: &Path, base_url: &str) -> std::io::Result<std::path::PathBuf> {
+    let home = session_tmp.join("codex");
+    std::fs::create_dir_all(&home)?;
+    let config = format!(
+        "model_provider = \"covguard\"\n\n\
+         [model_providers.covguard]\n\
+         name = \"covguard-metered\"\n\
+         base_url = \"{base_url}/v1\"\n\
+         wire_api = \"responses\"\n\
+         env_key = \"COVGUARD_UPSTREAM_KEY\"\n"
+    );
+    std::fs::write(home.join("config.toml"), config)?;
+    Ok(home)
+}
+
 /// Run one guarded agent invocation to completion.
 pub async fn run(cfg: RunConfig) -> anyhow::Result<Outcome> {
     let run_id = uuid::Uuid::new_v4().to_string();
@@ -122,22 +140,33 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<Outcome> {
         }),
     );
 
+    // Which provider to meter — explicit, or inferred from the agent's name.
+    let mut agent_argv = cfg.agent_argv.clone();
+    let agent_name = Path::new(&agent_argv[0]).file_name().and_then(|s| s.to_str()).unwrap_or("agent").to_string();
+    let host = cfg.host.unwrap_or(if agent_name == "codex" { Host::OpenAI } else { Host::Anthropic });
+
     // Start the metering proxy on loopback.
-    let proxy = Proxy::new(ledger.clone(), chain.clone(), cfg.inject_auth.clone());
+    let proxy = Proxy::new(ledger.clone(), chain.clone(), cfg.inject_auth.clone(), host);
     let (port, _serve) = crate::proxy::start(proxy.clone()).await?;
     let base_url = format!("http://127.0.0.1:{port}");
     let hook_url = format!("{base_url}/__guard/hook");
 
     // Wire hooks for Claude Code (best-effort; skipped for other agents or when
     // the caller already passes --settings).
-    let mut agent_argv = cfg.agent_argv.clone();
-    let agent_name = Path::new(&agent_argv[0]).file_name().and_then(|s| s.to_str()).unwrap_or("agent").to_string();
     if agent_name == "claude" && !agent_argv.iter().any(|a| a == "--settings") {
         if let Ok(settings) = write_hook_settings(&session_tmp, &hook_url) {
             agent_argv.push("--settings".into());
             agent_argv.push(settings.to_string_lossy().to_string());
         }
     }
+
+    // Codex routes through a config file, not an env base URL. Written into the
+    // (sandbox-readable) session tmp. Experimental — not yet live-verified.
+    let codex_home = if host == Host::OpenAI {
+        Some(write_codex_config(&session_tmp, &base_url)?)
+    } else {
+        None
+    };
 
     // Wrap the agent in the OS sandbox.
     let layout = SandboxLayout {
@@ -156,9 +185,22 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<Outcome> {
     command
         .args(&sandboxed[1..])
         .current_dir(&cfg.workspace)
-        .env("ANTHROPIC_BASE_URL", &base_url)
         .env("GUARD_HOOK_URL", &hook_url)
         .kill_on_drop(true);
+    match host {
+        Host::Anthropic => {
+            command.env("ANTHROPIC_BASE_URL", &base_url);
+        }
+        Host::OpenAI => {
+            if let Some(ch) = &codex_home {
+                command.env("CODEX_HOME", ch);
+            }
+            command.env("OPENAI_BASE_URL", format!("{base_url}/v1"));
+            if let Ok(k) = std::env::var("OPENAI_API_KEY") {
+                command.env("COVGUARD_UPSTREAM_KEY", k);
+            }
+        }
+    }
     unsafe {
         command.pre_exec(|| {
             libc::setpgid(0, 0);
@@ -263,6 +305,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<Outcome> {
     // Persist: the signed receipt, the human-readable card, and the raw events.
     std::fs::write(receipt_dir.join("receipt.json"), serde_json::to_vec_pretty(&receipt)?)?;
     std::fs::write(receipt_dir.join("receipt.html"), receipt::to_html(&receipt))?;
+    std::fs::write(receipt_dir.join("receipt.svg"), receipt::to_svg(&receipt))?;
     let mut events_jsonl = String::new();
     for e in chain.snapshot() {
         events_jsonl.push_str(&serde_json::to_string(&e)?);

@@ -16,6 +16,8 @@ async fn main() -> ExitCode {
         "run" => cmd_run(rest).await,
         "verify" => cmd_verify(rest),
         "receipts" => cmd_receipts(rest),
+        "card" => cmd_card(rest),
+        "mcp" => covenant_guard::mcp::serve().map(|_| 0),
         "doctor" => cmd_doctor(),
         "version" | "--version" | "-V" => {
             println!("covguard {}", env!("CARGO_PKG_VERSION"));
@@ -166,6 +168,29 @@ fn cmd_receipts(args: &[String]) -> anyhow::Result<i32> {
             anyhow::bail!("usage: covguard receipts [list | show <id|last> | open <id|last>] (got '{other}')");
         }
     }
+}
+
+fn cmd_card(args: &[String]) -> anyhow::Result<i32> {
+    // covguard card <id|last> [--png <out>]
+    let which = args.first().map(|s| s.as_str()).unwrap_or("last");
+    let id = resolve_id(which)?;
+    let dir = receipts_dir().join(&id);
+    let rp = dir.join("receipt.json");
+    let r: Receipt = serde_json::from_slice(&std::fs::read(&rp)?)?;
+    let svg = receipt::to_svg(&r);
+    let svg_path = dir.join("receipt.svg");
+    std::fs::write(&svg_path, &svg)?;
+
+    let png_out = args.iter().position(|a| a == "--png").and_then(|i| args.get(i + 1));
+    if let Some(out) = png_out {
+        match receipt::render_png(&svg, Path::new(out)) {
+            Ok(()) => println!("{out}"),
+            Err(e) => anyhow::bail!("png render failed: {e}"),
+        }
+    } else {
+        println!("{}", svg_path.display());
+    }
+    Ok(0)
 }
 
 fn cmd_doctor() -> anyhow::Result<i32> {

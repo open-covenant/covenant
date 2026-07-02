@@ -31,6 +31,7 @@ futures = { workspace = true }
 libc = { workspace = true }
 bs58 = { workspace = true }
 uuid = { workspace = true }
+resvg = "0.44"
 
 [dev-dependencies]
 tempfile = { workspace = true }

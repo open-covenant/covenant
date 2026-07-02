@@ -687,6 +687,34 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_recovery_byte_above_the_recid_range() {
+        // The sibling v=26 test exercises the checked_sub(27) underflow arm
+        // of recover_eth_address; this pins the second arm: v >= 31 survives
+        // the subtraction (recid_byte >= 4) and must be rejected by
+        // RecoveryId::from_byte rather than fall through to point recovery.
+        // v=31 is the boundary (first recid byte past 3), v=255 the extreme.
+        let ed = ed25519_key(21);
+        let secp = Secp256k1IssuerKey::generate();
+        let good = IdentityBinding::create(&ed, &secp, [22u8; 32]);
+
+        for v in [31u8, 255] {
+            let mut sig = good.secp256k1_signature();
+            sig[64] = v;
+            let bad = IdentityBinding::from_parts(
+                good.ed25519_pubkey(),
+                good.secp256k1_address(),
+                good.audit_root(),
+                good.ed25519_signature(),
+                sig,
+            );
+            assert!(
+                matches!(bad.verify(), Err(BindingError::BadRecoveryByte(b)) if b == v),
+                "recovery byte {v} maps past the RecoveryId range and must be rejected",
+            );
+        }
+    }
+
+    #[test]
     fn from_parts_roundtrips_the_wire_fields() {
         let ed = ed25519_key(19);
         let secp = Secp256k1IssuerKey::generate();

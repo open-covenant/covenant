@@ -47,6 +47,20 @@ run() {
   "$@"
 }
 
+# Local-only validators are deliberately untracked (operator tooling); a clean
+# clone does not have them. Run when present, skip when absent — but a tracked
+# validator that has gone missing is a broken gate, not a skip.
+run_local() {
+  if [ -f "$1" ]; then
+    run node "$1"
+  elif git ls-files --error-unmatch "$1" >/dev/null 2>&1; then
+    printf 'missing tracked validator: %s\n' "$1" >&2
+    exit 1
+  else
+    printf 'skip (local-only validator, not in this checkout): %s\n' "$1"
+  fi
+}
+
 if [ "$mode" != "scripts" ]; then
   run cargo fmt --check
 fi
@@ -56,7 +70,7 @@ run node ./scripts/metrics.mjs
 run node ./scripts/conformance.mjs --check
 run node ./scripts/validate-cli-envelope-docs.mjs
 run node ./scripts/validate-chain-cli-envelope-fields.mjs
-run node ./scripts/validate-sdk-compatibility.mjs
+run_local ./scripts/validate-sdk-compatibility.mjs
 run node ./scripts/validate-crate-groups-coverage.mjs
 run node ./scripts/validate-cvnt-solana-quarantine.mjs
 run node ./scripts/validate-gvisor-required-check-deferral.mjs
@@ -65,7 +79,7 @@ run node ./scripts/validate-gvisor-live-runner-doc-contract.mjs
 run node ./scripts/validate-daemon-subprocess-recover-before-tick.mjs
 run node ./scripts/validate-budget-projection-env-doc.mjs
 run node ./scripts/validate-ipc-v2-migration-doc-fixtures.mjs
-run node ./scripts/validate-autonomy-status-gaps.mjs
+run_local ./scripts/validate-autonomy-status-gaps.mjs
 run node ./scripts/validate-chain-tx-test-line-refs.mjs
 run node ./scripts/validate-receipt-list-line-refs.mjs
 run node ./scripts/validate-receipt-onchain-fallback-line-refs.mjs

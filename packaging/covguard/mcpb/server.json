@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "org.opencovenant/guard",
+  "title": "Covenant Guard",
+  "description": "Hard spend cap, OS sandbox, and signed receipts for unattended coding agents like Claude Code.",
+  "repository": {
+    "url": "https://github.com/open-covenant/covenant",
+    "source": "github"
+  },
+  "websiteUrl": "https://opencovenant.org/guard",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/open-covenant/covenant/releases/download/covguard-v0.1.0/covenant-guard.mcpb",
+      "version": "0.1.0",
+      "fileSha256": "b08d89e97220a5bee918e22285e7a6f14ff15a3e11f887842521809891b8bb9d",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

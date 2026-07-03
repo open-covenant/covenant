@@ -1,0 +1,27 @@
+{
+  "manifest_version": "0.3",
+  "name": "covenant-guard",
+  "display_name": "Covenant Guard",
+  "version": "0.1.0",
+  "description": "Read-only MCP tools over covguard guarded runs: status, receipts, and signature verification.",
+  "long_description": "Covenant Guard (covguard) runs a coding agent unattended with a hard spend cap, an OS sandbox, and a signed receipt. This MCP server exposes read-only tools over the local guard state: guard_status (latest run, spend against cap), guard_receipts (list runs), and guard_verify (re-check a receipt's ed25519 signature and SHA-256 event chain).",
+  "author": { "name": "Covenant", "url": "https://opencovenant.org" },
+  "homepage": "https://opencovenant.org/guard",
+  "repository": { "type": "git", "url": "https://github.com/open-covenant/covenant" },
+  "license": "Apache-2.0",
+  "keywords": ["spend-cap", "sandbox", "receipt", "unattended", "claude-code", "codex"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/covguard-darwin-arm64",
+    "mcp_config": {
+      "command": "${__dirname}/server/covguard-darwin-arm64",
+      "args": ["mcp"],
+      "env": {},
+      "platform_overrides": {
+        "darwin": { "command": "${__dirname}/server/covguard-darwin-arm64" },
+        "linux": { "command": "${__dirname}/server/covguard-linux-x64" }
+      }
+    }
+  },
+  "compatibility": { "platforms": ["darwin", "linux"] }
+}

@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-03T00:01:09.289Z",
+  "updatedAt": "2026-07-03T00:21:13.113Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12716,
-    "tasks": 1490,
+    "events": 12720,
+    "tasks": 1491,
     "integrated": 1491
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1483,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "ci-toolchain-pin-and-clean-clone-gate",
+    "state": "in_progress",
+    "since": "2026-07-03T00:09:10.765Z"
+  },
   "recent": [
     {
       "at": "2026-07-02T23:54:30.031Z",

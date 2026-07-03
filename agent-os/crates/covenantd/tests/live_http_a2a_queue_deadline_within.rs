@@ -190,7 +190,9 @@ async fn live_http_a2a_queue_deadline_within_keeps_only_urgent() {
     }
 
     let filtered: Value = client
-        .get(format!("{base}/a2a/queue?limit=20&deadline_within_ms={window_ms}"))
+        .get(format!(
+            "{base}/a2a/queue?limit=20&deadline_within_ms={window_ms}"
+        ))
         .send()
         .await
         .expect("queue deadline-within")

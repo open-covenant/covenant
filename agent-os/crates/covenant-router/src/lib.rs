@@ -808,11 +808,14 @@ required = ["tool.web_search"]
         std::fs::write(&manifest_path, "name = \"unterminated").unwrap();
         match load_agents_from_dir(dir.path()) {
             Err(RouterError::Manifest { path, source: _ }) => {
-                assert_eq!(path, manifest_path, "must bind the offending agent.toml path");
+                assert_eq!(
+                    path, manifest_path,
+                    "must bind the offending agent.toml path"
+                );
             }
-            other => panic!(
-                "malformed agent.toml must surface as RouterError::Manifest, got {other:?}"
-            ),
+            other => {
+                panic!("malformed agent.toml must surface as RouterError::Manifest, got {other:?}")
+            }
         }
     }
 

@@ -36,7 +36,6 @@ solana_security_txt::security_txt! {
     auditors: "None"
 }
 
-
 /// Accumulator scaling factor for `acc_sol_per_weight`. 1e12 keeps u128 math
 /// well clear of overflow: with `max_active_locks = 500`, per-position weight
 /// bounded by `1e9 * 6dec * 3 = 3e15`, total_weight bounded by `1.5e18`, and
@@ -129,7 +128,6 @@ fn weight_for(amount: u64, multiplier_bps: u16) -> Result<u128> {
         .ok_or_else(|| error!(CovenantStakeError::MathOverflow))
 }
 
-
 #[program]
 pub mod stake {
     use super::*;
@@ -209,10 +207,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn update_min_lock_amount(
-        ctx: Context<UpdateConfigParam>,
-        new_min: u64,
-    ) -> Result<()> {
+    pub fn update_min_lock_amount(ctx: Context<UpdateConfigParam>, new_min: u64) -> Result<()> {
         require!(new_min > 0, CovenantStakeError::InvalidParameter);
         let old = ctx.accounts.config.min_lock_amount;
         ctx.accounts.config.min_lock_amount = new_min;
@@ -220,10 +215,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn update_max_active_locks(
-        ctx: Context<UpdateConfigParam>,
-        new_max: u32,
-    ) -> Result<()> {
+    pub fn update_max_active_locks(ctx: Context<UpdateConfigParam>, new_max: u32) -> Result<()> {
         require!(new_max > 0, CovenantStakeError::InvalidParameter);
         require!(
             new_max >= ctx.accounts.config.active_lock_count,
@@ -235,10 +227,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn update_authority(
-        ctx: Context<UpdateAuthority>,
-        new_authority: Pubkey,
-    ) -> Result<()> {
+    pub fn update_authority(ctx: Context<UpdateAuthority>, new_authority: Pubkey) -> Result<()> {
         let config = &mut ctx.accounts.config;
         let old = config.authority;
         config.authority = new_authority;
@@ -275,11 +264,11 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn create_position(
-        ctx: Context<CreatePosition>,
-        args: CreatePositionArgs,
-    ) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+    pub fn create_position(ctx: Context<CreatePosition>, args: CreatePositionArgs) -> Result<()> {
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         let lock_secs = tier_lock_secs(args.lock_tier_bps)?;
         require!(
             args.amount >= ctx.accounts.config.min_lock_amount,
@@ -348,7 +337,10 @@ pub mod stake {
     }
 
     pub fn increase_amount(ctx: Context<IncreaseAmount>, extra: u64) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         require!(extra > 0, CovenantStakeError::ZeroAmount);
         let now = Clock::get()?.unix_timestamp;
         require!(
@@ -414,7 +406,10 @@ pub mod stake {
     }
 
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         let now = Clock::get()?.unix_timestamp;
         internal_accrue(&mut ctx.accounts.config, now)?;
 
@@ -530,7 +525,10 @@ pub mod stake {
     }
 
     pub fn deposit_sol_fees(ctx: Context<DepositSolFees>, amount: u64) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         require!(amount > 0, CovenantStakeError::ZeroAmount);
         require!(
             ctx.accounts.config.total_weight > 0,
@@ -592,7 +590,10 @@ pub mod stake {
     }
 
     pub fn deposit_buylock_cvnt(ctx: Context<DepositBuyLockCvnt>, amount: u64) -> Result<()> {
-        require!(!ctx.accounts.config.paused, CovenantStakeError::ProtocolPaused);
+        require!(
+            !ctx.accounts.config.paused,
+            CovenantStakeError::ProtocolPaused
+        );
         require!(amount > 0, CovenantStakeError::ZeroAmount);
 
         let cpi = CpiContext::new(
@@ -620,7 +621,6 @@ pub mod stake {
         Ok(())
     }
 }
-
 
 fn internal_accrue(config: &mut Config, now: i64) -> Result<()> {
     if config.total_weight == 0 || config.pending_sol_lamports == 0 {
@@ -663,14 +663,16 @@ fn transfer_from_reward_vault<'info>(
     let after_vault = vault_lamports
         .checked_sub(amount)
         .ok_or(CovenantStakeError::InsufficientRewardVault)?;
-    require!(after_vault >= rent_min, CovenantStakeError::InsufficientRewardVault);
+    require!(
+        after_vault >= rent_min,
+        CovenantStakeError::InsufficientRewardVault
+    );
     **vault_lamports = after_vault;
     **recipient_lamports = recipient_lamports
         .checked_add(amount)
         .ok_or(CovenantStakeError::MathOverflow)?;
     Ok(())
 }
-
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct InitializeArgs {
@@ -694,7 +696,6 @@ pub struct CreatePositionArgs {
     pub amount: u64,
     pub lock_tier_bps: u16,
 }
-
 
 #[account]
 #[derive(InitSpace)]
@@ -748,7 +749,6 @@ pub struct FeeRouter {
     pub last_deposit_ts: i64,
     pub bump: u8,
 }
-
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -1094,7 +1094,6 @@ pub struct DepositBuyLockCvnt<'info> {
     pub depositor: Signer<'info>,
     pub token_program: Interface<'info, TokenInterface>,
 }
-
 
 #[event]
 pub struct ProgramInitialized {

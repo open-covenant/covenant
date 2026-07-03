@@ -94,7 +94,12 @@ pub fn digest(
     buf.push(0x19);
     buf.push(0x01);
     buf.extend_from_slice(&domain_separator());
-    buf.extend_from_slice(&struct_hash(audit_root, credential_hash, valid_from, valid_until));
+    buf.extend_from_slice(&struct_hash(
+        audit_root,
+        credential_hash,
+        valid_from,
+        valid_until,
+    ));
     keccak256(&buf)
 }
 

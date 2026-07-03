@@ -7,8 +7,12 @@ fn deposit_buylock_cvnt_routes_to_vault_and_counts() {
     let mut env = boot();
     let amount = 10_000_000_000; // 10k CVNT
     let payer = env.payer.insecure_clone();
-    let depositor_ata =
-        create_token_account(&mut env.svm, &payer, &env.mint, &env.fee_router_keypair.pubkey());
+    let depositor_ata = create_token_account(
+        &mut env.svm,
+        &payer,
+        &env.mint,
+        &env.fee_router_keypair.pubkey(),
+    );
     mint_to(&mut env.svm, &payer, &env.mint, &depositor_ata, amount);
 
     deposit_buylock_cvnt(&mut env, &depositor_ata, amount).expect("deposit");
@@ -68,8 +72,12 @@ fn buylock_vault_has_no_withdraw_path_in_v1() {
     let mut env = boot();
     let amount = 5_000_000_000;
     let payer = env.payer.insecure_clone();
-    let depositor_ata =
-        create_token_account(&mut env.svm, &payer, &env.mint, &env.fee_router_keypair.pubkey());
+    let depositor_ata = create_token_account(
+        &mut env.svm,
+        &payer,
+        &env.mint,
+        &env.fee_router_keypair.pubkey(),
+    );
     mint_to(&mut env.svm, &payer, &env.mint, &depositor_ata, amount);
     deposit_buylock_cvnt(&mut env, &depositor_ata, amount).expect("deposit");
 
@@ -77,8 +85,15 @@ fn buylock_vault_has_no_withdraw_path_in_v1() {
 
     // Exercise every withdraw-shaped user action; none should touch buylock.
     let (owner, owner_ata) = funded_owner(&mut env, MIN_LOCK_AMOUNT);
-    create_position(&mut env, &owner, &owner_ata, 1, MIN_LOCK_AMOUNT, TIER_30D_BPS)
-        .expect("create");
+    create_position(
+        &mut env,
+        &owner,
+        &owner_ata,
+        1,
+        MIN_LOCK_AMOUNT,
+        TIER_30D_BPS,
+    )
+    .expect("create");
     advance_clock(&mut env, RATE_LIMIT_SECS);
     deposit_sol_fees(&mut env, 100_000_000).expect("deposit fees");
     claim(&mut env, &owner, 1).expect("claim");

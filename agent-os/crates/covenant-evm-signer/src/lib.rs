@@ -123,7 +123,10 @@ impl EasAttestationSigner {
     /// the equivalent EAS off-chain attestation. The attestation's `time`
     /// / `expirationTime` mirror the credential's validity window, and its
     /// `data` is `abi.encode(auditRoot, credentialHash)`.
-    pub fn attest(&self, vc: &VerifiableCredential) -> Result<EasOffchainAttestation, EvmSignerError> {
+    pub fn attest(
+        &self,
+        vc: &VerifiableCredential,
+    ) -> Result<EasOffchainAttestation, EvmSignerError> {
         let report = vc.verify()?;
         let signer = self.issuer.address();
         if report.issuer_address != signer {
@@ -222,7 +225,10 @@ impl EasOffchainAttestation {
     /// Recover the attester from the attestation's own digest and
     /// signature — the check an EVM verifier or EAS's tooling performs.
     pub fn recover_signer(&self) -> Result<[u8; 20], EvmSignerError> {
-        recover_address(&eip712::digest(&self.domain, &self.message), &self.signature)
+        recover_address(
+            &eip712::digest(&self.domain, &self.message),
+            &self.signature,
+        )
     }
 
     /// The EAS off-chain attestation envelope, matching the shape the EAS
@@ -312,7 +318,9 @@ mod tests {
         // The core contract: ecrecover over the produced attestation
         // returns the issuer's secp256k1 address.
         let (secp, vc) = issuer_key_and_vc();
-        let att = EasAttestationSigner::base_sepolia(secp.clone()).attest(&vc).unwrap();
+        let att = EasAttestationSigner::base_sepolia(secp.clone())
+            .attest(&vc)
+            .unwrap();
 
         assert_eq!(att.recover_signer().unwrap(), secp.address());
         assert_eq!(att.signer, secp.address());
@@ -321,14 +329,18 @@ mod tests {
     #[test]
     fn attest_references_the_covenant_schema() {
         let (secp, vc) = issuer_key_and_vc();
-        let att = EasAttestationSigner::base_sepolia(secp).attest(&vc).unwrap();
+        let att = EasAttestationSigner::base_sepolia(secp)
+            .attest(&vc)
+            .unwrap();
         assert_eq!(att.message.schema, covenant_schema_uid());
     }
 
     #[test]
     fn attest_data_is_audit_root_then_credential_hash() {
         let (secp, vc) = issuer_key_and_vc();
-        let att = EasAttestationSigner::base_sepolia(secp).attest(&vc).unwrap();
+        let att = EasAttestationSigner::base_sepolia(secp)
+            .attest(&vc)
+            .unwrap();
 
         assert_eq!(att.message.data.len(), 64);
         assert_eq!(eth::hex_encode(&att.message.data[..32]), AUDIT_ROOT);
@@ -341,7 +353,9 @@ mod tests {
     #[test]
     fn attest_mirrors_the_credential_validity_window() {
         let (secp, vc) = issuer_key_and_vc();
-        let att = EasAttestationSigner::base_sepolia(secp).attest(&vc).unwrap();
+        let att = EasAttestationSigner::base_sepolia(secp)
+            .attest(&vc)
+            .unwrap();
         assert_eq!(att.message.time, 1_700_000_000);
         assert_eq!(att.message.expiration_time, 1_800_000_000);
     }
@@ -352,7 +366,9 @@ mod tests {
         // refuse: otherwise the EAS attester would not be the VC issuer.
         let (_secp, vc) = issuer_key_and_vc();
         let other = Secp256k1IssuerKey::from_secret_bytes(&[11u8; 32]).unwrap();
-        let err = EasAttestationSigner::base_sepolia(other).attest(&vc).unwrap_err();
+        let err = EasAttestationSigner::base_sepolia(other)
+            .attest(&vc)
+            .unwrap_err();
         assert!(matches!(err, EvmSignerError::IssuerMismatch { .. }));
     }
 
@@ -362,7 +378,9 @@ mod tests {
         // emitted message + domain + signature, recompute the digest, and
         // recover the signer named in the JSON.
         let (secp, vc) = issuer_key_and_vc();
-        let att = EasAttestationSigner::base_sepolia(secp.clone()).attest(&vc).unwrap();
+        let att = EasAttestationSigner::base_sepolia(secp.clone())
+            .attest(&vc)
+            .unwrap();
         let value = att.to_json();
         let sig = &value["sig"];
 
@@ -376,7 +394,10 @@ mod tests {
         let domain = EasDomain {
             version: sig["domain"]["version"].as_str().unwrap().to_string(),
             chain_id: sig["domain"]["chainId"].as_u64().unwrap(),
-            verifying_contract: eth::hex_decode_20(sig["domain"]["verifyingContract"].as_str().unwrap()).unwrap(),
+            verifying_contract: eth::hex_decode_20(
+                sig["domain"]["verifyingContract"].as_str().unwrap(),
+            )
+            .unwrap(),
         };
         let message = AttestMessage {
             schema: eth::hex_decode_32(sig["message"]["schema"].as_str().unwrap()).unwrap(),
@@ -388,12 +409,17 @@ mod tests {
             data: eth::hex_decode(sig["message"]["data"].as_str().unwrap()).unwrap(),
         };
         let mut signature = [0u8; 65];
-        signature[..32].copy_from_slice(&eth::hex_decode_32(sig["signature"]["r"].as_str().unwrap()).unwrap());
-        signature[32..64].copy_from_slice(&eth::hex_decode_32(sig["signature"]["s"].as_str().unwrap()).unwrap());
+        signature[..32]
+            .copy_from_slice(&eth::hex_decode_32(sig["signature"]["r"].as_str().unwrap()).unwrap());
+        signature[32..64]
+            .copy_from_slice(&eth::hex_decode_32(sig["signature"]["s"].as_str().unwrap()).unwrap());
         signature[64] = sig["signature"]["v"].as_u64().unwrap() as u8;
 
         let digest = eip712::digest(&domain, &message);
-        assert_eq!(recover_address(&digest, &signature).unwrap(), secp.address());
+        assert_eq!(
+            recover_address(&digest, &signature).unwrap(),
+            secp.address()
+        );
     }
 
     #[test]
@@ -402,7 +428,10 @@ mod tests {
         let d = EasDomain::base_sepolia();
         assert_eq!(d.chain_id, 84_532);
         assert_eq!(d.version, "1.2.0");
-        assert_eq!(eth::hex_0x(&d.verifying_contract), "0x4200000000000000000000000000000000000021");
+        assert_eq!(
+            eth::hex_0x(&d.verifying_contract),
+            "0x4200000000000000000000000000000000000021"
+        );
     }
 
     #[test]
@@ -410,8 +439,12 @@ mod tests {
         // Fixed key + fixed VC: RFC-6979 ECDSA makes the whole attestation
         // byte-identical, so a re-issue dedupes rather than forking.
         let (secp, vc) = issuer_key_and_vc();
-        let a = EasAttestationSigner::base_sepolia(secp.clone()).attest(&vc).unwrap();
-        let b = EasAttestationSigner::base_sepolia(secp).attest(&vc).unwrap();
+        let a = EasAttestationSigner::base_sepolia(secp.clone())
+            .attest(&vc)
+            .unwrap();
+        let b = EasAttestationSigner::base_sepolia(secp)
+            .attest(&vc)
+            .unwrap();
         assert_eq!(a.to_json_string(), b.to_json_string());
         assert_eq!(a.uid, b.uid);
     }
@@ -462,7 +495,11 @@ mod tests {
         let att = signer.attest_reputation(&reputation_projection()).unwrap();
         assert_eq!(att.message.time, 1_700_000_000);
         assert_eq!(att.message.expiration_time, 1_800_000_000);
-        let data_expiry = u64::from_be_bytes(att.message.data[2 * 32 + 24..2 * 32 + 32].try_into().unwrap());
+        let data_expiry = u64::from_be_bytes(
+            att.message.data[2 * 32 + 24..2 * 32 + 32]
+                .try_into()
+                .unwrap(),
+        );
         assert_eq!(data_expiry, att.message.expiration_time);
     }
 
@@ -501,13 +538,19 @@ mod tests {
         let value = att.to_json();
         let sig = &value["sig"];
 
-        assert_eq!(sig["message"]["schema"], eth::hex_0x(&reputation_schema_uid()));
+        assert_eq!(
+            sig["message"]["schema"],
+            eth::hex_0x(&reputation_schema_uid())
+        );
         assert_eq!(value["signer"], eth::hex_0x(&secp.address()));
 
         let domain = EasDomain {
             version: sig["domain"]["version"].as_str().unwrap().to_string(),
             chain_id: sig["domain"]["chainId"].as_u64().unwrap(),
-            verifying_contract: eth::hex_decode_20(sig["domain"]["verifyingContract"].as_str().unwrap()).unwrap(),
+            verifying_contract: eth::hex_decode_20(
+                sig["domain"]["verifyingContract"].as_str().unwrap(),
+            )
+            .unwrap(),
         };
         let message = AttestMessage {
             schema: eth::hex_decode_32(sig["message"]["schema"].as_str().unwrap()).unwrap(),
@@ -519,12 +562,17 @@ mod tests {
             data: eth::hex_decode(sig["message"]["data"].as_str().unwrap()).unwrap(),
         };
         let mut signature = [0u8; 65];
-        signature[..32].copy_from_slice(&eth::hex_decode_32(sig["signature"]["r"].as_str().unwrap()).unwrap());
-        signature[32..64].copy_from_slice(&eth::hex_decode_32(sig["signature"]["s"].as_str().unwrap()).unwrap());
+        signature[..32]
+            .copy_from_slice(&eth::hex_decode_32(sig["signature"]["r"].as_str().unwrap()).unwrap());
+        signature[32..64]
+            .copy_from_slice(&eth::hex_decode_32(sig["signature"]["s"].as_str().unwrap()).unwrap());
         signature[64] = sig["signature"]["v"].as_u64().unwrap() as u8;
 
         let digest = eip712::digest(&domain, &message);
-        assert_eq!(recover_address(&digest, &signature).unwrap(), secp.address());
+        assert_eq!(
+            recover_address(&digest, &signature).unwrap(),
+            secp.address()
+        );
     }
 
     #[test]

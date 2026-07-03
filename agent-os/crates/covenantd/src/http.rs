@@ -1682,7 +1682,8 @@ mod tests {
         let (tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(1);
         let mut stream = Box::pin(tokio_broadcast_stream(rx));
         tx.send(trace("evicted")).expect("first send");
-        tx.send(trace("survivor")).expect("second send evicts the first");
+        tx.send(trace("survivor"))
+            .expect("second send evicts the first");
         let lagged = stream
             .next()
             .await

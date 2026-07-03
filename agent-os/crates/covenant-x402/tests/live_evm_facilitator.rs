@@ -25,7 +25,11 @@ fn env(key: &str) -> Option<String> {
 
 fn secret_bytes(hex: &str) -> [u8; 32] {
     let body = hex.strip_prefix("0x").unwrap_or(hex);
-    assert_eq!(body.len(), 64, "COVENANT_X402_EVM_SECRET_HEX must be 32 bytes");
+    assert_eq!(
+        body.len(),
+        64,
+        "COVENANT_X402_EVM_SECRET_HEX must be 32 bytes"
+    );
     let mut out = [0u8; 32];
     for (i, pair) in body.as_bytes().chunks_exact(2).enumerate() {
         out[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16)
@@ -64,7 +68,10 @@ async fn live_evm_facilitator_accepts_exact_payment() {
         }),
     };
 
-    let header = signer.build_payment(&requirement).await.expect("build payment");
+    let header = signer
+        .build_payment(&requirement)
+        .await
+        .expect("build payment");
     let payment_payload: Value = {
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
         serde_json::from_slice(&BASE64.decode(header).expect("base64")).expect("json")
@@ -96,8 +103,9 @@ async fn live_evm_facilitator_accepts_exact_payment() {
         .expect("facilitator reachable");
     let status = resp.status();
     let text = resp.text().await.expect("read body");
-    let verdict: Value = serde_json::from_str(&text)
-        .unwrap_or_else(|e| panic!("facilitator /verify returned non-JSON ({status}): {e}: {text}"));
+    let verdict: Value = serde_json::from_str(&text).unwrap_or_else(|e| {
+        panic!("facilitator /verify returned non-JSON ({status}): {e}: {text}")
+    });
 
     eprintln!("facilitator /verify -> {status}: {verdict}");
     assert!(

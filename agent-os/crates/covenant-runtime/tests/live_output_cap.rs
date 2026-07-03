@@ -132,7 +132,9 @@ async fn live_subprocess_runner_kills_an_agent_flooding_stdout_past_the_cap() {
             *limit, EXPECTED_CAP,
             "OutputTooLarge must carry the production cap; got limit={limit}",
         ),
-        other => panic!("a flooding agent must surface as RunnerError::OutputTooLarge; got {other:?}"),
+        other => {
+            panic!("a flooding agent must surface as RunnerError::OutputTooLarge; got {other:?}")
+        }
     }
 
     // Promptness is the contract the unit test omits: the ~16 MiB read trips the

@@ -145,9 +145,10 @@ impl EvmSigner {
             .map_err(|e| X402Error::Sign(format!("parse pay_to {:?}: {e}", requirements.pay_to)))?;
         let verifying_contract = parse_address(&requirements.asset)
             .map_err(|e| X402Error::Sign(format!("parse asset {:?}: {e}", requirements.asset)))?;
-        let value: u128 = requirements.amount.parse().map_err(|e| {
-            X402Error::Sign(format!("parse amount {:?}: {e}", requirements.amount))
-        })?;
+        let value: u128 = requirements
+            .amount
+            .parse()
+            .map_err(|e| X402Error::Sign(format!("parse amount {:?}: {e}", requirements.amount)))?;
         if value == 0 {
             return Err(X402Error::Sign(
                 "amount must be positive; a zero-value authorization is a malformed challenge"
@@ -240,7 +241,9 @@ fn chain_id_for_network(network: &str) -> Result<u64> {
         .or_else(|| network.strip_prefix("base:"))
     {
         return rest.parse::<u64>().map_err(|_| {
-            X402Error::Sign(format!("EvmSigner: unparseable chain id in network {network:?}"))
+            X402Error::Sign(format!(
+                "EvmSigner: unparseable chain id in network {network:?}"
+            ))
         });
     }
     match network {
@@ -483,8 +486,9 @@ mod tests {
         let domain = domain_separator("Ether Mail", "1", 1, &verifying);
 
         let person_typehash = keccak256(b"Person(string name,address wallet)");
-        let mail_typehash =
-            keccak256(b"Mail(Person from,Person to,string contents)Person(string name,address wallet)");
+        let mail_typehash = keccak256(
+            b"Mail(Person from,Person to,string contents)Person(string name,address wallet)",
+        );
 
         let hash_person = |name: &str, wallet_hex: &str| {
             let wallet = parse_address(wallet_hex).unwrap();
@@ -530,7 +534,9 @@ mod tests {
         // equals `from`. Reproduce that here from the decoded envelope.
         let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
         let req = base_sepolia_usdc_req("10000");
-        let header = signer.build_envelope(&req, 1_740_672_089, [0x11; 32]).unwrap();
+        let header = signer
+            .build_envelope(&req, 1_740_672_089, [0x11; 32])
+            .unwrap();
         let env = decode_envelope(&header);
 
         let auth = &env["payload"]["authorization"];
@@ -542,7 +548,12 @@ mod tests {
         let nonce = parse_bytes32(auth["nonce"].as_str().unwrap());
 
         let recomputed = eip712_digest(
-            &domain_separator("USDC", "2", 84532, &parse_address(USDC_BASE_SEPOLIA).unwrap()),
+            &domain_separator(
+                "USDC",
+                "2",
+                84532,
+                &parse_address(USDC_BASE_SEPOLIA).unwrap(),
+            ),
             &transfer_struct_hash(&Authorization {
                 from,
                 to,
@@ -553,7 +564,11 @@ mod tests {
             }),
         );
         let sig = parse_hex(env["payload"]["signature"].as_str().unwrap());
-        assert_eq!(recover(&recomputed, &sig), signer.address(), "recovers to payer");
+        assert_eq!(
+            recover(&recomputed, &sig),
+            signer.address(),
+            "recovers to payer"
+        );
         assert_eq!(from, signer.address(), "authorization.from is the payer");
         assert_eq!(value, 10000);
     }
@@ -562,19 +577,29 @@ mod tests {
     async fn envelope_matches_x402_exact_shape() {
         let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
         let req = base_sepolia_usdc_req("10000");
-        let env = decode_envelope(&signer.build_envelope(&req, 1_740_672_089, [0x22; 32]).unwrap());
+        let env = decode_envelope(
+            &signer
+                .build_envelope(&req, 1_740_672_089, [0x22; 32])
+                .unwrap(),
+        );
 
         assert_eq!(env["x402Version"], 1);
         assert_eq!(env["scheme"], "exact");
         assert_eq!(env["network"], "base:84532");
         let sig = env["payload"]["signature"].as_str().unwrap();
-        assert!(sig.starts_with("0x") && sig.len() == 2 + 130, "65-byte hex sig");
+        assert!(
+            sig.starts_with("0x") && sig.len() == 2 + 130,
+            "65-byte hex sig"
+        );
         let auth = &env["payload"]["authorization"];
         assert_eq!(auth["value"], "10000");
         assert_eq!(auth["validAfter"], (1_740_672_089u64 - 600).to_string());
         assert_eq!(auth["validBefore"], (1_740_672_089u64 + 120).to_string());
         let nonce = auth["nonce"].as_str().unwrap();
-        assert!(nonce.starts_with("0x") && nonce.len() == 2 + 64, "32-byte hex nonce");
+        assert!(
+            nonce.starts_with("0x") && nonce.len() == 2 + 64,
+            "32-byte hex nonce"
+        );
     }
 
     #[tokio::test]
@@ -638,10 +663,19 @@ mod tests {
         let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
         let mut req = base_sepolia_usdc_req("10000");
         req.extra = None;
-        let env = decode_envelope(&signer.build_envelope(&req, 1_740_672_089, [0x33; 32]).unwrap());
+        let env = decode_envelope(
+            &signer
+                .build_envelope(&req, 1_740_672_089, [0x33; 32])
+                .unwrap(),
+        );
         let auth = &env["payload"]["authorization"];
         let digest = eip712_digest(
-            &domain_separator("USDC", "2", 84532, &parse_address(USDC_BASE_SEPOLIA).unwrap()),
+            &domain_separator(
+                "USDC",
+                "2",
+                84532,
+                &parse_address(USDC_BASE_SEPOLIA).unwrap(),
+            ),
             &transfer_struct_hash(&Authorization {
                 from: signer.address(),
                 to: parse_address(auth["to"].as_str().unwrap()).unwrap(),

@@ -43,8 +43,8 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<String, BoxError> {
-    let key_path =
-        std::env::var("COVENANT_EVM_ISSUER_KEY").map_err(|_| "COVENANT_EVM_ISSUER_KEY is not set")?;
+    let key_path = std::env::var("COVENANT_EVM_ISSUER_KEY")
+        .map_err(|_| "COVENANT_EVM_ISSUER_KEY is not set")?;
     let domain = domain_for(
         std::env::var("COVENANT_EVM_CHAIN")
             .as_deref()
@@ -60,9 +60,9 @@ fn run() -> Result<String, BoxError> {
 
     let attestation = match mode.as_str() {
         "audit-root" => signer.attest(&VerifiableCredential::from_json(input.trim())?)?,
-        "reputation" => {
-            signer.attest_reputation(&parse_reputation_projection(&serde_json::from_str(input.trim())?)?)?
-        }
+        "reputation" => signer.attest_reputation(&parse_reputation_projection(
+            &serde_json::from_str(input.trim())?,
+        )?)?,
         other => {
             return Err(format!(
                 "unsupported COVENANT_EVM_MODE '{other}': 'audit-root' or 'reputation'"
@@ -114,7 +114,9 @@ mod tests {
         assert_eq!(projection.score.decimals, 4);
         assert_eq!(projection.solana_attestation_pda, [0xAB; 32]);
 
-        let signer = EasAttestationSigner::base_sepolia(Secp256k1IssuerKey::from_secret_bytes(&[9u8; 32]).unwrap());
+        let signer = EasAttestationSigner::base_sepolia(
+            Secp256k1IssuerKey::from_secret_bytes(&[9u8; 32]).unwrap(),
+        );
         let att = signer.attest_reputation(&projection).unwrap();
         assert_eq!(att.recover_signer().unwrap(), att.signer);
     }

@@ -821,9 +821,7 @@ impl covenant_peer_auth::PeerRegistry for FailingPeerRegistry {
 struct FailingAuditLog;
 
 fn audit_outage_err() -> covenant_audit::AuditError {
-    covenant_audit::AuditError::Io(std::io::Error::other(
-        "audit storage outage (test fixture)",
-    ))
+    covenant_audit::AuditError::Io(std::io::Error::other("audit storage outage (test fixture)"))
 }
 
 #[async_trait::async_trait]
@@ -840,10 +838,7 @@ impl covenant_audit::AuditLog for FailingAuditLog {
     ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
         Err(audit_outage_err())
     }
-    async fn purge_older_than(
-        &self,
-        _before_ms: u64,
-    ) -> Result<u64, covenant_audit::AuditError> {
+    async fn purge_older_than(&self, _before_ms: u64) -> Result<u64, covenant_audit::AuditError> {
         Err(audit_outage_err())
     }
     async fn verify_integrity(
@@ -1148,7 +1143,10 @@ async fn grant_recv_http(base: &str, token: &str, sender_b58: &str) {
         .json()
         .await
         .unwrap();
-    assert_eq!(g["kind"], "capability_granted", "recv grant must succeed: {g}");
+    assert_eq!(
+        g["kind"], "capability_granted",
+        "recv grant must succeed: {g}"
+    );
 }
 
 async fn cross_host_reasons(audit: &Arc<dyn AuditLog>) -> Vec<(String, String)> {
@@ -1294,7 +1292,12 @@ async fn peer_tasks_route_collapses_every_rejection_to_one_non_leaking_response(
         .into_iter()
         .map(|(_, reason)| reason)
         .collect();
-    for expected in ["signature_invalid", "unknown_principal", "stale", "recv_not_granted"] {
+    for expected in [
+        "signature_invalid",
+        "unknown_principal",
+        "stale",
+        "recv_not_granted",
+    ] {
         assert!(
             reasons.contains(expected),
             "the audit feed must record the distinct stage {expected}: {reasons:?}"

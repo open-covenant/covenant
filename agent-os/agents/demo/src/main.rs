@@ -173,7 +173,8 @@ mod tests {
 
         assert!(try_charge_quota().is_ok());
         let written: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(home.join("demo-quota.json")).unwrap()).unwrap();
+            serde_json::from_str(&fs::read_to_string(home.join("demo-quota.json")).unwrap())
+                .unwrap();
         assert_eq!(written["day"], today_key());
         assert_eq!(written["count"], 1);
 

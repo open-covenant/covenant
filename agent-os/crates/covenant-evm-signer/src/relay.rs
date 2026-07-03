@@ -40,8 +40,7 @@ pub const EAS_ABI_SOURCE_COMMIT: &str = "0c51c77cccd68e19ddbfeb832f153e75fac1af1
 /// this (see [`attest_selector`]), never hard-coded, so a typo in the tuple
 /// shape changes the selector and fails the pin test rather than silently
 /// staging calldata no contract answers.
-pub const ATTEST_SIGNATURE: &str =
-    "attest((bytes32,(address,uint64,bool,bytes32,bytes,uint256)))";
+pub const ATTEST_SIGNATURE: &str = "attest((bytes32,(address,uint64,bool,bytes32,bytes,uint256)))";
 
 /// A Base chain the relayer can target. `autonomous` marks the only chain an
 /// autonomous session may stage without operator approval.
@@ -351,8 +350,10 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, EvmSignerError::MainnetGated("Base")));
         // Sepolia, the only autonomous chain, stages.
-        assert!(stage_reputation_attestation(&projection(), BASE_SEPOLIA, RelayPolicy::default())
-            .is_ok());
+        assert!(
+            stage_reputation_attestation(&projection(), BASE_SEPOLIA, RelayPolicy::default())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -375,7 +376,10 @@ mod tests {
         let tx = stage_reputation_attestation(&projection(), BASE_SEPOLIA, RelayPolicy::default())
             .unwrap();
         assert_eq!(tx.chain_id, 84_532);
-        assert_eq!(eth::hex_0x(&tx.to), "0x4200000000000000000000000000000000000021");
+        assert_eq!(
+            eth::hex_0x(&tx.to),
+            "0x4200000000000000000000000000000000000021"
+        );
         assert!(tx.revocable);
         assert_eq!(tx.expiration_time, 1_800_000_000);
     }
@@ -383,7 +387,10 @@ mod tests {
     #[test]
     fn predeploy_is_shared_across_the_superchain() {
         assert_eq!(BASE_SEPOLIA.eas, BASE_MAINNET.eas);
-        assert_eq!(eth::hex_0x(&EAS_PREDEPLOY), "0x4200000000000000000000000000000000000021");
+        assert_eq!(
+            eth::hex_0x(&EAS_PREDEPLOY),
+            "0x4200000000000000000000000000000000000021"
+        );
     }
 
     #[test]
@@ -405,7 +412,10 @@ mod tests {
             ..RelayPolicy::default()
         };
         let err = stage_reputation_attestation(&projection(), BASE_SEPOLIA, tight).unwrap_err();
-        assert!(matches!(err, EvmSignerError::PayloadTooLarge { max: 32, .. }));
+        assert!(matches!(
+            err,
+            EvmSignerError::PayloadTooLarge { max: 32, .. }
+        ));
     }
 
     #[test]

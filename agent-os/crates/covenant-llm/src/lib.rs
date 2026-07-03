@@ -2947,7 +2947,9 @@ model = "nomic-embed-text"
         let text = OllamaProvider::with_limits(server.uri(), "m", body.len())
             .complete(&[ChatMessage::user("hi")])
             .await
-            .expect("a body whose length equals the cap must read back: read_body_capped is inclusive");
+            .expect(
+                "a body whose length equals the cap must read back: read_body_capped is inclusive",
+            );
         assert_eq!(text, "hello world");
     }
 

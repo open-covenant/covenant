@@ -110,7 +110,9 @@ fn spawn_daemon(home: &Path, port: u16) -> Child {
 /// following read surfaces EOF — pinning both the rejection and that the
 /// failed handshake tears the connection down.
 async fn assert_revoked_rejected(sock: &Path, token_b58: &str) {
-    let mut stream = UnixStream::connect(sock).await.expect("connect revoked token");
+    let mut stream = UnixStream::connect(sock)
+        .await
+        .expect("connect revoked token");
     match authenticate(&mut stream, token_b58).await {
         Response::AuthenticationFailed { reason } => assert!(
             reason.contains("unknown") || reason.contains("revoked"),
@@ -152,7 +154,9 @@ async fn live_covenantd_forced_self_revoke_bricks_and_manual_recovery_regenerate
         // Sanity: the bootstrap token authenticates before the revoke.
         // Without this, the post-revoke rejection assertion is vacuous.
         {
-            let mut stream = UnixStream::connect(&sock).await.expect("connect operator pre-revoke");
+            let mut stream = UnixStream::connect(&sock)
+                .await
+                .expect("connect operator pre-revoke");
             match authenticate(&mut stream, &bricked_token).await {
                 Response::Authenticated { .. } => {}
                 other => panic!("operator auth must succeed pre-revoke, got {other:?}"),
@@ -163,7 +167,9 @@ async fn live_covenantd_forced_self_revoke_bricks_and_manual_recovery_regenerate
         // its full base58 prefix. force must bypass the self-revoke guard
         // and reach `revoke_by_token_prefix`, returning Revoked.
         {
-            let mut stream = UnixStream::connect(&sock).await.expect("connect operator revoke");
+            let mut stream = UnixStream::connect(&sock)
+                .await
+                .expect("connect operator revoke");
             match authenticate(&mut stream, &bricked_token).await {
                 Response::Authenticated { .. } => {}
                 other => panic!("operator auth for revoke failed: {other:?}"),

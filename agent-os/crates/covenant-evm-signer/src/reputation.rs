@@ -68,7 +68,11 @@ impl ReputationScore {
     /// decimals, i.e. `0.95` — not `95000` and not `0.0095`. Rejects a zero
     /// denominator, a `10^decimals` that overflows `u64`, and a result past
     /// `u32`.
-    pub fn from_ratio(numerator: u64, denominator: u64, decimals: u8) -> Result<Self, EvmSignerError> {
+    pub fn from_ratio(
+        numerator: u64,
+        denominator: u64,
+        decimals: u8,
+    ) -> Result<Self, EvmSignerError> {
         if denominator == 0 {
             return Err(EvmSignerError::Reputation("denominator is zero".into()));
         }
@@ -78,8 +82,9 @@ impl ReputationScore {
         let scaled = numerator as u128 * scale as u128;
         let denom = denominator as u128;
         let rounded = scaled / denom + u128::from(scaled % denom * 2 >= denom);
-        let score = u32::try_from(rounded)
-            .map_err(|_| EvmSignerError::Reputation(format!("scaled score {rounded} exceeds uint32")))?;
+        let score = u32::try_from(rounded).map_err(|_| {
+            EvmSignerError::Reputation(format!("scaled score {rounded} exceeds uint32"))
+        })?;
         Ok(Self { score, decimals })
     }
 
@@ -132,7 +137,13 @@ impl ReputationProjection {
     ) -> Result<Self, EvmSignerError> {
         let pda = hex_decode_32(pda_hex)
             .map_err(|e| EvmSignerError::Reputation(format!("solana_attestation_pda: {e}")))?;
-        Ok(Self::new(score, source_chain, pda, issued_at_unix, expiry_unix))
+        Ok(Self::new(
+            score,
+            source_chain,
+            pda,
+            issued_at_unix,
+            expiry_unix,
+        ))
     }
 
     /// Fail closed on the ways a projection would silently under-attest: a
@@ -154,7 +165,8 @@ impl ReputationProjection {
         }
         if self.solana_attestation_pda == [0u8; 32] {
             return Err(EvmSignerError::Reputation(
-                "solana_attestation_pda is all-zero: the score must reference its Solana anchor".into(),
+                "solana_attestation_pda is all-zero: the score must reference its Solana anchor"
+                    .into(),
             ));
         }
         if self.source_chain.is_empty() {
@@ -236,7 +248,8 @@ mod tests {
     /// consumable, not merely reproducible.
     fn decode(data: &[u8]) -> (u32, u8, u64, String, [u8; 32]) {
         // Low 8 bytes of head word `i`, where every value here fits u64.
-        let low64 = |i: usize| u64::from_be_bytes(data[i * 32 + 24..i * 32 + 32].try_into().unwrap());
+        let low64 =
+            |i: usize| u64::from_be_bytes(data[i * 32 + 24..i * 32 + 32].try_into().unwrap());
         let score = low64(0) as u32;
         let decimals = data[63]; // last byte of word 1
         let expiry = low64(2);

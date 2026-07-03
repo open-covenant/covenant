@@ -213,7 +213,15 @@ async fn live_cli_a2a_status_min_lease_age_filter_survives_restart() {
         let pre = run_cli_json(
             home.path(),
             &cli,
-            &["a2a", "status", "--limit", "20", "--min-lease-age-ms", "0", "--json"],
+            &[
+                "a2a",
+                "status",
+                "--limit",
+                "20",
+                "--min-lease-age-ms",
+                "0",
+                "--json",
+            ],
         )
         .await;
         let leased_at = entry(&pre, &id)
@@ -248,7 +256,15 @@ async fn live_cli_a2a_status_min_lease_age_filter_survives_restart() {
     let post = run_cli_json(
         home.path(),
         &cli,
-        &["a2a", "status", "--limit", "20", "--min-lease-age-ms", "0", "--json"],
+        &[
+            "a2a",
+            "status",
+            "--limit",
+            "20",
+            "--min-lease-age-ms",
+            "0",
+            "--json",
+        ],
     )
     .await;
     let post_entry = entry(&post, &id).expect("lease must survive the restart");
@@ -269,7 +285,15 @@ async fn live_cli_a2a_status_min_lease_age_filter_survives_restart() {
     let small = run_cli_json(
         home.path(),
         &cli,
-        &["a2a", "status", "--limit", "20", "--min-lease-age-ms", "1500", "--json"],
+        &[
+            "a2a",
+            "status",
+            "--limit",
+            "20",
+            "--min-lease-age-ms",
+            "1500",
+            "--json",
+        ],
     )
     .await;
     assert_eq!(small["min_lease_age_ms"].as_u64(), Some(1500));
@@ -284,7 +308,15 @@ async fn live_cli_a2a_status_min_lease_age_filter_survives_restart() {
     let huge = run_cli_json(
         home.path(),
         &cli,
-        &["a2a", "status", "--limit", "20", "--min-lease-age-ms", "3600000", "--json"],
+        &[
+            "a2a",
+            "status",
+            "--limit",
+            "20",
+            "--min-lease-age-ms",
+            "3600000",
+            "--json",
+        ],
     )
     .await;
     assert_eq!(huge["min_lease_age_ms"].as_u64(), Some(3_600_000));

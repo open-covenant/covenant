@@ -185,7 +185,10 @@ async fn live_http_peers_rotate_rejects_non_operator() {
         "the operator's original bearer must still authenticate after the denied rotation; got {}",
         operator_read.status(),
     );
-    let operator_json: Value = operator_read.json().await.expect("operator /peers/list body");
+    let operator_json: Value = operator_read
+        .json()
+        .await
+        .expect("operator /peers/list body");
     assert_ne!(
         operator_json["kind"], "error",
         "the operator's original bearer must still be honored (no rotation happened); \

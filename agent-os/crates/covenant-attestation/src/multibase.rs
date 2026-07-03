@@ -35,9 +35,9 @@ fn base58btc_decode(value: &str) -> Result<Vec<u8>, AttestationError> {
 /// signature it carries.
 pub fn base58btc_signature(value: &str) -> Result<[u8; 64], AttestationError> {
     let raw = base58btc_decode(value)?;
-    raw.as_slice()
-        .try_into()
-        .map_err(|_| AttestationError::Multibase(format!("expected 64 signature bytes, got {}", raw.len())))
+    raw.as_slice().try_into().map_err(|_| {
+        AttestationError::Multibase(format!("expected 64 signature bytes, got {}", raw.len()))
+    })
 }
 
 /// The `publicKeyMultibase` for an Ed25519 key: `z` + base58-btc of
@@ -66,9 +66,7 @@ pub fn ed25519_did_key(pubkey: &[u8; 32]) -> String {
 /// Recover the 32-byte Ed25519 public key from a verification method.
 /// Accepts the `did:key:z…#z…` form and the bare `z6Mk…` multibase form
 /// by taking the last `:`/`#`-delimited token.
-pub fn ed25519_public_key_from_verification_method(
-    vm: &str,
-) -> Result<[u8; 32], AttestationError> {
+pub fn ed25519_public_key_from_verification_method(vm: &str) -> Result<[u8; 32], AttestationError> {
     let token = vm
         .rsplit(|c| c == '#' || c == ':')
         .next()

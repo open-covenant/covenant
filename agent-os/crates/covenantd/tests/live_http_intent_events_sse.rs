@@ -244,7 +244,12 @@ async fn grant_dispatch_capabilities(daemon: &Daemon) {
     // The dispatch chain walks memory.write → embed → settlement before it
     // reaches the runner; grant the same four the buffered-dispatch live
     // test uses so the run reaches the hermes runner and streams a trace.
-    for action in ["memory.write", "memory.read", "chain.receipts", "tool.web_search"] {
+    for action in [
+        "memory.write",
+        "memory.read",
+        "chain.receipts",
+        "tool.web_search",
+    ] {
         let grant: Value = client
             .post(format!("{}/capabilities/grant", daemon.base))
             .bearer_auth(&daemon.token)

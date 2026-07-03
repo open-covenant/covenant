@@ -366,12 +366,7 @@ async fn live_ipc_sign_attestation_accepts_max_4096_byte_message() {
     let message_b58 = bs58::encode(vec![9u8; 4096]).into_string();
     let ts = now_ms();
 
-    match req(
-        &mut stream,
-        Request::SignAttestation { message_b58, ts },
-    )
-    .await
-    {
+    match req(&mut stream, Request::SignAttestation { message_b58, ts }).await {
         Response::IdentityAttestation {
             pubkey_b58,
             ts: echoed_ts,
@@ -385,7 +380,9 @@ async fn live_ipc_sign_attestation_accepts_max_4096_byte_message() {
                 "max-length attestation must still be signed by the daemon identity"
             );
         }
-        other => panic!("4096-byte (inclusive upper bound) message must be ACCEPTED, got {other:?}"),
+        other => {
+            panic!("4096-byte (inclusive upper bound) message must be ACCEPTED, got {other:?}")
+        }
     }
 
     drop(stream);
@@ -407,12 +404,7 @@ async fn live_ipc_sign_attestation_accepts_min_1_byte_message() {
     let message_b58 = bs58::encode(vec![42u8; 1]).into_string();
     let ts = now_ms();
 
-    match req(
-        &mut stream,
-        Request::SignAttestation { message_b58, ts },
-    )
-    .await
-    {
+    match req(&mut stream, Request::SignAttestation { message_b58, ts }).await {
         Response::IdentityAttestation {
             pubkey_b58,
             ts: echoed_ts,

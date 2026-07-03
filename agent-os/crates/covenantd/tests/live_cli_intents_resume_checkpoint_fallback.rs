@@ -215,8 +215,12 @@ budget_credits_per_hour = 1
 
     // The checkpoint save (covenantd lib.rs save_budget_pause_checkpoint) runs
     // before the exhaustion Response returns, so the PauseSaved line is on disk.
-    let checkpoints_before = std::fs::read_to_string(&checkpoints_path)
-        .unwrap_or_else(|_| panic!("checkpoints.jsonl must exist after exhaustion: {}", checkpoints_path.display()));
+    let checkpoints_before = std::fs::read_to_string(&checkpoints_path).unwrap_or_else(|_| {
+        panic!(
+            "checkpoints.jsonl must exist after exhaustion: {}",
+            checkpoints_path.display()
+        )
+    });
     assert!(
         checkpoints_before.contains("pause_saved"),
         "exhaustion must persist a pause_saved checkpoint; got {checkpoints_before:?}"
@@ -293,8 +297,12 @@ budget_credits_per_hour = 1
         .output()
         .await
         .expect("spawn covenant CLI (intents resume latest --json)");
-    let json_stdout = String::from_utf8_lossy(&cli_out_json.stdout).trim().to_string();
-    let json_stderr = String::from_utf8_lossy(&cli_out_json.stderr).trim().to_string();
+    let json_stdout = String::from_utf8_lossy(&cli_out_json.stdout)
+        .trim()
+        .to_string();
+    let json_stderr = String::from_utf8_lossy(&cli_out_json.stderr)
+        .trim()
+        .to_string();
 
     assert!(
         !cli_out_json.status.success(),

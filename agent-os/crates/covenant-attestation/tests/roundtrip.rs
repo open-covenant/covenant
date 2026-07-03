@@ -4,7 +4,9 @@
 //! anchors on Solana. The root here comes from a real `covenant-audit`
 //! chain, so this is a genuine link, not a hand-made hex.
 
-use covenant_attestation::{AttestationInput, AttestationIssuer, StatusPointer, VerifiableCredential};
+use covenant_attestation::{
+    AttestationInput, AttestationIssuer, StatusPointer, VerifiableCredential,
+};
 use covenant_audit::{AuditEvent, AuditKind, AuditLog, InMemoryAuditLog};
 use covenant_types::AgentId;
 use uuid::Uuid;
@@ -71,7 +73,12 @@ async fn verification_survives_a_json_transport_round_trip() {
 
     // Serialize, ship as text, parse, verify — the path a relying party takes.
     let received = VerifiableCredential::from_json(&vc.to_json()).unwrap();
-    let report = received.verify().expect("both proofs verify after transport");
+    let report = received
+        .verify()
+        .expect("both proofs verify after transport");
     assert_eq!(report.audit_root_hex, root);
-    assert_eq!(received.canonical_hash_hex().unwrap(), vc.canonical_hash_hex().unwrap());
+    assert_eq!(
+        received.canonical_hash_hex().unwrap(),
+        vc.canonical_hash_hex().unwrap()
+    );
 }

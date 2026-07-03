@@ -353,11 +353,7 @@ mod tests {
         // worker drains stdin first so the payload write does not race a
         // broken pipe, then prints nothing and exits 0.
         let mut config = Config::disabled(Cluster::Devnet);
-        config.worker_command = vec![
-            "sh".into(),
-            "-c".into(),
-            "cat >/dev/null; true".into(),
-        ];
+        config.worker_command = vec!["sh".into(), "-c".into(), "cat >/dev/null; true".into()];
         let err = invoke_with_limits::<serde_json::Value, serde_json::Value>(
             &config,
             "lookup",

@@ -99,14 +99,15 @@ fn provision_identity(home: &Path) -> [u8; 32] {
 /// Write `<home>/peers/known-hosts.json` binding a single host to an endpoint,
 /// serializing the same `KnownHosts` type the daemon deserializes at startup.
 fn write_known_hosts(home: &Path, host: &str, url: String, pubkey: [u8; 32]) {
-    let known = covenant_peer_auth::KnownHosts::new().with_host(
-        host,
-        covenant_peer_auth::PeerEndpoint { url, pubkey },
-    );
+    let known = covenant_peer_auth::KnownHosts::new()
+        .with_host(host, covenant_peer_auth::PeerEndpoint { url, pubkey });
     let path = covenantd::known_hosts_path(home);
     std::fs::create_dir_all(path.parent().unwrap()).expect("create peers dir");
-    std::fs::write(&path, serde_json::to_vec(&known).expect("serialize known-hosts"))
-        .expect("write known-hosts.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&known).expect("serialize known-hosts"),
+    )
+    .expect("write known-hosts.json");
 }
 
 async fn spawn_daemon(home: &Path, port: u16, deliver_timeout_ms: Option<&str>) -> Child {
@@ -196,7 +197,12 @@ async fn live_a2a_cross_host_task_delivers_to_remote_and_not_local() {
 
     // B authorizes inbound cross-host tasks from A by A's unforgeable pubkey;
     // A authorizes the outbound send to B by B's pubkey.
-    grant(&client_b, &base_b, &format!("a2a.recv.{}", peer_a.pubkey_base58())).await;
+    grant(
+        &client_b,
+        &base_b,
+        &format!("a2a.recv.{}", peer_a.pubkey_base58()),
+    )
+    .await;
     grant(
         &client_a,
         &base_a,
@@ -241,7 +247,10 @@ async fn live_a2a_cross_host_task_delivers_to_remote_and_not_local() {
             .json()
             .await
             .expect("B mailbox body");
-        assert_eq!(next["kind"], "a2_a_task_opt", "mailbox read envelope: {next:?}");
+        assert_eq!(
+            next["kind"], "a2_a_task_opt",
+            "mailbox read envelope: {next:?}"
+        );
         if !next["task"].is_null() {
             delivered = Some(next);
             break;
@@ -251,7 +260,10 @@ async fn live_a2a_cross_host_task_delivers_to_remote_and_not_local() {
     let delivered = delivered.expect("cross-host task must be delivered to B's mailbox");
     let typed: A2ATask = serde_json::from_value(delivered["task"].clone())
         .expect("B mailbox row deserializes as A2ATask");
-    assert_eq!(typed.id, task.id, "delivered task id must match the sent id");
+    assert_eq!(
+        typed.id, task.id,
+        "delivered task id must match the sent id"
+    );
     assert_eq!(
         typed.sender.pubkey, a_pubkey,
         "delivered task must name A as its sender",
@@ -311,7 +323,12 @@ async fn live_a2a_cross_host_dead_remote_fails_within_bounded_timeout() {
     let client = bearer_client(&read_operator_token(home.path()).await);
 
     let recipient = AgentId::new("agent@deadhost", dead_pubkey);
-    grant(&client, &base, &format!("a2a.send.{}", recipient.pubkey_base58())).await;
+    grant(
+        &client,
+        &base,
+        &format!("a2a.send.{}", recipient.pubkey_base58()),
+    )
+    .await;
 
     let task = A2ATask {
         id: Uuid::new_v4(),

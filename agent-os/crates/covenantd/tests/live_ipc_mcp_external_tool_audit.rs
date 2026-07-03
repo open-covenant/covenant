@@ -213,7 +213,10 @@ async fn live_ipc_mcp_external_tool_call_lands_audit_record() {
     .await
     {
         Response::ToolResult { is_error, .. } => {
-            assert!(is_error, "mcp_fake_fail must return a tool-level error result")
+            assert!(
+                is_error,
+                "mcp_fake_fail must return a tool-level error result"
+            )
         }
         other => panic!("mcp_fake_fail must return a ToolResult, got {other:?}"),
     }
@@ -256,7 +259,9 @@ async fn live_ipc_mcp_external_tool_call_lands_audit_record() {
                 .iter()
                 .find(|(tool, ..)| *tool == "mcp_fake_ping")
                 .unwrap_or_else(|| {
-                    panic!("audit feed must record the external mcp_fake_ping call: {completions:?}")
+                    panic!(
+                        "audit feed must record the external mcp_fake_ping call: {completions:?}"
+                    )
                 });
             assert_eq!(
                 ping.1,
@@ -273,7 +278,9 @@ async fn live_ipc_mcp_external_tool_call_lands_audit_record() {
                 .iter()
                 .find(|(tool, ..)| *tool == "mcp_fake_fail")
                 .unwrap_or_else(|| {
-                    panic!("audit feed must record the external mcp_fake_fail call: {completions:?}")
+                    panic!(
+                        "audit feed must record the external mcp_fake_fail call: {completions:?}"
+                    )
                 });
             assert_eq!(
                 fail.1,

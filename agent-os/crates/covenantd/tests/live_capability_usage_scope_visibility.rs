@@ -122,7 +122,10 @@ async fn usage_snapshot(stream: &mut UnixStream) -> Vec<CapabilityUsageEntry> {
 
 /// The grant identified by `signature_b58` — the ed25519 join key — or a panic if
 /// the snapshot does not carry it.
-fn entry_for<'a>(grants: &'a [CapabilityUsageEntry], signature_b58: &str) -> &'a CapabilityUsageEntry {
+fn entry_for<'a>(
+    grants: &'a [CapabilityUsageEntry],
+    signature_b58: &str,
+) -> &'a CapabilityUsageEntry {
     grants
         .iter()
         .find(|g| g.signature_b58 == signature_b58)

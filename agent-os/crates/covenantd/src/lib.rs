@@ -302,7 +302,9 @@ impl Default for MetaplexAttestConfig {
 /// a bad interval falls back to the default rather than refusing to boot.
 pub fn metaplex_attest_config_from_env() -> MetaplexAttestConfig {
     metaplex_attest_config_from_values(
-        std::env::var("COVENANT_METAPLEX_AUTO_ATTEST").ok().as_deref(),
+        std::env::var("COVENANT_METAPLEX_AUTO_ATTEST")
+            .ok()
+            .as_deref(),
         std::env::var("COVENANT_METAPLEX_ATTEST_INTERVAL_SECS")
             .ok()
             .as_deref(),
@@ -1455,10 +1457,7 @@ impl Server {
     /// `<home>/a2a/cross-host-dedup.jsonl`. Without it,
     /// [`Server::admit_remote_a2a_task`] refuses every cross-host envelope
     /// (fail-closed: no durable claim, no admission).
-    pub fn with_cross_host_dedup(
-        mut self,
-        dedup: Arc<cross_host::JsonlCrossHostDedup>,
-    ) -> Self {
+    pub fn with_cross_host_dedup(mut self, dedup: Arc<cross_host::JsonlCrossHostDedup>) -> Self {
         self.cross_host_dedup = Some(dedup);
         self
     }
@@ -4430,11 +4429,7 @@ impl Server {
     /// [`Self::call_tool`]. Reads run a DAS query; writes are delegated
     /// to the `covenant-metaplex-signer` sidecar. The minting key never
     /// enters the daemon's address space.
-    async fn metaplex_tool_call(
-        &self,
-        name: String,
-        arguments: serde_json::Value,
-    ) -> Response {
+    async fn metaplex_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
         let Some(state) = self.metaplex.clone() else {
             return Response::Error {
                 message: "metaplex profile is not enabled on this daemon.".into(),
@@ -16607,7 +16602,13 @@ required = {caps:?}
 
         let server = server_with_audit(audit.clone());
 
-        let query = |since_ms, until_ms, actor: Option<&str>, approver: Option<&str>, rule: Option<&str>, outcome: Option<&str>, limit| {
+        let query = |since_ms,
+                     until_ms,
+                     actor: Option<&str>,
+                     approver: Option<&str>,
+                     rule: Option<&str>,
+                     outcome: Option<&str>,
+                     limit| {
             Request::QueryProvenance {
                 since_ms,
                 until_ms,
@@ -16669,7 +16670,15 @@ required = {caps:?}
 
         // Approver filter excludes the self-revoke, which records none.
         let resp = server
-            .op_respond(query(None, None, None, Some("operator@local"), None, None, 10))
+            .op_respond(query(
+                None,
+                None,
+                None,
+                Some("operator@local"),
+                None,
+                None,
+                10,
+            ))
             .await;
         match resp {
             Response::ProvenanceActions { actions, .. } => {
@@ -16693,7 +16702,10 @@ required = {caps:?}
             Response::ProvenanceActions {
                 actions, scanned, ..
             } => {
-                assert_eq!(scanned, 2, "only the auth failure and the revoke are in window");
+                assert_eq!(
+                    scanned, 2,
+                    "only the auth failure and the revoke are in window"
+                );
                 assert_eq!(actions.len(), 1);
                 assert_eq!(actions[0].outcome, "revoked");
             }
@@ -47968,7 +47980,13 @@ required = {caps:?}
                 arguments: arguments.clone(),
             })
             .await;
-        assert!(matches!(resp, Response::ToolResult { is_error: false, .. }));
+        assert!(matches!(
+            resp,
+            Response::ToolResult {
+                is_error: false,
+                ..
+            }
+        ));
 
         let events = s.audit.recent(50).await.unwrap();
         let (tool, hash, outcome) = events
@@ -48063,7 +48081,10 @@ required = {caps:?}
         // arguments, never the raw value; the reason names the field and types.
         assert_eq!(hash, hash_hex(arguments.to_string().as_bytes()));
         assert!(reason.contains("field `text`"), "got: {reason}");
-        assert!(!reason.contains("42"), "reason must not echo the value: {reason}");
+        assert!(
+            !reason.contains("42"),
+            "reason must not echo the value: {reason}"
+        );
 
         // The tool body never ran: a refused call must not also leave a
         // completion row, or the chain would imply the malformed call executed.
@@ -48442,7 +48463,10 @@ required = {caps:?}
             _ => None,
         });
         let (passed, missing) = latest_check.expect("capability check row present");
-        assert!(passed, "authorization matches even when the budget is spent");
+        assert!(
+            passed,
+            "authorization matches even when the budget is spent"
+        );
         assert!(
             missing.is_empty(),
             "a spent grant must not appear in missing_actions"
@@ -48628,8 +48652,12 @@ required = {caps:?}
     /// A daemon that knows `alice@host1` as a cross-host peer bound to `sender`'s
     /// key and has a fresh restart-durable dedup log under `dir`.
     async fn cross_host_server(dir: &std::path::Path, sender: &LocalIdentity) -> Server {
-        cross_host_server_with_identity(dir, sender, Arc::new(LocalIdentity::generate("user@local")))
-            .await
+        cross_host_server_with_identity(
+            dir,
+            sender,
+            Arc::new(LocalIdentity::generate("user@local")),
+        )
+        .await
     }
 
     /// Same, but with an explicit daemon identity so two instances can share one
@@ -48854,8 +48882,9 @@ required = {caps:?}
         );
         let rows = cross_host_rows(&s).await;
         assert!(
-            rows.iter().any(|(outcome, _, sender_b58)| outcome == "admitted"
-                && *sender_b58 == alice.agent_id().pubkey_base58()),
+            rows.iter()
+                .any(|(outcome, _, sender_b58)| outcome == "admitted"
+                    && *sender_b58 == alice.agent_id().pubkey_base58()),
             "an admitted row attributing the remote sender must be on the audit feed: {rows:?}"
         );
     }
@@ -48893,9 +48922,10 @@ required = {caps:?}
         );
         let rows = cross_host_rows(&s).await;
         assert!(
-            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
-                && reason == "signature_invalid"
-                && sender_b58.is_empty()),
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "signature_invalid"
+                    && sender_b58.is_empty()),
             "the open-stage reason is recorded internally with no proven sender: {rows:?}"
         );
     }
@@ -48930,9 +48960,10 @@ required = {caps:?}
         );
         let rows = cross_host_rows(&s).await;
         assert!(
-            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
-                && reason == "malformed_signature"
-                && sender_b58.is_empty()),
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "malformed_signature"
+                    && sender_b58.is_empty()),
             "a structurally-malformed signature is its own admission reason, distinct \
              from signature_invalid, recorded with no proven sender: {rows:?}"
         );
@@ -48966,9 +48997,10 @@ required = {caps:?}
         );
         let rows = cross_host_rows(&s).await;
         assert!(
-            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
-                && reason == "malformed_payload"
-                && sender_b58.is_empty()),
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "malformed_payload"
+                    && sender_b58.is_empty()),
             "an undeserializable payload is its own admission reason, distinct \
              from signature_invalid, recorded with no proven sender: {rows:?}"
         );
@@ -49029,8 +49061,12 @@ required = {caps:?}
         grant_recv(&s, &alice).await;
         let now = 10_000_000;
         // A verified envelope whose recipient is not this daemon still opens.
-        let envelope =
-            sealed_envelope(&alice, AgentId::new("bob@host2", [5u8; 32]), 0x4b2a_0005, now);
+        let envelope = sealed_envelope(
+            &alice,
+            AgentId::new("bob@host2", [5u8; 32]),
+            0x4b2a_0005,
+            now,
+        );
         assert_eq!(
             s.admit_remote_a2a_task(envelope, now).await,
             cross_host::RemoteAdmission::Rejected
@@ -49232,8 +49268,7 @@ required = {caps:?}
             );
         }
         // A fresh daemon over the SAME dedup log still recognizes the replay.
-        let restarted =
-            cross_host_server_with_identity(dir.path(), &alice, identity.clone()).await;
+        let restarted = cross_host_server_with_identity(dir.path(), &alice, identity.clone()).await;
         grant_recv(&restarted, &alice).await;
         assert_eq!(
             restarted.admit_remote_a2a_task(envelope, now + 1).await,
@@ -49281,9 +49316,10 @@ required = {caps:?}
         );
         let rows = cross_host_rows(&s).await;
         assert!(
-            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
-                && reason == "dedup_write_failed"
-                && *sender_b58 == alice.agent_id().pubkey_base58()),
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "dedup_write_failed"
+                    && *sender_b58 == alice.agent_id().pubkey_base58()),
             "the write failure must be attributed to the proven sender on the audit feed: {rows:?}"
         );
     }
@@ -49311,15 +49347,17 @@ required = {caps:?}
         let rows = cross_host_rows(&s).await;
         let alice_b58 = alice.agent_id().pubkey_base58();
         assert!(
-            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "admitted"
-                && reason.is_empty()
-                && *sender_b58 == alice_b58),
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "admitted"
+                    && reason.is_empty()
+                    && *sender_b58 == alice_b58),
             "the durable admitted row precedes the enqueue and stays on the feed: {rows:?}"
         );
         assert!(
-            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
-                && reason == "enqueue_failed"
-                && *sender_b58 == alice_b58),
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "enqueue_failed"
+                    && *sender_b58 == alice_b58),
             "the enqueue failure must be corrected on the audit feed: {rows:?}"
         );
     }
@@ -49420,7 +49458,10 @@ required = {caps:?}
         ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
             self.inner.recent(limit).await
         }
-        async fn purge_older_than(&self, before_ms: u64) -> Result<u64, covenant_audit::AuditError> {
+        async fn purge_older_than(
+            &self,
+            before_ms: u64,
+        ) -> Result<u64, covenant_audit::AuditError> {
             self.inner.purge_older_than(before_ms).await
         }
         async fn verify_integrity(
@@ -49908,12 +49949,15 @@ required = {caps:?}
 
         let state = crate::http::HttpState {
             server: s.clone(),
-            live_traces_tx: tokio::sync::broadcast::channel::<covenant_runtime::StreamedTrace>(16).0,
+            live_traces_tx: tokio::sync::broadcast::channel::<covenant_runtime::StreamedTrace>(16)
+                .0,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            axum::serve(listener, crate::http::router(state)).await.unwrap();
+            axum::serve(listener, crate::http::router(state))
+                .await
+                .unwrap();
         });
         let url = format!("http://{addr}/a2a/peer-tasks");
         let client = reqwest::Client::builder()
@@ -50006,7 +50050,10 @@ required = {caps:?}
             expires_at: None,
         })
         .await;
-        match s.op_respond(Request::SendA2ATask { task: task.clone() }).await {
+        match s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await
+        {
             Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
             other => panic!("a local recipient must still queue: {other:?}"),
         }
@@ -55135,10 +55182,22 @@ required = {caps:?}
                 .expect("grant present")
                 .effective
         };
-        assert_eq!(status_of(live_sig), covenant_ipc::CapabilityEffectiveStatus::Live);
-        assert_eq!(status_of(exhausted_sig), covenant_ipc::CapabilityEffectiveStatus::Exhausted);
-        assert_eq!(status_of(revoked_sig), covenant_ipc::CapabilityEffectiveStatus::Revoked);
-        assert_eq!(status_of(expired_sig), covenant_ipc::CapabilityEffectiveStatus::Expired);
+        assert_eq!(
+            status_of(live_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Live
+        );
+        assert_eq!(
+            status_of(exhausted_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Exhausted
+        );
+        assert_eq!(
+            status_of(revoked_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Revoked
+        );
+        assert_eq!(
+            status_of(expired_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Expired
+        );
     }
 
     #[tokio::test]
@@ -55160,7 +55219,10 @@ required = {caps:?}
             )
         };
         let spend = |sig: [u8; 64]| {
-            [covenant_permissions::BudgetConsumeRequest { signature: sig, max_uses: 1 }]
+            [covenant_permissions::BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 1,
+            }]
         };
 
         // Expired AND exhausted: enforcement rejects on expiry before the budget
@@ -55168,14 +55230,20 @@ required = {caps:?}
         let exp_and_spent = grant(1, Some(1_000));
         let exp_and_spent_sig = exp_and_spent.signature;
         s.capabilities.record(exp_and_spent).await.unwrap();
-        s.capabilities.consume_uses(&spend(exp_and_spent_sig)).await.unwrap();
+        s.capabilities
+            .consume_uses(&spend(exp_and_spent_sig))
+            .await
+            .unwrap();
 
         // Revoked AND expired AND exhausted: revocation withdraws authority
         // outright ahead of every other check, so the status is Revoked.
         let all_three = grant(2, Some(1_000));
         let all_three_sig = all_three.signature;
         s.capabilities.record(all_three).await.unwrap();
-        s.capabilities.consume_uses(&spend(all_three_sig)).await.unwrap();
+        s.capabilities
+            .consume_uses(&spend(all_three_sig))
+            .await
+            .unwrap();
         assert!(s.capabilities.revoke(all_three_sig).await.unwrap());
 
         let grants = match s.op_respond(Request::CapabilityUsage).await {
@@ -55404,10 +55472,7 @@ required = {caps:?}
             Uuid::new_v4(),
             vec![covenant_mcp::Content::text("ok-result")],
         );
-        match server
-            .op_respond(Request::PostA2AResult { result })
-            .await
-        {
+        match server.op_respond(Request::PostA2AResult { result }).await {
             Response::Error { message } => assert!(
                 message.contains("a2a:")
                     && message.contains("injected mailbox lookup_task_sender read failure"),
@@ -55427,7 +55492,9 @@ required = {caps:?}
         // capability gate and op_respond IS the operator, so no grant is
         // needed to reach the recent_tasks bail arm.
         let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
-        let resp = server.op_respond(Request::RecentA2ATasks { limit: 10 }).await;
+        let resp = server
+            .op_respond(Request::RecentA2ATasks { limit: 10 })
+            .await;
         match resp {
             Response::Error { message } => {
                 assert!(
@@ -56321,8 +56388,9 @@ budget_credits_per_hour = {credits}
             .await
             .expect("a missing known-hosts file under home is local-only, not a boot failure");
         assert!(hosts.is_empty());
-        let server = server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
-            .with_known_hosts(hosts);
+        let server =
+            server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
+                .with_known_hosts(hosts);
         assert!(server.known_hosts().is_empty());
         assert!(
             matches!(
@@ -56354,8 +56422,9 @@ budget_credits_per_hour = {credits}
             .unwrap();
 
         let loaded = KnownHosts::load_from_path(path).await.unwrap();
-        let server = server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
-            .with_known_hosts(loaded);
+        let server =
+            server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
+                .with_known_hosts(loaded);
         let endpoint = server
             .known_hosts()
             .resolve_host("remote")
@@ -60492,9 +60561,14 @@ budget_credits_per_hour = {credits}
         // InMemoryPeerRegistry -> the None arm calls record_auth_failure,
         // which the FailingAuditLog double rejects -> Response::Error.
         let unregistered = covenant_peer_auth::PeerToken::generate().to_b58();
-        write_frame(&mut client, &Request::Authenticate { token_b58: unregistered })
-            .await
-            .expect("write Authenticate frame");
+        write_frame(
+            &mut client,
+            &Request::Authenticate {
+                token_b58: unregistered,
+            },
+        )
+        .await
+        .expect("write Authenticate frame");
 
         let resp: Response = read_frame(&mut client)
             .await
@@ -60528,7 +60602,8 @@ budget_credits_per_hour = {credits}
         let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
         let non_operator = LocalIdentity::generate("non-op@local").agent_id();
         assert_ne!(
-            non_operator.pubkey, s.identity.agent_id().pubkey,
+            non_operator.pubkey,
+            s.identity.agent_id().pubkey,
             "fixture peer must not share the server operator's pubkey"
         );
         match s.rotate_operator_token(&non_operator).await {
@@ -60555,7 +60630,8 @@ budget_credits_per_hour = {credits}
         let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
         let non_operator = LocalIdentity::generate("non-op@local").agent_id();
         assert_ne!(
-            non_operator.pubkey, s.identity.agent_id().pubkey,
+            non_operator.pubkey,
+            s.identity.agent_id().pubkey,
             "fixture peer must not share the server operator's pubkey"
         );
         match s.list_peers(10, None, None, &non_operator).await {
@@ -60582,7 +60658,8 @@ budget_credits_per_hour = {credits}
         let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
         let non_operator = LocalIdentity::generate("non-op@local").agent_id();
         assert_ne!(
-            non_operator.pubkey, s.identity.agent_id().pubkey,
+            non_operator.pubkey,
+            s.identity.agent_id().pubkey,
             "fixture peer must not share the server operator's pubkey"
         );
         match s.revoke_peer("abcdef".into(), false, None, &non_operator).await {
@@ -60738,13 +60815,19 @@ budget_credits_per_hour = {credits}
         async fn list_for_subject(
             &self,
             _subject_pubkey: [u8; 32],
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Ok(Vec::new())
         }
         async fn recent(
             &self,
             _limit: usize,
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Ok(Vec::new())
         }
         async fn purge_revoked_older_than(
@@ -60756,12 +60839,14 @@ budget_credits_per_hour = {credits}
         async fn consume_uses(
             &self,
             _requests: &[covenant_permissions::BudgetConsumeRequest],
-        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
             Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
         }
         async fn usage_snapshot(
             &self,
-        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
             Ok(Vec::new())
         }
     }
@@ -60825,13 +60910,19 @@ budget_credits_per_hour = {credits}
         async fn list_for_subject(
             &self,
             _subject_pubkey: [u8; 32],
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Ok(Vec::new())
         }
         async fn recent(
             &self,
             _limit: usize,
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Err(covenant_permissions::PermissionError::Io(
                 std::io::Error::other("injected capability recent read failure"),
             ))
@@ -60845,12 +60936,14 @@ budget_credits_per_hour = {credits}
         async fn consume_uses(
             &self,
             _requests: &[covenant_permissions::BudgetConsumeRequest],
-        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
             Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
         }
         async fn usage_snapshot(
             &self,
-        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
             Ok(Vec::new())
         }
     }
@@ -61179,7 +61272,9 @@ budget_credits_per_hour = {credits}
             })
             .await
         {
-            Response::IntentResult { intent_id, status, .. } => {
+            Response::IntentResult {
+                intent_id, status, ..
+            } => {
                 assert_eq!(
                     status, "ok",
                     "dispatch must succeed during an embedder outage, got status {status}",
@@ -61306,7 +61401,9 @@ budget_credits_per_hour = {credits}
                     "the surfaced error must carry the store's cause for triage, got: {message}",
                 );
             }
-            other => panic!("expected Response::Error when purge_older_than() fails, got {other:?}"),
+            other => {
+                panic!("expected Response::Error when purge_older_than() fails, got {other:?}")
+            }
         }
     }
 
@@ -61363,7 +61460,8 @@ budget_credits_per_hour = {credits}
         async fn compact(
             &self,
             _request: MemoryCompactionRequest,
-        ) -> Result<covenant_memory::MemoryCompactionOutcome, covenant_memory::MemoryError> {
+        ) -> Result<covenant_memory::MemoryCompactionOutcome, covenant_memory::MemoryError>
+        {
             Err(covenant_memory::MemoryError::Io(std::io::Error::other(
                 "injected memory compact write failure",
             )))
@@ -61602,7 +61700,8 @@ budget_credits_per_hour = {credits}
             &self,
             _dry_run: bool,
             _correlations: Vec<covenant_memory::MemoryReceiptBackfillCorrelation>,
-        ) -> Result<covenant_memory::BackfillReceiptCorrelationOutcome, covenant_memory::MemoryError> {
+        ) -> Result<covenant_memory::BackfillReceiptCorrelationOutcome, covenant_memory::MemoryError>
+        {
             Err(covenant_memory::MemoryError::Io(std::io::Error::other(
                 "injected memory backfill write failure",
             )))
@@ -61663,9 +61762,9 @@ budget_credits_per_hour = {credits}
             &self,
             _limit: usize,
         ) -> Result<Vec<SettlementReceipt>, covenant_settlement::SettlementError> {
-            Err(covenant_settlement::SettlementError::Io(std::io::Error::other(
-                "injected settlement recent read failure",
-            )))
+            Err(covenant_settlement::SettlementError::Io(
+                std::io::Error::other("injected settlement recent read failure"),
+            ))
         }
         async fn mark_batch_confirmed(
             &self,
@@ -61722,7 +61821,9 @@ budget_credits_per_hour = {credits}
         // because both handlers read self.settlement.recent().
         let server = server_with_settlement_dyn(Arc::new(FailingSettlement));
         grant_action(&server, "chain.batches").await;
-        let resp = server.op_respond(Request::ReceiptBatches { limit: 10 }).await;
+        let resp = server
+            .op_respond(Request::ReceiptBatches { limit: 10 })
+            .await;
         match resp {
             Response::Error { message } => {
                 assert!(
@@ -61780,10 +61881,11 @@ budget_credits_per_hour = {credits}
             &self,
             _dry_run: bool,
             _correlations: &[covenant_settlement::ReceiptBackfillCorrelation],
-        ) -> Result<covenant_settlement::BackfillOutcome, covenant_settlement::SettlementError> {
-            Err(covenant_settlement::SettlementError::Io(std::io::Error::other(
-                "injected settlement backfill write failure",
-            )))
+        ) -> Result<covenant_settlement::BackfillOutcome, covenant_settlement::SettlementError>
+        {
+            Err(covenant_settlement::SettlementError::Io(
+                std::io::Error::other("injected settlement backfill write failure"),
+            ))
         }
     }
 
@@ -61876,9 +61978,9 @@ budget_credits_per_hour = {credits}
             _receipt_ids: &[Uuid],
             _confirmation: ChainConfirmation,
         ) -> Result<u64, covenant_settlement::SettlementError> {
-            Err(covenant_settlement::SettlementError::Io(std::io::Error::other(
-                "injected settlement mark_batch_confirmed write failure",
-            )))
+            Err(covenant_settlement::SettlementError::Io(
+                std::io::Error::other("injected settlement mark_batch_confirmed write failure"),
+            ))
         }
     }
 
@@ -61904,7 +62006,9 @@ budget_credits_per_hour = {credits}
             operator: server.identity.agent_id(),
         });
         grant_action(&server, "chain.flush").await;
-        let resp = server.op_respond(Request::FlushReceipts { limit: 10 }).await;
+        let resp = server
+            .op_respond(Request::FlushReceipts { limit: 10 })
+            .await;
         match resp {
             Response::Error { message } => {
                 assert!(
@@ -61916,9 +62020,9 @@ budget_credits_per_hour = {credits}
                     "the surfaced error must carry the store's cause for triage, got: {message}",
                 );
             }
-            other => panic!(
-                "expected Response::Error when mark_batch_confirmed() fails, got {other:?}"
-            ),
+            other => {
+                panic!("expected Response::Error when mark_batch_confirmed() fails, got {other:?}")
+            }
         }
     }
 
@@ -62091,7 +62195,11 @@ budget_credits_per_hour = {credits}
         // swapped to the failing double; no register_agent_budgets is needed
         // because the double's try_debit returns Io, not NoCapacity.
         let mut s = server_with(
-            vec![stub_card_with_budget("research", vec!["tool.web_search"], 10)],
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
             "mocked summary",
         );
         s.budget = Arc::new(FailingDebitBudget);
@@ -62212,7 +62320,11 @@ budget_credits_per_hour = {credits}
         // through the non-required record_peer_event (swallowed under
         // FailingAuditLog), so the grants still land.
         let mut s = server_with(
-            vec![stub_card_with_budget("research", vec!["tool.web_search"], 10)],
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
             "mocked summary",
         );
         s.budget = Arc::new(FailingExhaustedBudget);
@@ -62257,9 +62369,9 @@ budget_credits_per_hour = {credits}
                     "the surfaced error must carry the ledger's cause for triage, got: {message}",
                 );
             }
-            other => panic!(
-                "expected Response::Error when recent_debits_all() fails, got {other:?}"
-            ),
+            other => {
+                panic!("expected Response::Error when recent_debits_all() fails, got {other:?}")
+            }
         }
     }
 
@@ -62288,9 +62400,7 @@ budget_credits_per_hour = {credits}
                     "the surfaced error must carry the ledger's cause for triage, got: {message}",
                 );
             }
-            other => panic!(
-                "expected Response::Error when recent_debits() fails, got {other:?}"
-            ),
+            other => panic!("expected Response::Error when recent_debits() fails, got {other:?}"),
         }
     }
 
@@ -62332,7 +62442,8 @@ budget_credits_per_hour = {credits}
             _limit: usize,
             _pubkey_prefix: Option<&str>,
             _status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
-        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError> {
+        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError>
+        {
             Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
                 "injected peers list_summaries read failure",
             )))
@@ -62355,7 +62466,8 @@ budget_credits_per_hour = {credits}
         async fn find_unique_live_by_token_prefix(
             &self,
             _prefix: &str,
-        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError> {
+        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError>
+        {
             Ok(None)
         }
     }
@@ -62408,7 +62520,8 @@ budget_credits_per_hour = {credits}
             _limit: usize,
             _pubkey_prefix: Option<&str>,
             _status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
-        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError> {
+        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError>
+        {
             Ok((vec![], false))
         }
         async fn purge_revoked_older_than(
@@ -62427,7 +62540,8 @@ budget_credits_per_hour = {credits}
         async fn find_unique_live_by_token_prefix(
             &self,
             _prefix: &str,
-        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError> {
+        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError>
+        {
             Ok(None)
         }
     }
@@ -62491,9 +62605,7 @@ budget_credits_per_hour = {credits}
                     "the surfaced error must carry the registry's cause for triage, got: {message}",
                 );
             }
-            other => panic!(
-                "expected Response::Error when list_summaries() fails, got {other:?}"
-            ),
+            other => panic!("expected Response::Error when list_summaries() fails, got {other:?}"),
         }
     }
 
@@ -62508,7 +62620,9 @@ budget_credits_per_hour = {credits}
         // grant), so the purge reaches the failing registry's bail arm.
         let server = server_with_peers_dyn(Arc::new(FailingPeerRegistryReads));
         grant_action(&server, "peers.purge").await;
-        let resp = server.op_respond(Request::PurgePeers { before_ms: 1 }).await;
+        let resp = server
+            .op_respond(Request::PurgePeers { before_ms: 1 })
+            .await;
         match resp {
             Response::Error { message } => {
                 assert!(
@@ -62554,13 +62668,19 @@ budget_credits_per_hour = {credits}
         async fn list_for_subject(
             &self,
             _subject_pubkey: [u8; 32],
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Ok(Vec::new())
         }
         async fn recent(
             &self,
             _limit: usize,
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Ok(Vec::new())
         }
         async fn purge_revoked_older_than(
@@ -62572,12 +62692,14 @@ budget_credits_per_hour = {credits}
         async fn consume_uses(
             &self,
             _requests: &[covenant_permissions::BudgetConsumeRequest],
-        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
             Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
         }
         async fn usage_snapshot(
             &self,
-        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
             Err(covenant_permissions::PermissionError::Io(
                 std::io::Error::other("injected capability usage_snapshot failure"),
             ))
@@ -62642,13 +62764,19 @@ budget_credits_per_hour = {credits}
         async fn list_for_subject(
             &self,
             subject_pubkey: [u8; 32],
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             self.inner.list_for_subject(subject_pubkey).await
         }
         async fn recent(
             &self,
             limit: usize,
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             self.inner.recent(limit).await
         }
         async fn purge_revoked_older_than(
@@ -62662,12 +62790,14 @@ budget_credits_per_hour = {credits}
         async fn consume_uses(
             &self,
             requests: &[covenant_permissions::BudgetConsumeRequest],
-        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
             self.inner.consume_uses(requests).await
         }
         async fn usage_snapshot(
             &self,
-        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
             self.inner.usage_snapshot().await
         }
     }
@@ -62737,7 +62867,10 @@ budget_credits_per_hour = {credits}
         async fn list_for_subject(
             &self,
             _subject_pubkey: [u8; 32],
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Err(covenant_permissions::PermissionError::Io(
                 std::io::Error::other("injected capability list_for_subject failure"),
             ))
@@ -62745,7 +62878,10 @@ budget_credits_per_hour = {credits}
         async fn recent(
             &self,
             _limit: usize,
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Ok(Vec::new())
         }
         async fn purge_revoked_older_than(
@@ -62757,12 +62893,14 @@ budget_credits_per_hour = {credits}
         async fn consume_uses(
             &self,
             _requests: &[covenant_permissions::BudgetConsumeRequest],
-        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
             Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
         }
         async fn usage_snapshot(
             &self,
-        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
             Ok(Vec::new())
         }
     }
@@ -62789,7 +62927,9 @@ budget_credits_per_hour = {credits}
                     "the surfaced error must carry the store's cause for triage, got: {message}",
                 );
             }
-            other => panic!("expected Response::Error when list_for_subject() fails, got {other:?}"),
+            other => {
+                panic!("expected Response::Error when list_for_subject() fails, got {other:?}")
+            }
         }
     }
 
@@ -62824,13 +62964,19 @@ budget_credits_per_hour = {credits}
         async fn list_for_subject(
             &self,
             _subject_pubkey: [u8; 32],
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Ok(Vec::new())
         }
         async fn recent(
             &self,
             _limit: usize,
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             Ok(Vec::new())
         }
         async fn purge_revoked_older_than(
@@ -62842,12 +62988,14 @@ budget_credits_per_hour = {credits}
         async fn consume_uses(
             &self,
             _requests: &[covenant_permissions::BudgetConsumeRequest],
-        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
             Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
         }
         async fn usage_snapshot(
             &self,
-        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
             Ok(Vec::new())
         }
     }
@@ -62917,13 +63065,19 @@ budget_credits_per_hour = {credits}
         async fn list_for_subject(
             &self,
             subject_pubkey: [u8; 32],
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             self.inner.list_for_subject(subject_pubkey).await
         }
         async fn recent(
             &self,
             limit: usize,
-        ) -> Result<Vec<covenant_permissions::SignedCapability>, covenant_permissions::PermissionError> {
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
             self.inner.recent(limit).await
         }
         async fn purge_revoked_older_than(
@@ -62935,12 +63089,14 @@ budget_credits_per_hour = {credits}
         async fn consume_uses(
             &self,
             requests: &[covenant_permissions::BudgetConsumeRequest],
-        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError> {
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
             self.inner.consume_uses(requests).await
         }
         async fn usage_snapshot(
             &self,
-        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError> {
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
             self.inner.usage_snapshot().await
         }
     }
@@ -64601,13 +64757,14 @@ budget_credits_per_hour = {credits}
         #[async_trait::async_trait]
         impl secret::SecretSource for FailingSecretSource {
             async fn get(&self, _name: &str) -> Result<Option<String>, secret::SecretError> {
-                Err(secret::SecretError("injected secret backend failure".into()))
+                Err(secret::SecretError(
+                    "injected secret backend failure".into(),
+                ))
             }
         }
 
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
-        let s = server_with_audit(audit.clone())
-            .with_secret_source(Arc::new(FailingSecretSource));
+        let s = server_with_audit(audit.clone()).with_secret_source(Arc::new(FailingSecretSource));
         grant_scoped_action(&s, "secret.access", serde_json::json!({})).await;
 
         match s
@@ -64631,14 +64788,12 @@ budget_credits_per_hour = {credits}
 
         let events = audit.recent(20).await.unwrap();
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(
-                    &e.kind,
-                    AuditKind::SecretAccessDenied { secret_name, reason, .. }
-                        if secret_name == "openai-api-key"
-                            && reason.contains("injected secret backend failure")
-                )),
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessDenied { secret_name, reason, .. }
+                    if secret_name == "openai-api-key"
+                        && reason.contains("injected secret backend failure")
+            )),
             "a fail-closed backend refusal must record SecretAccessDenied naming the secret \
              and the backend cause: {events:?}"
         );

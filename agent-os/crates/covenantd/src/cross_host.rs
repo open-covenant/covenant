@@ -236,7 +236,8 @@ impl Server {
                     A2AEnvelopeError::MalformedSignature => "malformed_signature",
                     A2AEnvelopeError::MalformedPayload => "malformed_payload",
                 };
-                self.audit_cross_host(now_ms, "", "", "rejected", reason).await;
+                self.audit_cross_host(now_ms, "", "", "rejected", reason)
+                    .await;
                 return RemoteAdmission::Rejected;
             }
         };
@@ -467,8 +468,13 @@ impl Server {
         outcome: &str,
         reason: &str,
     ) {
-        let event =
-            self.cross_host_event(now_ms, sender_pubkey_b58, recipient_display, outcome, reason);
+        let event = self.cross_host_event(
+            now_ms,
+            sender_pubkey_b58,
+            recipient_display,
+            outcome,
+            reason,
+        );
         self.record_daemon_event(event).await;
     }
 
@@ -484,8 +490,13 @@ impl Server {
         outcome: &str,
         reason: &str,
     ) -> Result<(), AuditError> {
-        let event =
-            self.cross_host_event(now_ms, sender_pubkey_b58, recipient_display, outcome, reason);
+        let event = self.cross_host_event(
+            now_ms,
+            sender_pubkey_b58,
+            recipient_display,
+            outcome,
+            reason,
+        );
         self.record_daemon_event_required(event).await
     }
 
@@ -647,7 +658,11 @@ impl Server {
                 // A timeout (silent/slow remote) and a connection failure both
                 // mean the task did not reach the mailbox; the bounded client
                 // guarantees this returns rather than hangs.
-                let reason = if e.is_timeout() { "timeout" } else { "transport" };
+                let reason = if e.is_timeout() {
+                    "timeout"
+                } else {
+                    "transport"
+                };
                 self.audit_cross_host_delivery(
                     now_ms,
                     &recipient_b58,
@@ -728,7 +743,10 @@ mod tests {
     fn deliver_timeout_falls_back_on_absent_zero_or_garbage() {
         let default = Duration::from_millis(A2A_DELIVER_TIMEOUT_MS_DEFAULT);
         // A present positive value wins (surrounding whitespace tolerated).
-        assert_eq!(deliver_timeout_from(Some("250")), Duration::from_millis(250));
+        assert_eq!(
+            deliver_timeout_from(Some("250")),
+            Duration::from_millis(250)
+        );
         assert_eq!(
             deliver_timeout_from(Some("  500  ")),
             Duration::from_millis(500)
@@ -747,7 +765,10 @@ mod tests {
             .await
             .unwrap();
         let k = key(1, 1_000);
-        assert!(dedup.claim_fresh(&k, 1_000).await.unwrap(), "first claim is fresh");
+        assert!(
+            dedup.claim_fresh(&k, 1_000).await.unwrap(),
+            "first claim is fresh"
+        );
         assert!(
             !dedup.claim_fresh(&k, 1_001).await.unwrap(),
             "a second claim of the same key is a duplicate"
@@ -766,7 +787,10 @@ mod tests {
             "a different task id is independent"
         );
         assert!(
-            dedup.claim_fresh(&key(1, 2_000).clone(), 2_000).await.unwrap(),
+            dedup
+                .claim_fresh(&key(1, 2_000).clone(), 2_000)
+                .await
+                .unwrap(),
             "the same task id at a different issued_at_ms is a distinct envelope"
         );
     }
@@ -795,7 +819,10 @@ mod tests {
             .unwrap();
         let k = key(9, 1_000);
         assert!(dedup.claim_fresh(&k, 1_000).await.unwrap());
-        assert!(!dedup.claim_fresh(&k, 1_000).await.unwrap(), "duplicate while fresh");
+        assert!(
+            !dedup.claim_fresh(&k, 1_000).await.unwrap(),
+            "duplicate while fresh"
+        );
         let past_horizon = 1_000 + CROSS_HOST_MAX_AGE_MS + CROSS_HOST_MAX_SKEW_MS + 1;
         assert!(
             dedup.claim_fresh(&k, past_horizon).await.unwrap(),
@@ -822,7 +849,10 @@ mod tests {
             .unwrap();
         let horizon = CROSS_HOST_MAX_AGE_MS + CROSS_HOST_MAX_SKEW_MS;
         let k = key(11, 1_000);
-        assert!(dedup.claim_fresh(&k, 1_000).await.unwrap(), "first claim is fresh");
+        assert!(
+            dedup.claim_fresh(&k, 1_000).await.unwrap(),
+            "first claim is fresh"
+        );
         assert!(
             !dedup.claim_fresh(&k, 1_000 + horizon).await.unwrap(),
             "a key whose age equals the freshness horizon is still retained and must keep absorbing the replay as a duplicate"

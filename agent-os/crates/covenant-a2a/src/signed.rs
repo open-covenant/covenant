@@ -267,7 +267,10 @@ mod tests {
         let env = SignedA2ATask::seal(&task, 1000, &id);
         let wire = serde_json::to_string(&env).unwrap();
         let back: SignedA2ATask = serde_json::from_str(&wire).unwrap();
-        assert_eq!(back, env, "the envelope must round-trip through JSON intact");
+        assert_eq!(
+            back, env,
+            "the envelope must round-trip through JSON intact"
+        );
         assert_eq!(
             back.open().expect("round-tripped envelope still opens"),
             task

@@ -24,7 +24,15 @@ fn rpc(method: &str, params: serde_json::Value) -> serde_json::Value {
 
     let out = Command::new("curl")
         .args([
-            "-s", "-m", "25", "-X", "POST", &url, "-H", "content-type: application/json", "-d",
+            "-s",
+            "-m",
+            "25",
+            "-X",
+            "POST",
+            &url,
+            "-H",
+            "content-type: application/json",
+            "-d",
         ])
         .arg(body.to_string())
         .output()

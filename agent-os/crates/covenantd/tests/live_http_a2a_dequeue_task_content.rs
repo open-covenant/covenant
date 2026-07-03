@@ -203,9 +203,11 @@ async fn live_http_a2a_dequeue_returns_full_task_body_over_http() {
         "the distinctive intent_text marker must survive the HTTP round-trip: {row:?}",
     );
 
-    let typed: A2ATask =
-        serde_json::from_value(row).expect("leased row deserializes as A2ATask");
-    assert_eq!(typed.id, task.id, "round-tripped task id must match the posted id");
+    let typed: A2ATask = serde_json::from_value(row).expect("leased row deserializes as A2ATask");
+    assert_eq!(
+        typed.id, task.id,
+        "round-tripped task id must match the posted id"
+    );
     assert_eq!(
         typed.intent_text, MARKER,
         "round-tripped intent_text must equal the posted body, not a default",

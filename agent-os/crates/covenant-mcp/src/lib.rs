@@ -714,7 +714,9 @@ mod tests {
                 "properties": { "n": { "type": "integer" } },
             }),
         };
-        assert!(spec.validate_arguments(&serde_json::json!({ "n": 5 })).is_ok());
+        assert!(spec
+            .validate_arguments(&serde_json::json!({ "n": 5 }))
+            .is_ok());
         assert!(
             spec.validate_arguments(&serde_json::json!({ "n": 5.0 })).is_ok(),
             "a float with no fractional part satisfies `integer`, so clients that serialize ints as floats are not rejected",
@@ -777,7 +779,10 @@ mod tests {
             let err = spec
                 .validate_arguments(&serde_json::json!({ "x": mistyped }))
                 .expect_err("a mistyped argument must be rejected");
-            assert!(err.contains("field `x`"), "{declared}: names the field: {err}");
+            assert!(
+                err.contains("field `x`"),
+                "{declared}: names the field: {err}"
+            );
             assert!(
                 err.contains(declared),
                 "{declared}: names the expected type: {err}"

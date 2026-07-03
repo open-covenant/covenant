@@ -1650,7 +1650,10 @@ mod tests {
             "an event with no backing chain anchor must mark the report invalid: {report:?}",
         );
         assert_eq!(report.events, 2, "the event log now holds two event lines");
-        assert_eq!(report.anchors, 1, "the chain sidecar still holds one anchor");
+        assert_eq!(
+            report.anchors, 1,
+            "the chain sidecar still holds one anchor"
+        );
         assert!(
             report
                 .failures
@@ -4884,7 +4887,11 @@ mod tests {
     fn capability_check_fans_out_granted_and_missing_actions() {
         let event = dummy(AuditKind::CapabilityCheck {
             agent_id: "research".into(),
-            required_actions: vec!["memory.write".into(), "memory.read".into(), "a2a.send".into()],
+            required_actions: vec![
+                "memory.write".into(),
+                "memory.read".into(),
+                "a2a.send".into(),
+            ],
             missing_actions: vec!["a2a.send".into()],
             passed: false,
             authorized_by: vec![
@@ -4942,7 +4949,10 @@ mod tests {
         }));
         assert_eq!(revoked[0].outcome, "revoked");
         assert_eq!(revoked[0].rule.as_deref(), Some("GrantSig"));
-        assert!(revoked[0].approver.is_none(), "self-revoke names no approver");
+        assert!(
+            revoked[0].approver.is_none(),
+            "self-revoke names no approver"
+        );
 
         let noop = project_privileged_actions(&dummy(AuditKind::CapabilityRevoked {
             subject_display: "research@agent".into(),
@@ -4955,26 +4965,29 @@ mod tests {
             "an idempotent re-revoke is distinguished from a real authority change",
         );
 
-        let grant_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityGrantRejected {
-            subject_display: "research@agent".into(),
-            action: "memory.write".into(),
-            reason: "expired".into(),
-        }));
+        let grant_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityGrantRejected {
+                subject_display: "research@agent".into(),
+                action: "memory.write".into(),
+                reason: "expired".into(),
+            }));
         assert_eq!(grant_rejected[0].outcome, "grant_rejected");
         assert!(grant_rejected[0].rule.is_none());
 
-        let scope_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityScopeRejected {
-            agent_id: "audit:purge".into(),
-            action: "audit.purge".into(),
-            reason: "before_ms exceeds scope".into(),
-        }));
+        let scope_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityScopeRejected {
+                agent_id: "audit:purge".into(),
+                action: "audit.purge".into(),
+                reason: "before_ms exceeds scope".into(),
+            }));
         assert_eq!(scope_rejected[0].actor, "audit:purge");
         assert_eq!(scope_rejected[0].outcome, "scope_rejected");
 
-        let revoke_rejected = project_privileged_actions(&dummy(AuditKind::CapabilityRevokeRejected {
-            signature_b58: "OtherSig".into(),
-            reason: "not subject".into(),
-        }));
+        let revoke_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityRevokeRejected {
+                signature_b58: "OtherSig".into(),
+                reason: "not subject".into(),
+            }));
         assert_eq!(revoke_rejected[0].outcome, "revoke_rejected");
         assert_eq!(revoke_rejected[0].rule.as_deref(), Some("OtherSig"));
         assert!(
@@ -5005,7 +5018,10 @@ mod tests {
             outcome: "granted".into(),
         };
 
-        assert!(ProvenanceFilter::default().matches(&action), "empty filter matches everything");
+        assert!(
+            ProvenanceFilter::default().matches(&action),
+            "empty filter matches everything"
+        );
 
         let by_actor = ProvenanceFilter {
             actor: Some("research@agent".into()),
@@ -5034,7 +5050,10 @@ mod tests {
             rule: Some("GrantSig".into()),
             ..Default::default()
         };
-        assert!(by_rule_prefix.matches(&action), "rule matches on a signature prefix");
+        assert!(
+            by_rule_prefix.matches(&action),
+            "rule matches on a signature prefix"
+        );
         let wrong_rule = ProvenanceFilter {
             rule: Some("DifferentSig".into()),
             ..Default::default()
@@ -5046,7 +5065,10 @@ mod tests {
             until_ms: Some(1_000),
             ..Default::default()
         };
-        assert!(in_window.matches(&action), "window bounds are inclusive on both ends");
+        assert!(
+            in_window.matches(&action),
+            "window bounds are inclusive on both ends"
+        );
         let after_window = ProvenanceFilter {
             since_ms: Some(1_001),
             ..Default::default()
@@ -5071,13 +5093,19 @@ mod tests {
             until_ms: Some(999),
             ..Default::default()
         };
-        assert!(!before_until.matches(&action), "a row past the until bound is excluded");
+        assert!(
+            !before_until.matches(&action),
+            "a row past the until bound is excluded"
+        );
 
         let at_until = ProvenanceFilter {
             until_ms: Some(1_000),
             ..Default::default()
         };
-        assert!(at_until.matches(&action), "the upper window bound is inclusive");
+        assert!(
+            at_until.matches(&action),
+            "the upper window bound is inclusive"
+        );
     }
 
     #[test]

@@ -117,15 +117,20 @@ fn main() -> Result<()> {
             println!("initialize tx = {sig}");
 
             // Verify Config exists by reading it.
-            let cfg = rpc
-                .get_account(&config_pda)
-                .context("fetch config")?;
+            let cfg = rpc.get_account(&config_pda).context("fetch config")?;
             println!("config owner   = {}", cfg.owner);
             println!("config len     = {}", cfg.data.len());
-            let fr = rpc.get_account(&fee_router_pda).context("fetch fee_router")?;
+            let fr = rpc
+                .get_account(&fee_router_pda)
+                .context("fetch fee_router")?;
             println!("fee_router owner = {}", fr.owner);
-            let rv = rpc.get_account(&reward_vault_pda).context("fetch reward_vault")?;
-            println!("reward_vault owner = {}, lamports = {}", rv.owner, rv.lamports);
+            let rv = rpc
+                .get_account(&reward_vault_pda)
+                .context("fetch reward_vault")?;
+            println!(
+                "reward_vault owner = {}, lamports = {}",
+                rv.owner, rv.lamports
+            );
             Ok(())
         }
         "smoke" => {
@@ -146,16 +151,15 @@ fn main() -> Result<()> {
             send(&rpc, &deployer, &[fund_ix], &[])?;
 
             // Create user's $CVNT ATA. Use legacy SPL associated_token_account.
-            let ata = spl_associated_token_account::get_associated_token_address(
-                &user.pubkey(),
-                &mint,
-            );
-            let create_ata = spl_associated_token_account::instruction::create_associated_token_account(
-                &deployer.pubkey(),
-                &user.pubkey(),
-                &mint,
-                &spl_token::ID,
-            );
+            let ata =
+                spl_associated_token_account::get_associated_token_address(&user.pubkey(), &mint);
+            let create_ata =
+                spl_associated_token_account::instruction::create_associated_token_account(
+                    &deployer.pubkey(),
+                    &user.pubkey(),
+                    &mint,
+                    &spl_token::ID,
+                );
             send(&rpc, &deployer, &[create_ata], &[])?;
             println!("user ata = {ata}");
 
@@ -174,10 +178,7 @@ fn main() -> Result<()> {
             // collide on the [b"stake_v2", user, nonce] PDA. We generate a
             // random user above so the seed combination stays unique either
             // way, but explicit args.get(3) lets the operator override.
-            let nonce: u64 = args
-                .get(3)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1);
+            let nonce: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
             let amount: u64 = 2_000_000_000;
             let tier_bps: u16 = 10_000;
             let (position_pda, _) = Pubkey::find_program_address(
@@ -257,7 +258,10 @@ fn main() -> Result<()> {
             )?;
             let user_after = rpc.get_balance(&user.pubkey()).unwrap();
             println!("claim tx = {sig}");
-            println!("user SOL delta = {} lamports (expected ~1_000_000 less tx fee)", user_after as i64 - user_before as i64);
+            println!(
+                "user SOL delta = {} lamports (expected ~1_000_000 less tx fee)",
+                user_after as i64 - user_before as i64
+            );
             Ok(())
         }
         other => bail!("unknown subcommand: {other}"),

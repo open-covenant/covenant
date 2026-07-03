@@ -2900,8 +2900,8 @@ async fn run_zauth_scan(args: &[String]) -> Result<()> {
             }
         }
     }
-    let repo_url = repo_url
-        .ok_or_else(|| anyhow::anyhow!("covenant zauth scan: missing <repo-url>"))?;
+    let repo_url =
+        repo_url.ok_or_else(|| anyhow::anyhow!("covenant zauth scan: missing <repo-url>"))?;
 
     let resolved_keypair_path = resolve_operator_keypair_path(keypair_path)?;
     check_keypair_mode(&resolved_keypair_path)?;
@@ -2926,10 +2926,7 @@ async fn run_zauth_scan(args: &[String]) -> Result<()> {
     };
 
     let client = covenant_zauth::RepoScanClient::new(covenant_zauth::reposcan::http_client());
-    let result = client
-        .scan(&req, &signer)
-        .await
-        .context("zauth reposcan")?;
+    let result = client.scan(&req, &signer).await.context("zauth reposcan")?;
 
     if as_json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -5412,9 +5409,10 @@ async fn main() -> Result<()> {
                         match args[i].as_str() {
                             "--agent-pda" => {
                                 i += 1;
-                                agent_pda = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--agent-pda needs a value")
-                                })?);
+                                agent_pda =
+                                    Some(args.get(i).cloned().ok_or_else(|| {
+                                        anyhow::anyhow!("--agent-pda needs a value")
+                                    })?);
                             }
                             "--root" => {
                                 i += 1;
@@ -5424,9 +5422,11 @@ async fn main() -> Result<()> {
                             }
                             "--type" => {
                                 i += 1;
-                                attestation_type = Some(args.get(i).cloned().ok_or_else(|| {
-                                    anyhow::anyhow!("--type needs a value")
-                                })?);
+                                attestation_type = Some(
+                                    args.get(i)
+                                        .cloned()
+                                        .ok_or_else(|| anyhow::anyhow!("--type needs a value"))?,
+                                );
                             }
                             "--expires" => {
                                 i += 1;
@@ -9245,7 +9245,8 @@ mod tests {
             bytes[32..].copy_from_slice(&other[32..]);
             let json = serde_json::to_vec(&bytes.to_vec()).expect("serialize mismatched bytes");
             let path = write_bytes(dir.path(), "id.json", &json);
-            let err = load_operator_keypair(Some(path)).expect_err("must reject mismatched keypair");
+            let err =
+                load_operator_keypair(Some(path)).expect_err("must reject mismatched keypair");
             match err {
                 KeypairLoadError::InvalidKeyMaterial { .. } => {}
                 other => panic!("expected InvalidKeyMaterial, got {other:?}"),
@@ -10345,7 +10346,12 @@ mod tests {
             // operator the value was empty rather than misdiagnosing a
             // truncation.
             let err = parse_hash32_arg("metadata-hash", "").expect_err("must error");
-            assert!(matches!(err, Hash32ArgError::Empty { flag: "metadata-hash" }));
+            assert!(matches!(
+                err,
+                Hash32ArgError::Empty {
+                    flag: "metadata-hash"
+                }
+            ));
         }
 
         #[test]
@@ -11753,8 +11759,7 @@ mod tests {
 
     #[test]
     fn sap_published_attestation_json_renders_stable_shape() {
-        let value =
-            sap_published_attestation_json("AttPda33", "Attester33", "AgentPda11", "Sig33");
+        let value = sap_published_attestation_json("AttPda33", "Attester33", "AgentPda11", "Sig33");
         assert_eq!(value["kind"], "sap_published_attestation");
         assert_eq!(value["attestation_pda"], "AttPda33");
         assert_eq!(value["attester"], "Attester33");
@@ -11764,8 +11769,13 @@ mod tests {
 
     #[test]
     fn sap_published_attestation_json_pins_top_level_schema() {
-        const EXPECTED_KEYS: &[&str] =
-            &["agent_pda", "attestation_pda", "attester", "kind", "signature"];
+        const EXPECTED_KEYS: &[&str] = &[
+            "agent_pda",
+            "attestation_pda",
+            "attester",
+            "kind",
+            "signature",
+        ];
 
         fn assert_shape(value: &serde_json::Value) {
             let object = value

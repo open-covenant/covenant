@@ -131,7 +131,10 @@ impl AttestationIssuer {
     }
 
     /// Issue a dual-signed attestation credential over `input`.
-    pub fn issue(&self, input: &AttestationInput) -> Result<VerifiableCredential, AttestationError> {
+    pub fn issue(
+        &self,
+        input: &AttestationInput,
+    ) -> Result<VerifiableCredential, AttestationError> {
         let audit_root = multibase::hex_decode_32(&input.audit_root_hex)
             .map_err(|_| AttestationError::AuditRootFormat)?;
 
@@ -418,7 +421,10 @@ mod tests {
         }
     }
 
-    fn reparse_with(vc: &VerifiableCredential, mutate: impl FnOnce(&mut Value)) -> VerifiableCredential {
+    fn reparse_with(
+        vc: &VerifiableCredential,
+        mutate: impl FnOnce(&mut Value),
+    ) -> VerifiableCredential {
         let mut value = vc.as_value().clone();
         mutate(&mut value);
         VerifiableCredential::from_json(&serde_json::to_string(&value).unwrap()).unwrap()
@@ -445,7 +451,10 @@ mod tests {
 
         assert_eq!(value["issuer"], issuer.issuer_did());
         assert!(issuer.issuer_did().starts_with("did:key:z6Mk"));
-        assert_eq!(value["credentialStatus"]["type"], "BitstringStatusListEntry");
+        assert_eq!(
+            value["credentialStatus"]["type"],
+            "BitstringStatusListEntry"
+        );
         assert_eq!(value["credentialStatus"]["statusPurpose"], "revocation");
         assert_eq!(value["@context"][0], "https://www.w3.org/ns/credentials/v2");
     }
@@ -517,7 +526,10 @@ mod tests {
                 }
             }
         });
-        assert!(matches!(forged.verify(), Err(AttestationError::Secp256k1(_))));
+        assert!(matches!(
+            forged.verify(),
+            Err(AttestationError::Secp256k1(_))
+        ));
     }
 
     #[test]

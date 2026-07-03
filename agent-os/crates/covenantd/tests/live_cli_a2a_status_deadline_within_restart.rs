@@ -290,7 +290,9 @@ async fn live_cli_a2a_status_deadline_within_filter_survives_restart() {
     // absolute epoch it was sent with, not dropped or rewritten during replay.
     let near_entry = entry(&filtered, &near.id.to_string()).expect("near entry present");
     assert_eq!(
-        near_entry.pointer("/task/deadline_ms").and_then(Value::as_u64),
+        near_entry
+            .pointer("/task/deadline_ms")
+            .and_then(Value::as_u64),
         Some(near_deadline),
         "deadline_ms must replay verbatim across the restart",
     );

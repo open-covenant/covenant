@@ -90,8 +90,7 @@ pub fn verify_proof(document: &Value, proof: &Value) -> Result<(), AttestationEr
 
     let verification_method = str_field(object, "verificationMethod")?;
     let pubkey = multibase::ed25519_public_key_from_verification_method(verification_method)?;
-    let verifying_key =
-        VerifyingKey::from_bytes(&pubkey).map_err(|_| AttestationError::Ed25519)?;
+    let verifying_key = VerifyingKey::from_bytes(&pubkey).map_err(|_| AttestationError::Ed25519)?;
 
     let proof_value = str_field(object, "proofValue")?;
     let signature_bytes = multibase::base58btc_signature(proof_value)?;
@@ -176,9 +175,13 @@ mod conformance {
             multibase::ed25519_public_key_multibase(&signing_key.verifying_key().to_bytes());
         assert_eq!(derived, PUBLIC_KEY_MULTIBASE);
 
-        let proof =
-            create_proof(&unsigned_credential(), &signing_key, VERIFICATION_METHOD, CREATED)
-                .unwrap();
+        let proof = create_proof(
+            &unsigned_credential(),
+            &signing_key,
+            VERIFICATION_METHOD,
+            CREATED,
+        )
+        .unwrap();
         assert_eq!(
             proof["proofValue"].as_str().unwrap(),
             EXPECTED_PROOF_VALUE,
@@ -192,9 +195,13 @@ mod conformance {
     fn tampered_document_fails_verification() {
         let seed = multibase::ed25519_seed_from_secret_multibase(SECRET_KEY_MULTIBASE).unwrap();
         let signing_key = SigningKey::from_bytes(&seed);
-        let proof =
-            create_proof(&unsigned_credential(), &signing_key, VERIFICATION_METHOD, CREATED)
-                .unwrap();
+        let proof = create_proof(
+            &unsigned_credential(),
+            &signing_key,
+            VERIFICATION_METHOD,
+            CREATED,
+        )
+        .unwrap();
 
         let mut tampered = unsigned_credential();
         tampered["credentialSubject"]["alumniOf"] = json!("A Different School");

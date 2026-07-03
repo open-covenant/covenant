@@ -103,7 +103,10 @@ pub fn digest(domain: &EasDomain, message: &AttestMessage) -> [u8; 32] {
 /// Recover the 20-byte attester from a 65-byte `r ‖ s ‖ v` signature
 /// (`v ∈ {27, 28}`) over `digest`. The inverse of what an EVM contract's
 /// `ecrecover(digest, v, r, s)` computes.
-pub fn recover_address(digest: &[u8; 32], signature: &[u8; 65]) -> Result<[u8; 20], EvmSignerError> {
+pub fn recover_address(
+    digest: &[u8; 32],
+    signature: &[u8; 65],
+) -> Result<[u8; 20], EvmSignerError> {
     let recovery = signature[64]
         .checked_sub(27)
         .and_then(RecoveryId::from_byte)
@@ -238,6 +241,9 @@ mod tests {
         domain.chain_id = 8453; // Base mainnet, not the vector's chain 1
         let digest = digest(&domain, &MAINNET.message());
         let recovered = recover_address(&digest, &MAINNET.signature()).unwrap();
-        assert_ne!(eth::hex_0x(&recovered).to_lowercase(), MAINNET.signer.to_lowercase());
+        assert_ne!(
+            eth::hex_0x(&recovered).to_lowercase(),
+            MAINNET.signer.to_lowercase()
+        );
     }
 }

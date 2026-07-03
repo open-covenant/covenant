@@ -301,7 +301,9 @@ fn recover_address(digest: &[u8; 32], signature: &[u8; 65]) -> Result<[u8; 20], 
     // signature is never a legitimate receipt. `ecrecover` itself cannot
     // reject it, so the off-chain issuer path canonicalizes here.
     if sig.normalize_s().is_some() {
-        return Err(BondError::Signature("non-canonical high-S signature".into()));
+        return Err(BondError::Signature(
+            "non-canonical high-S signature".into(),
+        ));
     }
     let key = VerifyingKey::recover_from_prehash(digest, &sig, recovery)
         .map_err(|e| BondError::Signature(e.to_string()))?;
@@ -326,8 +328,7 @@ mod tests {
     // computes. Reproducing both proves this module's keccak256 is the
     // Ethereum keccak256 (not NIST SHA3-256) — a cross-implementation
     // anchor, not a self-consistency check.
-    const KECCAK_EMPTY: &str =
-        "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+    const KECCAK_EMPTY: &str = "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
     const PUBLISHED_FULL_DOMAIN_TYPEHASH: &str =
         "8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f";
 
@@ -568,7 +569,9 @@ mod tests {
         signed.signature[64] = if signed.signature[64] == 27 { 28 } else { 27 };
         assert_eq!(
             signed.verify(&key.address(), 1_750_000_000),
-            Err(BondError::Signature("non-canonical high-S signature".into()))
+            Err(BondError::Signature(
+                "non-canonical high-S signature".into()
+            ))
         );
     }
 

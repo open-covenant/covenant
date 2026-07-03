@@ -27,7 +27,15 @@ fn rpc(method: &str, params: serde_json::Value) -> serde_json::Value {
 
     let out = Command::new("curl")
         .args([
-            "-s", "-m", "25", "-X", "POST", &url, "-H", "content-type: application/json", "-d",
+            "-s",
+            "-m",
+            "25",
+            "-X",
+            "POST",
+            &url,
+            "-H",
+            "content-type: application/json",
+            "-d",
         ])
         .arg(body.to_string())
         .output()
@@ -87,7 +95,11 @@ fn live_base_sepolia_reputation_attest_dry_run() {
     // observed live. Both prove the calldata ABI-decoded on the live contract; a
     // malformed request would fail before the schema-existence check.
     if let Some(result) = response.get("result").and_then(serde_json::Value::as_str) {
-        assert_eq!(result.len(), 66, "attest UID should be 32 bytes, got {result}");
+        assert_eq!(
+            result.len(),
+            66,
+            "attest UID should be 32 bytes, got {result}"
+        );
     } else {
         let data = response["error"]["data"].as_str().unwrap_or_default();
         assert!(

@@ -116,19 +116,30 @@ async fn live_cli_audit_verify_detects_tampered_chain() {
     wait_for_operator_token(home.path()).await;
 
     // Seed at least one audit event (and its chain anchor).
-    run_ok(home.path(), &cli, &["capabilities", "grant", "tool.call.echo"]).await;
+    run_ok(
+        home.path(),
+        &cli,
+        &["capabilities", "grant", "tool.call.echo"],
+    )
+    .await;
 
     // Baseline: a healthy chain verifies. Without this a daemon that always
     // reports invalid would pass, so the corruption below would prove nothing.
     let baseline = verify_report(home.path(), &cli).await;
-    assert_eq!(baseline["valid"], true, "baseline must be valid: {baseline:?}");
+    assert_eq!(
+        baseline["valid"], true,
+        "baseline must be valid: {baseline:?}"
+    );
     assert_eq!(
         baseline["failures"].as_array().map(Vec::len),
         Some(0),
         "baseline must carry no failures: {baseline:?}",
     );
     let baseline_events = baseline["events"].as_u64().expect("events count");
-    assert!(baseline_events > 0, "baseline must have events: {baseline:?}");
+    assert!(
+        baseline_events > 0,
+        "baseline must have events: {baseline:?}"
+    );
     assert_eq!(
         baseline["anchors"].as_u64(),
         Some(baseline_events),
@@ -140,7 +151,11 @@ async fn live_cli_audit_verify_detects_tampered_chain() {
     // both files on the next call, so no restart is needed. No audit-generating
     // command runs between here and the re-verify, so the corruption stands.
     let chain_path = home.path().join("audit").join("events.chain.jsonl");
-    assert!(chain_path.exists(), "anchor sidecar missing at {}", chain_path.display());
+    assert!(
+        chain_path.exists(),
+        "anchor sidecar missing at {}",
+        chain_path.display()
+    );
     std::fs::write(&chain_path, b"").expect("truncate anchor sidecar");
 
     let tampered = verify_report(home.path(), &cli).await;

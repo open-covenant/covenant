@@ -135,7 +135,10 @@ async fn usage_snapshot(stream: &mut UnixStream) -> Vec<CapabilityUsageEntry> {
 
 /// The grant identified by `signature_b58` — the ed25519 join key — or a panic
 /// if the snapshot does not carry it.
-fn entry_for<'a>(grants: &'a [CapabilityUsageEntry], signature_b58: &str) -> &'a CapabilityUsageEntry {
+fn entry_for<'a>(
+    grants: &'a [CapabilityUsageEntry],
+    signature_b58: &str,
+) -> &'a CapabilityUsageEntry {
     grants
         .iter()
         .find(|g| g.signature_b58 == signature_b58)
@@ -235,7 +238,11 @@ fn assert_subject(entry: &CapabilityUsageEntry, expected_display: &str, expected
     let pubkey_bytes = bs58::decode(&entry.subject_pubkey_b58)
         .into_vec()
         .expect("subject pubkey is base58");
-    assert_eq!(pubkey_bytes.len(), 32, "subject pubkey is a 32-byte ed25519 key");
+    assert_eq!(
+        pubkey_bytes.len(),
+        32,
+        "subject pubkey is a 32-byte ed25519 key"
+    );
     assert!(
         pubkey_bytes.iter().any(|&b| b != 0),
         "subject pubkey is not the zeroed identity",

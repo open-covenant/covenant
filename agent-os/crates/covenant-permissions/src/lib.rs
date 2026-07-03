@@ -1575,8 +1575,7 @@ impl CapabilityStore for JsonlCapabilityStore {
         // for the last unit serialize, and the loser sees the count the winner
         // appended.
         let _g = self.lock.lock().await;
-        let mut counts: std::collections::HashMap<[u8; 64], u64> =
-            std::collections::HashMap::new();
+        let mut counts: std::collections::HashMap<[u8; 64], u64> = std::collections::HashMap::new();
         for use_record in Self::read_jsonl::<UseRecord>(&self.uses_path).await? {
             *counts.entry(use_record.signature).or_insert(0) += 1;
         }
@@ -1624,8 +1623,7 @@ impl CapabilityStore for JsonlCapabilityStore {
             .into_iter()
             .map(|r| r.signature)
             .collect();
-        let mut counts: std::collections::HashMap<[u8; 64], u64> =
-            std::collections::HashMap::new();
+        let mut counts: std::collections::HashMap<[u8; 64], u64> = std::collections::HashMap::new();
         for use_record in Self::read_jsonl::<UseRecord>(&self.uses_path).await? {
             *counts.entry(use_record.signature).or_insert(0) += 1;
         }
@@ -4811,7 +4809,10 @@ mod tests {
             .iter()
             .filter(|o| matches!(o, BudgetConsumeOutcome::Exhausted(_)))
             .count();
-        assert_eq!(consumed, 1, "exactly one concurrent check may consume the last unit");
+        assert_eq!(
+            consumed, 1,
+            "exactly one concurrent check may consume the last unit"
+        );
         assert_eq!(exhausted, 1, "the loser must be refused, not also pass");
     }
 
@@ -4830,7 +4831,10 @@ mod tests {
         let snap = store.usage_snapshot().await.unwrap();
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].capability.signature, sig);
-        assert_eq!(snap[0].used, 0, "a grant with no recorded use reports used == 0");
+        assert_eq!(
+            snap[0].used, 0,
+            "a grant with no recorded use reports used == 0"
+        );
         assert!(!snap[0].revoked);
 
         store
@@ -4949,8 +4953,12 @@ mod tests {
             .unwrap();
 
         let snap = store.usage_snapshot().await.unwrap();
-        let used_of =
-            |sig: [u8; 64]| snap.iter().find(|u| u.capability.signature == sig).unwrap().used;
+        let used_of = |sig: [u8; 64]| {
+            snap.iter()
+                .find(|u| u.capability.signature == sig)
+                .unwrap()
+                .used
+        };
         assert_eq!(used_of(sig_a), 2);
         assert_eq!(used_of(sig_b), 1);
     }

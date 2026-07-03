@@ -103,7 +103,12 @@ async fn grant(stream: &mut UnixStream, action: String) {
     }
 }
 
-async fn a2a_queue(stream: &mut UnixStream) -> (Vec<covenant_a2a::A2ATaskQueueEntry>, Vec<covenant_a2a::A2ATaskResult>) {
+async fn a2a_queue(
+    stream: &mut UnixStream,
+) -> (
+    Vec<covenant_a2a::A2ATaskQueueEntry>,
+    Vec<covenant_a2a::A2ATaskResult>,
+) {
     match req(
         stream,
         Request::A2AQueue {

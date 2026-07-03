@@ -208,8 +208,8 @@ async fn live_covenantd_secret_access_name_scope_gate() {
     // accountability trail for a scope-violation attempt. Phase 1's capability
     // denial does not write a SecretAccessDenied row, so this is the only one.
     let events = recent_audit(&mut stream).await;
-    let (denied_name, reason) =
-        latest_secret_denied(&events).expect("the out-of-scope read must record SecretAccessDenied");
+    let (denied_name, reason) = latest_secret_denied(&events)
+        .expect("the out-of-scope read must record SecretAccessDenied");
     assert_eq!(
         denied_name, OUT_OF_SCOPE,
         "the audit row must name the out-of-scope secret that was refused"

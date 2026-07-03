@@ -168,7 +168,14 @@ async fn live_ipc_a2a_idempotency_replay_returns_cached_result_without_second_en
     // 1. Send an idempotent task, lease it, post its result. This populates the
     //    receiver-side result cache for (sender, recipient, intent, KEY).
     let first = idempotent_task(&peer, INTENT, KEY);
-    match req(&mut stream, Request::SendA2ATask { task: first.clone() }).await {
+    match req(
+        &mut stream,
+        Request::SendA2ATask {
+            task: first.clone(),
+        },
+    )
+    .await
+    {
         Response::A2ATaskQueued { task_id } => {
             assert_eq!(task_id, first.id, "the queued id must echo the sent task")
         }
@@ -198,8 +205,15 @@ async fn live_ipc_a2a_idempotency_replay_returns_cached_result_without_second_en
     // confirm the normal post path delivers to the sender.
     match req(&mut stream, Request::TryRecvA2AResult).await {
         Response::A2AResultOpt { result: Some(r) } => {
-            assert_eq!(r.task_id, first.id, "the drained result must be the first task's");
-            assert_eq!(r.status, A2ATaskStatus::Ok, "the posted status must round-trip");
+            assert_eq!(
+                r.task_id, first.id,
+                "the drained result must be the first task's"
+            );
+            assert_eq!(
+                r.status,
+                A2ATaskStatus::Ok,
+                "the posted status must round-trip"
+            );
         }
         other => panic!("expected Response::A2AResultOpt with the first result, got {other:?}"),
     }
@@ -207,8 +221,18 @@ async fn live_ipc_a2a_idempotency_replay_returns_cached_result_without_second_en
     // 2. Replay: re-send with a fresh id but the SAME sender/recipient/intent/
     //    key. The daemon must serve the cached result without enqueuing again.
     let replay = idempotent_task(&peer, INTENT, KEY);
-    assert_ne!(replay.id, first.id, "the replay must carry a distinct task id");
-    match req(&mut stream, Request::SendA2ATask { task: replay.clone() }).await {
+    assert_ne!(
+        replay.id, first.id,
+        "the replay must carry a distinct task id"
+    );
+    match req(
+        &mut stream,
+        Request::SendA2ATask {
+            task: replay.clone(),
+        },
+    )
+    .await
+    {
         Response::A2ATaskQueued { task_id } => assert_eq!(
             task_id, replay.id,
             "the enqueue ack echoes the posted id on the cache-hit path too"
@@ -249,9 +273,18 @@ async fn live_ipc_a2a_idempotency_replay_returns_cached_result_without_second_en
     // 3. Negative control: a re-send carrying a DISTINCT idempotency key misses
     //    the cache and enqueues normally, proving the dedup is key-specific.
     let distinct = idempotent_task(&peer, INTENT, "idem-key-beta");
-    match req(&mut stream, Request::SendA2ATask { task: distinct.clone() }).await {
+    match req(
+        &mut stream,
+        Request::SendA2ATask {
+            task: distinct.clone(),
+        },
+    )
+    .await
+    {
         Response::A2ATaskQueued { task_id } => assert_eq!(task_id, distinct.id),
-        other => panic!("expected Response::A2ATaskQueued for the distinct-key send, got {other:?}"),
+        other => {
+            panic!("expected Response::A2ATaskQueued for the distinct-key send, got {other:?}")
+        }
     }
     match req(&mut stream, Request::TryRecvA2ATask).await {
         Response::A2ATaskOpt { task: Some(t) } => assert_eq!(

@@ -38,7 +38,9 @@ pub fn schema_uid(schema: &str, resolver: &[u8; 20], revocable: bool) -> [u8; 32
 /// `uint32(0)` is a fixed bump/nonce word.
 pub fn offchain_uid(message: &AttestMessage) -> [u8; 32] {
     let schema_str = eth::hex_0x(&message.schema);
-    let mut packed = Vec::with_capacity(2 + schema_str.len() + 20 + 20 + 8 + 8 + 1 + 32 + message.data.len() + 4);
+    let mut packed = Vec::with_capacity(
+        2 + schema_str.len() + 20 + 20 + 8 + 8 + 1 + 32 + message.data.len() + 4,
+    );
     packed.extend_from_slice(&OFFCHAIN_VERSION.to_be_bytes());
     packed.extend_from_slice(schema_str.as_bytes());
     packed.extend_from_slice(&message.recipient);

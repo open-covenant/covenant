@@ -1430,7 +1430,10 @@ api_key = "BSA-test"
         match err {
             SearchError::Status { status, body } => {
                 assert_eq!(status, 429, "got {status}");
-                assert!(body.contains("rate limited"), "body must carry provider text: {body}");
+                assert!(
+                    body.contains("rate limited"),
+                    "body must carry provider text: {body}"
+                );
             }
             other => panic!("expected SearchError::Status, got {other:?}"),
         }
@@ -1480,7 +1483,10 @@ api_key = "BSA-test"
         match err {
             SearchError::Status { status, body } => {
                 assert_eq!(status, 401, "got {status}");
-                assert!(body.contains("unauthorized"), "body must carry provider text: {body}");
+                assert!(
+                    body.contains("unauthorized"),
+                    "body must carry provider text: {body}"
+                );
             }
             other => panic!("expected SearchError::Status, got {other:?}"),
         }

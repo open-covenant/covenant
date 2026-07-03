@@ -203,19 +203,27 @@ pub struct AddrQuery {
 /// untrusted input; anything that is not a well-formed `resolve`-wrapping-`addr`
 /// request fails closed with [`EvmSignerError::MalformedRequest`].
 pub fn parse_addr_request(request: &[u8]) -> Result<AddrQuery, EvmSignerError> {
-    let selector = request.get(..4).ok_or_else(|| malformed("request too short"))?;
+    let selector = request
+        .get(..4)
+        .ok_or_else(|| malformed("request too short"))?;
     if selector != resolve_selector() {
         return Err(malformed("not a resolve(bytes,bytes) call"));
     }
     let args = &request[4..];
 
-    let name_off = word_as_usize(&word_at(args, 0).ok_or_else(|| malformed("missing name offset"))?)?;
-    let data_off = word_as_usize(&word_at(args, 32).ok_or_else(|| malformed("missing data offset"))?)?;
+    let name_off =
+        word_as_usize(&word_at(args, 0).ok_or_else(|| malformed("missing name offset"))?)?;
+    let data_off =
+        word_as_usize(&word_at(args, 32).ok_or_else(|| malformed("missing data offset"))?)?;
 
     let name = read_bytes(args, name_off)?;
     let data = read_bytes(args, data_off)?;
 
-    if data.get(..4).ok_or_else(|| malformed("inner call too short"))? != addr_selector() {
+    if data
+        .get(..4)
+        .ok_or_else(|| malformed("inner call too short"))?
+        != addr_selector()
+    {
         return Err(malformed("inner call is not addr(bytes32,uint256)"));
     }
     let node: [u8; 32] = data
@@ -422,8 +430,14 @@ mod tests {
     fn addr_result_is_the_abi_bytes_encoding() {
         let result = encode_addr_result(&SOLANA);
         assert_eq!(result.len(), 96);
-        assert_eq!(super::word_as_usize(&result[..32].try_into().unwrap()).unwrap(), 0x20);
-        assert_eq!(super::word_as_usize(&result[32..64].try_into().unwrap()).unwrap(), 32);
+        assert_eq!(
+            super::word_as_usize(&result[..32].try_into().unwrap()).unwrap(),
+            0x20
+        );
+        assert_eq!(
+            super::word_as_usize(&result[32..64].try_into().unwrap()).unwrap(),
+            32
+        );
         assert_eq!(&result[64..], &SOLANA);
     }
 
@@ -433,10 +447,22 @@ mod tests {
         let base = ccip_signature_digest(&RESOLVER, 1_800_000_000, &request(), &result);
 
         // Each bound field, changed alone, changes the digest.
-        assert_ne!(base, ccip_signature_digest(&[0x99; 20], 1_800_000_000, &request(), &result));
-        assert_ne!(base, ccip_signature_digest(&RESOLVER, 1_800_000_001, &request(), &result));
-        assert_ne!(base, ccip_signature_digest(&RESOLVER, 1_800_000_000, b"other", &result));
-        assert_ne!(base, ccip_signature_digest(&RESOLVER, 1_800_000_000, &request(), b"other"));
+        assert_ne!(
+            base,
+            ccip_signature_digest(&[0x99; 20], 1_800_000_000, &request(), &result)
+        );
+        assert_ne!(
+            base,
+            ccip_signature_digest(&RESOLVER, 1_800_000_001, &request(), &result)
+        );
+        assert_ne!(
+            base,
+            ccip_signature_digest(&RESOLVER, 1_800_000_000, b"other", &result)
+        );
+        assert_ne!(
+            base,
+            ccip_signature_digest(&RESOLVER, 1_800_000_000, &request(), b"other")
+        );
     }
 
     #[test]
@@ -461,25 +487,44 @@ mod tests {
     #[test]
     fn signed_response_recovers_to_the_gateway_signer() {
         let gw = gateway();
-        let response = gw.resolve_solana(&request(), &SOLANA, 1_800_000_000).unwrap();
+        let response = gw
+            .resolve_solana(&request(), &SOLANA, 1_800_000_000)
+            .unwrap();
         assert_eq!(response.recover_signer().unwrap(), gw.signer_address());
     }
 
     #[test]
     fn response_encodes_result_expires_and_signature() {
         let gw = gateway();
-        let response = gw.resolve_solana(&request(), &SOLANA, 1_800_000_000).unwrap();
+        let response = gw
+            .resolve_solana(&request(), &SOLANA, 1_800_000_000)
+            .unwrap();
         let encoded = response.abi_encode();
         // Head: offset(result)=0x60, expires, offset(sig).
-        assert_eq!(super::word_as_usize(&encoded[..32].try_into().unwrap()).unwrap(), 0x60);
-        assert_eq!(super::word_as_usize(&encoded[32..64].try_into().unwrap()).unwrap(), 1_800_000_000);
+        assert_eq!(
+            super::word_as_usize(&encoded[..32].try_into().unwrap()).unwrap(),
+            0x60
+        );
+        assert_eq!(
+            super::word_as_usize(&encoded[32..64].try_into().unwrap()).unwrap(),
+            1_800_000_000
+        );
         let sig_off = super::word_as_usize(&encoded[64..96].try_into().unwrap()).unwrap();
         // result tail: length 96 then the addr encoding.
-        assert_eq!(super::word_as_usize(&encoded[96..128].try_into().unwrap()).unwrap(), 96);
+        assert_eq!(
+            super::word_as_usize(&encoded[96..128].try_into().unwrap()).unwrap(),
+            96
+        );
         assert_eq!(&encoded[128..224], response.result.as_slice());
         // sig tail: length 65 then the signature.
-        assert_eq!(super::word_as_usize(&encoded[sig_off..sig_off + 32].try_into().unwrap()).unwrap(), 65);
-        assert_eq!(&encoded[sig_off + 32..sig_off + 32 + 65], &response.signature);
+        assert_eq!(
+            super::word_as_usize(&encoded[sig_off..sig_off + 32].try_into().unwrap()).unwrap(),
+            65
+        );
+        assert_eq!(
+            &encoded[sig_off + 32..sig_off + 32 + 65],
+            &response.signature
+        );
     }
 
     #[test]
@@ -558,9 +603,15 @@ mod tests {
         // The signer recovers correctly only against the resolver it signed for;
         // recovering against a different resolver yields a different address.
         let gw = gateway();
-        let response = gw.resolve_solana(&request(), &SOLANA, 1_800_000_000).unwrap();
-        let elsewhere =
-            ccip_signature_digest(&[0x99; 20], response.expires, &response.request, &response.result);
+        let response = gw
+            .resolve_solana(&request(), &SOLANA, 1_800_000_000)
+            .unwrap();
+        let elsewhere = ccip_signature_digest(
+            &[0x99; 20],
+            response.expires,
+            &response.request,
+            &response.result,
+        );
         assert_ne!(
             recover_address(&elsewhere, &response.signature).unwrap(),
             gw.signer_address()
@@ -570,7 +621,9 @@ mod tests {
     #[test]
     fn to_json_carries_the_response_and_trust_obligations() {
         let gw = gateway();
-        let response = gw.resolve_solana(&request(), &SOLANA, 1_800_000_000).unwrap();
+        let response = gw
+            .resolve_solana(&request(), &SOLANA, 1_800_000_000)
+            .unwrap();
         let v = response.to_json();
         assert_eq!(v["coinType"], SOLANA_COIN_TYPE);
         assert_eq!(v["expires"], 1_800_000_000);

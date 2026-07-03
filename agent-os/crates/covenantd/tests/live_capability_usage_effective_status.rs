@@ -131,7 +131,10 @@ async fn usage_snapshot(stream: &mut UnixStream) -> Vec<CapabilityUsageEntry> {
 
 /// The grant identified by `signature_b58` — the ed25519 join key — or a panic
 /// if the snapshot does not carry it.
-fn entry_for<'a>(grants: &'a [CapabilityUsageEntry], signature_b58: &str) -> &'a CapabilityUsageEntry {
+fn entry_for<'a>(
+    grants: &'a [CapabilityUsageEntry],
+    signature_b58: &str,
+) -> &'a CapabilityUsageEntry {
     grants
         .iter()
         .find(|g| g.signature_b58 == signature_b58)
@@ -199,7 +202,12 @@ async fn live_covenantd_capability_usage_effective_status_across_restart() {
             other => panic!("expected Response::CapabilityRevoked, got {other:?}"),
         }
 
-        assert_effective_statuses(&usage_snapshot(&mut stream).await, &exhausted_sig, &live_sig, &revoked_sig);
+        assert_effective_statuses(
+            &usage_snapshot(&mut stream).await,
+            &exhausted_sig,
+            &live_sig,
+            &revoked_sig,
+        );
 
         drop(stream);
         let _ = child.kill().await;
@@ -223,7 +231,12 @@ async fn live_covenantd_capability_usage_effective_status_across_restart() {
         let mut stream = UnixStream::connect(&sock).await.expect("connect #2");
         authenticate(&mut stream, home.path()).await;
 
-        assert_effective_statuses(&usage_snapshot(&mut stream).await, &exhausted_sig, &live_sig, &revoked_sig);
+        assert_effective_statuses(
+            &usage_snapshot(&mut stream).await,
+            &exhausted_sig,
+            &live_sig,
+            &revoked_sig,
+        );
 
         drop(stream);
         let _ = child.kill().await;
@@ -245,7 +258,10 @@ fn assert_effective_statuses(
     );
     assert!(!exhausted.revoked, "the exhausted grant is not revoked");
     assert_eq!(
-        exhausted.budget.expect("budgeted grant reports its budget").remaining,
+        exhausted
+            .budget
+            .expect("budgeted grant reports its budget")
+            .remaining,
         0,
         "the exhausted grant has no remaining budget",
     );

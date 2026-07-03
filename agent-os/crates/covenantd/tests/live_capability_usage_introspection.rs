@@ -14,7 +14,9 @@
 //! `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_capability_usage_introspection -- --ignored live_`.
 
-use covenant_ipc::{read_frame, write_frame, CapabilityUsageBudget, CapabilityUsageEntry, Request, Response};
+use covenant_ipc::{
+    read_frame, write_frame, CapabilityUsageBudget, CapabilityUsageEntry, Request, Response,
+};
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -98,7 +100,10 @@ async fn usage_snapshot(stream: &mut UnixStream) -> Vec<CapabilityUsageEntry> {
 
 /// The grant identified by `signature_b58` — the ed25519 join key — or a panic
 /// if the snapshot does not carry it.
-fn entry_for<'a>(grants: &'a [CapabilityUsageEntry], signature_b58: &str) -> &'a CapabilityUsageEntry {
+fn entry_for<'a>(
+    grants: &'a [CapabilityUsageEntry],
+    signature_b58: &str,
+) -> &'a CapabilityUsageEntry {
     grants
         .iter()
         .find(|g| g.signature_b58 == signature_b58)

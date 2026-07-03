@@ -592,8 +592,15 @@ mod tests {
             req.network, NETWORK,
             "network must be forced to the operator CAIP-2 rail passed in, not the challenge's short \"solana\"",
         );
-        assert_eq!(req.asset, ASSET, "the asset mint is carried through verbatim");
-        assert_eq!(req.pay_to, crate::config::PAY_TO, "payTo is the pinned Hyre payee");
+        assert_eq!(
+            req.asset, ASSET,
+            "the asset mint is carried through verbatim"
+        );
+        assert_eq!(
+            req.pay_to,
+            crate::config::PAY_TO,
+            "payTo is the pinned Hyre payee"
+        );
         assert_eq!(req.scheme, "exact", "the exact scheme is carried through");
         assert_eq!(
             req.amount, "10000",

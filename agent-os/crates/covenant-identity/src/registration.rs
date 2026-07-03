@@ -272,7 +272,11 @@ impl AgentRegistration {
                 agent_id: params.agent_id,
                 agent_registry,
             }],
-            supported_trust: params.supported_trust.iter().map(|s| s.to_string()).collect(),
+            supported_trust: params
+                .supported_trust
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             signatures: Vec::new(),
         }
     }
@@ -399,8 +403,7 @@ mod tests {
     // Minimal base58 (Bitcoin alphabet) so the test does not depend on the
     // bs58 crate; only used to check the DID subject equals the pubkey.
     fn bs58_like(input: &[u8]) -> String {
-        const ALPHABET: &[u8; 58] =
-            b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
         let mut digits: Vec<u8> = Vec::new();
         for &byte in input {
             let mut carry = byte as u32;
@@ -460,7 +463,10 @@ mod tests {
         ] {
             assert!(v.get(field).is_some(), "missing A2A required field {field}");
         }
-        assert_eq!(v["protocolVersion"], Value::String(A2A_PROTOCOL_VERSION.into()));
+        assert_eq!(
+            v["protocolVersion"],
+            Value::String(A2A_PROTOCOL_VERSION.into())
+        );
     }
 
     #[test]
@@ -476,7 +482,10 @@ mod tests {
             "active",
             "registrations",
         ] {
-            assert!(v.get(field).is_some(), "missing ERC-8004 required field {field}");
+            assert!(
+                v.get(field).is_some(),
+                "missing ERC-8004 required field {field}"
+            );
         }
         // Omitting the registration-v1 type is expectedFailureMode 3.
         assert_eq!(v["type"], Value::String(ERC8004_REGISTRATION_TYPE.into()));
@@ -499,7 +508,10 @@ mod tests {
         let v = sample_doc().to_value().unwrap();
         // expectedFailureMode 2: the draft churned trustModels -> supportedTrust.
         assert!(v.get("supportedTrust").is_some(), "must use supportedTrust");
-        assert!(v.get("trustModels").is_none(), "must not use the stale trustModels name");
+        assert!(
+            v.get("trustModels").is_none(),
+            "must not use the stale trustModels name"
+        );
         assert_eq!(v["supportedTrust"], serde_json::json!(["reputation"]));
     }
 
@@ -560,12 +572,18 @@ mod tests {
         b.sign(&test_key()).unwrap();
         // expectedFailureMode 4: JCS must be deterministic, and adding a
         // signature must not change the bytes it was computed over.
-        assert_eq!(a.signing_input_bytes().unwrap(), b.signing_input_bytes().unwrap());
+        assert_eq!(
+            a.signing_input_bytes().unwrap(),
+            b.signing_input_bytes().unwrap()
+        );
         // JCS emits lexicographically sorted keys.
         let jcs = String::from_utf8(a.signing_input_bytes().unwrap()).unwrap();
         let type_at = jcs.find("\"type\"").unwrap();
         let active_at = jcs.find("\"active\"").unwrap();
-        assert!(active_at < type_at, "JCS keys must be sorted, so active precedes type");
+        assert!(
+            active_at < type_at,
+            "JCS keys must be sorted, so active precedes type"
+        );
     }
 
     #[test]
@@ -573,7 +591,8 @@ mod tests {
         let mut doc = sample_doc();
         doc.sign(&test_key()).unwrap();
         let sig = &doc.signatures[0];
-        let header: Value = serde_json::from_slice(&base64url_decode(&sig.protected).unwrap()).unwrap();
+        let header: Value =
+            serde_json::from_slice(&base64url_decode(&sig.protected).unwrap()).unwrap();
         assert_eq!(header["alg"], Value::String("EdDSA".into()));
         // 64-byte ed25519 signature round-trips through base64url.
         assert_eq!(base64url_decode(&sig.signature).unwrap().len(), 64);
@@ -608,7 +627,10 @@ mod tests {
         assert_eq!(base64url_encode(&[0xfb, 0xff]), "-_8");
         assert_eq!(base64url_decode("-_8").unwrap(), vec![0xfb, 0xff]);
         assert!(base64url_decode("A").is_err(), "length%4==1 is invalid");
-        assert!(base64url_decode("**").is_err(), "non-alphabet bytes are invalid");
+        assert!(
+            base64url_decode("**").is_err(),
+            "non-alphabet bytes are invalid"
+        );
     }
 
     #[test]
@@ -636,9 +658,15 @@ mod tests {
     fn spec_commits_are_pinned() {
         // The fixture: if an upstream spec revision changes the shape, this
         // pin plus the field-name assertions above force a deliberate update.
-        assert_eq!(ERC8004_SPEC_COMMIT, "503591a6e80e6e1affdd6403341e25269141f046");
+        assert_eq!(
+            ERC8004_SPEC_COMMIT,
+            "503591a6e80e6e1affdd6403341e25269141f046"
+        );
         assert_eq!(A2A_SPEC_COMMIT, "210f03d426e2f2fa92000e14ef0de3b7ba15aee5");
-        assert_eq!(SOLANA_MAINNET_CAIP2, "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp");
+        assert_eq!(
+            SOLANA_MAINNET_CAIP2,
+            "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+        );
         assert_eq!(
             ERC8004_REGISTRATION_TYPE,
             "https://eips.ethereum.org/EIPS/eip-8004#registration-v1"

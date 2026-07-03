@@ -176,9 +176,21 @@ mod tests {
             r.text
         );
         // The failing provider's name and the original question are surfaced.
-        assert!(r.text.contains("failing-live"), "missing provider name: {}", r.text);
-        assert!(r.text.contains("what is x?"), "missing original question: {}", r.text);
+        assert!(
+            r.text.contains("failing-live"),
+            "missing provider name: {}",
+            r.text
+        );
+        assert!(
+            r.text.contains("what is x?"),
+            "missing original question: {}",
+            r.text
+        );
         // Sources still flow from the search hits so the caller isn't left empty.
-        assert_eq!(r.sources.len(), 1, "expected the stub search hit as a source");
+        assert_eq!(
+            r.sources.len(),
+            1,
+            "expected the stub search hit as a source"
+        );
     }
 }

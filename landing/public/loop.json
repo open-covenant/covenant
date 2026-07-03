@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-03T10:27:16.190Z",
+  "updatedAt": "2026-07-03T10:47:20.109Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12728,
+    "events": 12729,
     "tasks": 1492,
     "integrated": 1491
   },
@@ -187,7 +187,8 @@
     "integrated": 1483,
     "proposed": 1,
     "blocked": 6,
-    "cross_review": 2
+    "cross_review": 1,
+    "validation": 1
   },
   "areas": [
     {
@@ -217,8 +218,8 @@
   ],
   "inFlight": {
     "task": "workspace-paymentextra-struct-literal-drift",
-    "state": "cross_review",
-    "since": "2026-07-03T05:34:53.374Z"
+    "state": "validation",
+    "since": "2026-07-03T10:44:37.264Z"
   },
   "recent": [
     {

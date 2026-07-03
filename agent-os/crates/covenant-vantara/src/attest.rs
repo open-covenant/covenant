@@ -41,11 +41,14 @@ pub struct VantaraAttestation {
 
 impl VantaraAttestation {
     /// Build an attestation from a job, the feed-level cluster and hash
-    /// algorithm, and the feed's signing block (needed to verify the receipt).
+    /// algorithm, the feed's signing block, and the pinned provider key (the
+    /// out-of-band trust anchor, or `None` to trust the self-describing feed
+    /// key).
     pub fn from_job(
         cluster: &str,
         hash_algorithm: &str,
         signing: Option<&SigningBlock>,
+        pinned_key: Option<&str>,
         job: &Job,
     ) -> Self {
         Self {
@@ -56,7 +59,7 @@ impl VantaraAttestation {
             model: job.model.clone(),
             output_hash: job.output_hash.clone(),
             hash: check_output_hash(hash_algorithm, &job.output_hash),
-            signature: verify_receipt(signing, job),
+            signature: verify_receipt(signing, job, pinned_key),
             settlement: job.settlement.clone(),
             completed_at: job.completed_at.clone(),
         }
@@ -132,7 +135,7 @@ mod tests {
     fn verified_attestation_is_content_free() {
         let mut j = job();
         let block = sign(&mut j);
-        let a = VantaraAttestation::from_job("mainnet-beta", "sha256", Some(&block), &j);
+        let a = VantaraAttestation::from_job("mainnet-beta", "sha256", Some(&block), None, &j);
         assert_eq!(a.provider, "vantara");
         assert!(a.hash.valid);
         assert_eq!(a.signature, SignatureStatus::Verified);
@@ -152,15 +155,30 @@ mod tests {
     fn attestation_is_deterministic_for_a_fixed_record() {
         let mut j = job();
         let block = sign(&mut j);
-        let a = VantaraAttestation::from_job("mainnet-beta", "sha256", Some(&block), &j);
-        let b = VantaraAttestation::from_job("mainnet-beta", "sha256", Some(&block), &j);
+        let a = VantaraAttestation::from_job("mainnet-beta", "sha256", Some(&block), None, &j);
+        let b = VantaraAttestation::from_job("mainnet-beta", "sha256", Some(&block), None, &j);
         assert_eq!(a, b);
     }
 
     #[test]
     fn unsigned_record_is_not_verified() {
-        let a = VantaraAttestation::from_job("mainnet-beta", "sha256", None, &job());
+        let a = VantaraAttestation::from_job("mainnet-beta", "sha256", None, None, &job());
         assert_eq!(a.signature, SignatureStatus::Absent);
+        assert!(!a.is_verified());
+    }
+
+    #[test]
+    fn pin_mismatch_downgrades_a_valid_signature() {
+        let mut j = job();
+        let block = sign(&mut j);
+        let a = VantaraAttestation::from_job(
+            "mainnet-beta",
+            "sha256",
+            Some(&block),
+            Some("11111111111111111111111111111111"),
+            &j,
+        );
+        assert!(matches!(a.signature, SignatureStatus::Invalid { .. }));
         assert!(!a.is_verified());
     }
 
@@ -172,7 +190,7 @@ mod tests {
             settled_at: Some("2026-07-02T08:00:00.000Z".into()),
         });
         let block = sign(&mut j);
-        let a = VantaraAttestation::from_job("mainnet-beta", "sha256", Some(&block), &j);
+        let a = VantaraAttestation::from_job("mainnet-beta", "sha256", Some(&block), None, &j);
         assert!(a.is_settled());
     }
 

@@ -20,7 +20,18 @@ use serde_json::{json, Value};
 async fn main() {
     let base = std::env::var("COVENANT_VANTARA_BASE_URL")
         .unwrap_or_else(|_| covenant_vantara::BASE_URL.to_string());
-    let client = Arc::new(VantaraClient::new(&base));
+    // Anchor verification to the provider key published in the MPP doc, the
+    // same key the daemon pins to.
+    let client = match VantaraClient::new(&base).provider_key_from_mpp().await {
+        Ok(key) => {
+            println!("anchored to MPP provider key: {key}\n");
+            Arc::new(VantaraClient::with_pinned_key(&base, key))
+        }
+        Err(e) => {
+            println!("MPP provider key unresolved ({e}); using the self-describing feed key\n");
+            Arc::new(VantaraClient::new(&base))
+        }
+    };
     let cfg = VantaraConfig {
         enabled: true,
         base_url: base.clone(),
@@ -42,7 +53,7 @@ async fn main() {
 
     println!("\n-- {JOBS_TOOL} (provenance feed + attestations) --");
     let jobs_res = tool(JOBS_TOOL)
-        .call(json!({ "limit": 5 }))
+        .call(json!({ "limit": 20 }))
         .await
         .expect("jobs call");
     print_verification_summary(&jobs_res);

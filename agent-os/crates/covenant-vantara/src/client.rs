@@ -9,7 +9,7 @@
 //! [`payouts`]: VantaraClient::payouts
 //! [`find_job`]: VantaraClient::find_job
 
-use crate::types::{Job, JobsPage, PayoutsPage, SigningBlock};
+use crate::types::{Job, JobsPage, MppDoc, PayoutsPage, SigningBlock};
 use crate::{Result, VantaraError};
 
 /// Server default page size for the job feed. The explorer caps a page at
@@ -23,6 +23,7 @@ const MAX_SCAN: u32 = 5_000;
 pub struct VantaraClient {
     http: reqwest::Client,
     base_url: String,
+    pinned_key: Option<String>,
 }
 
 /// Outcome of a bounded feed scan.
@@ -54,7 +55,44 @@ impl VantaraClient {
         Self {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
+            pinned_key: None,
         }
+    }
+
+    /// Client that pins the provider signing key (base58): verification then
+    /// requires the feed's signing key to equal `key`.
+    pub fn with_pinned_key(base_url: impl Into<String>, key: impl Into<String>) -> Self {
+        Self {
+            pinned_key: Some(key.into()),
+            ..Self::new(base_url)
+        }
+    }
+
+    /// The pinned provider key, if any.
+    pub fn pinned_key(&self) -> Option<&str> {
+        self.pinned_key.as_deref()
+    }
+
+    /// Resolve the provider signing key from the MPP discovery doc at
+    /// `/.well-known/mpp` (`providerCallback.publicKey`). This is the
+    /// out-of-band anchor: a different endpoint than the feed, so the feed
+    /// cannot assert its own signing key unchecked.
+    pub async fn provider_key_from_mpp(&self) -> Result<String> {
+        let url = format!("{}/.well-known/mpp", self.base_url);
+        let resp = self
+            .http
+            .get(url)
+            .header("accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(VantaraError::UnexpectedStatus(status.as_u16()));
+        }
+        let text = resp.text().await?;
+        let doc: MppDoc = serde_json::from_str(&text)
+            .map_err(|e| VantaraError::Decode(format!("{e}: body={text}")))?;
+        Ok(doc.provider_callback.public_key)
     }
 
     /// One page of the job feed.
@@ -165,6 +203,33 @@ mod tests {
         let page = client.jobs(10, 20).await.expect("jobs");
         assert_eq!(page.pagination.total, 0);
         assert!(page.jobs.is_empty());
+    }
+
+    #[test]
+    fn with_pinned_key_sets_the_pin() {
+        assert_eq!(
+            VantaraClient::with_pinned_key("http://x", "KEY").pinned_key(),
+            Some("KEY")
+        );
+        assert_eq!(VantaraClient::new("http://x").pinned_key(), None);
+    }
+
+    #[tokio::test]
+    async fn provider_key_from_mpp_reads_the_callback_key() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/mpp"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"providerCallback":{"scheme":"ed25519","publicKey":"DBkSpBFu5oUNmPuJwB1J2gBLfRtVHmZHXaynaX3hAs71","encoding":"base58"}}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let key = VantaraClient::new(server.uri())
+            .provider_key_from_mpp()
+            .await
+            .expect("mpp key");
+        assert_eq!(key, "DBkSpBFu5oUNmPuJwB1J2gBLfRtVHmZHXaynaX3hAs71");
     }
 
     #[tokio::test]

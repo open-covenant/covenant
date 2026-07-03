@@ -51,6 +51,25 @@ pub struct SigningBlock {
     pub note: Option<String>,
 }
 
+/// The Machine Payments Protocol discovery document at `/.well-known/mpp`.
+/// Only the provider callback is read — its `publicKey` is the out-of-band
+/// trust anchor the feed's self-asserted signing key is checked against.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MppDoc {
+    #[serde(rename = "providerCallback")]
+    pub provider_callback: ProviderCallback,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ProviderCallback {
+    #[serde(rename = "publicKey")]
+    pub public_key: String,
+    #[serde(default)]
+    pub scheme: Option<String>,
+    #[serde(default)]
+    pub encoding: Option<String>,
+}
+
 /// One completed job. Content-free by design: the output is represented only
 /// by its hash, and no prompt, wallet, or payload is exposed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

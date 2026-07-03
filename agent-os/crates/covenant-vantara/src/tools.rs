@@ -96,6 +96,7 @@ impl Tool for JobsTool {
                             &page.cluster,
                             &page.hash_algorithm,
                             page.signing.as_ref(),
+                            self.client.pinned_key(),
                             j,
                         )
                         .to_json()
@@ -144,8 +145,13 @@ impl Tool for AttestTool {
                 hash_algorithm,
                 signing,
             }) => {
-                let att =
-                    VantaraAttestation::from_job(&cluster, &hash_algorithm, signing.as_ref(), &job);
+                let att = VantaraAttestation::from_job(
+                    &cluster,
+                    &hash_algorithm,
+                    signing.as_ref(),
+                    self.client.pinned_key(),
+                    &job,
+                );
                 Ok(ToolCallResult::ok(vec![Content::json(
                     json!({ "attestation": att.to_json() }),
                 )]))

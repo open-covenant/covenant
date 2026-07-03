@@ -20,6 +20,11 @@ pub struct VantaraConfig {
     /// tool; `Some([])` registers none.
     #[serde(default)]
     pub allow: Option<Vec<String>>,
+    /// Hard-pin the provider signing key (base58). When set, `verified`
+    /// requires the feed's signing key to equal this. When unset, the anchor
+    /// is resolved from the MPP discovery doc at startup.
+    #[serde(default)]
+    pub provider_pubkey: Option<String>,
 }
 
 fn default_base_url() -> String {
@@ -32,6 +37,7 @@ impl Default for VantaraConfig {
             enabled: false,
             base_url: default_base_url(),
             allow: None,
+            provider_pubkey: None,
         }
     }
 }
@@ -55,6 +61,7 @@ impl VantaraConfig {
                 .map(str::to_string)
                 .collect()
         });
+        cfg.provider_pubkey = env("COVENANT_VANTARA_PROVIDER_PUBKEY");
         cfg
     }
 

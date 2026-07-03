@@ -89,11 +89,20 @@ pub fn canonical_receipt(job: &Job) -> String {
     )
 }
 
-/// Verify a job's `vantaraSignature` against the feed's signing block. Decodes
-/// the key and signature under the encodings the block declares, rebuilds the
-/// canonical receipt from the record's own fields, and checks the ed25519
-/// signature. Everything comes from the feed; nothing is fetched out of band.
-pub fn verify_receipt(signing: Option<&SigningBlock>, job: &Job) -> SignatureStatus {
+/// Verify a job's `vantaraSignature`. Decodes the key and signature under the
+/// encodings the feed's signing block declares, rebuilds the canonical receipt
+/// from the record's own fields, and checks the ed25519 signature.
+///
+/// When `pinned_key` is set (an operator-configured key, or the one resolved
+/// from the MPP discovery doc), the feed's signing key must equal it, so
+/// `verified` means verified against a key sanctioned out of band, not one the
+/// feed asserted about itself. With no pin, verification falls back to the
+/// self-describing feed key.
+pub fn verify_receipt(
+    signing: Option<&SigningBlock>,
+    job: &Job,
+    pinned_key: Option<&str>,
+) -> SignatureStatus {
     let Some(sig_encoded) = job.vantara_signature.as_deref() else {
         return SignatureStatus::Absent;
     };
@@ -107,6 +116,16 @@ pub fn verify_receipt(signing: Option<&SigningBlock>, job: &Job) -> SignatureSta
         return SignatureStatus::Invalid {
             reason: format!("unsupported scheme `{}`", signing.scheme),
         };
+    }
+    if let Some(pinned) = pinned_key {
+        if pinned != signing.public_key {
+            return SignatureStatus::Invalid {
+                reason: format!(
+                    "feed signing key {} does not match the pinned provider key {pinned}",
+                    signing.public_key
+                ),
+            };
+        }
     }
     let Some(public_key) = decode(&signing.public_key, &signing.public_key_encoding) else {
         return invalid("public key does not decode");
@@ -201,7 +220,35 @@ mod tests {
         let mut j = job();
         let (block, sig) = signed(&j);
         j.vantara_signature = Some(sig);
-        assert_eq!(verify_receipt(Some(&block), &j), SignatureStatus::Verified);
+        assert_eq!(
+            verify_receipt(Some(&block), &j, None),
+            SignatureStatus::Verified
+        );
+    }
+
+    #[test]
+    fn pinned_matching_key_verifies() {
+        let mut j = job();
+        let (block, sig) = signed(&j);
+        j.vantara_signature = Some(sig);
+        let pin = block.public_key.clone();
+        assert_eq!(
+            verify_receipt(Some(&block), &j, Some(&pin)),
+            SignatureStatus::Verified
+        );
+    }
+
+    #[test]
+    fn pinned_mismatched_key_is_invalid() {
+        let mut j = job();
+        let (block, sig) = signed(&j);
+        j.vantara_signature = Some(sig);
+        // A valid signature under the feed's key, but the operator pinned a
+        // different provider key: refuse it before touching the crypto.
+        match verify_receipt(Some(&block), &j, Some("11111111111111111111111111111111")) {
+            SignatureStatus::Invalid { reason } => assert!(reason.contains("does not match")),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
     }
 
     #[test]
@@ -211,18 +258,18 @@ mod tests {
         j.vantara_signature = Some(sig);
         j.model = "hermes".into(); // canonical no longer matches the signed bytes
         assert!(matches!(
-            verify_receipt(Some(&block), &j),
+            verify_receipt(Some(&block), &j, None),
             SignatureStatus::Invalid { .. }
         ));
     }
 
     #[test]
     fn absent_signature_and_missing_block() {
-        assert_eq!(verify_receipt(None, &job()), SignatureStatus::Absent);
+        assert_eq!(verify_receipt(None, &job(), None), SignatureStatus::Absent);
         let mut j = job();
         j.vantara_signature = Some("AAAA".into());
         assert!(matches!(
-            verify_receipt(None, &j),
+            verify_receipt(None, &j, None),
             SignatureStatus::Invalid { .. }
         ));
     }
@@ -234,13 +281,13 @@ mod tests {
         j.vantara_signature = Some(sig);
         block.scheme = "secp256k1".into();
         assert!(matches!(
-            verify_receipt(Some(&block), &j),
+            verify_receipt(Some(&block), &j, None),
             SignatureStatus::Invalid { .. }
         ));
         let (mut block2, _) = signed(&j);
         block2.public_key = "not base58 !!!".into();
         assert!(matches!(
-            verify_receipt(Some(&block2), &j),
+            verify_receipt(Some(&block2), &j, None),
             SignatureStatus::Invalid { .. }
         ));
     }

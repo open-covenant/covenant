@@ -36,7 +36,8 @@ pub use client::{Lookup, VantaraClient};
 pub use config::{VantaraConfig, BASE_URL};
 pub use tools::{vantara_tools, ATTEST_TOOL, JOBS_TOOL, PAYOUTS_TOOL};
 pub use types::{
-    AssetTotal, Job, JobsPage, Pagination, Payout, PayoutsPage, Settlement, SigningBlock,
+    AssetTotal, Job, JobsPage, MppDoc, Pagination, Payout, PayoutsPage, ProviderCallback,
+    Settlement, SigningBlock,
 };
 pub use verify::{
     canonical_receipt, check_output_hash, verify_ed25519, verify_receipt, HashCheck,

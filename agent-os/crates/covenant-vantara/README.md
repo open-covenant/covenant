@@ -54,8 +54,16 @@ Two axes, both real:
   `vantara-job-receipt-v1|<jobId>|<nodeId or '-'>|<model>|<outputHash>|<completedAt>`.
   The feed is self-describing: its `signing` block carries the public key
   (base58), the encodings, and the canonical template, so the verifier rebuilds
-  the exact bytes and checks the signature with nothing fetched out of band. The
-  attestation reports `verified`, `absent`, or `invalid` with a reason.
+  the exact bytes and checks the signature. The attestation reports `verified`,
+  `absent`, or `invalid` with a reason.
+
+**Trust anchor.** By default the verifier pins the provider key to
+`providerCallback.publicKey` from the `/.well-known/mpp` discovery doc, resolved
+once at startup through a different endpoint than the feed. So `verified` means
+verified against a key sanctioned out of band, not one the feed asserted about
+itself, and a feed presenting a different signing key is rejected. Set
+`COVENANT_VANTARA_PROVIDER_PUBKEY` to hard-pin a specific key instead; with
+neither, verification falls back to the self-describing feed key.
 
 `proofSignature` is a separate, network-internal node-to-orchestrator MAC. It is
 verified server-side, intentionally not third-party verifiable, and left opaque
@@ -80,6 +88,7 @@ wallet-level binding is out of scope by design.
 COVENANT_VANTARA_ENABLED=true
 COVENANT_VANTARA_BASE_URL=https://www.vantara.services   # optional
 COVENANT_VANTARA_ALLOW=vantara.attest,vantara.payouts    # optional; empty = all
+COVENANT_VANTARA_PROVIDER_PUBKEY=                        # optional; hard-pin the signing key (base58)
 ```
 
 ## Live check

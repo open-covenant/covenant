@@ -1,21 +1,17 @@
 {
-  "updatedAt": "2026-07-02T23:40:53.629Z",
+  "updatedAt": "2026-07-03T00:01:09.289Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12697,
-    "tasks": 1488,
-    "integrated": 1488
+    "events": 12716,
+    "tasks": 1490,
+    "integrated": 1491
   },
   "throughput": {
-    "last24h": 7,
-    "last7d": 200,
-    "velocity": 28.6
+    "last24h": 10,
+    "last7d": 203,
+    "velocity": 29
   },
   "daily": [
-    {
-      "date": "06-12",
-      "count": 59
-    },
     {
       "date": "06-13",
       "count": 51
@@ -94,14 +90,14 @@
     },
     {
       "date": "07-02",
-      "count": 7
+      "count": 10
+    },
+    {
+      "date": "07-03",
+      "count": 0
     }
   ],
   "cumulative": [
-    {
-      "date": "06-12",
-      "total": 1036
-    },
     {
       "date": "06-13",
       "total": 1087
@@ -180,14 +176,17 @@
     },
     {
       "date": "07-02",
-      "total": 1488
+      "total": 1491
+    },
+    {
+      "date": "07-03",
+      "total": 1491
     }
   ],
   "states": {
-    "integrated": 1480,
+    "integrated": 1483,
     "proposed": 1,
-    "blocked": 6,
-    "validation": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,23 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "runtime-truncate-stderr-multibyte-boundary-coverage",
-    "state": "validation",
-    "since": "2026-07-02T23:40:27.469Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-02T23:54:30.031Z",
+      "task": "identity-binding-recovery-byte-above-range-coverage",
+      "note": "Committed as 55056f88 (1 file, +28). Metrics unchanged post-commit (tracked working-tree content already counted), README stays exact."
+    },
+    {
+      "at": "2026-07-02T23:53:07.935Z",
+      "task": "metrics-guard-tracked-files-only",
+      "note": "Committed as 58cd0463 (metrics.mjs + README.md together per task contract). Push follows with the session batch."
+    },
+    {
+      "at": "2026-07-02T23:46:59.267Z",
+      "task": "runtime-truncate-stderr-multibyte-boundary-coverage",
+      "note": "Committed as 4ede6c2a (1 file, +93): two tests pinning the is_char_boundary advance in truncate_stderr_for_diagnostics across 2-byte and 3-b"
+    },
     {
       "at": "2026-07-02T18:54:27.650Z",
       "task": "identity-base64url-noncanonical-trailing-bits-coverage",
@@ -305,21 +315,6 @@
       "at": "2026-07-01T10:43:22.094Z",
       "task": "multichain-20",
       "note": "INTEGRATED @ 2848d2d9 (pushed ff69d4bc..2848d2d9 loop/main-track; all push identity guards green). Committed: agent-os/evm/ (covenant-erc800"
-    },
-    {
-      "at": "2026-07-01T10:05:32.505Z",
-      "task": "multichain-12",
-      "note": "Integrated as ff69d4bc (5 files, +591/-14): reputation.rs + attest_reputation + sidecar reputation mode + README metrics. Fresh-worktree car"
-    },
-    {
-      "at": "2026-07-01T09:17:14.866Z",
-      "task": "multichain-11",
-      "note": "Committed ab7960e3 (8 files, +872/-5) and pushed to origin/loop/main-track. Committed Cargo.lock verified consistent via fresh-worktree carg"
-    },
-    {
-      "at": "2026-07-01T06:23:44.221Z",
-      "task": "multichain-10",
-      "note": "Committed 91957413 (10 files, +954/-2): covenant-evm-signer crate + repo-root README METRICS + agent-os README Crate Groups + surgical Cargo"
     }
   ]
 }

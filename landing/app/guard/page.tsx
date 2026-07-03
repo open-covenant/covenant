@@ -134,7 +134,15 @@ export default function GuardPage() {
             >
               covguard-v0.1.0
             </a>{" "}
-            ships cosign-signed tarballs and checksums.
+            ships cosign-signed tarballs and checksums. The MCP server is listed in the official{" "}
+            <a
+              className="underline decoration-neutral-700 underline-offset-4 transition-colors hover:text-neutral-50 hover:decoration-neutral-300"
+              href="https://registry.modelcontextprotocol.io/v0.1/servers?search=org.opencovenant/guard"
+            >
+              MCP Registry
+            </a>{" "}
+            as <span className="font-mono text-[12px] text-neutral-400">org.opencovenant/guard</span>, published under a
+            DNS-verified namespace on this domain.
           </p>
         </section>
       </main>

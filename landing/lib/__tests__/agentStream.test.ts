@@ -91,7 +91,7 @@ describe("generateStream", () => {
   function makeRepo() {
     const root = mkdtempSync(join(tmpdir(), "cov-gen-"));
     repos.push(root);
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_SYSTEM: "/dev/null",

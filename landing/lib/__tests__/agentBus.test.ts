@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bus, clean, commitEvent, parseTransitionLine } from "../agentBus.mjs";
+import { bus, clean, commitEvent, parseTransitionLine, type AgentEvent } from "../agentBus.mjs";
 
 const line = (o: Record<string, unknown>) => JSON.stringify(o);
 
@@ -82,7 +82,7 @@ describe("commitEvent", () => {
   let root: string;
 
   function sh(...args: string[]) {
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_SYSTEM: "/dev/null",
@@ -115,7 +115,7 @@ describe("commitEvent", () => {
   it("returns the subject and shortstat for a commit", () => {
     const hash = commit("add ledger", "ledger.txt", "a\nb\n");
     const ev = commitEvent(root, hash);
-    expect(ev.type).toBe("commit");
+    if (ev.type !== "commit") throw new Error(`expected a commit event, got ${ev.type}`);
     expect(ev.hash).toBe(hash);
     expect(ev.subject).toBe("add ledger");
     expect(ev.stat).toMatch(/^1 file changed, 2 insertions\(\+\)$/);
@@ -123,7 +123,9 @@ describe("commitEvent", () => {
 
   it("redacts a home path in the subject", () => {
     const hash = commit("edit at /Users/secret/loc", "x.txt", "y\n");
-    expect(commitEvent(root, hash).subject).toBe("edit at ~/loc");
+    const ev = commitEvent(root, hash);
+    if (ev.type !== "commit") throw new Error(`expected a commit event, got ${ev.type}`);
+    expect(ev.subject).toBe("edit at ~/loc");
   });
 
   it("fails closed to empty subject and stat on an unknown ref", () => {
@@ -148,6 +150,10 @@ describe("bus", () => {
     offs.push(off);
     return off;
   };
+  // The bus is payload-agnostic at runtime; these tests exercise fan-out and
+  // ring mechanics with bare markers rather than full AgentEvents.
+  const pub = (e: unknown) => bus.publish(e as AgentEvent);
+  const n = (e: unknown) => (e as { n: number }).n;
 
   beforeEach(() => {
     bus.ring.length = 0;
@@ -159,28 +165,28 @@ describe("bus", () => {
 
   it("delivers events to subscribers and stops after unsubscribe", () => {
     const got: number[] = [];
-    const off = track((e) => got.push((e as { n: number }).n));
-    bus.publish({ n: 1 });
-    bus.publish({ n: 2 });
+    const off = track((e) => got.push(n(e)));
+    pub({ n: 1 });
+    pub({ n: 2 });
     off();
-    bus.publish({ n: 3 });
+    pub({ n: 3 });
     expect(got).toEqual([1, 2]);
   });
 
   it("ignores a nullish event without touching the ring or subscribers", () => {
     const got: unknown[] = [];
     track((e) => got.push(e));
-    bus.publish(null);
-    bus.publish(undefined);
+    pub(null);
+    pub(undefined);
     expect(got).toHaveLength(0);
     expect(bus.ring).toHaveLength(0);
   });
 
   it("caps the replay ring at 200, dropping the oldest events", () => {
-    for (let i = 0; i < 250; i += 1) bus.publish({ n: i });
+    for (let i = 0; i < 250; i += 1) pub({ n: i });
     expect(bus.ring).toHaveLength(200);
-    expect((bus.ring[0] as { n: number }).n).toBe(50);
-    expect((bus.ring[199] as { n: number }).n).toBe(249);
+    expect(n(bus.ring[0])).toBe(50);
+    expect(n(bus.ring[199])).toBe(249);
   });
 
   it("isolates a throwing subscriber from the rest of the fan-out", () => {
@@ -188,8 +194,8 @@ describe("bus", () => {
     track(() => {
       throw new Error("boom");
     });
-    track((e) => seen.push((e as { n: number }).n));
-    bus.publish({ n: 42 });
+    track((e) => seen.push(n(e)));
+    pub({ n: 42 });
     expect(seen).toEqual([42]);
   });
 });

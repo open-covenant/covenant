@@ -68,3 +68,50 @@ export function concat(parts: Bytes[]): Bytes {
   }
   return out;
 }
+
+// Sequential little-endian reader, the inverse of the encoders above. Account
+// data is an 8-byte discriminator followed by the struct fields in order.
+export class BorshReader {
+  private pos = 0;
+  constructor(private readonly data: Uint8Array) {}
+
+  private take(n: number): Uint8Array {
+    if (this.pos + n > this.data.length) throw new Error('borsh: unexpected end of buffer');
+    const slice = this.data.subarray(this.pos, this.pos + n);
+    this.pos += n;
+    return slice;
+  }
+
+  private uint(byteLen: number): bigint {
+    const b = this.take(byteLen);
+    let v = 0n;
+    for (let i = byteLen - 1; i >= 0; i--) v = (v << 8n) | BigInt(b[i]!);
+    return v;
+  }
+
+  u8(): number {
+    return this.take(1)[0]!;
+  }
+  u32(): number {
+    return Number(this.uint(4));
+  }
+  u64(): bigint {
+    return this.uint(8);
+  }
+  i64(): bigint {
+    const v = this.uint(8);
+    return v >= 1n << 63n ? v - (1n << 64n) : v;
+  }
+  bool(): boolean {
+    return this.u8() !== 0;
+  }
+  pubkey(): string {
+    return new PublicKey(this.take(32)).toBase58();
+  }
+  hash32(): string {
+    return Buffer.from(this.take(32)).toString('hex');
+  }
+  discriminator(): Uint8Array {
+    return Uint8Array.from(this.take(8));
+  }
+}

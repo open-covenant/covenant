@@ -1,8 +1,9 @@
 # @covenant-org/sdk
 
-TypeScript SDK for the [Covenant](https://opencovenant.org) protocol on Solana. Build and sign
-the on-chain instructions (agent registration, `$CVNT` staking, task escrow, credit purchase,
-receipt anchoring), plus address helpers, PDA seeds, and cluster resolution.
+TypeScript SDK for the [Covenant](https://opencovenant.org) protocol on Solana. A high-level
+client that derives PDAs, signs, sends, and reads decoded on-chain state, plus the lower-level
+instruction builders (agent registration, `$CVNT` staking, task escrow, credit purchase, receipt
+anchoring), PDA derivation, account decoding, and Node + browser (wallet-adapter) signing.
 
 ## Install
 
@@ -44,9 +45,46 @@ const tx = new Transaction().add(...toTransactionInstructions(bundle));
 await sendAndConfirmTransaction(connection, tx, [operator]);
 ```
 
-The account addresses (the `*_PDA`s above) are derived from the protocol program; see the
-protocol docs for their seeds. The builders take pre-resolved addresses and do not derive PDAs
-for you.
+The account addresses above are PDAs of the protocol program. `deriveConfigPda`, `deriveAgentPda`,
+`deriveTaskPda`, `deriveCreditsPda`, `deriveStakePositionPda`, and `deriveReceiptBatchPda` derive
+them for you, so you rarely pass a raw PDA by hand.
+
+## Client
+
+For the full path — derive PDAs, sign, send, confirm, and read decoded state — use `CovenantClient`:
+
+```typescript
+import { Connection, Keypair } from '@solana/web3.js';
+import { CovenantClient, keypairSigner, hash32FromText } from '@covenant-org/sdk';
+
+const client = new CovenantClient({
+  connection: new Connection('https://api.mainnet-beta.solana.com', 'confirmed'),
+  signer: keypairSigner(operatorKeypair),
+});
+
+// read decoded on-chain state
+const config = await client.getConfig();
+const agent = await client.getAgent(hash32FromText('my-agent'));
+
+// register: derives the config + agent PDAs, signs, sends, confirms, returns the signature
+const signature = await client.registerAgent({
+  agentKey: hash32FromText('my-agent'),
+  metadataHash: hash32FromText('https://example.com/agents/my-agent.json'),
+  capabilityHash: hash32FromText('research,settlement'),
+});
+```
+
+The client fills the signer as the operator, owner, or client account and resolves the `$CVNT`
+mint from the on-chain config, so you pass only the token accounts and the arguments. In the
+browser, hand it a wallet-adapter wallet instead of a keypair:
+
+```typescript
+import { walletAdapterSigner } from '@covenant-org/sdk';
+const client = new CovenantClient({ connection, signer: walletAdapterSigner(wallet) });
+```
+
+Reads work without a signer. `fetchAgent`, `fetchConfig`, `fetchTask`, and the `decode*` functions
+are also exported directly for reading state without a client.
 
 ## Token instructions need the CVNT mint
 

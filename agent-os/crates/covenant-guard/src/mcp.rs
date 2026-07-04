@@ -12,9 +12,20 @@ use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
 const PROTOCOL: &str = "2025-06-18";
+const SUPPORTED: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 fn receipts_dir() -> std::path::PathBuf {
     crate::home_dir().join("receipts")
+}
+
+/// Run ids are UUIDs. Reject anything that could escape the receipts dir
+/// (path separators, `..`, `:`) before it reaches a filesystem join.
+fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn resolve_id(which: &str) -> Option<String> {
@@ -28,6 +39,9 @@ fn resolve_id(which: &str) -> Option<String> {
 }
 
 fn load_receipt(id: &str) -> Option<(Receipt, std::path::PathBuf)> {
+    if !valid_id(id) {
+        return None;
+    }
     let dir = receipts_dir().join(id);
     let bytes = std::fs::read(dir.join("receipt.json")).ok()?;
     let r: Receipt = serde_json::from_slice(&bytes).ok()?;
@@ -53,33 +67,47 @@ fn load_events(dir: &std::path::Path) -> Result<Option<Vec<Entry>>, String> {
     Ok(Some(out))
 }
 
+const TOOLS: &[&str] = &["guard_status", "guard_receipts", "guard_verify"];
+
 fn tool_defs() -> Value {
+    // All read-only over local files: readOnlyHint lets a client show them as
+    // safe, openWorldHint false says they touch no external system.
+    let ro = json!({ "readOnlyHint": true, "openWorldHint": false });
     json!([
         {
             "name": "guard_status",
+            "title": "Guard status",
             "description": "Summarize the most recent guarded run: outcome, spend against the cap, turns, files changed.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "annotations": ro
         },
         {
             "name": "guard_receipts",
+            "title": "List guarded runs",
             "description": "List recent guarded runs with their outcome and spend.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "annotations": ro
         },
         {
             "name": "guard_verify",
-            "description": "Verify a guarded run's receipt: signature and event chain. Pass a run id, or 'last'.",
+            "title": "Verify a receipt",
+            "description": "Verify a guarded run's receipt: signature and event chain. Pass a run id, or 'last' for the most recent (the default).",
             "inputSchema": {
                 "type": "object",
-                "properties": { "run": { "type": "string", "description": "Run id or 'last'" } },
-                "required": ["run"],
+                "properties": { "run": { "type": "string", "description": "Run id, or 'last' for the most recent run. Defaults to 'last'." } },
                 "additionalProperties": false
-            }
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false, "idempotentHint": true }
         }
     ])
 }
 
 fn text_result(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
+}
+
+fn text_error(text: String) -> Value {
+    json!({ "content": [{ "type": "text", "text": text }], "isError": true })
 }
 
 fn summarize(r: &Receipt) -> String {
@@ -141,12 +169,10 @@ fn call_tool(name: &str, args: &Value) -> Value {
                     };
                     text_result(format!("{verdict}\n{}", summarize(&r)))
                 }
-                None => text_result(format!("no receipt for '{which}'")),
+                None => text_error(format!("no receipt for '{which}'")),
             }
         }
-        _ => {
-            json!({ "content": [{ "type": "text", "text": format!("unknown tool: {name}") }], "isError": true })
-        }
+        _ => text_error(format!("unknown tool: {name}")),
     }
 }
 
@@ -165,18 +191,27 @@ fn handle(req: &Value) -> Option<Value> {
     let id = req.get("id").cloned()?;
     match method {
         "initialize" => {
-            let ver = req
+            // Respond with the client's version only if we speak it; otherwise
+            // our latest, per the spec's negotiation rule.
+            let requested = req
                 .get("params")
                 .and_then(|p| p.get("protocolVersion"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(PROTOCOL)
-                .to_string();
+                .and_then(|v| v.as_str());
+            let ver = match requested {
+                Some(v) if SUPPORTED.contains(&v) => v,
+                _ => PROTOCOL,
+            };
             Some(ok(
                 id,
                 json!({
                     "protocolVersion": ver,
                     "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "covenant-guard", "version": env!("CARGO_PKG_VERSION") }
+                    "serverInfo": {
+                        "name": "covenant-guard",
+                        "title": "Covenant Guard",
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "instructions": "Covenant Guard runs a coding agent under a hard spend cap, an OS sandbox, and a signed receipt. These tools read that local state: guard_status for the latest run, guard_receipts to list runs, guard_verify to re-check a receipt's signature and event chain. Starting a run is the covguard CLI's job, not a tool here."
                 }),
             ))
         }
@@ -185,6 +220,10 @@ fn handle(req: &Value) -> Option<Value> {
             let params = req.get("params").cloned().unwrap_or(json!({}));
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            // Unknown tool name is a protocol error (an invalid param), per spec.
+            if !TOOLS.contains(&name) {
+                return Some(err(id, -32602, &format!("unknown tool: {name}")));
+            }
             Some(ok(id, call_tool(name, &args)))
         }
         "ping" => Some(ok(id, json!({}))),
@@ -263,5 +302,38 @@ mod tests {
         let req = json!({"jsonrpc":"2.0","id":3,"method":"frobnicate"});
         let reply = handle(&req).unwrap();
         assert_eq!(reply["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn unknown_tool_is_invalid_params() {
+        let req = json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rm_rf","arguments":{}}});
+        let reply = handle(&req).unwrap();
+        assert_eq!(reply["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn unsupported_protocol_version_negotiates_down() {
+        let req = json!({"jsonrpc":"2.0","id":5,"method":"initialize","params":{"protocolVersion":"2099-13-99"}});
+        let reply = handle(&req).unwrap();
+        assert_eq!(reply["result"]["protocolVersion"], PROTOCOL);
+    }
+
+    #[test]
+    fn run_ids_cannot_escape_the_receipts_dir() {
+        assert!(!valid_id("../../etc/passwd"));
+        assert!(!valid_id("a/b"));
+        assert!(!valid_id(".."));
+        assert!(!valid_id(""));
+        assert!(valid_id("7b52f3d3-8be0-42a0-864b-5906621ef538"));
+        // A traversal id resolves to nothing rather than reading outside the dir.
+        assert!(load_receipt("../../../../etc").is_none());
+    }
+
+    #[test]
+    fn read_only_tools_are_annotated() {
+        let defs = tool_defs();
+        for t in defs.as_array().unwrap() {
+            assert_eq!(t["annotations"]["readOnlyHint"], true, "{}", t["name"]);
+        }
     }
 }

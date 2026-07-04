@@ -10,5 +10,7 @@ export function toPublicKey(value: Address): PublicKey {
 }
 
 export function toBase58(value: Address): string {
-  return value instanceof PublicKey ? value.toBase58() : value;
+  // new PublicKey validates the base58 and length, so a malformed address is
+  // rejected here rather than deep inside a later web3.js call.
+  return value instanceof PublicKey ? value.toBase58() : new PublicKey(value).toBase58();
 }

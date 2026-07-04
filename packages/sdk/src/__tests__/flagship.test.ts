@@ -5,6 +5,7 @@ import { CovenantClient } from '../solana/client.js';
 import { decodeAgent, decodeConfig, decodeTask } from '../solana/decode.js';
 import {
   deriveAgentPda,
+  deriveAssociatedTokenAddress,
   deriveConfigPda,
   deriveCreditsPda,
   deriveStakePositionPda,
@@ -180,5 +181,68 @@ describe('CovenantClient', () => {
     await expect(
       client.registerAgent({ agentKey: AGENT_KEY, metadataHash: 'aa'.repeat(32), capabilityHash: 'bb'.repeat(32) }),
     ).rejects.toThrow(/requires a signer/);
+  });
+});
+
+describe('hardening regressions', () => {
+  it('rejects a same-discriminator account from the wrong program via trailing bytes', () => {
+    const pk = () => Keypair.generate().publicKey.toBase58();
+    const config = concat([
+      Uint8Array.from([155, 12, 170, 224, 30, 250, 204, 130]),
+      pubkey(pk()),
+      pubkey(pk()),
+      pubkey(pk()),
+      pubkey(pk()),
+      u64('1000'),
+      bool(false),
+      u8(255),
+      u64('86400'),
+    ]);
+    expect(() => decodeConfig(config)).not.toThrow();
+    // The stake program's Config shares this discriminator but is larger; the
+    // extra bytes must make the settlement decoder throw, not silently misread.
+    expect(() => decodeConfig(concat([config, new Uint8Array(51)]))).toThrow(/trailing bytes/);
+  });
+
+  it('derives the associated token account', () => {
+    expect(
+      deriveAssociatedTokenAddress(
+        'So11111111111111111111111111111111111111112',
+        '2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump',
+      ).toBase58(),
+    ).toBe('GmQHNrFudrehjGQFcsNVAgiQrY32EZoP5Gn3xBAU96WX');
+  });
+
+  it('walletAdapterSigner reads publicKey live across an account switch', () => {
+    const a = Keypair.generate();
+    const b = Keypair.generate();
+    const adapter: { publicKey: PublicKey; signTransaction<T>(tx: T): Promise<T> } = {
+      publicKey: a.publicKey,
+      async signTransaction<T>(tx: T): Promise<T> {
+        return tx;
+      },
+    };
+    const signer = walletAdapterSigner(adapter);
+    expect(signer.publicKey.equals(a.publicKey)).toBe(true);
+    adapter.publicKey = b.publicKey;
+    expect(signer.publicKey.equals(b.publicKey)).toBe(true);
+  });
+
+  it('rejects a number amount before touching the network', async () => {
+    const client = new CovenantClient({
+      connection: {
+        getLatestBlockhash: async () => ({
+          blockhash: Keypair.generate().publicKey.toBase58(),
+          lastValidBlockHeight: 1000,
+        }),
+        sendRawTransaction: async () => 'x',
+        confirmTransaction: async () => ({ value: { err: null } }),
+      } as unknown as Connection,
+      signer: keypairSigner(Keypair.generate()),
+      covntMint: 'So11111111111111111111111111111111111111112',
+    });
+    await expect(
+      client.buyCredits({ ownerCovntAccount: OWNER, treasury: OWNER, amountCovnt: 123 as unknown as bigint }),
+    ).rejects.toThrow(/string or bigint/);
   });
 });

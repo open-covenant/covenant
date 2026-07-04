@@ -75,19 +75,39 @@ const DISCRIMINATORS = {
   Task: [79, 34, 229, 55, 88, 90, 55, 84],
 } as const;
 
-function readerFor(data: Uint8Array, account: keyof typeof DISCRIMINATORS): BorshReader {
+// These decoders are settlement-program only. Anchor account discriminators
+// depend only on the struct name, so the settlement Config and StakePosition
+// share bytes with the stake program's same-named accounts. Gating on the
+// discriminator alone would let a stake-program account decode as a settlement
+// struct and silently misread, so every decode also requires the buffer to be
+// fully consumed: the colliding stake accounts are larger and leave a trailing
+// tail, which turns a silent misread into a thrown error.
+function decodeAccount<T>(
+  data: Uint8Array,
+  account: keyof typeof DISCRIMINATORS,
+  fields: (reader: BorshReader) => T,
+): T {
   const reader = new BorshReader(data);
   const found = reader.discriminator();
   const want = DISCRIMINATORS[account];
   for (let i = 0; i < 8; i++) {
-    if (found[i] !== want[i]) throw new Error(`account is not a ${account} (discriminator mismatch)`);
+    if (found[i] !== want[i]) throw new Error(`account does not match ${account} (discriminator mismatch)`);
   }
-  return reader;
+  let value: T;
+  try {
+    value = fields(reader);
+  } catch (err) {
+    throw new Error(`failed to decode ${account} (${data.length} bytes): ${(err as Error).message}`);
+  }
+  const trailing = reader.remaining();
+  if (trailing !== 0) {
+    throw new Error(`account does not match ${account}: ${trailing} trailing bytes (wrong account type or program?)`);
+  }
+  return value;
 }
 
 export function decodeAgent(data: Uint8Array): AgentAccount {
-  const r = readerFor(data, 'Agent');
-  return {
+  return decodeAccount(data, 'Agent', (r) => ({
     agentKey: r.hash32(),
     operator: r.pubkey(),
     metadataHash: r.hash32(),
@@ -96,12 +116,11 @@ export function decodeAgent(data: Uint8Array): AgentAccount {
     reputation: r.u64(),
     active: r.bool(),
     bump: r.u8(),
-  };
+  }));
 }
 
 export function decodeConfig(data: Uint8Array): ConfigAccount {
-  const r = readerFor(data, 'Config');
-  return {
+  return decodeAccount(data, 'Config', (r) => ({
     authority: r.pubkey(),
     slashAuthority: r.pubkey(),
     covntMint: r.pubkey(),
@@ -110,41 +129,37 @@ export function decodeConfig(data: Uint8Array): ConfigAccount {
     paused: r.bool(),
     bump: r.u8(),
     minStakeLock: r.u64(),
-  };
+  }));
 }
 
 export function decodeCreditAccount(data: Uint8Array): CreditAccount {
-  const r = readerFor(data, 'CreditAccount');
-  return { owner: r.pubkey(), balance: r.u64(), bump: r.u8() };
+  return decodeAccount(data, 'CreditAccount', (r) => ({ owner: r.pubkey(), balance: r.u64(), bump: r.u8() }));
 }
 
 export function decodeReceiptBatch(data: Uint8Array): ReceiptBatchAccount {
-  const r = readerFor(data, 'ReceiptBatch');
-  return {
+  return decodeAccount(data, 'ReceiptBatch', (r) => ({
     batchId: r.hash32(),
     authority: r.pubkey(),
     merkleRoot: r.hash32(),
     receiptCount: r.u32(),
     createdAt: r.i64(),
     bump: r.u8(),
-  };
+  }));
 }
 
 export function decodeStakePosition(data: Uint8Array): StakePositionAccount {
-  const r = readerFor(data, 'StakePosition');
-  return {
+  return decodeAccount(data, 'StakePosition', (r) => ({
     agentKey: r.hash32(),
     owner: r.pubkey(),
     amount: r.u64(),
     lockUntil: r.u64(),
     active: r.bool(),
     bump: r.u8(),
-  };
+  }));
 }
 
 export function decodeTask(data: Uint8Array): TaskAccount {
-  const r = readerFor(data, 'Task');
-  return {
+  return decodeAccount(data, 'Task', (r) => ({
     taskId: r.hash32(),
     client: r.pubkey(),
     agentKey: r.hash32(),
@@ -156,7 +171,7 @@ export function decodeTask(data: Uint8Array): TaskAccount {
     deadline: r.i64(),
     status: r.u8(),
     bump: r.u8(),
-  };
+  }));
 }
 
 async function fetchDecoded<T>(

@@ -193,7 +193,7 @@ const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const A = (c: string) => c.repeat(32);
 
-describe('Solana stake descriptors — previously-uncovered builders', () => {
+describe('Solana stake descriptors: previously-uncovered builders', () => {
   it('initialize: authority is the sole signer and seeds authority data fields', () => {
     const ix = prepareStakeInitializeInstruction({
       configAccount: A('2'),
@@ -296,7 +296,7 @@ describe('Solana stake descriptors — previously-uncovered builders', () => {
 // The rotate_fee_router builder only had its all-absent path pinned (the data
 // nulls above); the present-value path, its account order, and the three
 // non-30d lock-tier accept arms of assertLockTier were unexercised.
-describe('Solana stake descriptors — remaining branch coverage', () => {
+describe('Solana stake descriptors: remaining branch coverage', () => {
   it('rotate_fee_router: present optional fields pass through verbatim and pin account order', () => {
     const ix = prepareStakeRotateFeeRouterInstruction({
       configAccount: A('2'),

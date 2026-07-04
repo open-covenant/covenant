@@ -37,12 +37,19 @@ export interface WalletAdapterLike {
 }
 
 export function walletAdapterSigner(adapter: WalletAdapterLike): CovenantSigner {
-  const { publicKey } = adapter;
-  if (!publicKey) throw new Error('wallet is not connected (publicKey is null)');
+  if (!adapter.publicKey) throw new Error('wallet is not connected (publicKey is null)');
   if (!adapter.signTransaction) throw new Error('wallet does not support signTransaction');
-  const signTransaction = adapter.signTransaction.bind(adapter);
-  const signAllTransactions = adapter.signAllTransactions?.bind(adapter);
-  return signAllTransactions
-    ? { publicKey, signTransaction, signAllTransactions }
-    : { publicKey, signTransaction };
+  // Read publicKey live rather than snapshotting it, so a mid-session account
+  // switch or reconnect can't leave the fee payer stale against a fresh wallet.
+  const signer: CovenantSigner = {
+    get publicKey(): PublicKey {
+      if (!adapter.publicKey) throw new Error('wallet disconnected (publicKey is null)');
+      return adapter.publicKey;
+    },
+    signTransaction: adapter.signTransaction.bind(adapter),
+  };
+  if (adapter.signAllTransactions) {
+    signer.signAllTransactions = adapter.signAllTransactions.bind(adapter);
+  }
+  return signer;
 }

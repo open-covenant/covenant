@@ -43,12 +43,12 @@ export const i64 = int(8, true);
 export const bool = (value: boolean): Bytes => Uint8Array.of(value ? 1 : 0);
 
 export function hash32(hex: string): Bytes {
-  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
-  if (!/^[0-9a-fA-F]{64}$/.test(clean)) {
+  // No 0x prefix, matching assertHash32 and the PDA seed encoder.
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
     throw new Error(`expected a 32-byte hex string, got: ${hex}`);
   }
   const out = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  for (let i = 0; i < 32; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
 
@@ -113,5 +113,8 @@ export class BorshReader {
   }
   discriminator(): Uint8Array {
     return Uint8Array.from(this.take(8));
+  }
+  remaining(): number {
+    return this.data.length - this.pos;
   }
 }

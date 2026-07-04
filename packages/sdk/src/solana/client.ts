@@ -30,8 +30,8 @@ import {
   deriveReceiptBatchPda,
   deriveStakePositionPda,
   deriveTaskPda,
-  SETTLEMENT_PROGRAM_ID,
 } from './pda.js';
+import { resolveSolanaNetwork } from './network.js';
 import { toBase58, toPublicKey, type Address } from './pubkey.js';
 import { toTransactionInstructions } from './serialize.js';
 import type { CovenantSigner } from './signer.js';
@@ -46,7 +46,6 @@ export interface CovenantClientOptions {
   connection: Connection;
   // Required for the write methods; reads work without one.
   signer?: CovenantSigner;
-  programId?: Address;
   // The CVNT SPL mint. If omitted, the client reads it from the on-chain config.
   covntMint?: Address;
   commitment?: Commitment;
@@ -105,6 +104,20 @@ export interface AnchorReceiptBatchParams {
   authority?: Address;
 }
 
+// Reject a JS number (which silently loses precision above 2^53) and validate
+// the integer format, per the string|bigint contract, before it reaches the wire.
+function intString(value: string | bigint, label: string): string {
+  const kind = typeof value;
+  if (kind !== 'string' && kind !== 'bigint') {
+    throw new Error(`${label} must be a string or bigint (a number risks precision loss), got ${kind}`);
+  }
+  const text = value.toString();
+  if (!/^-?\d+$/.test(text)) {
+    throw new Error(`${label} must be an integer, got ${JSON.stringify(value)}`);
+  }
+  return text;
+}
+
 // The high-level entry point: derives every PDA, fills the signer account, and
 // runs each instruction build -> sign -> send -> confirm. Reads decode program
 // state. Pass a signer for writes; reads and PDA derivation need only a connection.
@@ -114,11 +127,13 @@ export class CovenantClient {
   private readonly signer?: CovenantSigner;
   private readonly txOptions: BuildTransactionOptions & SendOptions;
   private readonly mintOverride?: Address;
-  private cachedMint?: SolanaAddress;
+  private mintPromise?: Promise<SolanaAddress>;
 
   constructor(options: CovenantClientOptions) {
     this.connection = options.connection;
-    this.programId = toPublicKey(options.programId ?? SETTLEMENT_PROGRAM_ID);
+    // Env-aware, matching the instruction builders (which resolve their program
+    // from the network), so the PDA program and the instruction program agree.
+    this.programId = toPublicKey(resolveSolanaNetwork().programId);
     this.signer = options.signer;
     this.mintOverride = options.covntMint;
     this.txOptions = {
@@ -128,7 +143,6 @@ export class CovenantClient {
     };
   }
 
-  // --- PDA accessors ---
   configPda(): PublicKey {
     return deriveConfigPda(this.programId).address;
   }
@@ -148,7 +162,6 @@ export class CovenantClient {
     return deriveReceiptBatchPda(batchId, this.programId).address;
   }
 
-  // --- reads ---
   getConfig(): Promise<ConfigAccount | null> {
     return fetchConfig(this.connection, this.configPda());
   }
@@ -168,7 +181,7 @@ export class CovenantClient {
     return fetchReceiptBatch(this.connection, this.receiptBatchPda(batchId));
   }
 
-  // --- writes: build -> sign -> send -> confirm, returns the signature ---
+  // Writes build, sign, send, and confirm, then return the signature.
   async registerAgent(params: RegisterAgentParams): Promise<string> {
     const operator = params.operator ?? this.requireSigner().publicKey;
     return this.send(
@@ -194,8 +207,8 @@ export class CovenantClient {
         ownerCovntAccount: toBase58(params.ownerCovntAccount),
         stakeVault: toBase58(params.stakeVault),
         covntMint: await this.resolveMint(params.covntMint),
-        amountCovnt: String(params.amountCovnt),
-        lockUntil: String(params.lockUntil),
+        amountCovnt: intString(params.amountCovnt, 'amountCovnt'),
+        lockUntil: intString(params.lockUntil, 'lockUntil'),
       }),
     );
   }
@@ -210,7 +223,7 @@ export class CovenantClient {
         ownerCovntAccount: toBase58(params.ownerCovntAccount),
         treasury: toBase58(params.treasury),
         covntMint: await this.resolveMint(params.covntMint),
-        amountCovnt: String(params.amountCovnt),
+        amountCovnt: intString(params.amountCovnt, 'amountCovnt'),
       }),
     );
   }
@@ -228,10 +241,10 @@ export class CovenantClient {
         covntMint: await this.resolveMint(params.covntMint),
         provider: toBase58(params.provider),
         taskId: params.taskId,
-        amountCovnt: String(params.amountCovnt),
+        amountCovnt: intString(params.amountCovnt, 'amountCovnt'),
         taskHash: params.taskHash,
         criteriaHash: params.criteriaHash,
-        deadline: String(params.deadline),
+        deadline: intString(params.deadline, 'deadline'),
       }),
     );
   }
@@ -281,13 +294,21 @@ export class CovenantClient {
   private async resolveMint(override?: Address): Promise<SolanaAddress> {
     const explicit = override ?? this.mintOverride;
     if (explicit) return toBase58(explicit);
-    if (this.cachedMint) return this.cachedMint;
-    const config = await this.getConfig();
-    if (!config) {
-      throw new Error('cannot resolve the CVNT mint: config not found on-chain and no covntMint was provided');
+    // Cache the in-flight promise so concurrent writes share one config read,
+    // and drop it on failure so a transient RPC error is not cached forever.
+    if (!this.mintPromise) {
+      this.mintPromise = (async () => {
+        const config = await this.getConfig();
+        if (!config) {
+          throw new Error('cannot resolve the CVNT mint: config not found on-chain and no covntMint was provided');
+        }
+        return config.covntMint;
+      })();
+      this.mintPromise.catch(() => {
+        this.mintPromise = undefined;
+      });
     }
-    this.cachedMint = config.covntMint;
-    return this.cachedMint;
+    return this.mintPromise;
   }
 
   private async send(bundle: PreparedSolanaBundle): Promise<string> {

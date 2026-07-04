@@ -22,7 +22,7 @@ function derive(seeds: Array<Buffer | Uint8Array>, programId: Address): DerivedP
   return { address, bump };
 }
 
-// --- settlement program (cov9UDyp...) ---
+// Settlement-program PDAs (cov9UDyp...).
 
 export function deriveConfigPda(programId: Address = SETTLEMENT_PROGRAM_ID): DerivedPda {
   return derive([utf8('config')], programId);
@@ -52,7 +52,7 @@ export function deriveReceiptBatchPda(batchId: Hash32, programId: Address = SETT
   return derive([utf8('receipt_batch'), hash(batchId)], programId);
 }
 
-// --- stake program (CstkpU2q...) ---
+// Stake-program PDAs (CstkpU2q...).
 
 export function deriveStakeConfigPda(programId: Address = STAKE_PROGRAM_ID): DerivedPda {
   return derive([utf8('stake_config')], programId);
@@ -80,7 +80,35 @@ export function deriveStakeV2PositionPda(
   nonce: number | bigint,
   programId: Address = STAKE_PROGRAM_ID,
 ): DerivedPda {
-  const n = Buffer.alloc(8);
-  n.writeBigUInt64LE(BigInt(nonce));
-  return derive([utf8('stake_v2'), toPublicKey(owner).toBuffer(), n], programId);
+  if (typeof nonce === 'number' && !Number.isInteger(nonce)) {
+    throw new Error(`stake position nonce must be an integer, got ${nonce}`);
+  }
+  const value = BigInt(nonce);
+  if (value < 0n || value > 0xffffffffffffffffn) {
+    throw new Error(`stake position nonce must fit in a u64 (0 to 2^64-1), got ${nonce}`);
+  }
+  const seed = Buffer.alloc(8);
+  seed.writeBigUInt64LE(value);
+  return derive([utf8('stake_v2'), toPublicKey(owner).toBuffer(), seed], programId);
+}
+
+// Token accounts.
+
+export const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+export const ASSOCIATED_TOKEN_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+
+// The Associated Token Account for owner + mint, so callers derive the token
+// accounts the token instructions need instead of passing raw addresses. CVNT is
+// a standard SPL token, so the default token program is Tokenkeg; pass Token-2022
+// for a Token-2022 mint.
+export function deriveAssociatedTokenAddress(
+  owner: Address,
+  mint: Address,
+  tokenProgram: Address = TOKEN_PROGRAM_ID,
+): PublicKey {
+  const [address] = PublicKey.findProgramAddressSync(
+    [toPublicKey(owner).toBuffer(), toPublicKey(tokenProgram).toBuffer(), toPublicKey(mint).toBuffer()],
+    toPublicKey(ASSOCIATED_TOKEN_PROGRAM_ID),
+  );
+  return address;
 }

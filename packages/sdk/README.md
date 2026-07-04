@@ -1,8 +1,9 @@
 # @covenant-org/sdk
 
-TypeScript SDK for the [Covenant](https://opencovenant.org) protocol on Solana. Build and sign
-the on-chain instructions (agent registration, `$CVNT` staking, task escrow, credit purchase,
-receipt anchoring), plus address helpers, PDA seeds, and cluster resolution.
+TypeScript SDK for the [Covenant](https://opencovenant.org) protocol on Solana. A high-level
+client that derives PDAs, signs, sends, and reads decoded on-chain state, plus the lower-level
+instruction builders (agent registration, `$CVNT` staking, task escrow, credit purchase, receipt
+anchoring), PDA derivation, account decoding, and Node + browser (wallet-adapter) signing.
 
 ## Install
 
@@ -14,13 +15,64 @@ npm add @covenant-org/sdk @solana/web3.js
 
 ## Quick start
 
-Every builder returns a wallet-agnostic descriptor. `toTransactionInstructions` turns it into
-real, signable `TransactionInstruction`s (an 8-byte Anchor discriminator plus Borsh-encoded args
-from the on-chain program IDLs), ready to drop into a transaction and sign with any wallet.
+`CovenantClient` is the high-level path. It derives every PDA, fills the signer as the operator,
+owner, or client account, resolves the `$CVNT` mint from the on-chain config, and runs each call
+build, sign, send, confirm. Reads decode on-chain state and need no signer.
+
+```typescript
+import { Connection, Keypair } from '@solana/web3.js';
+import { CovenantClient, keypairSigner, hash32FromText } from '@covenant-org/sdk';
+
+const client = new CovenantClient({
+  connection: new Connection('https://api.mainnet-beta.solana.com', 'confirmed'),
+  signer: keypairSigner(operatorKeypair),
+});
+
+// read decoded on-chain state (no signer required)
+const config = await client.getConfig();
+const agent = await client.getAgent(hash32FromText('my-agent'));
+
+// register: derives the config + agent PDAs, signs, sends, confirms, returns the signature
+const signature = await client.registerAgent({
+  agentKey: hash32FromText('my-agent'),
+  metadataHash: hash32FromText('https://example.com/agents/my-agent.json'),
+  capabilityHash: hash32FromText('research,settlement'),
+});
+```
+
+In the browser, hand the client a wallet-adapter wallet instead of a keypair:
+
+```typescript
+import { walletAdapterSigner } from '@covenant-org/sdk';
+const client = new CovenantClient({ connection, signer: walletAdapterSigner(wallet) });
+```
+
+## Deriving addresses
+
+Each PDA has a `derive*Pda` helper that bakes in the program id and returns `{ address: PublicKey, bump }`:
+
+```typescript
+import { deriveConfigPda, deriveAgentPda, deriveAssociatedTokenAddress } from '@covenant-org/sdk';
+
+const { address: config } = deriveConfigPda();
+const { address: agent } = deriveAgentPda(hash32FromText('my-agent'));
+const ata = deriveAssociatedTokenAddress(owner, covntMint); // token account for owner + mint
+```
+
+The client derives these internally; you only reach for them with the low-level builders, whose
+account fields are base58 strings, so unwrap a PDA with `.address.toBase58()`.
+
+## Low-level instruction builders
+
+Each `prepare*Instruction` returns a wallet-agnostic descriptor; `toTransactionInstructions` turns
+it into signable `TransactionInstruction`s (an 8-byte Anchor discriminator plus Borsh-encoded args
+from the on-chain IDLs).
 
 ```typescript
 import { Connection, Keypair, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
 import {
+  deriveAgentPda,
+  deriveConfigPda,
   hash32FromText,
   prepareRegisterAgentInstruction,
   resolveSolanaNetwork,
@@ -28,14 +80,14 @@ import {
 } from '@covenant-org/sdk';
 
 const operator = Keypair.generate();
-const network = resolveSolanaNetwork(); // devnet by default; see Configuration
-const connection = new Connection(network.rpcUrl, 'confirmed');
+const connection = new Connection(resolveSolanaNetwork().rpcUrl, 'confirmed');
+const agentKey = hash32FromText('my-agent');
 
 const bundle = prepareRegisterAgentInstruction({
-  configAccount: CONFIG_PDA,
+  configAccount: deriveConfigPda().address.toBase58(),
+  agentAccount: deriveAgentPda(agentKey).address.toBase58(),
   operator: operator.publicKey.toBase58(),
-  agentAccount: AGENT_PDA,
-  agentKey: hash32FromText('my-agent'),
+  agentKey,
   metadataHash: hash32FromText('https://example.com/agents/my-agent.json'),
   capabilityHash: hash32FromText('research,settlement'),
 });
@@ -44,32 +96,48 @@ const tx = new Transaction().add(...toTransactionInstructions(bundle));
 await sendAndConfirmTransaction(connection, tx, [operator]);
 ```
 
-The account addresses (the `*_PDA`s above) are derived from the protocol program; see the
-protocol docs for their seeds. The builders take pre-resolved addresses and do not derive PDAs
-for you.
+`fetchAgent`, `fetchConfig`, `fetchTask`, and the `decode*` functions read and decode state
+directly, without a client.
 
-## Token instructions need the CVNT mint
+## Token accounts and the CVNT mint
 
-`stake`, `buy_credits`, `create_task`, and `release_task` move `$CVNT`, so each requires the
-token mint as a `covntMint` field. Source it from your deployment or the `COVNT_MINT` env var;
-`resolveSolanaNetwork().covntMint` is `null` until you set it.
+`stake`, `buy_credits`, `create_task`, and `release_task` move `$CVNT`, so each needs the mint and
+the owner's token account. Derive the token account with `deriveAssociatedTokenAddress`, and read
+the mint from the on-chain config (or set the `COVNT_MINT` env var, since
+`resolveSolanaNetwork().covntMint` is `null` until you do):
 
 ```typescript
-import { prepareStakeInstruction, toTransactionInstructions } from '@covenant-org/sdk';
+import {
+  deriveAgentPda,
+  deriveAssociatedTokenAddress,
+  deriveConfigPda,
+  deriveStakePositionPda,
+  fetchConfig,
+  hash32FromText,
+  prepareStakeInstruction,
+  toTransactionInstructions,
+} from '@covenant-org/sdk';
+
+const owner = operator.publicKey;
+const agentKey = hash32FromText('my-agent');
+const { covntMint } = (await fetchConfig(connection, deriveConfigPda().address))!;
 
 const bundle = prepareStakeInstruction({
-  configAccount: CONFIG_PDA,
-  agentAccount: AGENT_PDA,
-  positionAccount: POSITION_PDA,
-  owner: operator.publicKey.toBase58(),
-  ownerCovntAccount: OWNER_COVNT_ATA,
+  configAccount: deriveConfigPda().address.toBase58(),
+  agentAccount: deriveAgentPda(agentKey).address.toBase58(),
+  positionAccount: deriveStakePositionPda(agentKey, owner).address.toBase58(),
+  owner: owner.toBase58(),
+  ownerCovntAccount: deriveAssociatedTokenAddress(owner, covntMint).toBase58(),
   stakeVault: STAKE_VAULT,
-  covntMint: COVNT_MINT,
+  covntMint,
   amountCovnt: '1000000000',
   lockUntil: String(Math.floor(Date.now() / 1000) + 30 * 86400),
 });
 const [ix] = toTransactionInstructions(bundle);
 ```
+
+`stakeVault` is the program's `$CVNT` vault, a deployment address you configure once. `CovenantClient`
+takes the same token accounts if you prefer the high-level path.
 
 ## Configuration
 
@@ -92,12 +160,16 @@ const mainnet = resolveSolanaNetwork({ cluster: 'mainnet' });
 
 | Area | Exports |
 | --- | --- |
+| Client | `CovenantClient` |
+| Signers | `keypairSigner`, `walletAdapterSigner` |
+| PDA derivation | `deriveConfigPda`, `deriveAgentPda`, `deriveTaskPda`, `deriveCreditsPda`, `deriveStakePositionPda`, `deriveReceiptBatchPda`, `deriveAssociatedTokenAddress`, the stake-program `derive*Pda`, `SETTLEMENT_PROGRAM_ID`, `STAKE_PROGRAM_ID` |
+| Account reads | `fetchConfig`, `fetchAgent`, `fetchTask`, `fetchCreditAccount`, `fetchStakePosition`, `fetchReceiptBatch`, and the matching `decode*` |
 | Settlement instructions | `prepareRegisterAgentInstruction`, `prepareStakeInstruction`, `prepareBuyCreditsInstruction`, `prepareCreateTaskInstruction`, `prepareReleaseTaskInstruction`, `prepareAnchorReceiptBatchInstruction` |
 | Stake-program instructions | `prepareStakeInitializeInstruction`, `prepareStakeCreatePositionInstruction`, `prepareStakeIncreaseAmountInstruction`, `prepareStakeClaimInstruction`, `prepareStakeClosePositionInstruction`, plus the fee-router, pause, and authority admin builders |
-| Serialization | `toTransactionInstruction`, `toTransactionInstructions` |
-| Accounts and hashing | `isSolanaAddress`, `assertSolanaAddress`, `assertHash32`, `hash32FromText`, `ACCOUNT_SEEDS` |
+| Transactions and serialization | `buildTransaction`, `sendAndConfirmSignedTransaction`, `toTransactionInstruction`, `toTransactionInstructions` |
+| Addresses and hashing | `isSolanaAddress`, `assertSolanaAddress`, `assertHash32`, `hash32FromText`, `toBase58`, `toPublicKey`, `ACCOUNT_SEEDS` |
 | Network | `resolveSolanaNetwork`, `solanaExplorerHref` |
-| Discovery and tasks | `DiscoveryEventRecord`, `DiscoveryStats`, `TASK_STATUS_VALUES`, `TaskStatus` |
+| Tasks | `TASK_STATUS_VALUES` (`TaskStatus`, `DiscoveryEventRecord`, and `DiscoveryStats` are TypeScript types only) |
 
 Everything imports from the package root. Instruction data is encoded from the program IDLs
 (settlement `cov9UDyp...`, stake `CstkpU2q...`), so the wire bytes cannot drift from what the
@@ -105,7 +177,7 @@ on-chain program accepts.
 
 ## Stability
 
-`0.1.0`, alpha. `compatibility/exports.v1.json` and `compatibility/instructions.v1.json` pin the
+`0.2.0`, alpha. `compatibility/exports.v1.json` and `compatibility/instructions.v1.json` pin the
 exported surface and each instruction's account order and data keys against accidental drift.
 Semver support windows are not yet guaranteed, so pin an exact version.
 

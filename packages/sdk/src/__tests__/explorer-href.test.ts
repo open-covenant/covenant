@@ -4,7 +4,7 @@ import { solanaExplorerHref } from '../solana/network.js';
 // solanaExplorerHref is the SDK's public block-explorer link builder. It wraps
 // the config explorerHref with the per-call resolved network, so the kind/value
 // routing and the resolved-cluster composition (a non-mainnet cluster appends
-// ?cluster=, mainnet omits it) are its own contract — pinned by nothing.
+// ?cluster=, mainnet omits it) are its own contract, pinned by nothing.
 const CLUSTER_KEYS = ['NEXT_PUBLIC_COVENANT_SOLANA_CLUSTER', 'COVENANT_SOLANA_CLUSTER'] as const;
 const ADDRESS = '11111111111111111111111111111111';
 const SIGNATURE = 'sig123abc';

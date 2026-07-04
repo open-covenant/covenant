@@ -6,9 +6,15 @@
     "./discovery/types.js",
     "./domain/task.js",
     "./solana/accounts.js",
+    "./solana/client.js",
+    "./solana/decode.js",
     "./solana/instructions.js",
     "./solana/network.js",
+    "./solana/pda.js",
+    "./solana/pubkey.js",
     "./solana/serialize.js",
+    "./solana/signer.js",
+    "./solana/transaction.js",
     "./solana/stake.js"
   ]
 }

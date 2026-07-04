@@ -47,7 +47,7 @@ describe('borsh primitives', () => {
   it('encodes a 32-byte hash from hex and rejects bad input', () => {
     expect(borsh.hash32('00'.repeat(32))).toEqual(new Uint8Array(32));
     expect(borsh.hash32('ff'.repeat(32))).toEqual(new Uint8Array(32).fill(255));
-    expect(borsh.hash32('0x' + 'ab'.repeat(32))[0]).toBe(0xab);
+    expect(() => borsh.hash32('0x' + 'ab'.repeat(32))).toThrow(/32-byte hex/);
     expect(() => borsh.hash32('ab')).toThrow(/32-byte hex/);
     expect(() => borsh.hash32('zz'.repeat(32))).toThrow(/32-byte hex/);
   });

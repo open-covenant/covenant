@@ -43,12 +43,12 @@ export const i64 = int(8, true);
 export const bool = (value: boolean): Bytes => Uint8Array.of(value ? 1 : 0);
 
 export function hash32(hex: string): Bytes {
-  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
-  if (!/^[0-9a-fA-F]{64}$/.test(clean)) {
+  // No 0x prefix, matching assertHash32 and the PDA seed encoder.
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
     throw new Error(`expected a 32-byte hex string, got: ${hex}`);
   }
   const out = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  for (let i = 0; i < 32; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
 
@@ -67,4 +67,54 @@ export function concat(parts: Bytes[]): Bytes {
     offset += part.length;
   }
   return out;
+}
+
+// Sequential little-endian reader, the inverse of the encoders above. Account
+// data is an 8-byte discriminator followed by the struct fields in order.
+export class BorshReader {
+  private pos = 0;
+  constructor(private readonly data: Uint8Array) {}
+
+  private take(n: number): Uint8Array {
+    if (this.pos + n > this.data.length) throw new Error('borsh: unexpected end of buffer');
+    const slice = this.data.subarray(this.pos, this.pos + n);
+    this.pos += n;
+    return slice;
+  }
+
+  private uint(byteLen: number): bigint {
+    const b = this.take(byteLen);
+    let v = 0n;
+    for (let i = byteLen - 1; i >= 0; i--) v = (v << 8n) | BigInt(b[i]!);
+    return v;
+  }
+
+  u8(): number {
+    return this.take(1)[0]!;
+  }
+  u32(): number {
+    return Number(this.uint(4));
+  }
+  u64(): bigint {
+    return this.uint(8);
+  }
+  i64(): bigint {
+    const v = this.uint(8);
+    return v >= 1n << 63n ? v - (1n << 64n) : v;
+  }
+  bool(): boolean {
+    return this.u8() !== 0;
+  }
+  pubkey(): string {
+    return new PublicKey(this.take(32)).toBase58();
+  }
+  hash32(): string {
+    return Buffer.from(this.take(32)).toString('hex');
+  }
+  discriminator(): Uint8Array {
+    return Uint8Array.from(this.take(8));
+  }
+  remaining(): number {
+    return this.data.length - this.pos;
+  }
 }

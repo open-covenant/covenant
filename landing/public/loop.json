@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-03T23:51:02.725Z",
+  "updatedAt": "2026-07-04T00:11:06.252Z",
   "branch": "loop/main-track",
   "totals": {
     "events": 12729,
@@ -7,15 +7,11 @@
     "integrated": 1491
   },
   "throughput": {
-    "last24h": 2,
+    "last24h": 0,
     "last7d": 194,
     "velocity": 27.7
   },
   "daily": [
-    {
-      "date": "06-13",
-      "count": 51
-    },
     {
       "date": "06-14",
       "count": 0
@@ -95,13 +91,13 @@
     {
       "date": "07-03",
       "count": 0
+    },
+    {
+      "date": "07-04",
+      "count": 0
     }
   ],
   "cumulative": [
-    {
-      "date": "06-13",
-      "total": 1087
-    },
     {
       "date": "06-14",
       "total": 1087
@@ -180,6 +176,10 @@
     },
     {
       "date": "07-03",
+      "total": 1491
+    },
+    {
+      "date": "07-04",
       "total": 1491
     }
   ],

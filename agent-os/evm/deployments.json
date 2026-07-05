@@ -16,5 +16,25 @@
     "selector": "0xf2c298be",
     "returns": "uint256 agentId",
     "event": "Registered(uint256 indexed agentId, string agentURI, address indexed owner)"
+  },
+  "covenantMainnet": {
+    "network": "Base",
+    "chainId": 8453,
+    "deployed": "2026-07-05",
+    "issuerAddress": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",
+    "reputationSchema": {
+      "registry": "0x4200000000000000000000000000000000000020",
+      "uid": "0x84738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc39",
+      "schema": "uint32 score,uint8 score_decimals,uint64 expiry,string source_chain,bytes32 solana_attestation_pda",
+      "resolver": "0x0000000000000000000000000000000000000000",
+      "revocable": true,
+      "tx": "0x14b0d3bf59b75552f1c5fee60f05dc69908150caac476bd4f72dcc791262b473"
+    },
+    "bondReceiptVerifier": {
+      "address": "0x2B03E47CB3900BA9ccf861B214233E4c237EA309",
+      "trustedAttestor": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",
+      "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "tx": "0x4517c9265edff3f543f033edaff8232f204b2947bb0cd3b99c2bdf2aad65bef5"
+    }
   }
 }

@@ -151,10 +151,12 @@ pub fn to_payment_requirements(accept: &Accept) -> PaymentRequirements {
         extra: accept
             .extra
             .as_ref()
-            .and_then(|e| e.fee_payer.clone())
-            .map(|fee_payer| PaymentExtra {
-                fee_payer: Some(fee_payer),
-            }),
+            .map(|e| PaymentExtra {
+                fee_payer: e.fee_payer.clone(),
+                name: e.name.clone(),
+                version: e.version.clone(),
+            })
+            .filter(|extra| *extra != PaymentExtra::default()),
     }
 }
 
@@ -336,20 +338,66 @@ mod tests {
         assert_eq!(pr.amount, "50000");
         assert_eq!(pr.amount_usdc, 0.05);
         assert_eq!(pr.pay_to, crate::treasury::SOLANA);
-        assert_eq!(
-            pr.extra.as_ref().unwrap().fee_payer.as_deref(),
-            Some(crate::treasury::SOLANA)
+        let extra = pr.extra.as_ref().unwrap();
+        assert_eq!(extra.fee_payer.as_deref(), Some(crate::treasury::SOLANA));
+        assert!(
+            extra.name.is_none() && extra.version.is_none(),
+            "Solana option carries no EIP-712 domain"
         );
     }
 
     #[test]
-    fn to_requirements_drops_non_fee_payer_extra_on_base() {
+    fn to_requirements_lifts_base_eip712_domain() {
+        // The Base accept's extra carries the EIP-712 domain the EVM signer
+        // needs for the TransferWithAuthorization separator; dropping it here
+        // would make build_payment fail closed (or sign under a wrong pinned
+        // domain) even though the facilitator supplied the real one.
         let c = decode_from_headers(&live_headers()).unwrap();
         let pr = to_payment_requirements(&c.accepts[0]);
-        assert!(
-            pr.extra.is_none(),
-            "Base extra is {{name, version}} only; no feePayer to lift"
+        let extra = pr.extra.expect("Base {name, version} extra is lifted");
+        assert_eq!(extra.name.as_deref(), Some("USD Coin"));
+        assert_eq!(extra.version.as_deref(), Some("2"));
+        assert!(extra.fee_payer.is_none(), "Base option has no gas sponsor");
+    }
+
+    #[test]
+    fn to_requirements_propagates_unexpected_solana_domain_fields() {
+        // A hostile Solana accept can tack on EIP-712 domain fields; they
+        // propagate verbatim (the Solana signer never reads them) rather
+        // than being silently rewritten here.
+        let mut a = mk_accept(
+            "solana",
+            "usdc",
+            "1000",
+            "PinnedTreasury11111111111111111111111111111",
         );
+        a.extra = Some(AcceptExtra {
+            fee_payer: None,
+            name: Some("USD Coin".into()),
+            version: Some("2".into()),
+        });
+        let pr = to_payment_requirements(&a);
+        let extra = pr.extra.expect("non-empty extra is lifted");
+        assert!(extra.fee_payer.is_none());
+        assert_eq!(extra.name.as_deref(), Some("USD Coin"));
+        assert_eq!(extra.version.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn to_requirements_maps_empty_extra_to_none() {
+        let mut a = mk_accept(
+            "solana",
+            "usdc",
+            "1000",
+            "PinnedTreasury11111111111111111111111111111",
+        );
+        a.extra = Some(AcceptExtra {
+            fee_payer: None,
+            name: None,
+            version: None,
+        });
+        let pr = to_payment_requirements(&a);
+        assert!(pr.extra.is_none(), "an empty extra block stays absent");
     }
 
     fn mk_accept(network: &str, asset: &str, amount: &str, pay_to: &str) -> Accept {

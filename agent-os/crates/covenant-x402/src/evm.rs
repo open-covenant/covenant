@@ -699,6 +699,23 @@ mod tests {
         assert!(matches!(err, X402Error::Sign(m) if m.contains("no EIP-712 domain")));
     }
 
+    #[tokio::test]
+    async fn unknown_asset_with_partial_extra_fails_closed() {
+        // Half a domain must not sign: both name and version are required
+        // before a wire-supplied domain is trusted, and challenge decoders
+        // now deliver partial extras verbatim instead of collapsing them
+        // to None.
+        let signer = EvmSigner::from_secret_bytes(&cow_secret()).unwrap();
+        let mut req = base_sepolia_usdc_req("10000");
+        req.asset = USDC_BASE_MAINNET.into();
+        req.extra = Some(PaymentExtra {
+            name: Some("USD Coin".into()),
+            ..Default::default()
+        });
+        let err = signer.build_payment(&req).await.expect_err("half a domain");
+        assert!(matches!(err, X402Error::Sign(m) if m.contains("no EIP-712 domain")));
+    }
+
     #[test]
     fn chain_id_mapping() {
         assert_eq!(chain_id_for_network("base:84532").unwrap(), 84532);

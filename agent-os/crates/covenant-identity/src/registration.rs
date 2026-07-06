@@ -30,7 +30,7 @@
 //!
 //! [`AgentCard`]: https://github.com/a2aproject/A2A
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 /// ERC-8004 registration file discriminator. Pinned to `ethereum/ERCs`

@@ -201,7 +201,7 @@ fn validate_against_schema(schema: &Value, arguments: &Value) -> Result<(), Stri
     // Empty schema (no required fields, no typed properties): nothing to
     // enforce. This is the permissive "any object" the default tool spec emits,
     // so such tools keep accepting whatever they accepted before.
-    if required.is_empty() && properties.map_or(true, serde_json::Map::is_empty) {
+    if required.is_empty() && properties.is_none_or(serde_json::Map::is_empty) {
         return Ok(());
     }
 

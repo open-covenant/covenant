@@ -724,8 +724,7 @@ fn load_snapshot(path: &Path) -> Vec<PersistedEntry> {
 fn write_snapshot(path: &Path, rows: &[PersistedEntry]) -> std::io::Result<()> {
     let mut buf = String::new();
     for row in rows {
-        let line = serde_json::to_string(row)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let line = serde_json::to_string(row).map_err(std::io::Error::other)?;
         buf.push_str(&line);
         buf.push('\n');
     }
@@ -2129,13 +2128,13 @@ cpu_ms_per_task = 5000
     async fn read_agent_output_capped_clamps_and_flags_overflow() {
         // Over the cap: buffer clamped to max, overflow reported so the caller
         // can reject and kill rather than keep reading an unbounded flood.
-        let data = vec![b'x'; 100];
+        let data = [b'x'; 100];
         let (buf, overflowed) = read_agent_output_capped(&mut &data[..], 64).await.unwrap();
         assert!(overflowed);
         assert_eq!(buf.len(), 64);
 
         // Exactly the cap: full payload, no overflow.
-        let data = vec![b'y'; 64];
+        let data = [b'y'; 64];
         let (buf, overflowed) = read_agent_output_capped(&mut &data[..], 64).await.unwrap();
         assert!(!overflowed);
         assert_eq!(buf.len(), 64);
@@ -3716,9 +3715,7 @@ cpu_ms_per_task = 5000
         // located relative to the LAST ')'. A naive split on the first
         // whitespace would read the wrong columns.
         let mut fields = vec!["4242", "(weird ) name)", "R", "1", "4200"];
-        for _ in 6..=21 {
-            fields.push("0");
-        }
+        fields.extend(std::iter::repeat_n("0", 16)); // fields 6..=21
         fields.push("99887"); // field 22: starttime
         let id = parse_proc_stat(&fields.join(" ")).expect("stat must parse past the tricky comm");
         assert_eq!(
@@ -3753,9 +3750,7 @@ cpu_ms_per_task = 5000
 
         // Well-formed up to the last ')', but pgid (field 5) is not a number.
         let mut bad_pgid = vec!["4242", "(comm)", "R", "1", "not-a-pgid"];
-        for _ in 6..=21 {
-            bad_pgid.push("0");
-        }
+        bad_pgid.extend(std::iter::repeat_n("0", 16)); // fields 6..=21
         bad_pgid.push("99887");
         assert!(
             parse_proc_stat(&bad_pgid.join(" ")).is_none(),
@@ -3764,9 +3759,7 @@ cpu_ms_per_task = 5000
 
         // Well-formed up to the last ')', but starttime (field 22) is not a number.
         let mut bad_start = vec!["4242", "(comm)", "R", "1", "4200"];
-        for _ in 6..=21 {
-            bad_start.push("0");
-        }
+        bad_start.extend(std::iter::repeat_n("0", 16)); // fields 6..=21
         bad_start.push("not-a-time");
         assert!(
             parse_proc_stat(&bad_start.join(" ")).is_none(),

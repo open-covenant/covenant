@@ -6256,7 +6256,7 @@ mod tests {
             }
         }
 
-        let mut tied = vec![tasks[0].id, tasks[1].id, tasks[2].id];
+        let mut tied = [tasks[0].id, tasks[1].id, tasks[2].id];
         tied.sort();
         let expected = vec![tasks[3].id, tied[0], tied[1], tied[2], tasks[4].id];
 
@@ -6316,7 +6316,7 @@ mod tests {
 
         let m = JsonlMailbox::open(path).await.unwrap();
 
-        let mut tied = vec![tasks[0].id, tasks[1].id, tasks[2].id];
+        let mut tied = [tasks[0].id, tasks[1].id, tasks[2].id];
         tied.sort();
         let expected = vec![tasks[3].id, tied[0], tied[1], tied[2], tasks[4].id];
 

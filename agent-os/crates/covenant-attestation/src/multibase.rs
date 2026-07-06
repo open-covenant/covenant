@@ -68,7 +68,7 @@ pub fn ed25519_did_key(pubkey: &[u8; 32]) -> String {
 /// by taking the last `:`/`#`-delimited token.
 pub fn ed25519_public_key_from_verification_method(vm: &str) -> Result<[u8; 32], AttestationError> {
     let token = vm
-        .rsplit(|c| c == '#' || c == ':')
+        .rsplit(['#', ':'])
         .next()
         .filter(|t| !t.is_empty())
         .ok_or_else(|| AttestationError::VerificationMethod(vm.to_string()))?;
@@ -120,7 +120,7 @@ fn hex_nibble(c: u8) -> Result<u8, AttestationError> {
 /// caller's responsibility to strip.
 pub fn hex_decode(value: &str) -> Result<Vec<u8>, AttestationError> {
     let bytes = value.as_bytes();
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(AttestationError::Hex("odd hex length".into()));
     }
     bytes

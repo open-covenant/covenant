@@ -149,7 +149,8 @@ fn emit(text: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{today_key, try_charge_quota};
-    use std::{fs, path::PathBuf};
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     // pid-named temp home so re-runs (and any future parallel case) don't collide.
     fn fresh_home() -> PathBuf {
@@ -159,7 +160,7 @@ mod tests {
         dir
     }
 
-    fn seed(home: &PathBuf, day: u64, count: u64) {
+    fn seed(home: &Path, day: u64, count: u64) {
         let body = serde_json::json!({ "day": day, "count": count }).to_string();
         fs::write(home.join("demo-quota.json"), body).unwrap();
     }

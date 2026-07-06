@@ -21,7 +21,7 @@
 //! pins the ordering rather than a single after-the-fact assertion.
 //!
 //! Hermetic — x402 dispatch is enabled from env alone (`COVENANT_X402_ENABLED`
-//! + a `/bin/true` signer so `x402_dispatch_config_from_env` resolves
+//! and a `/bin/true` signer so `x402_dispatch_config_from_env` resolves
 //! `Some`); the malformed-cap path short-circuits before the signer is
 //! constructed, so no real signer, Solana RPC, or x402 endpoint is touched.
 //! `#[ignore]`'d. Run with

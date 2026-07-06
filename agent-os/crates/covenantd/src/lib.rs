@@ -265,11 +265,13 @@ pub fn sap_attest_config_from_values(
     enabled: Option<&str>,
     interval_secs: Option<&str>,
 ) -> SapAttestConfig {
-    let mut config = SapAttestConfig::default();
-    config.enabled = matches!(
-        enabled.map(str::trim),
-        Some("1") | Some("true") | Some("yes")
-    );
+    let mut config = SapAttestConfig {
+        enabled: matches!(
+            enabled.map(str::trim),
+            Some("1") | Some("true") | Some("yes")
+        ),
+        ..Default::default()
+    };
     if let Some(secs) = interval_secs
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|s| *s > 0)
@@ -64596,12 +64598,11 @@ budget_credits_per_hour = {credits}
         // Positive control: the granted provider ("xona") clears the scope gate
         // and the dispatch fails further down (no budget capacity), proving the
         // gate is not a blanket deny — the error must NOT be a scope rejection.
-        match s.op_respond(pay_x402_req()).await {
-            Response::Error { message } => assert!(
+        if let Response::Error { message } = s.op_respond(pay_x402_req()).await {
+            assert!(
                 !message.contains("capability scope"),
                 "the granted provider must clear the scope gate: {message}"
-            ),
-            _ => {}
+            );
         }
     }
 

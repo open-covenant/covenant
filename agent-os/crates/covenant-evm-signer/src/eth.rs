@@ -83,7 +83,7 @@ fn nibble(c: u8) -> Result<u8, String> {
 /// — the input side accepts whatever an EVM tool emits.
 pub fn hex_decode(value: &str) -> Result<Vec<u8>, String> {
     let body = value.strip_prefix("0x").unwrap_or(value);
-    if body.len() % 2 != 0 {
+    if !body.len().is_multiple_of(2) {
         return Err("odd hex length".into());
     }
     body.as_bytes()

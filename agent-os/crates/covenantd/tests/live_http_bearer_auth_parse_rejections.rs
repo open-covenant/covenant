@@ -5,9 +5,10 @@
 //! branches, each carrying a different operational signal:
 //!   1. missing Authorization header  -> "missing Authorization header"
 //!   2. header with no space separator -> "expected `Authorization: Bearer <token>`"
-//!   3. scheme is not `bearer` (RFC 7235 §2.1 is case-insensitive)
-//!                                    -> "expected `Authorization: Bearer <token>`"
+//!   3. scheme is not `bearer`        -> "expected `Authorization: Bearer <token>`"
+//!      (RFC 7235 §2.1 makes the scheme case-insensitive)
 //!   4. token is not valid base58     -> "malformed bearer token"
+//!
 //! Only branch 1 has any direct coverage today (lib.rs unit sites plus the
 //! bearer-gated 401 in `live_http_identity_sign.rs`). Branches 2-4 — the
 //! header-format, scheme, and token-decode arms — have zero direct or

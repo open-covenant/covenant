@@ -133,7 +133,7 @@ function SiteJsonLd() {
           "Capability tokens",
           "MCP and A2A comms",
           "Audit log",
-          "On-chain settlement scaffold",
+          "On-chain settlement program",
         ],
         citation: "https://doi.org/10.5281/zenodo.20134416",
         maintainer: { "@id": `${SITE_URL}/#org` },

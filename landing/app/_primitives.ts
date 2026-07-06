@@ -75,9 +75,9 @@ export const PRIMITIVES: Primitive[] = [
   {
     slug: "settlement",
     term: "Settlement",
-    gloss: "How resource consumption is accounted for, with an on-chain scaffold.",
+    gloss: "How resource consumption is accounted for, with an on-chain settlement program on mainnet.",
     definition:
-      "Settlement is how resource consumption is accounted for. Covenant records local SettlementReceipt rows today; chain fields remain empty unless a settlement integration records them, and a Solana program provides the scaffold for networked settlement.",
+      "Settlement is how resource consumption is accounted for. Covenant records local SettlementReceipt rows today; the Solana settlement program is deployed and live on mainnet, but the daemon-driven flush that anchors these receipts on-chain is not yet production, so the chain fields remain empty for now.",
     docHref: "https://docs.opencovenant.org/settlement",
   },
   {

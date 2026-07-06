@@ -235,12 +235,13 @@ export default function ConceptsPage() {
         when the resource is memory, and an optional on-chain signature.
         Receipts accumulate in{" "}
         <code>$COVENANT_HOME/receipts/working.jsonl</code>. Chain fields
-        remain empty unless a future settlement integration records them.
+        remain empty until the daemon-driven flush to the deployed
+        on-chain program is production.
       </p>
 
       <p>
         See <Link href="/settlement">Settlement</Link> for the current
-        local receipt model and the planned on-chain boundary.
+        local receipt model and the deployed on-chain settlement program.
       </p>
 
       <h2>End-to-end intent flow</h2>

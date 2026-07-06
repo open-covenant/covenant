@@ -14,9 +14,10 @@ export default function SettlementPage() {
       <h1>Settlement</h1>
       <p>
         Settlement is how Covenant accounts for resource consumption.
-        Today the daemon writes local receipts. The future on-chain path
-        batches those receipts into the Solana settlement program once
-        the authority, mint, oracle, and reconciliation flows are ready.
+        Today the daemon writes local receipts. The Solana settlement
+        program is deployed and live on mainnet; the daemon-driven path
+        that batches those receipts and anchors them to the program is
+        not yet production.
       </p>
 
       <h2>Receipt</h2>
@@ -66,8 +67,9 @@ export default function SettlementPage() {
 
       <h2>Future on-chain flush</h2>
       <p>
-        The planned on-chain side is an Anchor program for Solana. Three
-        of its instruction shapes describe the credit flow:
+        The on-chain side is an Anchor program deployed on Solana
+        mainnet. Three of its instruction shapes describe the credit
+        flow:
       </p>
 
       <ul>
@@ -79,7 +81,7 @@ export default function SettlementPage() {
         </li>
         <li>
           <code>buy_credits(amount_covnt)</code>: transfer{" "}
-          <code>$COVNT</code> into the treasury in exchange for
+          <code>$CVNT</code> into the treasury in exchange for
           credits at the configured rate.
         </li>
         <li>
@@ -95,8 +97,8 @@ export default function SettlementPage() {
         The intended production flow is for the daemon to batch local
         receipts and submit consumption to the program. Once an on-chain
         transaction confirms, the receipt&apos;s <code>onchain_sig</code>{" "}
-        can be populated with the signature. This is a planned
-        reconciliation path, not deployed behavior.
+        can be populated with the signature. This daemon-driven
+        reconciliation path is not yet production.
       </p>
 
       <h2>Planned economic model</h2>

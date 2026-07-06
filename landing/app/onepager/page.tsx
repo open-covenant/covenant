@@ -103,7 +103,7 @@ export default function OnePagerPage() {
           <div className="col">
             <p className="seclabel"><span className="n">01</span>What Covenant is</p>
             <p className="intro">
-              A daemon and eight on-chain primitives turn an agent into one that signs Solana transactions under controls
+              A daemon and eight operating-layer primitives turn an agent into one that signs Solana transactions under controls
               it cannot bypass. Four guarantees hold on every action:
             </p>
             <div className="guarantee"><p><b>Capability gating.</b> An agent runs only pre-authorized actions. Anything outside its grant is refused before signing.</p></div>

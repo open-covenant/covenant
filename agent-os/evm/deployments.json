@@ -52,5 +52,34 @@
         "reason": "no malleability guard; never announced or consumed"
       }
     }
+  },
+  "ethereumMainnet": {
+    "network": "Ethereum",
+    "chainId": 1,
+    "ens": {
+      "name": "opencovenant.eth",
+      "namehash": "0x932e2a1a7ef681c3e5f9c30f21490e3323e40d235d7ed03df919a6ef97eece11",
+      "owner": "0x5fA1d0C0bfFE257a20027C523093F941834f5D66",
+      "wrapped": true,
+      "publicResolver": "0x231b0Ee14048e9dCcD1d247744d114a4EB5E8E63",
+      "solanaIdentity": "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc",
+      "addrCoinType501": "0x347cb1af926f368342eb8c64f6e4ec7e31a1eb45c5d41a04ea996dad85bc690f",
+      "expires": "2027-07-07",
+      "note": "base name; records (addr(501) + text url/twitter/description) on the ENS public resolver. RENEW before expiry."
+    },
+    "offchainResolver": {
+      "address": "0xADDE5F806613FFE71c8d5E137998C511a24e9630",
+      "deployed": "2026-07-07",
+      "tx": "0xac72857442b9be13b48a94d476556618d48cce882bf146ea6068008795f41f3e",
+      "url": "https://ens-gateway.opencovenant.org/{sender}/{data}.json",
+      "gatewaySigner": "0x70d879160ead90b9267bbb41f80bbab694824af2",
+      "subname": {
+        "name": "agents.opencovenant.eth",
+        "namehash": "0x0dd84cb68d62bf9dac0df51ab32e4c117ddccdcd8ab61042dd23b77388dfaad4",
+        "tx": "0x9fc90d7ddcacb923545c8b3190dc53b85a8defcd5506f19887de4f9337e8af0f",
+        "note": "resolver set to the OffchainResolver; *.agents.opencovenant.eth wildcard-resolves per-agent via the CCIP gateway (addr(node,501))."
+      },
+      "gatewayService": "Render covenant-ens-gateway (srv-d96m3b8k1i2s73a5d9eg)"
+    }
   }
 }

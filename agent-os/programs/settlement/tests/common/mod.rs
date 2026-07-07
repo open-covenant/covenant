@@ -461,7 +461,11 @@ pub const E_TASK_NOT_EXPIRED: u32 = 6012;
 pub const E_STAKE_LOCKED: u32 = 6013;
 pub const E_STAKE_STILL_ACTIVE: u32 = 6014;
 pub const E_LOCK_TOO_SHORT: u32 = 6015;
-pub const E_TASKS_DISABLED: u32 = 6016;
+pub const E_NOT_ARBITER: u32 = 6016;
+pub const E_REVIEW_WINDOW_NOT_ELAPSED: u32 = 6017;
+pub const E_REVIEW_WINDOW_ELAPSED: u32 = 6018;
+pub const E_INVALID_REVIEW_WINDOW: u32 = 6019;
+pub const E_INVALID_DEADLINE: u32 = 6020;
 
 pub fn task_pda(task_id: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(&[b"task", task_id], &ID).0
@@ -802,8 +806,10 @@ pub fn create_task(
     agent_key: &[u8; 32],
     task_id: &[u8; 32],
     provider: &Pubkey,
+    arbiter: &Pubkey,
     amount_covnt: u64,
     deadline: i64,
+    review_window: i64,
     tc: &TaskCtx,
 ) -> Result<(), TransactionError> {
     let agent = agent_pda(agent_key);
@@ -812,10 +818,12 @@ pub fn create_task(
         args: CreateTaskArgs {
             task_id: *task_id,
             provider: *provider,
+            arbiter: *arbiter,
             amount_covnt,
             task_hash: [4u8; 32],
             criteria_hash: [5u8; 32],
             deadline,
+            review_window,
         },
     }
     .data();
@@ -843,21 +851,83 @@ pub fn create_task(
     )
 }
 
-pub fn release_task(
+pub fn submit_task(
     env: &mut Env,
     tc: &TaskCtx,
-    provider_covnt: &Pubkey,
+    provider: &Keypair,
+    result_hash: [u8; 32],
+    receipt_hash: [u8; 32],
 ) -> Result<(), TransactionError> {
-    let client = env.payer.pubkey();
-    let data = ix::ReleaseTask {
-        result_hash: [6u8; 32],
-        receipt_hash: [7u8; 32],
+    let data = ix::SubmitTask {
+        result_hash,
+        receipt_hash,
     }
     .data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(tc.task, false),
-        AccountMeta::new_readonly(client, true),
+        AccountMeta::new_readonly(provider.pubkey(), true),
+    ];
+    let payer = env.payer.insecure_clone();
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &[provider],
+    )
+}
+
+/// `authority` signs the release: the client (approving) or the arbiter
+/// (dispute ruling). Fee is always paid by the env payer.
+pub fn release_task(
+    env: &mut Env,
+    tc: &TaskCtx,
+    provider_covnt: &Pubkey,
+    authority: &Keypair,
+) -> Result<(), TransactionError> {
+    let data = ix::ReleaseTask {}.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(tc.task, false),
+        AccountMeta::new_readonly(authority.pubkey(), true),
+        AccountMeta::new(tc.escrow_vault, false),
+        AccountMeta::new(*provider_covnt, false),
+        AccountMeta::new_readonly(env.mint, false),
+        AccountMeta::new_readonly(spl_token::ID, false),
+    ];
+    let payer = env.payer.insecure_clone();
+    let extra: Vec<&Keypair> = if authority.pubkey() == payer.pubkey() {
+        vec![]
+    } else {
+        vec![authority]
+    };
+    send(
+        &mut env.svm,
+        &payer,
+        &[Instruction {
+            program_id: ID,
+            accounts: metas,
+            data,
+        }],
+        &extra,
+    )
+}
+
+pub fn claim_task(
+    env: &mut Env,
+    tc: &TaskCtx,
+    provider_covnt: &Pubkey,
+    provider: &Keypair,
+) -> Result<(), TransactionError> {
+    let data = ix::ClaimTask {}.data();
+    let metas = vec![
+        AccountMeta::new_readonly(env.config, false),
+        AccountMeta::new(tc.task, false),
+        AccountMeta::new_readonly(provider.pubkey(), true),
         AccountMeta::new(tc.escrow_vault, false),
         AccountMeta::new(*provider_covnt, false),
         AccountMeta::new_readonly(env.mint, false),
@@ -872,23 +942,33 @@ pub fn release_task(
             accounts: metas,
             data,
         }],
-        &[],
+        &[provider],
     )
 }
 
-pub fn refund_task(env: &mut Env, tc: &TaskCtx) -> Result<(), TransactionError> {
-    let client = env.payer.pubkey();
+/// `authority` signs the refund: the client (post-deadline reclaim) or the
+/// arbiter (dispute ruling within the review window).
+pub fn refund_task(
+    env: &mut Env,
+    tc: &TaskCtx,
+    authority: &Keypair,
+) -> Result<(), TransactionError> {
     let data = ix::RefundTask {}.data();
     let metas = vec![
         AccountMeta::new_readonly(env.config, false),
         AccountMeta::new(tc.task, false),
-        AccountMeta::new_readonly(client, true),
+        AccountMeta::new_readonly(authority.pubkey(), true),
         AccountMeta::new(tc.escrow_vault, false),
         AccountMeta::new(tc.client_covnt, false),
         AccountMeta::new_readonly(env.mint, false),
         AccountMeta::new_readonly(spl_token::ID, false),
     ];
     let payer = env.payer.insecure_clone();
+    let extra: Vec<&Keypair> = if authority.pubkey() == payer.pubkey() {
+        vec![]
+    } else {
+        vec![authority]
+    };
     send(
         &mut env.svm,
         &payer,
@@ -897,7 +977,7 @@ pub fn refund_task(env: &mut Env, tc: &TaskCtx) -> Result<(), TransactionError> 
             accounts: metas,
             data,
         }],
-        &[],
+        &extra,
     )
 }
 

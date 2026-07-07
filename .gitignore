@@ -157,3 +157,8 @@ test-results/
 !.vscode/settings.json
 
 *.tsbuildinfo
+
+# foundry (evm contract tests)
+agent-os/evm/lib/
+agent-os/evm/out/
+agent-os/evm/cache/

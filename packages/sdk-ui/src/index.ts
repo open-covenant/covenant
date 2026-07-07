@@ -9,4 +9,4 @@ export {
 export type {
   CreditSummary,
   LeaderboardRow,
-} from '@covenant-org/sdk';
+} from './fixtures.js';

@@ -10,8 +10,6 @@ function randomHash32(): string {
   return randomBytes(32).toString('hex');
 }
 import {
-  MOCK_AGENT_DETAILS,
-  MOCK_TASKS,
   TASK_STATUS_VALUES,
   hash32FromText,
   prepareAnchorReceiptBatchInstruction,
@@ -22,6 +20,7 @@ import {
   resolveSolanaNetwork,
   isSolanaAddress,
 } from '@covenant-org/sdk';
+import { MOCK_AGENT_DETAILS, MOCK_TASKS } from './fixtures.js';
 
 const network = resolveSolanaNetwork();
 
@@ -65,6 +64,7 @@ const buyCreditsSchema = z.object({
   creditAccount: addressSchema,
   ownerCovntAccount: addressSchema,
   treasury: addressSchema,
+  covntMint: addressSchema,
   amountCovnt: z.string().min(1),
 });
 
@@ -75,6 +75,7 @@ const stakeSchema = z.object({
   positionAccount: addressSchema,
   ownerCovntAccount: addressSchema,
   stakeVault: addressSchema,
+  covntMint: addressSchema,
   amountCovnt: z.string().min(1),
   lockUntil: z.string().min(1),
 });
@@ -86,6 +87,7 @@ const createTaskSchema = z.object({
   taskAccount: addressSchema,
   clientCovntAccount: addressSchema,
   escrowVault: addressSchema,
+  covntMint: addressSchema,
   provider: addressSchema,
   description: z.string().min(3),
   amountCovnt: z.string().min(1),
@@ -324,14 +326,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'prepare_stake':
         return asText(prepareStakeInstruction(stakeSchema.parse(args)));
       case 'prepare_create_task': {
-        const parsed = createTaskSchema.parse(args);
-        const taskId = parsed.taskId ?? randomHash32();
+        const { description, ...rest } = createTaskSchema.parse(args);
+        const taskId = rest.taskId ?? randomHash32();
         return asText(
           prepareCreateTaskInstruction({
-            ...parsed,
+            ...rest,
             taskId,
-            taskHash: hash32FromText(parsed.description),
-            criteriaHash: hash32FromText(`criteria:${parsed.description}`),
+            taskHash: hash32FromText(description),
+            criteriaHash: hash32FromText(`criteria:${description}`),
           }),
         );
       }

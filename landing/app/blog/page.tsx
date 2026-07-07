@@ -28,6 +28,12 @@ type Post = { slug: string; date: string; title: string; dek: string };
 
 const POSTS: Post[] = [
   {
+    slug: "covenant-is-now-multichain",
+    date: "7 July 2026",
+    title: "Covenant is now multi-chain. The token isn't.",
+    dek: "The trust layer is live on Base while $CVNT stays a single Solana mint. Only signed data crosses chains, verifiable with a plain ecrecover.",
+  },
+  {
     slug: "covenant-payai",
     date: "21 June 2026",
     title: "Proof of work on the payment rail",

@@ -15,19 +15,16 @@
 //! authenticates both artifacts, with no bridge and no gas: an off-chain
 //! attestation is a signature, not a transaction.
 //!
-//! Two more surfaces build on the same primitives, and neither signs nor
-//! submits: [`EasAttestationSigner::attest_reputation`] projects an
-//! audit-derived reputation score into an off-chain attestation, and
-//! [`stage_reputation_attestation`] builds the *unsigned* on-chain EAS `attest`
-//! transaction that writes that score for verifiers who must enforce
-//! in-contract. On-chain signing, broadcast, and mainnet stay operator-gated;
-//! the library holds no key and never touches an RPC.
+//! [`EasAttestationSigner::attest_reputation`] projects an audit-derived
+//! reputation score into an off-chain attestation the same way. Under Covenant's
+//! Option-A model the attester of record is the secp256k1 issuer, so reputation
+//! is projected off-chain, never written by a relayer EOA whose `msg.sender`
+//! would land as the attester. The library holds no key and never touches an RPC.
 //!
 //! [EAS]: https://attest.org
 
 mod eip712;
 mod eth;
-mod relay;
 mod reputation;
 pub mod resolver;
 mod uid;
@@ -37,10 +34,6 @@ use covenant_identity::Secp256k1IssuerKey;
 use serde_json::{json, Value};
 
 pub use eip712::{recover_address, AttestMessage, EasDomain, DOMAIN_NAME, OFFCHAIN_VERSION};
-pub use relay::{
-    attest_selector, stage_reputation_attestation, RelayChain, RelayPolicy, RelayTransaction,
-    ATTEST_SIGNATURE, BASE_MAINNET, BASE_SEPOLIA, EAS_ABI_SOURCE_COMMIT,
-};
 pub use reputation::{
     parse_reputation_projection, reputation_schema_uid, ReputationProjection, ReputationScore,
     REPUTATION_SCHEMA, SOLANA_MAINNET_CAIP2,

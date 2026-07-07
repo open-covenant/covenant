@@ -1,7 +1,7 @@
 //! CCIP-Read (EIP-3668) gateway for `*.agents.opencovenant.eth`.
 //!
 //! An `OffchainResolver` on L1 reverts `OffchainLookup` and defers here. This
-//! service answers `addr(node, 501)` — the ENSIP-9 Solana record — for names it
+//! service answers `addr(node, 501)`, the ENSIP-9 Solana record, for names it
 //! knows, signs the response with the gateway key, and returns the blob the
 //! resolver's `resolveWithProof` verifies against its signer allowlist. It only
 //! ever signs `addr(node, 501)`; the signing core refuses any other selector or
@@ -9,12 +9,12 @@
 //!
 //! Config (env):
 //! - `COVENANT_ENS_GATEWAY_KEY_HEX` (32-byte hex) or `COVENANT_ENS_GATEWAY_KEY`
-//!   (key file path) — the secp256k1 signer, allowlisted in the resolver.
-//! - `COVENANT_ENS_RESOLVER` — the deployed `OffchainResolver` address; the
+//!   (key file path): the secp256k1 signer, allowlisted in the resolver.
+//! - `COVENANT_ENS_RESOLVER`: the deployed `OffchainResolver` address. The
 //!   response digest binds it, so a response is not replayable at another resolver.
-//! - `COVENANT_ENS_NAMES` — optional JSON `{ "<name>": "<base58 solana>" }` merged
+//! - `COVENANT_ENS_NAMES`: optional JSON `{ "<name>": "<base58 solana>" }` merged
 //!   over the seed name.
-//! - `PORT` — listen port (Render injects it; default 8080).
+//! - `PORT`: listen port (Render injects it; default 8080).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -34,6 +34,10 @@ use serde_json::{json, Value};
 /// state, so a short life just triggers a re-fetch, never a stale binding.
 const RESPONSE_TTL_SECS: u64 = 300;
 
+/// A valid CCIP request is a few hundred bytes; anything past this is malformed,
+/// not a real query, so reject it before decoding.
+const MAX_REQUEST_HEX: usize = 8192;
+
 /// The name seeded at boot: the Covenant foundation identity.
 const SEED_NAME: &str = "foundation.agents.opencovenant.eth";
 const SEED_SOLANA: &str = "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc";
@@ -47,8 +51,7 @@ struct AppState {
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -61,9 +64,12 @@ async fn main() {
     );
     let state = Arc::new(AppState { gateway, names });
 
+    // A CCIP-Read gateway is fetched cross-origin by in-browser wallets, so the
+    // browser needs CORS to read the response at all.
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/:sender/:data", get(resolve))
+        .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
 
     let port: u16 = std::env::var("PORT")
@@ -103,15 +109,20 @@ async fn resolve(
 /// a socket: decode the request, resolve the name to a known Solana address, and
 /// return the ABI-encoded signed response.
 fn respond(state: &AppState, data: &str) -> Result<Vec<u8>, StatusCode> {
+    if data.len() > MAX_REQUEST_HEX {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let request = decode_hex(data).ok_or(StatusCode::BAD_REQUEST)?;
     let query = parse_addr_request(&request).map_err(|_| StatusCode::BAD_REQUEST)?;
     let name = dns_decode(&query.name).ok_or(StatusCode::BAD_REQUEST)?;
     let solana = state.names.get(&name).ok_or(StatusCode::NOT_FOUND)?;
     let expires = now() + RESPONSE_TTL_SECS;
+    // The address is a known, non-zero config value and signing is infallible, so
+    // the only reachable error here is a non-501 coin type: a client fault, 400.
     let resp = state
         .gateway
         .resolve_solana(&request, solana, expires)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
     Ok(resp.abi_encode())
 }
 
@@ -258,11 +269,37 @@ mod tests {
             "the resolved Solana address must appear in the signed response"
         );
 
-        let unknown =
-            encode_solana_addr_request(b"\x07unknown\x0copencovenant\x03eth\x00", &node);
+        let unknown = encode_solana_addr_request(b"\x07unknown\x0copencovenant\x03eth\x00", &node);
         assert_eq!(
             respond(&state, &hex::encode(&unknown)),
             Err(StatusCode::NOT_FOUND)
+        );
+    }
+
+    #[test]
+    fn respond_400s_a_non_solana_coin_type_and_oversized_input() {
+        use covenant_evm_signer::resolver::{encode_addr_call, encode_resolve_call};
+        let gateway = ResolverGateway::new(
+            Secp256k1IssuerKey::from_secret_bytes(&[7u8; 32]).unwrap(),
+            [0x11u8; 20],
+        );
+        let mut names = HashMap::new();
+        names.insert("agent.opencovenant.eth".to_string(), [0x33u8; 32]);
+        let state = AppState { gateway, names };
+
+        // A known name, but coinType 60 (ETH) instead of 501 (Solana).
+        let eth_coin = encode_resolve_call(
+            b"\x05agent\x0copencovenant\x03eth\x00",
+            &encode_addr_call(&[0x22u8; 32], 60),
+        );
+        assert_eq!(
+            respond(&state, &hex::encode(&eth_coin)),
+            Err(StatusCode::BAD_REQUEST)
+        );
+
+        assert_eq!(
+            respond(&state, &"0".repeat(MAX_REQUEST_HEX + 2)),
+            Err(StatusCode::BAD_REQUEST)
         );
     }
 

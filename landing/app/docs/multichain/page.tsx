@@ -75,12 +75,18 @@ export default function MultichainPage() {
 
       <h2>Live on Base mainnet</h2>
       <p>
-        Three trust primitives are live on Base mainnet, and one real Covenant
-        record already verifies against Base&apos;s own attestation stack. The
-        entire surface went through an internal adversarial security audit and
-        hardening before any of it shipped.
+        The trust primitives are live on Base mainnet, the agent is registered
+        and discoverable, and one real Covenant record already verifies against
+        Base&apos;s own attestation stack. The entire surface went through an
+        internal adversarial security audit and hardening before any of it
+        shipped.
       </p>
       <ul>
+        <li>
+          <strong>ERC-8004 identity.</strong> The agent is registered in the
+          ERC-8004 Identity Registry, so EVM tooling discovers a Covenant
+          identity whose record points back to Solana.
+        </li>
         <li>
           <strong>Issuer identity.</strong> Covenant&apos;s secp256k1 Base
           identity, bound to the Solana identity. The key every attestation
@@ -161,10 +167,6 @@ $CVNT mint (Solana only)     2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`}</cod
 
       <h2>What comes next</h2>
       <ul>
-        <li>
-          <strong>ERC-8004 discovery.</strong> Register the agent so EVM tooling
-          discovers a Covenant identity that points back to Solana.
-        </li>
         <li>
           <strong>Base x402 endpoints.</strong> Base-native paid endpoints over
           the EIP-3009 rail already built.

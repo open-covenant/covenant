@@ -24,7 +24,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@covenant/sdk": "workspace:*"
+    "@covenant-org/sdk": "workspace:*"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5.62.0",

@@ -136,7 +136,7 @@ Record the resulting ATA addresses; both must be passed to `initialize`.
 
 ## `initialize`
 
-Use the SDK builder `prepareStakeInitializeInstruction` (from `@covenant/sdk`) or the equivalent Rust ix builder. Required args:
+Use the SDK builder `prepareStakeInitializeInstruction` (from `@covenant-org/sdk`) or the equivalent Rust ix builder. Required args:
 
 | Arg | Recommended value |
 |---|---|

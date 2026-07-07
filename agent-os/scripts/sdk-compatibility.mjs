@@ -31,7 +31,7 @@ const packageDirs = [
   {
     id: "sdk",
     path: "packages/sdk",
-    public_name: "@covenant/sdk",
+    public_name: "@covenant-org/sdk",
     expected_private: false,
     stability: "workspace_alpha",
   },
@@ -130,8 +130,8 @@ function instructionFixture() {
   if (fixture.schema !== "covenant.sdk-instructions.v1") {
     errors.push("instruction fixture schema must be covenant.sdk-instructions.v1");
   }
-  if (fixture.package !== "@covenant/sdk") {
-    errors.push("instruction fixture package must be @covenant/sdk");
+  if (fixture.package !== "@covenant-org/sdk") {
+    errors.push("instruction fixture package must be @covenant-org/sdk");
   }
   if (fixture.stability !== "workspace_alpha") {
     errors.push("instruction fixture stability must be workspace_alpha");

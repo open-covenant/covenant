@@ -14,7 +14,7 @@ The report uses schema `covenant.sdk-compatibility.v1`. The report-contract vali
 
 | Package | Current status | Compatibility boundary |
 |---|---|---|
-| `@covenant/sdk` | Workspace-only, not published to npm | Root export map, TypeScript declarations, `packages/sdk/compatibility/exports.v1.json`, and `packages/sdk/compatibility/instructions.v1.json` are validated. |
+| `@covenant-org/sdk` | Workspace-only, not published to npm | Root export map, TypeScript declarations, `packages/sdk/compatibility/exports.v1.json`, and `packages/sdk/compatibility/instructions.v1.json` are validated. |
 | `@covenant/sdk-ui` | Private workspace-only | React hooks remain private; `packages/sdk-ui/compatibility/exports.v1.json` tracks workspace export drift. |
 
 ## Workspace-Only Rules

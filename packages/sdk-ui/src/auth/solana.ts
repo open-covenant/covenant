@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { isSolanaAddress, type SolanaAddress } from '@covenant/sdk';
+import { isSolanaAddress, type SolanaAddress } from '@covenant-org/sdk';
 import { getJson } from '../http/json.js';
 
 declare global {

@@ -7,7 +7,7 @@ import {
   type CreditSummary,
   type LeaderboardRow,
   type SolanaAddress,
-} from '@covenant/sdk';
+} from '@covenant-org/sdk';
 
 function resolveCredits(owner?: SolanaAddress) {
   if (!owner) return MOCK_CREDITS;

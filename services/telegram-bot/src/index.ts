@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import { Bot, type Context, type NextFunction } from 'grammy';
-import { MOCK_LEADERBOARD, MOCK_TASKS, resolveSolanaNetwork } from '@covenant/sdk';
+import { MOCK_LEADERBOARD, MOCK_TASKS, resolveSolanaNetwork } from '@covenant-org/sdk';
 
 const app = Fastify({ logger: true, bodyLimit: 32 * 1024 });
 const PORT = Number(process.env.TELEGRAM_PORT ?? 8788);

@@ -21,7 +21,7 @@ import {
   prepareStakeInstruction,
   resolveSolanaNetwork,
   isSolanaAddress,
-} from '@covenant/sdk';
+} from '@covenant-org/sdk';
 
 const network = resolveSolanaNetwork();
 

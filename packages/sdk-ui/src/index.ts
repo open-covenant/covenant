@@ -9,4 +9,4 @@ export {
 export type {
   CreditSummary,
   LeaderboardRow,
-} from '@covenant/sdk';
+} from '@covenant-org/sdk';

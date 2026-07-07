@@ -6,6 +6,6 @@
     "./auth/session.js",
     "./auth/solana.js",
     "./hooks/data.js",
-    "@covenant/sdk"
+    "@covenant-org/sdk"
   ]
 }

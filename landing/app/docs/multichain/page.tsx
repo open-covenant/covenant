@@ -118,6 +118,18 @@ export default function MultichainPage() {
         the token boundary are already settled.
       </p>
 
+      <h2>A name that resolves to the identity</h2>
+      <p>
+        <strong>opencovenant.eth resolves to the Covenant identity.</strong> An
+        ENS lookup of the name on Ethereum returns the same Solana identity the
+        ERC-8004 record points at, so the name, the onchain registration, and the
+        canonical identity all agree. Per-agent names extend it:{" "}
+        <code>&lt;agent&gt;.agents.opencovenant.eth</code> resolves to each
+        agent&apos;s Solana identity through a CCIP-Read gateway, so any
+        ENS-aware tool can look up a Covenant agent by name. The name is a
+        pointer; the identity stays authoritative on Solana.
+      </p>
+
       <h2>The invariant: $CVNT never leaves Solana</h2>
       <p>
         $CVNT is one mint, one market. It is never bridged, wrapped, or minted on
@@ -170,10 +182,6 @@ $CVNT mint (Solana only)     2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`}</cod
         <li>
           <strong>Base x402 endpoints.</strong> Base-native paid endpoints over
           the EIP-3009 rail already built.
-        </li>
-        <li>
-          <strong>ENS resolution.</strong> A human-readable name resolving to the
-          Solana identity over CCIP-Read.
         </li>
         <li>
           <strong>Cross-chain enforcement.</strong> Bonds slashable on Solana

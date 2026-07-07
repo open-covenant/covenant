@@ -11,9 +11,9 @@
 //! chain-agnostic (`salt`), a bond exists on exactly one chain with one
 //! USDC contract, so this domain binds `chainId`: a Base-Sepolia receipt
 //! must not verify against a Base-mainnet verifier. `verifyingContract`
-//! is deliberately omitted — the verifier is not deployed yet, and
-//! leaving it out keeps a receipt valid across verifier upgrades on the
-//! same chain. An operator may add it at deploy time.
+//! is deliberately omitted so a receipt stays valid across verifier
+//! redeploys on the same chain (the verifier is live on Base mainnet, see
+//! `agent-os/evm/deployments.json`); an operator may bind it at deploy time.
 //!
 //! The security hinge is the ed25519 ↔ secp256k1 binding (bidirectionally
 //! anchored on Solana by multichain-00): [`BondReceipt::subject`] carries
@@ -290,8 +290,11 @@ fn address_word(address: &[u8; 20]) -> [u8; 32] {
 }
 
 fn recover_address(digest: &[u8; 32], signature: &[u8; 65]) -> Result<[u8; 20], BondError> {
+    // EVM `ecrecover` accepts only v ∈ {27, 28} (recid 0/1); reject recid 2/3
+    // so this path agrees with the Base verifier's precompile.
     let recovery = signature[64]
         .checked_sub(27)
+        .filter(|&b| b <= 1)
         .and_then(RecoveryId::from_byte)
         .ok_or_else(|| BondError::Signature(format!("bad recovery byte {}", signature[64])))?;
     let sig = EcdsaSignature::from_slice(&signature[..64])

@@ -70,7 +70,16 @@ pub enum RegistrationError {
     Unsigned,
     #[error("invalid base64url in signature envelope")]
     Base64,
+    #[error("agentId {0} exceeds the JSON exact-integer range (2^53-1); JCS canonicalization would round it and two ids could share one signature")]
+    UnsafeAgentId(u64),
 }
+
+/// JSON's exact-integer ceiling, 2^53 - 1. `serde_jcs` serializes every
+/// integer through `f64` per RFC 8785, so an `agentId` above this rounds to
+/// the nearest double and two distinct ids can canonicalize identically,
+/// yielding one signature that verifies for both. ERC-721 `agentId`s are
+/// sequential and never approach this, so refusing the range costs nothing.
+const MAX_SAFE_AGENT_ID: u64 = 9_007_199_254_740_991;
 
 /// Inputs a caller supplies alongside an agent identity to build a
 /// registration document. Borrowed so callers can pass configuration
@@ -142,7 +151,7 @@ impl<'a> RegistrationParams<'a> {
 /// A2A `AgentCapabilities`. All fields optional; an empty object is a
 /// valid capability set.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Capabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streaming: Option<bool>,
@@ -155,6 +164,7 @@ pub struct Capabilities {
 /// A2A `AgentSkill`. `id`, `name`, `description`, and `tags` are required
 /// by the pinned schema.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Skill {
     pub id: String,
     pub name: String,
@@ -167,6 +177,7 @@ pub struct Skill {
 /// One ERC-8004 `services[]` endpoint entry: `name`, `endpoint`, optional
 /// `version`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Service {
     pub name: String,
     pub endpoint: String,
@@ -177,7 +188,7 @@ pub struct Service {
 /// One ERC-8004 `registrations[]` entry binding a numeric agentId to a
 /// CAIP-2 registry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Registration {
     pub agent_id: u64,
     pub agent_registry: String,
@@ -200,7 +211,7 @@ pub struct CardSignature {
 /// bytes — JCS sorts keys — so members are grouped by originating spec
 /// for readability.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentRegistration {
     /// ERC-8004 discriminator; harmless extra field to an A2A client.
     #[serde(rename = "type")]
@@ -285,6 +296,13 @@ impl AgentRegistration {
     /// array removed. This is the payload every signature is computed
     /// over, so it must be reproduced exactly on the verify side.
     pub fn signing_input_bytes(&self) -> Result<Vec<u8>, RegistrationError> {
+        if let Some(r) = self
+            .registrations
+            .iter()
+            .find(|r| r.agent_id > MAX_SAFE_AGENT_ID)
+        {
+            return Err(RegistrationError::UnsafeAgentId(r.agent_id));
+        }
         let mut body = self.clone();
         body.signatures.clear();
         Ok(serde_jcs::to_vec(&body)?)
@@ -554,6 +572,34 @@ mod tests {
             doc.verify(&test_key().verifying_key()),
             Err(RegistrationError::Unsigned)
         ));
+    }
+
+    #[test]
+    fn signing_refuses_an_agent_id_past_the_json_safe_integer() {
+        let mut doc = sample_doc();
+        doc.registrations = vec![Registration {
+            agent_id: MAX_SAFE_AGENT_ID + 1,
+            agent_registry: "eip155:8453:0x8004".into(),
+        }];
+        assert!(matches!(
+            doc.sign(&test_key()),
+            Err(RegistrationError::UnsafeAgentId(_))
+        ));
+        // The boundary value itself is allowed.
+        doc.registrations[0].agent_id = MAX_SAFE_AGENT_ID;
+        assert!(doc.sign(&test_key()).is_ok());
+    }
+
+    #[test]
+    fn deny_unknown_fields_rejects_an_injected_property() {
+        let mut v = sample_doc().to_value().unwrap();
+        v.as_object_mut().unwrap().insert(
+            "evilEndpoint".into(),
+            serde_json::json!("https://attacker.example"),
+        );
+        // A field Covenant never modeled must fail to parse rather than be
+        // silently dropped (and thus escape the signature).
+        assert!(serde_json::from_value::<AgentRegistration>(v).is_err());
     }
 
     #[test]

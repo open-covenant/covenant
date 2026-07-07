@@ -63,6 +63,15 @@ pub const COVENANT_SCHEMA: &str = "bytes32 auditRoot,bytes32 credentialHash";
 const BASE_SEPOLIA_CHAIN_ID: u64 = 84_532;
 const BASE_SEPOLIA_EAS_VERSION: &str = "1.2.0";
 
+/// Base mainnet's EAS deployment (the same predeploy address, chain 8453).
+/// Its `version()` reports `1.0.1` — a *different* domain version than
+/// Sepolia's `1.2.0`, so the domain separator differs and a Sepolia
+/// attestation cannot be replayed onto mainnet. Reusing the Sepolia version
+/// here would recover the wrong signer; the value is pinned against the live
+/// contract by the mainnet dry-run test, exactly as Sepolia is.
+const BASE_MAINNET_CHAIN_ID: u64 = 8_453;
+const BASE_MAINNET_EAS_VERSION: &str = "1.0.1";
+
 #[derive(Debug, thiserror::Error)]
 pub enum EvmSignerError {
     #[error("input credential did not verify: {0}")]
@@ -94,6 +103,17 @@ impl EasDomain {
             verifying_contract: eth::EAS_PREDEPLOY,
         }
     }
+
+    /// The Base mainnet EAS off-chain domain. Distinct `version` and
+    /// `chain_id` from Sepolia, so an attestation signed under one domain
+    /// never verifies under the other.
+    pub fn base_mainnet() -> Self {
+        Self {
+            version: BASE_MAINNET_EAS_VERSION.to_string(),
+            chain_id: BASE_MAINNET_CHAIN_ID,
+            verifying_contract: eth::EAS_PREDEPLOY,
+        }
+    }
 }
 
 /// The schema UID a Covenant audit-root attestation references —
@@ -117,6 +137,11 @@ impl EasAttestationSigner {
     /// A signer scoped to Base Sepolia's EAS.
     pub fn base_sepolia(issuer: Secp256k1IssuerKey) -> Self {
         Self::new(issuer, EasDomain::base_sepolia())
+    }
+
+    /// A signer scoped to Base mainnet's EAS.
+    pub fn base_mainnet(issuer: Secp256k1IssuerKey) -> Self {
+        Self::new(issuer, EasDomain::base_mainnet())
     }
 
     /// Verify `vc`, confirm it was issued by this signer's key, and emit
@@ -432,6 +457,36 @@ mod tests {
             eth::hex_0x(&d.verifying_contract),
             "0x4200000000000000000000000000000000000021"
         );
+    }
+
+    #[test]
+    fn base_mainnet_domain_is_pinned() {
+        let d = EasDomain::base_mainnet();
+        assert_eq!(d.chain_id, 8_453);
+        assert_eq!(d.version, "1.0.1");
+        assert_eq!(
+            eth::hex_0x(&d.verifying_contract),
+            "0x4200000000000000000000000000000000000021"
+        );
+    }
+
+    #[test]
+    fn mainnet_and_sepolia_domains_produce_different_digests() {
+        // The version + chainId differ, so the same message signed under one
+        // domain must not verify under the other. If these ever collide, a
+        // Sepolia attestation would replay onto mainnet.
+        let msg = crate::eip712::AttestMessage {
+            schema: [1u8; 32],
+            recipient: [0u8; 20],
+            time: 1,
+            expiration_time: 0,
+            revocable: true,
+            ref_uid: [0u8; 32],
+            data: vec![2, 3, 4],
+        };
+        let sep = crate::eip712::digest(&EasDomain::base_sepolia(), &msg);
+        let main = crate::eip712::digest(&EasDomain::base_mainnet(), &msg);
+        assert_ne!(sep, main);
     }
 
     #[test]

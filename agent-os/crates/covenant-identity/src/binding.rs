@@ -390,8 +390,14 @@ impl IdentityBinding {
 /// malleable high-S twin of a signature (we only ever emit low-S).
 fn recover_eth_address(digest: &[u8; 32], sig65: &[u8; 65]) -> Result<[u8; 20], BindingError> {
     let v = sig65[64];
-    let recid_byte = v.checked_sub(27).ok_or(BindingError::BadRecoveryByte(v))?;
-    let recid = RecoveryId::from_byte(recid_byte).ok_or(BindingError::BadRecoveryByte(v))?;
+    // EVM `ecrecover` accepts only v ∈ {27, 28} (recid 0/1). k256 would also
+    // take recid 2/3; reject those so this path agrees with the on-chain
+    // precompile a dual-signed artifact is also checked by.
+    let recid = v
+        .checked_sub(27)
+        .filter(|&b| b <= 1)
+        .and_then(RecoveryId::from_byte)
+        .ok_or(BindingError::BadRecoveryByte(v))?;
     let sig = K256Signature::from_slice(&sig65[..64])
         .map_err(|_| BindingError::MalformedSecp256k1Signature)?;
     if sig.normalize_s().is_some() {
@@ -693,11 +699,14 @@ mod tests {
         // the subtraction (recid_byte >= 4) and must be rejected by
         // RecoveryId::from_byte rather than fall through to point recovery.
         // v=31 is the boundary (first recid byte past 3), v=255 the extreme.
+        // v=29 and v=30 (recid 2/3) survive RecoveryId::from_byte but are not
+        // valid EVM ecrecover bytes, so this path must reject them too or it
+        // would disagree with the on-chain precompile.
         let ed = ed25519_key(21);
         let secp = Secp256k1IssuerKey::generate();
         let good = IdentityBinding::create(&ed, &secp, [22u8; 32]);
 
-        for v in [31u8, 255] {
+        for v in [29u8, 30, 31, 255] {
             let mut sig = good.secp256k1_signature();
             sig[64] = v;
             let bad = IdentityBinding::from_parts(

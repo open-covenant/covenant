@@ -107,12 +107,23 @@ pub fn recover_address(
     digest: &[u8; 32],
     signature: &[u8; 65],
 ) -> Result<[u8; 20], EvmSignerError> {
+    // EVM `ecrecover` accepts only v ∈ {27, 28} (recid 0/1); reject recid 2/3.
     let recovery = signature[64]
         .checked_sub(27)
+        .filter(|&b| b <= 1)
         .and_then(RecoveryId::from_byte)
         .ok_or_else(|| EvmSignerError::Signature(format!("bad recovery byte {}", signature[64])))?;
     let ecdsa = EcdsaSignature::from_slice(&signature[..64])
         .map_err(|e| EvmSignerError::Signature(e.to_string()))?;
+    // Reject the malleable high-S twin, matching the binding and bond recover
+    // paths: Covenant only emits low-S, so a non-canonical signature is never
+    // a legitimate attestation, and a consumer that dedups on signature bytes
+    // must not see two "valid" forms of one attestation.
+    if ecdsa.normalize_s().is_some() {
+        return Err(EvmSignerError::Signature(
+            "non-canonical high-S signature".into(),
+        ));
+    }
     let vk = VerifyingKey::recover_from_prehash(digest, &ecdsa, recovery)
         .map_err(|e| EvmSignerError::Signature(e.to_string()))?;
     Ok(eth::address_from_verifying_key(&vk))

@@ -73,14 +73,17 @@ fn run() -> Result<String, BoxError> {
     Ok(attestation.to_json_string())
 }
 
-/// Resolve the target chain to its EAS domain. Base Sepolia only —
-/// anything else is refused rather than silently retargeted, so a caller
-/// that expects mainnet gets an error instead of a Sepolia attestation.
+/// Resolve the target chain to its EAS domain. Each chain carries its own
+/// EAS domain version, so an unknown chain is refused rather than silently
+/// retargeted (which would sign under the wrong domain and recover the wrong
+/// signer). Off-chain signing only: the issuer signs the attestation here, it
+/// is never broadcast, so mainnet is not a fund-moving path.
 fn domain_for(chain: &str) -> Result<EasDomain, BoxError> {
     match chain {
         "base-sepolia" => Ok(EasDomain::base_sepolia()),
+        "base" | "base-mainnet" => Ok(EasDomain::base_mainnet()),
         other => Err(format!(
-            "unsupported COVENANT_EVM_CHAIN '{other}': only 'base-sepolia' is available (mainnet is gated)"
+            "unsupported COVENANT_EVM_CHAIN '{other}': expected 'base-sepolia' or 'base'"
         )
         .into()),
     }
@@ -92,11 +95,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn base_sepolia_is_the_default_and_only_chain() {
+    fn domain_for_resolves_base_chains_and_rejects_others() {
         assert_eq!(domain_for("base-sepolia").unwrap().chain_id, 84_532);
-        assert!(domain_for("base").is_err());
-        assert!(domain_for("base-mainnet").is_err());
+        assert_eq!(domain_for("base").unwrap().chain_id, 8_453);
+        assert_eq!(domain_for("base-mainnet").unwrap().chain_id, 8_453);
+        // An unknown chain is refused, not silently retargeted to a default,
+        // so a caller never signs under the wrong EAS domain.
         assert!(domain_for("mainnet").is_err());
+        assert!(domain_for("ethereum").is_err());
     }
 
     #[test]

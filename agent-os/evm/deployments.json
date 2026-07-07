@@ -31,10 +31,17 @@
       "tx": "0x14b0d3bf59b75552f1c5fee60f05dc69908150caac476bd4f72dcc791262b473"
     },
     "bondReceiptVerifier": {
-      "address": "0x2B03E47CB3900BA9ccf861B214233E4c237EA309",
+      "address": "0xBee387DD4A2fF215d6f997E5DA464C92285BCb6e",
       "trustedAttestor": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",
       "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      "tx": "0x4517c9265edff3f543f033edaff8232f204b2947bb0cd3b99c2bdf2aad65bef5"
+      "deployed": "2026-07-07",
+      "tx": "0xe4012e6cda96c4f823a5956c331c4e56bcf4e6710d0613c537ef8ebc4b8b6c27",
+      "note": "hardened redeploy: rejects malleable signatures (high-S and v outside {27,28}). replay protection remains the consuming escrow's job. supersedes the first deploy below (unannounced, unconsumed).",
+      "supersedes": {
+        "address": "0x2B03E47CB3900BA9ccf861B214233E4c237EA309",
+        "tx": "0x4517c9265edff3f543f033edaff8232f204b2947bb0cd3b99c2bdf2aad65bef5",
+        "reason": "no malleability guard; never announced or consumed"
+      }
     }
   }
 }

@@ -49,6 +49,8 @@ const QUARANTINE_ROOTS = [
   "crates/covenant-evm-signer",
   "crates/covenant-x402",
   "crates/covenant-x402-signer",
+  "crates/covenant-hyre",
+  "crates/covenant-zauth",
   "evm",
 ];
 

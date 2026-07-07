@@ -172,6 +172,16 @@ impl ReputationProjection {
         if self.source_chain.is_empty() {
             return Err(EvmSignerError::Reputation("source_chain is empty".into()));
         }
+        // A reader recovers the real value as `score / 10^decimals`. Past 18
+        // decimals that computation overflows or, under `unchecked` math,
+        // wraps, so a real score could read as an absurd value. Cap well
+        // inside the [0,1]/[0,100] range these scores actually use.
+        if self.score.decimals > 18 {
+            return Err(EvmSignerError::Reputation(format!(
+                "score_decimals {} exceeds 18",
+                self.score.decimals
+            )));
+        }
         Ok(())
     }
 }

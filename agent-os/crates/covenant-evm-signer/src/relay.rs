@@ -162,6 +162,7 @@ impl RelayTransaction {
 
     fn notes(&self) -> Vec<String> {
         vec![
+            "Attester model: EAS records the SUBMITTING address as `attester` (msg.sender). Under Covenant's Option-A trust model the attester of record must be the secp256k1 issuer, which this direct-`attest` path cannot satisfy from a relayer EOA. Do NOT submit this under Option A; use the off-chain issuer-signed attestation, or `attestByDelegation` carrying the issuer's signature so `attester` stays the issuer.".into(),
             "Unsigned: no signature, nonce, gas, or from. Submission needs an operator-custodied funded key; this crate never holds one.".into(),
             format!(
                 "EAS is an OP-Stack predeploy at {}; re-verify the live contract's attest ABI against this calldata immediately before submission.",

@@ -324,11 +324,14 @@ case "$mode" in
   quick)
     run cargo check --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
     run cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
+    # evm/ is a workspace-detached crate (own lockfile), so --workspace skips it.
+    run cargo test --manifest-path evm/Cargo.toml --locked
     ;;
   full)
     run cargo build --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
     run cargo clippy --workspace --all-targets --exclude covenant-settlement-program --exclude covenant-stake-program --locked -- -D warnings
     run cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked
+    run cargo test --manifest-path evm/Cargo.toml --locked
     ;;
   live)
     run cargo test --workspace --exclude covenant-settlement-program --exclude covenant-stake-program --locked -- --ignored live_

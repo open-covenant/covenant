@@ -30,6 +30,15 @@
       "revocable": true,
       "tx": "0x14b0d3bf59b75552f1c5fee60f05dc69908150caac476bd4f72dcc791262b473"
     },
+    "erc8004Registration": {
+      "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+      "agentId": 58403,
+      "owner": "0x5fA1d0C0bfFE257a20027C523093F941834f5D66",
+      "agentURI": "https://opencovenant.org/agents/covenant-foundation.json",
+      "deployed": "2026-07-07",
+      "tx": "0xaa55d6bebffb50d653fbb9bbfcffb1f3dc3e2b6311bafba6c120c3a4940a54ad",
+      "note": "the launch/de-stealth registration; Covenant is now discoverable in ERC-8004 tooling on Base. owner is the relayer EOA (holds no signing authority); the card points at the Solana metaplex identity."
+    },
     "bondReceiptVerifier": {
       "address": "0xBee387DD4A2fF215d6f997E5DA464C92285BCb6e",
       "trustedAttestor": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",

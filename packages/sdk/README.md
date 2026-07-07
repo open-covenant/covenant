@@ -101,7 +101,7 @@ directly, without a client.
 
 ## Token accounts and the CVNT mint
 
-`stake`, `buy_credits`, `create_task`, and `release_task` move `$CVNT`, so each needs the mint and
+`stake`, `buy_credits`, `create_task`, `release_task`, `claim_task`, and `refund_task` move `$CVNT`, so each needs the mint and
 the owner's token account. Derive the token account with `deriveAssociatedTokenAddress`, and read
 the mint from the on-chain config (or set the `COVNT_MINT` env var, since
 `resolveSolanaNetwork().covntMint` is `null` until you do):
@@ -164,7 +164,7 @@ const mainnet = resolveSolanaNetwork({ cluster: 'mainnet' });
 | Signers | `keypairSigner`, `walletAdapterSigner` |
 | PDA derivation | `deriveConfigPda`, `deriveAgentPda`, `deriveTaskPda`, `deriveCreditsPda`, `deriveStakePositionPda`, `deriveReceiptBatchPda`, `deriveAssociatedTokenAddress`, the stake-program `derive*Pda`, `SETTLEMENT_PROGRAM_ID`, `STAKE_PROGRAM_ID` |
 | Account reads | `fetchConfig`, `fetchAgent`, `fetchTask`, `fetchCreditAccount`, `fetchStakePosition`, `fetchReceiptBatch`, and the matching `decode*` |
-| Settlement instructions | `prepareRegisterAgentInstruction`, `prepareStakeInstruction`, `prepareBuyCreditsInstruction`, `prepareCreateTaskInstruction`, `prepareReleaseTaskInstruction`, `prepareAnchorReceiptBatchInstruction` |
+| Settlement instructions | `prepareRegisterAgentInstruction`, `prepareStakeInstruction`, `prepareBuyCreditsInstruction`, `prepareCreateTaskInstruction`, `prepareSubmitTaskInstruction`, `prepareReleaseTaskInstruction`, `prepareClaimTaskInstruction`, `prepareRefundTaskInstruction`, `prepareAnchorReceiptBatchInstruction` |
 | Stake-program instructions | `prepareStakeInitializeInstruction`, `prepareStakeCreatePositionInstruction`, `prepareStakeIncreaseAmountInstruction`, `prepareStakeClaimInstruction`, `prepareStakeClosePositionInstruction`, plus the fee-router, pause, and authority admin builders |
 | Transactions and serialization | `buildTransaction`, `sendAndConfirmSignedTransaction`, `toTransactionInstruction`, `toTransactionInstructions` |
 | Addresses and hashing | `isSolanaAddress`, `assertSolanaAddress`, `assertHash32`, `hash32FromText`, `toBase58`, `toPublicKey`, `ACCOUNT_SEEDS` |
@@ -177,7 +177,7 @@ on-chain program accepts.
 
 ## Stability
 
-`0.2.0`, alpha. `compatibility/exports.v1.json` and `compatibility/instructions.v1.json` pin the
+`0.2.1`, alpha. `compatibility/exports.v1.json` and `compatibility/instructions.v1.json` pin the
 exported surface and each instruction's account order and data keys against accidental drift.
 Semver support windows are not yet guaranteed, so pin an exact version.
 

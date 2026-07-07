@@ -126,6 +126,32 @@ impl ReputationProjection {
         }
     }
 
+    /// Build a projection from a canonical audit-derived score
+    /// ([`covenant_audit::reputation::AuditReputation`]), the Solana anchor the
+    /// score is committed to, and the validity window. Refuses a score with no
+    /// history: an agent that has taken no governed actions has no reputation to
+    /// project, and attesting one would dress a blank record up as a number.
+    pub fn from_audit(
+        audit: &covenant_audit::reputation::AuditReputation,
+        source_chain: impl Into<String>,
+        solana_attestation_pda: [u8; 32],
+        issued_at_unix: u64,
+        expiry_unix: u64,
+    ) -> Result<Self, EvmSignerError> {
+        let scaled = audit.score.ok_or_else(|| {
+            EvmSignerError::Reputation(
+                "audit chain has no governed actions to score; nothing to attest".into(),
+            )
+        })?;
+        Ok(Self::new(
+            ReputationScore::new(scaled, audit.decimals),
+            source_chain,
+            solana_attestation_pda,
+            issued_at_unix,
+            expiry_unix,
+        ))
+    }
+
     /// Build a projection with the Solana anchor supplied as hex (`0x…`
     /// optional). The convenience the sidecar reads its stdin through.
     pub fn from_pda_hex(
@@ -252,6 +278,44 @@ pub fn parse_reputation_projection(v: &Value) -> Result<ReputationProjection, Ev
 #[cfg(test)]
 mod tests {
     use super::*;
+    use covenant_audit::reputation::AuditReputation;
+
+    #[test]
+    fn from_audit_maps_a_real_score_and_refuses_a_blank_history() {
+        let scored = AuditReputation {
+            compliant: 3,
+            violations: 1,
+            score: Some(7_500),
+            decimals: 4,
+        };
+        let p = ReputationProjection::from_audit(
+            &scored,
+            crate::reputation::SOLANA_MAINNET_CAIP2,
+            [0xAB; 32],
+            1_700_000_000,
+            1_800_000_000,
+        )
+        .unwrap();
+        assert_eq!(p.score.score, 7_500);
+        assert_eq!(p.score.decimals, 4);
+
+        let blank = AuditReputation {
+            compliant: 0,
+            violations: 0,
+            score: None,
+            decimals: 4,
+        };
+        assert!(matches!(
+            ReputationProjection::from_audit(
+                &blank,
+                crate::reputation::SOLANA_MAINNET_CAIP2,
+                [0xAB; 32],
+                1_700_000_000,
+                1_800_000_000,
+            ),
+            Err(EvmSignerError::Reputation(_))
+        ));
+    }
 
     /// Decode the reputation tuple the way a Base verifier or EAS's
     /// `SchemaDecoder` would, so the round-trip proves the encoding is

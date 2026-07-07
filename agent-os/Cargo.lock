@@ -1220,6 +1220,7 @@ name = "covenant-evm-signer"
 version = "0.1.0"
 dependencies = [
  "covenant-attestation",
+ "covenant-audit",
  "covenant-identity",
  "ed25519-dalek 2.2.0",
  "k256",

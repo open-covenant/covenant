@@ -634,4 +634,20 @@ mod tests {
         assert!(joined.contains("allowlist"));
         assert!(joined.contains("resolver"));
     }
+
+    #[test]
+    fn signature_meets_the_solidity_resolver_invariants() {
+        // `OffchainResolver.sol`'s `recover` rejects any signature with a high-S
+        // or a `v` outside {27,28} before `ecrecover`. The gateway must never
+        // emit one, or a response would verify off chain and revert on chain.
+        // Lock both here: `v` is canonical, and the hardened Rust recover (same
+        // low-S + recid guard the contract applies) round-trips to the signer.
+        let gw = gateway();
+        let resp = gw
+            .resolve_solana(&request(), &SOLANA, 1_800_000_000)
+            .unwrap();
+        let v = resp.signature[64];
+        assert!(v == 27 || v == 28, "v must be 27 or 28, got {v}");
+        assert_eq!(resp.recover_signer().unwrap(), gw.signer_address());
+    }
 }

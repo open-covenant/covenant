@@ -29,7 +29,7 @@ mod eip712;
 mod eth;
 mod relay;
 mod reputation;
-mod resolver;
+pub mod resolver;
 mod uid;
 
 use covenant_attestation::VerifiableCredential;

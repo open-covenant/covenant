@@ -70,22 +70,50 @@ export interface CreateTaskInput {
   escrowVault: SolanaAddress;
   covntMint: SolanaAddress;
   provider: SolanaAddress;
+  /** Optional third-party dispute resolver; omit for a client-only escrow. */
+  arbiter?: SolanaAddress;
   taskId: Hash32;
   amountCovnt: string;
   taskHash: Hash32;
   criteriaHash: Hash32;
   deadline: string;
+  /** Seconds after submission before the provider may claim unilaterally. */
+  reviewWindow: string;
+}
+
+export interface SubmitTaskInput {
+  configAccount: SolanaAddress;
+  taskAccount: SolanaAddress;
+  provider: SolanaAddress;
+  resultHash: Hash32;
+  receiptHash: Hash32;
 }
 
 export interface ReleaseTaskInput {
   configAccount: SolanaAddress;
-  client: SolanaAddress;
   taskAccount: SolanaAddress;
+  authority: SolanaAddress;
   escrowVault: SolanaAddress;
   providerCovntAccount: SolanaAddress;
   covntMint: SolanaAddress;
-  resultHash: Hash32;
-  receiptHash: Hash32;
+}
+
+export interface ClaimTaskInput {
+  configAccount: SolanaAddress;
+  taskAccount: SolanaAddress;
+  provider: SolanaAddress;
+  escrowVault: SolanaAddress;
+  providerCovntAccount: SolanaAddress;
+  covntMint: SolanaAddress;
+}
+
+export interface RefundTaskInput {
+  configAccount: SolanaAddress;
+  taskAccount: SolanaAddress;
+  authority: SolanaAddress;
+  escrowVault: SolanaAddress;
+  clientCovntAccount: SolanaAddress;
+  covntMint: SolanaAddress;
 }
 
 export interface AnchorReceiptBatchInput {
@@ -99,6 +127,7 @@ export interface AnchorReceiptBatchInput {
 
 const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const DEFAULT_PUBKEY = '11111111111111111111111111111111';
 
 export function hash32FromText(value: string): Hash32 {
   return bytesToHex(sha256(new TextEncoder().encode(value)));
@@ -184,12 +213,31 @@ export function prepareCreateTaskInstruction(input: CreateTaskInput): PreparedSo
       meta('system_program', SYSTEM_PROGRAM_ID, false, false),
     ],
     data: {
-      provider: assertSolanaAddress(input.provider, 'provider'),
       task_id: assertHash32(input.taskId, 'task id'),
+      provider: assertSolanaAddress(input.provider, 'provider'),
+      arbiter: assertSolanaAddress(input.arbiter ?? DEFAULT_PUBKEY, 'arbiter'),
       amount_covnt: input.amountCovnt,
       task_hash: assertHash32(input.taskHash, 'task hash'),
       criteria_hash: assertHash32(input.criteriaHash, 'criteria hash'),
       deadline: input.deadline,
+      review_window: input.reviewWindow,
+    },
+  });
+}
+
+export function prepareSubmitTaskInstruction(input: SubmitTaskInput): PreparedSolanaBundle {
+  const network = resolveSolanaNetwork();
+  return bundle(network, {
+    programId: network.programId,
+    instruction: 'submit_task',
+    accounts: [
+      meta('config', input.configAccount, false, false),
+      meta('task', input.taskAccount, false, true),
+      meta('provider', input.provider, true, false),
+    ],
+    data: {
+      result_hash: assertHash32(input.resultHash, 'result hash'),
+      receipt_hash: assertHash32(input.receiptHash, 'receipt hash'),
     },
   });
 }
@@ -202,16 +250,49 @@ export function prepareReleaseTaskInstruction(input: ReleaseTaskInput): Prepared
     accounts: [
       meta('config', input.configAccount, false, false),
       meta('task', input.taskAccount, false, true),
-      meta('client', input.client, true, false),
+      meta('authority', input.authority, true, false),
       meta('escrow_vault', input.escrowVault, false, true),
       meta('provider_covnt', input.providerCovntAccount, false, true),
       meta('covnt_mint', input.covntMint, false, false),
       meta('token_program', TOKEN_PROGRAM_ID, false, false),
     ],
-    data: {
-      result_hash: assertHash32(input.resultHash, 'result hash'),
-      receipt_hash: assertHash32(input.receiptHash, 'receipt hash'),
-    },
+    data: {},
+  });
+}
+
+export function prepareClaimTaskInstruction(input: ClaimTaskInput): PreparedSolanaBundle {
+  const network = resolveSolanaNetwork();
+  return bundle(network, {
+    programId: network.programId,
+    instruction: 'claim_task',
+    accounts: [
+      meta('config', input.configAccount, false, false),
+      meta('task', input.taskAccount, false, true),
+      meta('provider', input.provider, true, false),
+      meta('escrow_vault', input.escrowVault, false, true),
+      meta('provider_covnt', input.providerCovntAccount, false, true),
+      meta('covnt_mint', input.covntMint, false, false),
+      meta('token_program', TOKEN_PROGRAM_ID, false, false),
+    ],
+    data: {},
+  });
+}
+
+export function prepareRefundTaskInstruction(input: RefundTaskInput): PreparedSolanaBundle {
+  const network = resolveSolanaNetwork();
+  return bundle(network, {
+    programId: network.programId,
+    instruction: 'refund_task',
+    accounts: [
+      meta('config', input.configAccount, false, false),
+      meta('task', input.taskAccount, false, true),
+      meta('authority', input.authority, true, false),
+      meta('escrow_vault', input.escrowVault, false, true),
+      meta('client_covnt', input.clientCovntAccount, false, true),
+      meta('covnt_mint', input.covntMint, false, false),
+      meta('token_program', TOKEN_PROGRAM_ID, false, false),
+    ],
+    data: {},
   });
 }
 

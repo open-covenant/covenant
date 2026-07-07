@@ -247,6 +247,86 @@ export const settlementIdl = {
       ]
     },
     {
+      "name": "claim_task",
+      "docs": [
+        "Provider recourse: once the review window after submission has elapsed",
+        "with no release and no arbiter refund, the provider claims the escrow",
+        "itself. This is what stops a silent client from stranding delivered",
+        "work, the exact gap that kept task escrow disabled before."
+      ],
+      "discriminator": [
+        49,
+        222,
+        219,
+        238,
+        155,
+        68,
+        221,
+        136
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "Task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider",
+          "signer": true
+        },
+        {
+          "name": "escrow_vault",
+          "writable": true
+        },
+        {
+          "name": "provider_covnt",
+          "writable": true
+        },
+        {
+          "name": "covnt_mint"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_position",
       "docs": [
         "Owner-signed reclaim of a spent position account (rent returned to",
@@ -661,12 +741,10 @@ export const settlementIdl = {
     {
       "name": "refund_task",
       "docs": [
-        "Refund the escrowed COVNT back to the client after the task",
-        "deadline has passed. Only the client signs; the provider has no",
-        "recourse here. Mirrors the escrow-agent norm where the funder",
-        "recovers their funds when the counterparty failed to deliver in",
-        "time. Pause check matches `release_task` so a paused protocol",
-        "halts all escrow movement uniformly."
+        "Return the escrow to the client. Two paths: the client reclaims after",
+        "the deadline passes with no submission (provider never delivered), or",
+        "a set arbiter refunds during the review window (dispute resolved in",
+        "the client's favour). Pause check matches the release path."
       ],
       "discriminator": [
         8,
@@ -720,11 +798,11 @@ export const settlementIdl = {
           }
         },
         {
-          "name": "client",
-          "signer": true,
-          "relations": [
-            "task"
-          ]
+          "name": "authority",
+          "docs": [
+            "Client (post-deadline reclaim) or arbiter (dispute ruling); verified in the handler."
+          ],
+          "signer": true
         },
         {
           "name": "escrow_vault",
@@ -819,6 +897,12 @@ export const settlementIdl = {
     },
     {
       "name": "release_task",
+      "docs": [
+        "Release the escrow to the provider for delivered work. Signed by the",
+        "client (approving the submission) or, when one is set, the arbiter",
+        "(resolving a dispute in the provider's favour). Requires a prior",
+        "submission, so funds only move against on-chain proof of delivery."
+      ],
       "discriminator": [
         189,
         118,
@@ -871,11 +955,11 @@ export const settlementIdl = {
           }
         },
         {
-          "name": "client",
-          "signer": true,
-          "relations": [
-            "task"
-          ]
+          "name": "authority",
+          "docs": [
+            "Client (approving) or arbiter (dispute ruling); verified in the handler."
+          ],
+          "signer": true
         },
         {
           "name": "escrow_vault",
@@ -892,26 +976,7 @@ export const settlementIdl = {
           "name": "token_program"
         }
       ],
-      "args": [
-        {
-          "name": "result_hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "receipt_hash",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        }
-      ]
+      "args": []
     },
     {
       "name": "set_agent_active",
@@ -1356,6 +1421,91 @@ export const settlementIdl = {
         {
           "name": "lock_until",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "submit_task",
+      "docs": [
+        "The provider posts proof of delivery on-chain, moving the task from",
+        "FUNDED to SUBMITTED and starting the review window. Only the named",
+        "provider may submit, and only before the deadline, so a late delivery",
+        "cannot settle out from under the client's refund right."
+      ],
+      "discriminator": [
+        148,
+        183,
+        26,
+        116,
+        107,
+        213,
+        118,
+        213
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "task",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  115,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "task.task_id",
+                "account": "Task"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "result_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "receipt_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
         }
       ]
     },
@@ -1927,6 +2077,19 @@ export const settlementIdl = {
       ]
     },
     {
+      "name": "TaskClaimed",
+      "discriminator": [
+        208,
+        90,
+        243,
+        116,
+        80,
+        15,
+        228,
+        202
+      ]
+    },
+    {
       "name": "TaskCreated",
       "discriminator": [
         49,
@@ -1963,6 +2126,19 @@ export const settlementIdl = {
         254,
         186,
         247
+      ]
+    },
+    {
+      "name": "TaskSubmitted",
+      "discriminator": [
+        39,
+        29,
+        92,
+        117,
+        184,
+        101,
+        14,
+        126
       ]
     },
     {
@@ -2062,8 +2238,28 @@ export const settlementIdl = {
     },
     {
       "code": 6016,
-      "name": "TasksDisabled",
-      "msg": "task escrow is disabled in this build"
+      "name": "NotArbiter",
+      "msg": "only the task arbiter may take this action"
+    },
+    {
+      "code": 6017,
+      "name": "ReviewWindowNotElapsed",
+      "msg": "the review window has not elapsed yet; provider cannot claim"
+    },
+    {
+      "code": 6018,
+      "name": "ReviewWindowElapsed",
+      "msg": "the review window has elapsed; arbiter refund no longer allowed"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidReviewWindow",
+      "msg": "review window must be zero or positive"
+    },
+    {
+      "code": 6020,
+      "name": "InvalidDeadline",
+      "msg": "deadline must be in the future"
     }
   ],
   "types": [
@@ -2329,6 +2525,10 @@ export const settlementIdl = {
             "type": "pubkey"
           },
           {
+            "name": "arbiter",
+            "type": "pubkey"
+          },
+          {
             "name": "amount_covnt",
             "type": "u64"
           },
@@ -2352,6 +2552,10 @@ export const settlementIdl = {
           },
           {
             "name": "deadline",
+            "type": "i64"
+          },
+          {
+            "name": "review_window",
             "type": "i64"
           }
         ]
@@ -2847,6 +3051,15 @@ export const settlementIdl = {
             "type": "pubkey"
           },
           {
+            "name": "arbiter",
+            "docs": [
+              "Neutral dispute resolver. `Pubkey::default()` means no arbiter, in",
+              "which case delivered work settles to the provider after the review",
+              "window and the client's only recourse is a pre-submission refund."
+            ],
+            "type": "pubkey"
+          },
+          {
             "name": "amount_covnt",
             "type": "u64"
           },
@@ -2878,7 +3091,34 @@ export const settlementIdl = {
             }
           },
           {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
             "name": "deadline",
+            "docs": [
+              "Submission deadline. The provider must submit by this time or the",
+              "client can reclaim the escrow."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "submitted_at",
+            "docs": [
+              "Set when the provider submits; 0 while FUNDED."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "review_window",
+            "docs": [
+              "Seconds after submission before the provider may self-claim."
+            ],
             "type": "i64"
           },
           {
@@ -2888,6 +3128,35 @@ export const settlementIdl = {
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_covnt",
+            "type": "u64"
+          },
+          {
+            "name": "claimed_at",
+            "type": "i64"
           }
         ]
       }
@@ -2924,6 +3193,10 @@ export const settlementIdl = {
             "type": "pubkey"
           },
           {
+            "name": "arbiter",
+            "type": "pubkey"
+          },
+          {
             "name": "amount_covnt",
             "type": "u64"
           },
@@ -2947,6 +3220,10 @@ export const settlementIdl = {
           },
           {
             "name": "deadline",
+            "type": "i64"
+          },
+          {
+            "name": "review_window",
             "type": "i64"
           }
         ]
@@ -3006,6 +3283,49 @@ export const settlementIdl = {
           {
             "name": "amount_covnt",
             "type": "u64"
+          },
+          {
+            "name": "result_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TaskSubmitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "task_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "provider",
+            "type": "pubkey"
+          },
+          {
+            "name": "submitted_at",
+            "type": "i64"
           },
           {
             "name": "result_hash",

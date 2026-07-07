@@ -17,10 +17,13 @@ import {
 import {
   prepareAnchorReceiptBatchInstruction,
   prepareBuyCreditsInstruction,
+  prepareClaimTaskInstruction,
   prepareCreateTaskInstruction,
+  prepareRefundTaskInstruction,
   prepareRegisterAgentInstruction,
   prepareReleaseTaskInstruction,
   prepareStakeInstruction,
+  prepareSubmitTaskInstruction,
   type PreparedSolanaBundle,
 } from './instructions.js';
 import {
@@ -85,16 +88,36 @@ export interface CreateTaskParams {
   taskHash: Hash32;
   criteriaHash: Hash32;
   deadline: string | bigint;
+  reviewWindow: string | bigint;
+  arbiter?: Address;
   client?: Address;
   covntMint?: Address;
+}
+export interface SubmitTaskParams {
+  taskId: Hash32;
+  resultHash: Hash32;
+  receiptHash: Hash32;
+  provider?: Address;
 }
 export interface ReleaseTaskParams {
   taskId: Hash32;
   escrowVault: Address;
   providerCovntAccount: Address;
-  resultHash: Hash32;
-  receiptHash: Hash32;
-  client?: Address;
+  authority?: Address;
+  covntMint?: Address;
+}
+export interface ClaimTaskParams {
+  taskId: Hash32;
+  escrowVault: Address;
+  providerCovntAccount: Address;
+  provider?: Address;
+  covntMint?: Address;
+}
+export interface RefundTaskParams {
+  taskId: Hash32;
+  escrowVault: Address;
+  clientCovntAccount: Address;
+  authority?: Address;
   covntMint?: Address;
 }
 export interface AnchorReceiptBatchParams {
@@ -240,27 +263,68 @@ export class CovenantClient {
         escrowVault: toBase58(params.escrowVault),
         covntMint: await this.resolveMint(params.covntMint),
         provider: toBase58(params.provider),
+        arbiter: params.arbiter ? toBase58(params.arbiter) : undefined,
         taskId: params.taskId,
         amountCovnt: intString(params.amountCovnt, 'amountCovnt'),
         taskHash: params.taskHash,
         criteriaHash: params.criteriaHash,
         deadline: intString(params.deadline, 'deadline'),
+        reviewWindow: intString(params.reviewWindow, 'reviewWindow'),
+      }),
+    );
+  }
+
+  async submitTask(params: SubmitTaskParams): Promise<string> {
+    const provider = params.provider ?? this.requireSigner().publicKey;
+    return this.send(
+      prepareSubmitTaskInstruction({
+        configAccount: this.configPda().toBase58(),
+        taskAccount: this.taskPda(params.taskId).toBase58(),
+        provider: toBase58(provider),
+        resultHash: params.resultHash,
+        receiptHash: params.receiptHash,
       }),
     );
   }
 
   async releaseTask(params: ReleaseTaskParams): Promise<string> {
-    const client = params.client ?? this.requireSigner().publicKey;
+    const authority = params.authority ?? this.requireSigner().publicKey;
     return this.send(
       prepareReleaseTaskInstruction({
         configAccount: this.configPda().toBase58(),
         taskAccount: this.taskPda(params.taskId).toBase58(),
-        client: toBase58(client),
+        authority: toBase58(authority),
         escrowVault: toBase58(params.escrowVault),
         providerCovntAccount: toBase58(params.providerCovntAccount),
         covntMint: await this.resolveMint(params.covntMint),
-        resultHash: params.resultHash,
-        receiptHash: params.receiptHash,
+      }),
+    );
+  }
+
+  async claimTask(params: ClaimTaskParams): Promise<string> {
+    const provider = params.provider ?? this.requireSigner().publicKey;
+    return this.send(
+      prepareClaimTaskInstruction({
+        configAccount: this.configPda().toBase58(),
+        taskAccount: this.taskPda(params.taskId).toBase58(),
+        provider: toBase58(provider),
+        escrowVault: toBase58(params.escrowVault),
+        providerCovntAccount: toBase58(params.providerCovntAccount),
+        covntMint: await this.resolveMint(params.covntMint),
+      }),
+    );
+  }
+
+  async refundTask(params: RefundTaskParams): Promise<string> {
+    const authority = params.authority ?? this.requireSigner().publicKey;
+    return this.send(
+      prepareRefundTaskInstruction({
+        configAccount: this.configPda().toBase58(),
+        taskAccount: this.taskPda(params.taskId).toBase58(),
+        authority: toBase58(authority),
+        escrowVault: toBase58(params.escrowVault),
+        clientCovntAccount: toBase58(params.clientCovntAccount),
+        covntMint: await this.resolveMint(params.covntMint),
       }),
     );
   }

@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   prepareAnchorReceiptBatchInstruction,
   prepareBuyCreditsInstruction,
+  prepareClaimTaskInstruction,
   prepareCreateTaskInstruction,
+  prepareRefundTaskInstruction,
   prepareRegisterAgentInstruction,
   prepareReleaseTaskInstruction,
   prepareStakeInstruction,
+  prepareSubmitTaskInstruction,
 } from '../solana/instructions.js';
 import {
   prepareStakeClaimInstruction,
@@ -59,20 +62,59 @@ describe('serialize: golden bytes', () => {
     expect(hex(ix.data)).toBe('0ead3a26f8eb7366' + 'ff00000000000000');
   });
 
-  it('release_task encodes two 32-byte hashes in order', () => {
+  it('submit_task encodes result and receipt hashes in order', () => {
     const ix = one(
-      prepareReleaseTaskInstruction({
+      prepareSubmitTaskInstruction({
         configAccount: SYS,
-        client: SYS,
         taskAccount: SYS,
-        escrowVault: SYS,
-        providerCovntAccount: SYS,
-        covntMint: SYS,
+        provider: SYS,
         resultHash: HZERO,
         receiptHash: HFF,
       }),
     );
-    expect(hex(ix.data)).toBe('bd768e6325f42677' + HZERO + HFF);
+    expect(hex(ix.data)).toBe('94b71a746bd576d5' + HZERO + HFF);
+  });
+
+  it('release_task carries only its discriminator (no args)', () => {
+    const ix = one(
+      prepareReleaseTaskInstruction({
+        configAccount: SYS,
+        taskAccount: SYS,
+        authority: SYS,
+        escrowVault: SYS,
+        providerCovntAccount: SYS,
+        covntMint: SYS,
+      }),
+    );
+    expect(hex(ix.data)).toBe('bd768e6325f42677');
+  });
+
+  it('claim_task carries only its discriminator (no args)', () => {
+    const ix = one(
+      prepareClaimTaskInstruction({
+        configAccount: SYS,
+        taskAccount: SYS,
+        provider: SYS,
+        escrowVault: SYS,
+        providerCovntAccount: SYS,
+        covntMint: SYS,
+      }),
+    );
+    expect(hex(ix.data)).toBe('31dedbee9b44dd88');
+  });
+
+  it('refund_task carries only its discriminator (no args)', () => {
+    const ix = one(
+      prepareRefundTaskInstruction({
+        configAccount: SYS,
+        taskAccount: SYS,
+        authority: SYS,
+        escrowVault: SYS,
+        clientCovntAccount: SYS,
+        covntMint: SYS,
+      }),
+    );
+    expect(hex(ix.data)).toBe('080898be18189e15');
   });
 
   it('create_position flattens the args struct (u64,u64,u16)', () => {
@@ -131,7 +173,7 @@ describe('serialize: discriminators, lengths, and metas', () => {
     expect(ix.programId.toBase58()).toBe(bundle.instructions[0]!.programId);
   });
 
-  it('create_task: struct with a pubkey and an i64 flattens to 152 bytes', () => {
+  it('create_task: struct with two pubkeys and two i64s flattens to 184 bytes', () => {
     const ix = one(
       prepareCreateTaskInstruction({
         configAccount: SYS,
@@ -142,15 +184,17 @@ describe('serialize: discriminators, lengths, and metas', () => {
         escrowVault: SYS,
         covntMint: SYS,
         provider: SYS,
+        arbiter: SYS,
         taskId: HZERO,
         amountCovnt: '1',
         taskHash: HZERO,
         criteriaHash: HZERO,
         deadline: '1750000000',
+        reviewWindow: '3600',
       }),
     );
     expect(hex(ix.data.subarray(0, 8))).toBe('c25006b4e87f30ab');
-    expect(ix.data).toHaveLength(8 + 32 + 32 + 8 + 32 + 32 + 8);
+    expect(ix.data).toHaveLength(8 + 32 + 32 + 32 + 8 + 32 + 32 + 8 + 8);
   });
 
   it('anchor_receipt_batch: two hashes and a u32', () => {

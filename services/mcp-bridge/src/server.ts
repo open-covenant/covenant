@@ -89,9 +89,11 @@ const createTaskSchema = z.object({
   escrowVault: addressSchema,
   covntMint: addressSchema,
   provider: addressSchema,
+  arbiter: addressSchema.optional(),
   description: z.string().min(3),
   amountCovnt: z.string().min(1),
   deadline: z.string().min(1),
+  reviewWindow: z.string().min(1),
   taskId: hash32Schema.optional(),
 });
 

@@ -4,10 +4,13 @@ import {
   hash32FromText,
   prepareAnchorReceiptBatchInstruction,
   prepareBuyCreditsInstruction,
+  prepareClaimTaskInstruction,
   prepareCreateTaskInstruction,
+  prepareRefundTaskInstruction,
   prepareRegisterAgentInstruction,
   prepareReleaseTaskInstruction,
   prepareStakeInstruction,
+  prepareSubmitTaskInstruction,
 } from '../solana/instructions.js';
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
@@ -122,11 +125,13 @@ describe('Solana instruction descriptors', () => {
         escrowVault: addr('7'),
         covntMint: addr('9'),
         provider: addr('8'),
+        arbiter: addr('a'),
         taskId: hash32FromText('task-id'),
         amountCovnt: '500',
         taskHash: hash32FromText('task-hash'),
         criteriaHash: hash32FromText('criteria'),
         deadline: '1760000000',
+        reviewWindow: '3600',
       }),
     );
 
@@ -143,26 +148,71 @@ describe('Solana instruction descriptors', () => {
       { name: 'system_program', address: SYSTEM_PROGRAM, signer: false, writable: false },
     ]);
     expect(ix.data).toEqual({
-      provider: addr('8'),
       task_id: hash32FromText('task-id'),
+      provider: addr('8'),
+      arbiter: addr('a'),
       amount_covnt: '500',
       task_hash: hash32FromText('task-hash'),
       criteria_hash: hash32FromText('criteria'),
       deadline: '1760000000',
+      review_window: '3600',
     });
   });
 
-  it('release_task: client signs but is not writable, and result/receipt hashes do not transpose', () => {
+  it('create_task: arbiter defaults to the zero pubkey when omitted', () => {
+    const ix = only(
+      prepareCreateTaskInstruction({
+        configAccount: addr('2'),
+        agentAccount: addr('3'),
+        taskAccount: addr('4'),
+        client: addr('5'),
+        clientCovntAccount: addr('6'),
+        escrowVault: addr('7'),
+        covntMint: addr('9'),
+        provider: addr('8'),
+        taskId: hash32FromText('task-id'),
+        amountCovnt: '500',
+        taskHash: hash32FromText('task-hash'),
+        criteriaHash: hash32FromText('criteria'),
+        deadline: '1760000000',
+        reviewWindow: '3600',
+      }),
+    );
+    expect(ix.data.arbiter).toBe(SYSTEM_PROGRAM);
+  });
+
+  it('submit_task: provider signs read-only and result/receipt hashes do not transpose', () => {
+    const ix = only(
+      prepareSubmitTaskInstruction({
+        configAccount: addr('2'),
+        taskAccount: addr('3'),
+        provider: addr('4'),
+        resultHash: hash32FromText('result'),
+        receiptHash: hash32FromText('receipt'),
+      }),
+    );
+    expect(ix.instruction).toBe('submit_task');
+    expect(ix.accounts).toEqual([
+      { name: 'config', address: addr('2'), signer: false, writable: false },
+      { name: 'task', address: addr('3'), signer: false, writable: true },
+      { name: 'provider', address: addr('4'), signer: true, writable: false },
+    ]);
+    expect(ix.data).toEqual({
+      result_hash: hash32FromText('result'),
+      receipt_hash: hash32FromText('receipt'),
+    });
+    expect(ix.data.result_hash).not.toBe(ix.data.receipt_hash);
+  });
+
+  it('release_task: authority signs read-only and the instruction carries no args', () => {
     const ix = only(
       prepareReleaseTaskInstruction({
         configAccount: addr('2'),
         taskAccount: addr('3'),
-        client: addr('4'),
+        authority: addr('4'),
         escrowVault: addr('5'),
         providerCovntAccount: addr('6'),
         covntMint: addr('7'),
-        resultHash: hash32FromText('result'),
-        receiptHash: hash32FromText('receipt'),
       }),
     );
 
@@ -170,17 +220,61 @@ describe('Solana instruction descriptors', () => {
     expect(ix.accounts).toEqual([
       { name: 'config', address: addr('2'), signer: false, writable: false },
       { name: 'task', address: addr('3'), signer: false, writable: true },
-      { name: 'client', address: addr('4'), signer: true, writable: false },
+      { name: 'authority', address: addr('4'), signer: true, writable: false },
       { name: 'escrow_vault', address: addr('5'), signer: false, writable: true },
       { name: 'provider_covnt', address: addr('6'), signer: false, writable: true },
       { name: 'covnt_mint', address: addr('7'), signer: false, writable: false },
       { name: 'token_program', address: TOKEN_PROGRAM, signer: false, writable: false },
     ]);
-    expect(ix.data).toEqual({
-      result_hash: hash32FromText('result'),
-      receipt_hash: hash32FromText('receipt'),
-    });
-    expect(ix.data.result_hash).not.toBe(ix.data.receipt_hash);
+    expect(ix.data).toEqual({});
+  });
+
+  it('claim_task: provider signs read-only and the instruction carries no args', () => {
+    const ix = only(
+      prepareClaimTaskInstruction({
+        configAccount: addr('2'),
+        taskAccount: addr('3'),
+        provider: addr('4'),
+        escrowVault: addr('5'),
+        providerCovntAccount: addr('6'),
+        covntMint: addr('7'),
+      }),
+    );
+    expect(ix.instruction).toBe('claim_task');
+    expect(ix.accounts).toEqual([
+      { name: 'config', address: addr('2'), signer: false, writable: false },
+      { name: 'task', address: addr('3'), signer: false, writable: true },
+      { name: 'provider', address: addr('4'), signer: true, writable: false },
+      { name: 'escrow_vault', address: addr('5'), signer: false, writable: true },
+      { name: 'provider_covnt', address: addr('6'), signer: false, writable: true },
+      { name: 'covnt_mint', address: addr('7'), signer: false, writable: false },
+      { name: 'token_program', address: TOKEN_PROGRAM, signer: false, writable: false },
+    ]);
+    expect(ix.data).toEqual({});
+  });
+
+  it('refund_task: authority signs read-only and refunds to the client account', () => {
+    const ix = only(
+      prepareRefundTaskInstruction({
+        configAccount: addr('2'),
+        taskAccount: addr('3'),
+        authority: addr('4'),
+        escrowVault: addr('5'),
+        clientCovntAccount: addr('6'),
+        covntMint: addr('7'),
+      }),
+    );
+    expect(ix.instruction).toBe('refund_task');
+    expect(ix.accounts).toEqual([
+      { name: 'config', address: addr('2'), signer: false, writable: false },
+      { name: 'task', address: addr('3'), signer: false, writable: true },
+      { name: 'authority', address: addr('4'), signer: true, writable: false },
+      { name: 'escrow_vault', address: addr('5'), signer: false, writable: true },
+      { name: 'client_covnt', address: addr('6'), signer: false, writable: true },
+      { name: 'covnt_mint', address: addr('7'), signer: false, writable: false },
+      { name: 'token_program', address: TOKEN_PROGRAM, signer: false, writable: false },
+    ]);
+    expect(ix.data).toEqual({});
   });
 
   it('anchor_receipt_batch: authority signs and the receipt count is preserved', () => {

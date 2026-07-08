@@ -13,7 +13,14 @@ export const metadata: Metadata = {
     title: "Covenant is now multi-chain. The token isn't.",
     description:
       "The trust layer is live on Base while $CVNT stays a single Solana mint. Only signed data crosses chains, verifiable with a plain ecrecover.",
-    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
+    images: [
+      {
+        url: "/og/covenant-is-now-multichain.png",
+        width: 1200,
+        height: 630,
+        alt: "Covenant is going multi-chain. The token isn't.",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
@@ -21,7 +28,7 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Covenant is now multi-chain. The token isn't.",
     description: "Trust crosses to Base. The token stays on Solana.",
-    images: "/twitter-image.jpg",
+    images: "/og/covenant-is-now-multichain.png",
   },
 };
 

@@ -207,6 +207,14 @@ export const PARTNERS: Integration[] = [
     status: "building",
     href: "https://github.com/Gitlawb",
   },
+  {
+    slug: "bento",
+    name: "Bento",
+    blurb:
+      "Bento's execution-firewall verdict screens an agent's intent as a gate input before Covenant signs, with its on-chain standing read in as a labeled reputation signal.",
+    status: "building",
+    href: "https://bentoguard.xyz",
+  },
 ];
 
 // Partner avatars (X profile images) committed at public/partners/<slug>.jpg.
@@ -233,6 +241,7 @@ const LOGO_SLUGS = new Set<string>([
   "syra",
   "earnfi",
   "percolator",
+  "bento",
 ]);
 
 export function logoFor(slug: string): string | undefined {

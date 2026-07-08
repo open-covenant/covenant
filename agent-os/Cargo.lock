@@ -1602,6 +1602,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-x402-signer-evm"
+version = "0.0.0"
+dependencies = [
+ "covenant-x402",
+ "hex",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "covenant-zauth"
 version = "0.0.0"
 dependencies = [

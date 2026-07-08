@@ -1,0 +1,18 @@
+[package]
+name = "covenant-x402-signer-evm"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Standalone EVM (Base) x402 signer sidecar for covenantd. EIP-3009 USDC payment authorizations, gasless, no RPC and no Solana deps; the secp256k1 key stays out of the daemon."
+
+[[bin]]
+name = "covenant-x402-signer-evm"
+path = "src/main.rs"
+
+[dependencies]
+covenant-x402 = { path = "../covenant-x402" }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-std"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+hex = "0.4"

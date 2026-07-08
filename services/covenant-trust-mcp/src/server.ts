@@ -35,10 +35,10 @@ function reputationText(r: Reputation): string {
 
 function buildServer(): McpServer {
   const server = new McpServer(
-    {name: 'covenant-trust', title: 'Covenant Trust', version: '0.1.0'},
+    {name: 'covenant-guard', title: 'Covenant Guard', version: '0.1.0'},
     {
       instructions:
-        'Covenant Trust exposes on-chain trust facts for agents. Use covenant_reputation before ' +
+        'Covenant Guard exposes on-chain trust facts for agents. Use covenant_reputation before ' +
         'transacting with or trusting a Solana wallet, covenant_agent_passport to check an agent asset\'s ' +
         'registered identity and attestation, and covenant_verify to check a Covenant-signed receipt or ' +
         'attestation. All tools are read-only and take no credentials.',

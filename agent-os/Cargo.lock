@@ -1497,6 +1497,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-spend-permission"
+version = "0.1.0"
+dependencies = [
+ "covenant-types",
+ "serde_json",
+ "sha3",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "covenant-stake-keeper"
 version = "0.1.0"
 dependencies = [

@@ -15,6 +15,7 @@ members = [
     "crates/covenant-attestation",
     "crates/covenant-evm-signer",
     "crates/covenant-evm-firewall",
+    "crates/covenant-spend-permission",
     "crates/covenant-ens-gateway",
     "crates/covenant-audit",
     "crates/covenant-permissions",

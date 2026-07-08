@@ -1231,6 +1231,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-evm-firewall"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "covenant-evm-signer"
 version = "0.1.0"
 dependencies = [

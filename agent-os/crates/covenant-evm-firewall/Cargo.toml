@@ -1,0 +1,13 @@
+[package]
+name = "covenant-evm-firewall"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pre-execution firewall for a governed agent's Base transactions: allowlist + value-cap policy check, plus an eth_call simulation request/response codec, so a Base tx is refused or simulated before the signer is ever asked to sign it."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -110,12 +110,12 @@ export default function MultichainPage() {
 
       <h2>Payments: chain-local USDC, never the token</h2>
       <p>
-        Covenant already runs x402 paid endpoints on Solana mainnet, returning
-        real USDC payment challenges per call. The same model carries to Base:
-        per-call value is chain-local USDC, signed through an EIP-3009
-        authorization so an agent needs only USDC, not the gas token and not
-        $CVNT. Base-native paid endpoints are the next step; the payment rail and
-        the token boundary are already settled.
+        Covenant runs x402 paid endpoints on Solana mainnet and now on Base too,
+        returning real USDC payment challenges per call. Per-call value is
+        chain-local USDC, signed through an EIP-3009 authorization so an agent
+        needs only USDC, not the gas token and not $CVNT. The Base endpoint
+        settles gaslessly through Coinbase&apos;s x402 facilitator; the token
+        boundary holds either way, $CVNT never crosses.
       </p>
 
       <h2>A name that resolves to the identity</h2>
@@ -179,10 +179,6 @@ $CVNT mint (Solana only)     2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`}</cod
 
       <h2>What comes next</h2>
       <ul>
-        <li>
-          <strong>Base x402 endpoints.</strong> Base-native paid endpoints over
-          the EIP-3009 rail already built.
-        </li>
         <li>
           <strong>Cross-chain enforcement.</strong> Bonds slashable on Solana
           from an EVM-proven event, with an objective fault definition and a

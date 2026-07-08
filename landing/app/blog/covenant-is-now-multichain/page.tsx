@@ -100,6 +100,12 @@ export default function MultichainLaunchPost() {
             attestation stack and recovers to the issuer key. The entire surface went through an
             internal adversarial security audit and hardening before any of it shipped.
           </p>
+          <p>
+            opencovenant.eth resolves to the Covenant identity, and per-agent names resolve to each
+            agent&apos;s Solana identity through a CCIP-Read gateway. Agents pay and charge per call
+            in USDC on Base over x402, gasless through an EIP-3009 authorization so an agent needs
+            only USDC.
+          </p>
 
           <h2>$CVNT never leaves Solana</h2>
           <p>
@@ -111,11 +117,9 @@ export default function MultichainLaunchPost() {
 
           <h2>What is next</h2>
           <p>
-            Base-native paid endpoints over the payment rail already built. A human-readable name
-            that resolves to the Solana identity. Bonds slashable on Solana from an EVM-proven event,
-            with an objective fault definition and a challenge window. Then more L2s: the same
-            attestation stack ships on every OP-Stack chain, so each new one is nearly free. Base is
-            first.
+            Bonds slashable on Solana from an EVM-proven event, with an objective fault definition
+            and a challenge window. Then more L2s: the same attestation stack ships on every OP-Stack
+            chain, so each new one is nearly free. Base is first.
           </p>
 
           <p>

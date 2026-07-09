@@ -235,6 +235,7 @@ async fn main() -> Result<()> {
                 count = added.len(),
                 base_url = %cfg.base_url,
                 credit_enabled = cfg.credit_enabled,
+                onchain_verify = cfg.rpc_url.is_some(),
                 "krexa credit/risk oracle enabled (read-only; credit-backed draws stay off)"
             );
             tools_vec.extend(added);
@@ -1107,6 +1108,8 @@ fn circuit_from_env() -> Option<Vec<Arc<dyn covenant_mcp::Tool>>> {
 /// - `COVENANT_KREXA_ENABLED` truthy turns on the `krexa.score` tool
 /// - `COVENANT_KREXA_BASE_URL` overrides the backend host (optional)
 /// - `COVENANT_KREXA_CREDIT_ENABLED` un-gates the built-but-off credit module
+/// - `COVENANT_KREXA_RPC_URL` mainnet RPC for the trustless on-chain read
+///   (defaults to mainnet-beta; set empty to force REST-only)
 fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::KrexaConfig)> {
     let truthy = |k: &str| {
         std::env::var(k)
@@ -1132,7 +1135,18 @@ fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::Krex
              the live x402 settlement path; this only un-gates the built-but-off credit module"
         );
     }
-    let client = covenant_krexa::KrexaClient::new(cfg.base_url.clone());
+    // Trustless on-chain read of the KrexitScore account. Krexa's programs
+    // are on mainnet, so this defaults to a mainnet endpoint rather than the
+    // devnet daemon default; set COVENANT_KREXA_RPC_URL="" to force REST-only.
+    cfg.rpc_url = match std::env::var("COVENANT_KREXA_RPC_URL") {
+        Ok(u) if u.trim().is_empty() => None,
+        Ok(u) => Some(u),
+        Err(_) => Some(covenant_krexa::DEFAULT_RPC_URL.to_string()),
+    };
+    let mut client = covenant_krexa::KrexaClient::new(cfg.base_url.clone());
+    if let Some(url) = cfg.rpc_url.clone() {
+        client = client.with_rpc_url(url);
+    }
     Some((client, cfg))
 }
 

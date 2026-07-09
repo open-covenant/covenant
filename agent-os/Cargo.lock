@@ -1618,6 +1618,8 @@ name = "covenant-krexa"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
+ "bs58",
  "covenant-mcp",
  "reqwest 0.12.28",
  "serde",

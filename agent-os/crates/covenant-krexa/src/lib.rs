@@ -39,11 +39,13 @@
 pub mod client;
 pub mod config;
 pub mod credit;
+pub mod onchain;
 pub mod tools;
 
-pub use client::{CreditEligibility, CreditLine, KrexaClient, KrexitScore};
-pub use config::{KrexaConfig, BASE_URL};
+pub use client::{CreditEligibility, CreditLine, KrexaClient, KrexitScore, OnchainScore};
+pub use config::{KrexaConfig, BASE_URL, DEFAULT_RPC_URL};
 pub use credit::{shortfall_draw_lamports, DrawRequest, SignedDraw};
+pub use onchain::{KrexitScoreAccount, ScoreHistoryEntry, KREXIT_SCORE_DISCRIMINATOR};
 pub use tools::{krexa_tools, PROVIDER, SCORE_TOOL, TRUST_LABEL};
 
 /// Errors surfaced by the Krexa client.
@@ -55,6 +57,10 @@ pub enum KrexaError {
     Api { status: u16, message: String },
     #[error("decode: {0}")]
     Decode(String),
+    /// An on-chain read/verify failure: RPC error, missing account, or a
+    /// decoded account whose `agent` field doesn't match the queried pubkey.
+    #[error("krexa on-chain: {0}")]
+    Chain(String),
     /// A credit-backed draw was attempted while `credit_enabled` is false.
     #[error("krexa credit is disabled (credit_enabled=false); this path is built but off")]
     CreditDisabled,

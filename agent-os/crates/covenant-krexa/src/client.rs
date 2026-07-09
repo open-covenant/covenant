@@ -9,15 +9,18 @@
 
 use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::onchain::KrexitScoreAccount;
 use crate::{KrexaError, Result};
 
 #[derive(Clone)]
 pub struct KrexaClient {
     http: reqwest::Client,
     base_url: String,
+    rpc_url: Option<String>,
 }
 
 impl KrexaClient {
@@ -34,7 +37,21 @@ impl KrexaClient {
         Self {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
+            rpc_url: None,
         }
+    }
+
+    /// Point the client at a Solana RPC so [`Self::score_onchain`] can
+    /// decode the `KrexitScore` account. Krexa's programs are on mainnet;
+    /// pass a mainnet endpoint.
+    pub fn with_rpc_url(mut self, rpc_url: impl Into<String>) -> Self {
+        self.rpc_url = Some(rpc_url.into());
+        self
+    }
+
+    /// The configured RPC endpoint, if any. `None` means REST-only.
+    pub fn rpc_url(&self) -> Option<&str> {
+        self.rpc_url.as_deref()
     }
 
     /// REST base, for modules building their own paths (e.g. credit).
@@ -116,6 +133,74 @@ impl KrexaClient {
             .await?;
         serde_json::from_value(raw).map_err(|e| KrexaError::Decode(format!("line: {e}")))
     }
+
+    /// Read and decode the on-chain `KrexitScore` account at `score_pda`
+    /// (as returned by [`KrexitScore::score_pda`]) and verify it belongs to
+    /// `agent_pubkey`. This is the trustless path: the score is whatever the
+    /// chain holds, not what Krexa's server reports. Every failure — RPC
+    /// error, missing account, or an agent mismatch — is a
+    /// [`KrexaError::Chain`], so a caller can degrade to the REST soft
+    /// signal on error. Requires an RPC url ([`Self::with_rpc_url`]).
+    pub async fn score_onchain(
+        &self,
+        agent_pubkey: &str,
+        score_pda: &str,
+    ) -> Result<OnchainScore> {
+        let rpc_url = self
+            .rpc_url
+            .as_deref()
+            .ok_or_else(|| KrexaError::Chain("no rpc_url configured".into()))?;
+        let want = decode_pubkey32(agent_pubkey)?;
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [score_pda, { "commitment": "confirmed", "encoding": "base64" }],
+        });
+        let resp = self.http.post(rpc_url).json(&body).send().await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(KrexaError::Chain(format!(
+                "getAccountInfo status {status}: {}",
+                truncate(&text)
+            )));
+        }
+        let parsed: Value = serde_json::from_str(&text)
+            .map_err(|e| KrexaError::Chain(format!("rpc body: {e}; {}", truncate(&text))))?;
+        if let Some(err) = parsed.get("error") {
+            return Err(KrexaError::Chain(format!("rpc error: {err}")));
+        }
+        if parsed.pointer("/result/value").is_none_or(Value::is_null) {
+            return Err(KrexaError::Chain(format!(
+                "no KrexitScore account at {score_pda}"
+            )));
+        }
+        let data_b64 = parsed
+            .pointer("/result/value/data/0")
+            .and_then(Value::as_str)
+            .ok_or_else(|| KrexaError::Chain("account data not base64-encoded".into()))?;
+        let owner_program = parsed
+            .pointer("/result/value/owner")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let bytes = B64
+            .decode(data_b64)
+            .map_err(|e| KrexaError::Chain(format!("account base64: {e}")))?;
+        let account = KrexitScoreAccount::decode(&bytes)?;
+        if !account.matches_agent(&want) {
+            return Err(KrexaError::Chain(
+                "on-chain agent mismatch: scorePda belongs to a different agent".into(),
+            ));
+        }
+        Ok(OnchainScore {
+            account,
+            score_pda: score_pda.to_string(),
+            owner_program,
+        })
+    }
 }
 
 /// A Krexit score response. Keeps the full blob; accessors pull the
@@ -194,6 +279,17 @@ impl KrexitScore {
             .and_then(Value::as_str)
             .map(String::from)
     }
+}
+
+/// The decoded, agent-verified on-chain score from [`KrexaClient::score_onchain`].
+/// `account.score` is the trustless number; `owner_program` is Krexa's score
+/// program, recovered from the account's on-chain owner (pin it once Krexa
+/// confirms the canonical id).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OnchainScore {
+    pub account: KrexitScoreAccount,
+    pub score_pda: String,
+    pub owner_program: String,
 }
 
 /// `GET /solana/credit/:agent/eligibility`. Amounts here are whole USDC as
@@ -280,6 +376,18 @@ fn is_cold_start_status(status: reqwest::StatusCode) -> bool {
 /// A connect failure or timeout against a parked instance; retryable.
 fn is_transient(e: &reqwest::Error) -> bool {
     e.is_timeout() || e.is_connect()
+}
+
+/// Base58 pubkey → 32 raw bytes, the form [`KrexitScoreAccount::matches_agent`]
+/// compares against. A non-base58 or wrong-length string is a
+/// [`KrexaError::Chain`].
+fn decode_pubkey32(pubkey: &str) -> Result<[u8; 32]> {
+    let bytes = bs58::decode(pubkey)
+        .into_vec()
+        .map_err(|e| KrexaError::Chain(format!("agent pubkey not base58: {e}")))?;
+    bytes
+        .try_into()
+        .map_err(|_| KrexaError::Chain("agent pubkey is not 32 bytes".into()))
 }
 
 fn truncate(s: &str) -> String {
@@ -459,6 +567,103 @@ mod tests {
             .await;
         let err = KrexaClient::new(server.uri()).score("X").await.unwrap_err();
         assert!(matches!(err, KrexaError::Api { status: 404, .. }));
+    }
+
+    /// A valid 648-byte KrexitScore buffer with `agent` and `score` set and
+    /// every other field zero — enough to exercise decode + the agent guard.
+    fn account_bytes(agent: [u8; 32], score: u16) -> Vec<u8> {
+        let mut b = vec![0u8; crate::onchain::KREXIT_SCORE_LEN];
+        b[..8].copy_from_slice(&crate::onchain::KREXIT_SCORE_DISCRIMINATOR);
+        b[8..40].copy_from_slice(&agent);
+        b[72..74].copy_from_slice(&score.to_le_bytes());
+        b
+    }
+
+    /// A `getAccountInfo` success envelope carrying `bytes` as base64 and
+    /// `owner` as the account's program.
+    fn rpc_account(bytes: &[u8], owner: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {
+                "context": { "slot": 1 },
+                "value": {
+                    "owner": owner,
+                    "lamports": 2_000_000u64,
+                    "data": [B64.encode(bytes), "base64"],
+                    "executable": false,
+                    "rentEpoch": 0
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn score_onchain_decodes_and_verifies_agent() {
+        let agent = "EnteGjokMnFqTDcZSBitXDQEctMCnqV33HbPKw2LnDCg";
+        let agent_bytes = decode_pubkey32(agent).unwrap();
+        let score_prog = "BuutifX7Wj8ysKeLQt1pag3JYWQdZHjktCA6ePUfHFHs";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(rpc_account(&account_bytes(agent_bytes, 742), score_prog)),
+            )
+            .mount(&server)
+            .await;
+        let c = KrexaClient::new("http://rest.invalid").with_rpc_url(server.uri());
+        let oc = c
+            .score_onchain(agent, "DtbfDxdDZtx7pQRAufzeAGTMPbMB9F2shKk8X7FkF9er")
+            .await
+            .unwrap();
+        assert_eq!(oc.account.score, 742);
+        assert!(oc.account.matches_agent(&agent_bytes));
+        assert_eq!(oc.owner_program, score_prog);
+    }
+
+    #[tokio::test]
+    async fn score_onchain_rejects_mismatched_agent() {
+        // The returned account belongs to a different agent than queried.
+        let queried = "EnteGjokMnFqTDcZSBitXDQEctMCnqV33HbPKw2LnDCg";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(rpc_account(&account_bytes([0xAA; 32], 800), "prog")),
+            )
+            .mount(&server)
+            .await;
+        let c = KrexaClient::new("http://rest.invalid").with_rpc_url(server.uri());
+        let err = c.score_onchain(queried, "pda").await.unwrap_err();
+        assert!(matches!(err, KrexaError::Chain(_)));
+    }
+
+    #[tokio::test]
+    async fn score_onchain_reports_missing_account() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": { "context": { "slot": 1 }, "value": null }
+            })))
+            .mount(&server)
+            .await;
+        let c = KrexaClient::new("http://rest.invalid").with_rpc_url(server.uri());
+        let err = c
+            .score_onchain("EnteGjokMnFqTDcZSBitXDQEctMCnqV33HbPKw2LnDCg", "pda")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KrexaError::Chain(_)));
+    }
+
+    #[tokio::test]
+    async fn score_onchain_requires_rpc_url() {
+        // REST-only client: the trustless read is unavailable, not a panic.
+        let c = KrexaClient::new("http://rest.invalid");
+        let err = c
+            .score_onchain("EnteGjokMnFqTDcZSBitXDQEctMCnqV33HbPKw2LnDCg", "pda")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KrexaError::Chain(_)));
     }
 
     /// Live read against the deployed Krexa backend:

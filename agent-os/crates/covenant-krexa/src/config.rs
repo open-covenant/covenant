@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 /// score, eligibility, credit-line, and oracle endpoints.
 pub const BASE_URL: &str = "https://tcredit-backend.onrender.com/api/v1";
 
+/// Suggested mainnet RPC for the trustless on-chain read, offered to the
+/// daemon wiring. Krexa's programs are on mainnet, so this must not be the
+/// devnet daemon default. Not applied by [`KrexaConfig::default`], which
+/// stays REST-only until an operator opts in.
+pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KrexaConfig {
     /// Master switch for the read-only oracle + the `krexa.score` tool.
@@ -26,6 +32,12 @@ pub struct KrexaConfig {
     /// the custody + audit + TVL questions are resolved.
     #[serde(default)]
     pub credit_enabled: bool,
+    /// Solana RPC for the trustless on-chain read. When set, `krexa.score`
+    /// decodes the `KrexitScore` account directly and cross-checks it
+    /// against the queried agent, dropping trust in the REST score. `None`
+    /// keeps the REST-only soft signal. Must point at mainnet.
+    #[serde(default)]
+    pub rpc_url: Option<String>,
 }
 
 fn default_base_url() -> String {
@@ -38,6 +50,7 @@ impl Default for KrexaConfig {
             enabled: false,
             base_url: default_base_url(),
             credit_enabled: false,
+            rpc_url: None,
         }
     }
 }
@@ -51,6 +64,7 @@ mod tests {
         let c = KrexaConfig::default();
         assert!(!c.enabled);
         assert!(!c.credit_enabled, "credit must default OFF");
+        assert!(c.rpc_url.is_none(), "on-chain read is opt-in");
         assert_eq!(c.base_url, BASE_URL);
     }
 

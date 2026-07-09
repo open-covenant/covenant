@@ -23,6 +23,11 @@ pub const SCORE_TOOL: &str = "krexa.score";
 /// mistaken for a Covenant-verified fact.
 pub const TRUST_LABEL: &str = "krexa-attested (third-party REST), soft signal";
 
+/// The label for the on-chain-verified score: decoded straight from the
+/// `KrexitScore` account and cross-checked against the queried agent, so it
+/// no longer depends on trusting Krexa's REST server.
+pub const ONCHAIN_TRUST_LABEL: &str = "krexa on-chain (KrexitScore account, agent-verified), trustless";
+
 /// Build the Krexa tool set. Empty when disabled.
 pub fn krexa_tools(client: Arc<KrexaClient>, cfg: &KrexaConfig) -> Vec<Arc<dyn Tool>> {
     if !cfg.enabled {
@@ -70,27 +75,53 @@ impl Tool for ScoreTool {
             ));
         }
 
-        match self.client.score(pubkey).await {
-            Ok(s) => Ok(ToolCallResult::ok(vec![
-                Content::json(json!({
-                    "provider": PROVIDER,
-                    "trust": TRUST_LABEL,
-                    "pubkey": pubkey,
-                    "score": s.score(),
-                    "creditLevel": s.credit_level(),
-                    "riskBand": s.risk_band(),
-                    "registered": s.registered(),
-                    "snsBoostApplied": s.sns_boost_applied(),
-                    "recommendation": s.recommendation(),
-                    "attestationHash": s.attestation_hash(),
-                })),
-                Content::json(json!({ "raw": s.raw })),
-            ])),
+        let s = match self.client.score(pubkey).await {
+            Ok(s) => s,
             Err(e) => {
                 tracing::debug!(pubkey, error = %e, "krexa score read failed");
-                Ok(ToolCallResult::error(e.to_string()))
+                return Ok(ToolCallResult::error(e.to_string()));
             }
+        };
+
+        // Trustless upgrade: with an RPC configured and a scorePda in hand,
+        // decode the account on-chain and cross-check the agent. A failure
+        // here degrades to the REST soft signal — never a tool error.
+        let onchain = match (self.client.rpc_url(), s.score_pda()) {
+            (Some(_), Some(pda)) => match self.client.score_onchain(pubkey, &pda).await {
+                Ok(oc) => Some(oc),
+                Err(e) => {
+                    tracing::debug!(pubkey, error = %e, "krexa on-chain verify failed; soft signal only");
+                    None
+                }
+            },
+            _ => None,
+        };
+
+        let mut summary = json!({
+            "provider": PROVIDER,
+            "trust": TRUST_LABEL,
+            "pubkey": pubkey,
+            "score": s.score(),
+            "creditLevel": s.credit_level(),
+            "riskBand": s.risk_band(),
+            "registered": s.registered(),
+            "snsBoostApplied": s.sns_boost_applied(),
+            "recommendation": s.recommendation(),
+            "attestationHash": s.attestation_hash(),
+            "onchainVerified": false,
+        });
+        if let Some(oc) = &onchain {
+            summary["onchainVerified"] = json!(true);
+            summary["onchainTrust"] = json!(ONCHAIN_TRUST_LABEL);
+            summary["scoreOnchain"] = json!(oc.account.score);
+            summary["creditLevelOnchain"] = json!(oc.account.credit_level);
+            summary["scorePda"] = json!(oc.score_pda);
+            summary["scoreProgram"] = json!(oc.owner_program);
         }
+        Ok(ToolCallResult::ok(vec![
+            Content::json(summary),
+            Content::json(json!({ "raw": s.raw })),
+        ]))
     }
 }
 
@@ -149,6 +180,7 @@ mod tests {
             enabled: true,
             base_url: server.uri(),
             credit_enabled: false,
+            rpc_url: None,
         };
         let tools = krexa_tools(Arc::new(KrexaClient::new(server.uri())), &cfg);
         let res = tools[0].call(json!({ "pubkey": pubkey })).await.unwrap();
@@ -161,6 +193,8 @@ mod tests {
         assert_eq!(body["snsBoostApplied"], true);
         assert_eq!(body["attestationHash"], "abc");
         assert_eq!(body["trust"], TRUST_LABEL);
+        // No RPC configured: the score stays a REST-only soft signal.
+        assert_eq!(body["onchainVerified"], false);
     }
 
     #[tokio::test]
@@ -197,5 +231,60 @@ mod tests {
                 "expected reject for {bad:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn score_tool_verifies_onchain_when_rpc_configured() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        let pubkey = "EnteGjokMnFqTDcZSBitXDQEctMCnqV33HbPKw2LnDCg";
+        let agent_bytes: [u8; 32] = bs58::decode(pubkey).into_vec().unwrap().try_into().unwrap();
+        // On-chain account carries score 730; the REST soft signal says 342.
+        let mut acct = vec![0u8; crate::onchain::KREXIT_SCORE_LEN];
+        acct[..8].copy_from_slice(&crate::onchain::KREXIT_SCORE_DISCRIMINATOR);
+        acct[8..40].copy_from_slice(&agent_bytes);
+        acct[72..74].copy_from_slice(&730u16.to_le_bytes());
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/solana/score/{pubkey}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "score": 342, "creditLevel": 1,
+                "scorePda": "DtbfDxdDZtx7pQRAufzeAGTMPbMB9F2shKk8X7FkF9er",
+                "krexit": { "riskBand": "deep_subprime" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": { "context": { "slot": 1 }, "value": {
+                    "owner": "BuutifX7Wj8ysKeLQt1pag3JYWQdZHjktCA6ePUfHFHs",
+                    "lamports": 2_000_000u64,
+                    "data": [B64.encode(&acct), "base64"],
+                    "executable": false, "rentEpoch": 0
+                }}
+            })))
+            .mount(&server)
+            .await;
+
+        let cfg = KrexaConfig {
+            enabled: true,
+            base_url: server.uri(),
+            ..Default::default()
+        };
+        let client = Arc::new(KrexaClient::new(server.uri()).with_rpc_url(server.uri()));
+        let tools = krexa_tools(client, &cfg);
+        let res = tools[0].call(json!({ "pubkey": pubkey })).await.unwrap();
+        assert!(!res.is_error);
+        let body = match &res.content[0] {
+            Content::Json { value } => value.clone(),
+            other => panic!("expected json, got {other:?}"),
+        };
+        // The two scores come from different sources and stay distinct.
+        assert_eq!(body["score"], 342, "top-level score is the REST soft signal");
+        assert_eq!(body["onchainVerified"], true);
+        assert_eq!(body["scoreOnchain"], 730, "trustless score decoded from chain");
+        assert_eq!(body["onchainTrust"], ONCHAIN_TRUST_LABEL);
+        assert_eq!(body["scoreProgram"], "BuutifX7Wj8ysKeLQt1pag3JYWQdZHjktCA6ePUfHFHs");
     }
 }

@@ -666,6 +666,31 @@ mod tests {
         assert!(matches!(err, KrexaError::Chain(_)));
     }
 
+    /// Live decode of a real KrexitScore account. Krexa's score program
+    /// (`2Gwt…`) is deployed on devnet only, not mainnet, so this points at
+    /// devnet:
+    ///   cargo test -p covenant-krexa live_onchain_devnet -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_onchain_devnet() {
+        let agent = "HTPY5dAxLUs3DQ2SmkbKRH5pxnQQY1FvR8WrHE3Vrt5n";
+        let pda = "Ho93vyNnuicqCSgoLTo28tjYNDXMpmE1cJfU76eq8r5P";
+        let c = KrexaClient::new(crate::config::BASE_URL)
+            .with_rpc_url("https://api.devnet.solana.com");
+        let oc = c
+            .score_onchain(agent, pda)
+            .await
+            .expect("decode live devnet KrexitScore");
+        println!(
+            "onchain score={} level={} owner(score program)={}",
+            oc.account.score, oc.account.credit_level, oc.owner_program
+        );
+        assert_eq!(oc.account.score, 720);
+        assert_eq!(oc.account.credit_level, 3);
+        assert_eq!(oc.owner_program, "2GwtAXnjY5LehfZfT77ZH3XSshwbni8LP9zXeA84WUqh");
+        assert!(oc.account.matches_agent(&decode_pubkey32(agent).unwrap()));
+    }
+
     /// Live read against the deployed Krexa backend:
     ///   cargo test -p covenant-krexa live_krexa_score -- --ignored --nocapture
     #[tokio::test]

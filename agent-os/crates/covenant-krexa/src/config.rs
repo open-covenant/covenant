@@ -12,10 +12,11 @@ use serde::{Deserialize, Serialize};
 /// score, eligibility, credit-line, and oracle endpoints.
 pub const BASE_URL: &str = "https://tcredit-backend.onrender.com/api/v1";
 
-/// Suggested mainnet RPC for the trustless on-chain read, offered to the
-/// daemon wiring. Krexa's programs are on mainnet, so this must not be the
-/// devnet daemon default. Not applied by [`KrexaConfig::default`], which
-/// stays REST-only until an operator opts in.
+/// Suggested RPC for the trustless on-chain read, offered to the daemon
+/// wiring (kept on mainnet for a production posture). NB: Krexa's score
+/// program `2Gwt…` is currently devnet-only, so the read stays inert on
+/// mainnet until they ship it there; point `COVENANT_KREXA_RPC_URL` at
+/// devnet to exercise it today. Not applied by [`KrexaConfig::default`].
 pub const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -35,7 +36,9 @@ pub struct KrexaConfig {
     /// Solana RPC for the trustless on-chain read. When set, `krexa.score`
     /// decodes the `KrexitScore` account directly and cross-checks it
     /// against the queried agent, dropping trust in the REST score. `None`
-    /// keeps the REST-only soft signal. Must point at mainnet.
+    /// keeps the REST-only soft signal. NB: Krexa's score program is on
+    /// devnet only today, so this yields a value against a devnet RPC and is
+    /// inert on mainnet until they deploy it there.
     #[serde(default)]
     pub rpc_url: Option<String>,
 }

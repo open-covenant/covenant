@@ -1135,9 +1135,10 @@ fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::Krex
              the live x402 settlement path; this only un-gates the built-but-off credit module"
         );
     }
-    // Trustless on-chain read of the KrexitScore account. Krexa's programs
-    // are on mainnet, so this defaults to a mainnet endpoint rather than the
-    // devnet daemon default; set COVENANT_KREXA_RPC_URL="" to force REST-only.
+    // Trustless on-chain read of the KrexitScore account. Defaults to a
+    // mainnet endpoint (production posture); Krexa's score program is
+    // currently devnet-only, so point COVENANT_KREXA_RPC_URL at devnet to
+    // exercise the read today, or "" to force REST-only.
     cfg.rpc_url = match std::env::var("COVENANT_KREXA_RPC_URL") {
         Ok(u) if u.trim().is_empty() => None,
         Ok(u) => Some(u),

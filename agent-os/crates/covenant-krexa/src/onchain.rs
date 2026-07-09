@@ -204,8 +204,11 @@ impl KrexitScoreAccount {
     /// Krexa hands back the `scorePda` address in its REST response; a
     /// buggy or dishonest server could point us at a different agent's
     /// (flattering) account. Comparing the decoded `agent` closes that gap
-    /// without re-deriving the PDA — which would additionally need Krexa's
-    /// score-program id, not yet published.
+    /// without re-deriving the PDA. Full self-derivation (not trusting the
+    /// REST `scorePda` at all) is now possible: score program `2Gwt…`
+    /// (devnet only today), PDA seed `["krexit_score", agent_pubkey]`. It
+    /// needs an sdk-free `find_program_address`, so the agent-field check
+    /// stands until that's worth adding.
     pub fn matches_agent(&self, agent_pubkey: &[u8; 32]) -> bool {
         &self.agent == agent_pubkey
     }

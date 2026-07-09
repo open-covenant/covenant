@@ -865,6 +865,45 @@ pub enum Request {
         #[serde(default)]
         expires_at_unix: Option<u64>,
     },
+    SaidStatus,
+    SaidLookup {
+        wallet: String,
+    },
+    SaidAnchor {
+        start_audit_index: u64,
+        end_audit_index: u64,
+        merkle_root_hex: String,
+        #[serde(default)]
+        live: bool,
+    },
+    SaidAnchorStatus {
+        #[serde(default = "default_recent_limit")]
+        recent_limit: usize,
+    },
+    SaidInbox {
+        chain: String,
+        address: String,
+    },
+    SaidFreeTier {
+        address: String,
+    },
+    SaidSend {
+        source_chain: String,
+        source_address: String,
+        target_chain: String,
+        target_address: String,
+        payload_json: String,
+    },
+    SaidRegisterOnChain {
+        metadata_uri: String,
+    },
+    SaidGetVerified,
+    SaidValidateWork {
+        agent: String,
+        task_hash_hex: String,
+        passed: bool,
+        evidence_uri: String,
+    },
 }
 
 fn default_recent_limit() -> usize {
@@ -1182,9 +1221,101 @@ pub enum Response {
         agent_pda: String,
         signature: String,
     },
+    SaidStatus {
+        enabled: bool,
+        cluster: String,
+        program_id: String,
+        rpc_url: String,
+        api_base_url: String,
+        paid_gates: String,
+        has_signer: bool,
+    },
+    SaidAgent {
+        wallet: String,
+        pda: Option<String>,
+        owner: Option<String>,
+        name: Option<String>,
+        description: Option<String>,
+        metadata_uri: Option<String>,
+        is_verified: bool,
+        sponsored: bool,
+        reputation_score: f64,
+        feedback_count: u64,
+        activity_count: u64,
+        registered_at: Option<String>,
+    },
+    SaidAnchored {
+        anchor_index: u64,
+        start_seq: u64,
+        end_seq: u64,
+        merkle_root_hex: String,
+        tx_sig: String,
+        slot: u64,
+        fixture: bool,
+    },
+    SaidAnchorStatus {
+        next_index: u64,
+        last_confirmed_index: Option<u64>,
+        pending: u64,
+        recent: Vec<SaidAnchorRow>,
+    },
+    SaidInbox {
+        chain: String,
+        address: String,
+        messages: Vec<SaidInboxMessage>,
+    },
+    SaidFreeTier {
+        address: String,
+        used: u32,
+        remaining: u32,
+        limit: u32,
+        paid_price: Option<String>,
+        payment_chains: Vec<String>,
+    },
+    SaidSent {
+        message_id: String,
+        free_tier_remaining: Option<u32>,
+        delivered_at: Option<i64>,
+    },
+    SaidOnChainRegistered {
+        agent_pda: String,
+        owner: String,
+        signature: String,
+    },
+    SaidVerified {
+        signature: String,
+        slot: u64,
+    },
+    SaidValidationPosted {
+        validation_pda: String,
+        validator: String,
+        signature: String,
+    },
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SaidInboxMessage {
+    pub id: String,
+    pub source_chain: String,
+    pub source_address: String,
+    pub target_chain: String,
+    pub target_address: String,
+    pub payload: Option<serde_json::Value>,
+    pub created_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SaidAnchorRow {
+    pub anchor_index: u64,
+    pub start_seq: u64,
+    pub end_seq: u64,
+    pub merkle_root_hex: String,
+    pub tx_sig: String,
+    pub slot: u64,
+    pub submitted_at_ms: i64,
 }
 
 #[derive(Debug, thiserror::Error)]

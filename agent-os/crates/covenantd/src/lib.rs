@@ -58,6 +58,7 @@ use covenant_permissions::{
 };
 use covenant_router::{AgentCard, Router};
 use covenant_runtime::{AgentResult, Runner};
+use covenant_said_bridge::{Config as SaidBridgeConfig, SaidBridge};
 use covenant_sap_bridge::{Config as SapBridgeConfig, SapBridge};
 use covenant_settlement::{
     build_receipt_batch, derive_batch_id, intent_dispatch_credits, memory_write_credits,
@@ -214,6 +215,18 @@ pub fn hermes_gateway_config_from_env() -> Option<HermesGatewayConfig> {
 /// touching the network.
 pub fn sap_bridge_config_from_env() -> SapBridgeConfig {
     SapBridgeConfig::from_env(std::env::vars())
+}
+
+pub fn said_bridge_config_from_env() -> SaidBridgeConfig {
+    SaidBridgeConfig::from_env(std::env::vars())
+}
+
+fn said_keypair_present() -> bool {
+    let Ok(raw) = std::env::var("COVENANT_SAID_KEYPAIR") else {
+        return false;
+    };
+    let trimmed = raw.trim();
+    !trimmed.is_empty() && std::path::Path::new(trimmed).is_file()
 }
 
 /// Config for the autonomous SAP audit-root anchoring driver.
@@ -1241,6 +1254,7 @@ pub struct Server {
     /// surface `BridgeDisabledError` when it's absent or
     /// `enabled = false`.
     sap_bridge: Option<SapBridge>,
+    said_bridge: Option<SaidBridge>,
     /// Outcomes of in-flight async (hermes) dispatches, keyed by intent id.
     /// `std::sync::Mutex` (not the tokio one used elsewhere) because the
     /// critical section is a trivial map mutation never held across `.await`.
@@ -1291,6 +1305,7 @@ impl Server {
             sns: None,
             acedata: None,
             sap_bridge: None,
+            said_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
     }
@@ -1445,6 +1460,363 @@ impl Server {
     /// `BridgeDisabledError` to the caller.
     pub fn sap_bridge(&self) -> Option<&SapBridge> {
         self.sap_bridge.as_ref()
+    }
+
+    pub fn with_said_bridge(mut self, bridge: SaidBridge) -> Self {
+        self.said_bridge = Some(bridge);
+        self
+    }
+
+    pub fn said_bridge(&self) -> Option<&SaidBridge> {
+        self.said_bridge.as_ref()
+    }
+
+    pub(crate) fn said_status(&self) -> Response {
+        match self.said_bridge.as_ref() {
+            Some(bridge) => {
+                let cfg = bridge.config();
+                Response::SaidStatus {
+                    enabled: cfg.enabled,
+                    cluster: cfg.cluster.as_str().to_owned(),
+                    program_id: cfg.program_id.clone(),
+                    rpc_url: cfg.rpc_url.clone(),
+                    api_base_url: cfg.api_base_url.clone(),
+                    paid_gates: cfg.paid.summary(),
+                    has_signer: said_keypair_present(),
+                }
+            }
+            None => Response::SaidStatus {
+                enabled: false,
+                cluster: String::new(),
+                program_id: String::new(),
+                rpc_url: String::new(),
+                api_base_url: String::new(),
+                paid_gates: "none".into(),
+                has_signer: false,
+            },
+        }
+    }
+
+    fn said_paths(&self) -> std::result::Result<(std::path::PathBuf, std::path::PathBuf), String> {
+        let home = self
+            .home
+            .as_ref()
+            .ok_or_else(|| "$COVENANT_HOME is unset; cannot resolve said paths".to_string())?;
+        let dir = home.join("said");
+        Ok((dir.join("cursor.db"), dir.join("anchor_pending.jsonl")))
+    }
+
+    pub(crate) async fn said_anchor(
+        &self,
+        start_audit_index: u64,
+        end_audit_index: u64,
+        merkle_root_hex: String,
+        live: bool,
+    ) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        if !bridge.config().enabled {
+            return Response::Error {
+                message: "said anchor: said bridge is disabled".into(),
+            };
+        }
+        let (cursor_path, fixture_path) = match self.said_paths() {
+            Ok(p) => p,
+            Err(e) => return Response::Error { message: e },
+        };
+        let cursor = match covenant_said_bridge::cursor::AnchorCursor::open(&cursor_path) {
+            Ok(c) => c,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said anchor: cursor open: {e}"),
+                }
+            }
+        };
+        let request = covenant_said_bridge::anchor::AnchorRequest {
+            start_audit_index,
+            end_audit_index,
+            merkle_root_hex,
+        };
+        let mode = if live {
+            covenant_said_bridge::anchor::AnchorMode::Live
+        } else {
+            covenant_said_bridge::anchor::AnchorMode::Fixture
+        };
+        match bridge.anchor(&cursor, &fixture_path, mode, request).await {
+            Ok(s) => Response::SaidAnchored {
+                anchor_index: s.anchor_index,
+                start_seq: s.start_seq,
+                end_seq: s.end_seq,
+                merkle_root_hex: s.merkle_root_hex,
+                tx_sig: s.tx_sig,
+                slot: s.slot,
+                fixture: matches!(mode, covenant_said_bridge::anchor::AnchorMode::Fixture),
+            },
+            Err(e) => Response::Error {
+                message: format!("said anchor: {e}"),
+            },
+        }
+    }
+
+    pub(crate) fn said_anchor_status(&self, recent_limit: usize) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        if !bridge.config().enabled {
+            return Response::Error {
+                message: "said anchor-status: said bridge is disabled".into(),
+            };
+        }
+        let (cursor_path, _) = match self.said_paths() {
+            Ok(p) => p,
+            Err(e) => return Response::Error { message: e },
+        };
+        let cursor = match covenant_said_bridge::cursor::AnchorCursor::open(&cursor_path) {
+            Ok(c) => c,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said anchor-status: cursor open: {e}"),
+                }
+            }
+        };
+        let next_index = match cursor.next_index() {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said anchor-status: cursor: {e}"),
+                }
+            }
+        };
+        let last_confirmed_index = match cursor.last_confirmed_index() {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said anchor-status: cursor: {e}"),
+                }
+            }
+        };
+        let pending = match cursor.pending() {
+            Ok(v) => v.len() as u64,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said anchor-status: cursor: {e}"),
+                }
+            }
+        };
+        let recent = match cursor.recent(recent_limit) {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| covenant_ipc::SaidAnchorRow {
+                    anchor_index: r.anchor_index,
+                    start_seq: r.start_audit_index,
+                    end_seq: r.end_audit_index,
+                    merkle_root_hex: r.merkle_root_hex,
+                    tx_sig: r.tx_sig,
+                    slot: r.slot,
+                    submitted_at_ms: r.submitted_at_ms,
+                })
+                .collect(),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("said anchor-status: cursor: {e}"),
+                }
+            }
+        };
+        Response::SaidAnchorStatus {
+            next_index,
+            last_confirmed_index,
+            pending,
+            recent,
+        }
+    }
+
+    pub(crate) async fn said_inbox(&self, chain: String, address: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        match bridge.xchain_inbox(&chain, &address).await {
+            Ok(inbox) => Response::SaidInbox {
+                chain: inbox.chain.unwrap_or(chain),
+                address: inbox.address.unwrap_or(address),
+                messages: inbox
+                    .messages
+                    .into_iter()
+                    .map(|m| covenant_ipc::SaidInboxMessage {
+                        id: m.id,
+                        source_chain: m.source_chain,
+                        source_address: m.source_address,
+                        target_chain: m.target_chain,
+                        target_address: m.target_address,
+                        payload: m.payload,
+                        created_at: m.created_at,
+                    })
+                    .collect(),
+            },
+            Err(e) => Response::Error {
+                message: format!("said inbox: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_free_tier(&self, address: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        match bridge.xchain_free_tier(&address).await {
+            Ok(ft) => Response::SaidFreeTier {
+                address: ft.address,
+                used: ft.used,
+                remaining: ft.remaining,
+                limit: ft.limit,
+                paid_price: ft.paid_price,
+                payment_chains: ft.payment_chains.into_iter().map(|c| c.name).collect(),
+            },
+            Err(e) => Response::Error {
+                message: format!("said free-tier: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_send(
+        &self,
+        source_chain: String,
+        source_address: String,
+        target_chain: String,
+        target_address: String,
+        payload_json: String,
+    ) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let payload: serde_json::Value = match serde_json::from_str(&payload_json) {
+            Ok(v) => v,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("invalid payload JSON: {e}"),
+                }
+            }
+        };
+        let req = covenant_said_bridge::xchain::SendRequest {
+            source_chain,
+            source_address,
+            target_chain,
+            target_address,
+            payload,
+        };
+        match bridge.xchain_send(&req).await {
+            Ok(r) => Response::SaidSent {
+                message_id: r.message_id,
+                free_tier_remaining: r.free_tier_remaining,
+                delivered_at: r.delivered_at,
+            },
+            Err(e) => Response::Error {
+                message: format!("said send: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_register_on_chain(&self, metadata_uri: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let input = covenant_said_bridge::instructions::RegisterAgentInput { metadata_uri };
+        match bridge.register_on_chain(&input).await {
+            Ok(r) => Response::SaidOnChainRegistered {
+                agent_pda: r.agent_pda,
+                owner: r.owner,
+                signature: r.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("said register: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_get_verified(&self) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        match bridge.get_verified().await {
+            Ok(r) => Response::SaidVerified {
+                signature: r.signature,
+                slot: r.slot,
+            },
+            Err(e) => Response::Error {
+                message: format!("said get_verified: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_validate_work(
+        &self,
+        agent: String,
+        task_hash_hex: String,
+        passed: bool,
+        evidence_uri: String,
+    ) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        let input = covenant_said_bridge::instructions::ValidateWorkInput {
+            agent,
+            task_hash_hex,
+            passed,
+            evidence_uri,
+        };
+        match bridge.validate_work(&input).await {
+            Ok(r) => Response::SaidValidationPosted {
+                validation_pda: r.validation_pda,
+                validator: r.validator,
+                signature: r.signature,
+            },
+            Err(e) => Response::Error {
+                message: format!("said validate_work: {e}"),
+            },
+        }
+    }
+
+    pub(crate) async fn said_lookup(&self, wallet: String) -> Response {
+        let Some(bridge) = self.said_bridge.as_ref() else {
+            return Response::Error {
+                message: "said bridge is not wired into this daemon".into(),
+            };
+        };
+        match bridge.lookup(&wallet).await {
+            Ok(a) => Response::SaidAgent {
+                wallet: a.wallet,
+                pda: a.pda,
+                owner: a.owner,
+                name: a.name,
+                description: a.description,
+                metadata_uri: a.metadata_uri,
+                is_verified: a.is_verified,
+                sponsored: a.sponsored,
+                reputation_score: a.reputation_score,
+                feedback_count: a.feedback_count,
+                activity_count: a.activity_count,
+                registered_at: a.registered_at,
+            },
+            Err(e) => Response::Error {
+                message: format!("said lookup: {e}"),
+            },
+        }
     }
 
     /// Resolve the SAP bridge status. Returns a disabled snapshot when
@@ -2390,6 +2762,49 @@ impl Server {
                     expires_at_unix,
                 )
                 .await
+            }
+            Request::SaidStatus => self.said_status(),
+            Request::SaidLookup { wallet } => self.said_lookup(wallet).await,
+            Request::SaidAnchor {
+                start_audit_index,
+                end_audit_index,
+                merkle_root_hex,
+                live,
+            } => {
+                self.said_anchor(start_audit_index, end_audit_index, merkle_root_hex, live)
+                    .await
+            }
+            Request::SaidAnchorStatus { recent_limit } => self.said_anchor_status(recent_limit),
+            Request::SaidInbox { chain, address } => self.said_inbox(chain, address).await,
+            Request::SaidFreeTier { address } => self.said_free_tier(address).await,
+            Request::SaidSend {
+                source_chain,
+                source_address,
+                target_chain,
+                target_address,
+                payload_json,
+            } => {
+                self.said_send(
+                    source_chain,
+                    source_address,
+                    target_chain,
+                    target_address,
+                    payload_json,
+                )
+                .await
+            }
+            Request::SaidRegisterOnChain { metadata_uri } => {
+                self.said_register_on_chain(metadata_uri).await
+            }
+            Request::SaidGetVerified => self.said_get_verified().await,
+            Request::SaidValidateWork {
+                agent,
+                task_hash_hex,
+                passed,
+                evidence_uri,
+            } => {
+                self.said_validate_work(agent, task_hash_hex, passed, evidence_uri)
+                    .await
             }
             Request::FlushReceipts { limit } => self.flush_receipts(limit, peer).await,
             Request::ReceiptBatches { limit } => self.receipt_batches(limit, peer).await,

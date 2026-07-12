@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-12T13:37:05.782Z",
+  "updatedAt": "2026-07-12T13:57:10.381Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12734,
-    "tasks": 1492,
+    "events": 12737,
+    "tasks": 1493,
     "integrated": 1493
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1485,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "cross_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "in-source-line-ref-drift-reanchor",
+    "state": "cross_review",
+    "since": "2026-07-12T13:45:33.848Z"
+  },
   "recent": [
     {
       "at": "2026-07-12T13:31:13.205Z",

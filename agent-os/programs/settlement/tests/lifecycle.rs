@@ -102,8 +102,18 @@ fn task_submit_then_release_pays_provider() {
     );
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &Pubkey::default(), 600, 10_000, 300, &tc)
-        .expect("create_task");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
     assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
     assert_eq!(token_balance(&env, &tc.client_covnt), 400);
 
@@ -134,8 +144,18 @@ fn task_claim_after_review_window_pays_provider() {
     );
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &Pubkey::default(), 600, 10_000, 300, &tc)
-        .expect("create_task");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
     submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit"); // submitted_at = 1_000
 
     warp_unix(&mut env, 1_301); // past submitted_at + review_window
@@ -161,8 +181,18 @@ fn task_arbiter_release_pays_provider() {
     );
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &arbiter.pubkey(), 600, 10_000, 300, &tc)
-        .expect("create_task");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &arbiter.pubkey(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
     submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit");
 
     release_task(&mut env, &tc, &provider_covnt, &arbiter).expect("arbiter release");
@@ -182,8 +212,18 @@ fn task_refund_after_deadline_returns_client() {
     let client = env.payer.insecure_clone();
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &Pubkey::default(), 600, 5_000, 300, &tc)
-        .expect("create_task");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        5_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
 
     warp_unix(&mut env, 6_000); // past the deadline, provider never submitted
     refund_task(&mut env, &tc, &client).expect("refund");
@@ -203,8 +243,18 @@ fn task_arbiter_refund_within_window_returns_client() {
     let client = env.payer.insecure_clone();
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &arbiter.pubkey(), 600, 10_000, 300, &tc)
-        .expect("create_task");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &arbiter.pubkey(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
     submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit"); // submitted_at 1_000
 
     warp_unix(&mut env, 1_100); // inside the review window

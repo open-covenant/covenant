@@ -40,7 +40,10 @@ fn main() {
     println!("bondToken           = {}", hex0x(&receipt.bond_token));
     println!("bondAmount          = {}", receipt.bond_amount);
     println!("agentReturn         = {}", hex0x(&receipt.agent_return));
-    println!("slashBeneficiary    = {}", hex0x(&receipt.slash_beneficiary));
+    println!(
+        "slashBeneficiary    = {}",
+        hex0x(&receipt.slash_beneficiary)
+    );
     println!("slashBeneficiaryBps = {}", receipt.slash_beneficiary_bps);
     println!("nonce               = {}", hex0x(&receipt.nonce));
     println!("issuedAt            = {}", receipt.issued_at);

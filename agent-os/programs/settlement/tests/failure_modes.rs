@@ -76,8 +76,18 @@ fn submit_after_deadline_rejected() {
     let task_id = [41u8; 32];
     let provider = Keypair::new();
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &Pubkey::default(), 600, 5_000, 300, &tc)
-        .expect("create");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        5_000,
+        300,
+        &tc,
+    )
+    .expect("create");
     warp_unix(&mut env, 6_000);
     let err = submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32])
         .expect_err("submit past deadline");
@@ -101,10 +111,20 @@ fn release_before_submit_rejected() {
         &provider.pubkey(),
     );
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &Pubkey::default(), 600, 10_000, 300, &tc)
-        .expect("create");
-    let err = release_task(&mut env, &tc, &provider_covnt, &client)
-        .expect_err("release before submit");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create");
+    let err =
+        release_task(&mut env, &tc, &provider_covnt, &client).expect_err("release before submit");
     assert_eq!(custom_error(&err), Some(E_WRONG_TASK_STATUS));
     assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
 }
@@ -124,12 +144,22 @@ fn claim_before_window_rejected() {
         &provider.pubkey(),
     );
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &Pubkey::default(), 600, 10_000, 300, &tc)
-        .expect("create");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create");
     submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit"); // submitted_at 1_000
     warp_unix(&mut env, 1_200); // still inside the 300s window
-    let err = claim_task(&mut env, &tc, &provider_covnt, &provider)
-        .expect_err("claim before window");
+    let err =
+        claim_task(&mut env, &tc, &provider_covnt, &provider).expect_err("claim before window");
     assert_eq!(custom_error(&err), Some(E_REVIEW_WINDOW_NOT_ELAPSED));
     assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
 }
@@ -144,8 +174,18 @@ fn refund_before_deadline_rejected() {
     let provider = Keypair::new();
     let client = env.payer.insecure_clone();
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &Pubkey::default(), 600, 10_000, 300, &tc)
-        .expect("create");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create");
     let err = refund_task(&mut env, &tc, &client).expect_err("refund before deadline");
     assert_eq!(custom_error(&err), Some(E_TASK_NOT_EXPIRED));
 }
@@ -166,13 +206,22 @@ fn double_release_rejected() {
         &provider.pubkey(),
     );
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider.pubkey(), &Pubkey::default(), 600, 10_000, 300, &tc)
-        .expect("create");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create");
     submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit");
     release_task(&mut env, &tc, &provider_covnt, &client).expect("first release");
     bump_blockhash(&mut env); // distinct signature for the retry
-    let err = release_task(&mut env, &tc, &provider_covnt, &client)
-        .expect_err("second release");
+    let err = release_task(&mut env, &tc, &provider_covnt, &client).expect_err("second release");
     assert_eq!(custom_error(&err), Some(E_WRONG_TASK_STATUS));
 }
 

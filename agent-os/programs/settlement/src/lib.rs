@@ -338,7 +338,10 @@ pub mod settlement {
             CovenantError::WrongTaskStatus
         );
         let now = Clock::get()?.unix_timestamp;
-        require!(now <= ctx.accounts.task.deadline, CovenantError::TaskExpired);
+        require!(
+            now <= ctx.accounts.task.deadline,
+            CovenantError::TaskExpired
+        );
 
         let task = &mut ctx.accounts.task;
         task.result_hash = result_hash;
@@ -368,8 +371,8 @@ pub mod settlement {
         );
         let signer = ctx.accounts.authority.key();
         let is_client = signer == ctx.accounts.task.client;
-        let is_arbiter = ctx.accounts.task.arbiter != Pubkey::default()
-            && signer == ctx.accounts.task.arbiter;
+        let is_arbiter =
+            ctx.accounts.task.arbiter != Pubkey::default() && signer == ctx.accounts.task.arbiter;
         require!(is_client || is_arbiter, CovenantError::Unauthorized);
 
         let task_id = ctx.accounts.task.task_id;
@@ -439,13 +442,16 @@ pub mod settlement {
         let now = Clock::get()?.unix_timestamp;
         let signer = ctx.accounts.authority.key();
         let is_client = signer == ctx.accounts.task.client;
-        let is_arbiter = ctx.accounts.task.arbiter != Pubkey::default()
-            && signer == ctx.accounts.task.arbiter;
+        let is_arbiter =
+            ctx.accounts.task.arbiter != Pubkey::default() && signer == ctx.accounts.task.arbiter;
         require!(is_client || is_arbiter, CovenantError::Unauthorized);
 
         match ctx.accounts.task.status {
             TASK_FUNDED => {
-                require!(now > ctx.accounts.task.deadline, CovenantError::TaskNotExpired);
+                require!(
+                    now > ctx.accounts.task.deadline,
+                    CovenantError::TaskNotExpired
+                );
             }
             TASK_SUBMITTED => {
                 require!(is_arbiter, CovenantError::NotArbiter);

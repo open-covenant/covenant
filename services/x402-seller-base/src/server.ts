@@ -32,6 +32,7 @@ import { createFacilitatorConfig } from "@coinbase/x402";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
+import { makeAttestHandler } from "./attest-route.js";
 
 // The EIP-712 domain (name, version) is the token's own, not ours: the buyer's
 // wallet signs the transferWithAuthorization against it and the facilitator
@@ -193,15 +194,9 @@ app.use(
 );
 
 // Paid, reached only after a verified payment. Returning >= 400 cancels
-// settlement, so a bad request is never charged.
-app.post("/x402/attest", (req: Request, res: Response) => {
-  const { subject, claim } = (req.body ?? {}) as { subject?: unknown; claim?: unknown };
-  if (typeof subject !== "string" || !subject || subject.length > 256 || claim === undefined) {
-    res.status(400).json({ error: "subject (1-256 char string) and claim are required" });
-    return;
-  }
-  res.json(attestor.attest(subject, claim, Math.floor(Date.now() / 1000)));
-});
+// settlement, so a bad request is never charged. Handler lives in
+// attest-route.ts so tests can hit it without the payment middleware.
+app.post("/x402/attest", makeAttestHandler(attestor));
 
 app.listen(PORT, () => {
   console.log(

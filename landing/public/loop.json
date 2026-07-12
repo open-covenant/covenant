@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-12T13:16:57.171Z",
+  "updatedAt": "2026-07-12T13:37:05.782Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12730,
+    "events": 12734,
     "tasks": 1492,
-    "integrated": 1491
+    "integrated": 1493
   },
   "throughput": {
-    "last24h": 0,
-    "last7d": 0,
-    "velocity": 0
+    "last24h": 2,
+    "last7d": 2,
+    "velocity": 0.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-12",
-      "count": 0
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,15 +180,13 @@
     },
     {
       "date": "07-12",
-      "total": 1491
+      "total": 1493
     }
   ],
   "states": {
-    "integrated": 1483,
+    "integrated": 1485,
     "proposed": 1,
-    "blocked": 6,
-    "cross_review": 1,
-    "ready": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -216,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "workspace-paymentextra-struct-literal-drift",
-    "state": "ready",
-    "since": "2026-07-05T19:41:53.753Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-12T13:31:13.205Z",
+      "task": "workspace-paymentextra-struct-literal-drift",
+      "note": "fix merged on loop/main-track; struct-literal drift gate verified by CI run 29193474452 (rustfmt fix c5ac873a follow-up included)"
+    },
+    {
+      "at": "2026-07-12T13:31:10.476Z",
+      "task": "ci-toolchain-pin-and-clean-clone-gate",
+      "note": "merged on loop/main-track (toolchain pin + clean-clone gate live in CI config); CI green 29193474452"
+    },
     {
       "at": "2026-07-02T23:54:30.031Z",
       "task": "identity-binding-recovery-byte-above-range-coverage",
@@ -311,16 +315,6 @@
       "at": "2026-07-01T13:43:34.155Z",
       "task": "multichain-22",
       "note": "Pushed 950a3824..731c17eb to origin/loop/main-track; all 4 pre-push guards ok. Off-chain gateway signer + golden tests only; ENS name/DNS, r"
-    },
-    {
-      "at": "2026-07-01T13:02:14.095Z",
-      "task": "multichain-21",
-      "note": "Pushed 2848d2d9..950a3824 to origin/loop/main-track; all 4 pre-push guards ok (current-git-identity, github-cli-account, github-push-identit"
-    },
-    {
-      "at": "2026-07-01T10:43:22.094Z",
-      "task": "multichain-20",
-      "note": "INTEGRATED @ 2848d2d9 (pushed ff69d4bc..2848d2d9 loop/main-track; all push identity guards green). Committed: agent-os/evm/ (covenant-erc800"
     }
   ]
 }

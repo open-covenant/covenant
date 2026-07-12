@@ -401,12 +401,12 @@ The envelope source-of-truth lives at `peer_revoke_json` in `agent-os/crates/cov
 - `since_ms` (u64 or null): the Unix-epoch millisecond threshold echoed from `--since-ms`, or `null` when the flag was omitted. Pinned as u64-or-null at the schema test (`main.rs:7840-7843`) — never a string-of-integer. Same semantic as the HTTP gateway query parameter described in the **Query Parameters** section above: events whose `timestamp_ms` is strictly less than the threshold are dropped before the limit truncation.
 - `events` (array of `AuditEvent`): the matched events. The array is empty when no events fall in the window. Pinned as an array by `main.rs:7844-7847` — never null or a string.
 
-The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:43`:
+The inner `AuditEvent` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:45`:
 
 - `id` (string) — event UUID.
 - `timestamp_ms` (u64) — Unix-epoch milliseconds when the event was recorded.
 - `issuer` (object) — `{display: string, pubkey: string (base58)}` per the `AgentId` Serialize impl at `covenant-types/src/lib.rs:177`.
-- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:105` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
+- `kind` (object) — tagged-enum `AuditKind` (defined at `covenant-audit/src/lib.rs:107` onwards) with a `type` discriminator (e.g., `"capability_granted"`, `"intent_dispatched"`, `"hermes_tool_invoked"`) and variant-specific extra fields. Consumers must route on `kind.type` before reading variant-specific fields.
 
 Top-level keys are pinned to exactly these four by the test at `agent-os/crates/covenant/src/main.rs:7819` (`audit_recent_json_pins_top_level_schema`), exercised against three cases: populated with `since_ms`, empty with `since_ms`, and empty without `since_ms`.
 
@@ -429,7 +429,7 @@ The envelope source-of-truth lives at `audit_purge_json` in `agent-os/crates/cov
 - `kind`: literal string `"audit_integrity"` — past-tense outcome name, distinct from the verb name `verify` and from the workspace-level `verify_report` envelope; consumers routing on `kind` must match this literal exactly rather than reusing either of those tokens. Pinned at the value level by `main.rs:7913` (asserts `value["kind"].as_str() == Some("audit_integrity")`), so a future kind-rename fails the test rather than silently rewriting the discriminator string.
 - `report` (object): a structured `covenant_audit::AuditIntegrityReport`, never a string blob. The top-level object has exactly two keys (`kind` and `report`); the inner `report` is pinned by the schema test at `main.rs:7914-7917` to be a JSON object.
 
-The inner `AuditIntegrityReport` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:61`:
+The inner `AuditIntegrityReport` shape, defined at `agent-os/crates/covenant-audit/src/lib.rs:63`:
 
 - `events` (u64) — total audit events the integrity walk visited.
 - `anchors` (u64) — count of anchor records (root-hash checkpoints) the walk crossed.

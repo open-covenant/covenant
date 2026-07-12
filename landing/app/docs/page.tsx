@@ -136,8 +136,9 @@ export default function DocsIndexPage() {
         manifest-level requirements, trusted-local fail-closed behavior,
         daemon-selectable Linux gVisor configuration, runtime-level gVisor
         runner work, live Linux sandbox coverage, and a documented Linux runner
-        setup. Distributed settlement, installers, SDK publication,
-        release-scope and audit-root signing, and transparency publication are
+        setup. Distributed settlement, installers, additional-language SDK
+        publication (Python and Rust-crate), release-scope and audit-root
+        signing, and transparency publication are
         tracked on <a href="https://opencovenant.org/roadmap">the roadmap</a>.
       </p>
 

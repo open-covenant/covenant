@@ -128,10 +128,12 @@ const SECTIONS: Section[] = [
     body: (
       <p className={paragraph}>
         We are careful to separate what ships from what is planned. Today the local control plane is
-        real and live-tested across nearly thirty Rust crates and more than two thousand five hundred
-        tests, including over three hundred that exercise real process, model, and network boundaries.
-        Production-grade isolation for untrusted code, networked multi-peer operation, and on-chain
-        settlement are on the roadmap, not the changelog. The line between done, experimental, and
+        real and live-tested across more than thirty-five Rust crates and over three thousand four
+        hundred tests, including over four hundred fifty that exercise real process, model, and
+        network boundaries. Production-grade isolation for untrusted code and networked multi-peer
+        operation are on the roadmap, not the changelog; the Solana settlement program is live on
+        mainnet, while its daemon-driven per-intent lifecycle is not yet production. The line between
+        done, experimental, and
         planned is documented in BUILT.md and throughout the docs. If a claim is not true yet, we do
         not make it.
       </p>
@@ -205,8 +207,9 @@ export default function AboutPage() {
             revenue is shared automatically: part goes to people who stake $CVNT, part is used to
             buy the token on the open market and lock it away, and the rest funds the treasury. The
             more the network is used, the more value returns to holders and the more supply comes
-            off the market. Stake to earn a share of that revenue, paid in SOL, with longer locks
-            earning more. You can stake on the{" "}
+            off the market. The first-party staking program is being sunset — principal is
+            withdrawable at any time, regardless of lock — as staking moves to Covenant&apos;s partner
+            integration. You can manage positions on the{" "}
             <a href="/stake" className={linkClass}>
               stake page
             </a>

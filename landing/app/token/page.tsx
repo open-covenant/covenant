@@ -73,7 +73,9 @@ export default function TokenPage() {
                 As Covenant gets used, the network earns revenue, and that revenue is shared
                 automatically: part goes to people who stake $CVNT, part is used to buy the token on
                 the open market and lock it away, and the rest funds the treasury. Stake to earn a
-                share, paid in SOL, with longer locks earning more. You can stake on the{" "}
+                share, paid in SOL, with longer locks earning more. The first-party staking program is
+                being sunset — principal is withdrawable at any time regardless of lock — as staking
+                moves to a partner integration. You can manage positions on the{" "}
                 <a href="/stake" className={linkClass}>
                   stake page
                 </a>

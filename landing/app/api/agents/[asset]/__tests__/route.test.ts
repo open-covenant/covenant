@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GET } from "../route";
 import {
   AGENT_IDENTITY_PROGRAM,
-  ATTESTATION_SCHEMA,
+  ATTESTATION_SCHEMA_V2,
   COVENANT_COLLECTION,
   COVENANT_DATA_AUTHORITY,
   FEATURED_AGENT_ASSET,
@@ -46,7 +46,7 @@ function das(overrides: DasOverrides = {}): Record<string, unknown> {
         authority: { address: overrides.appDataAuthority ?? COVENANT_DATA_AUTHORITY },
         // Helius snake_cases AppData; the route must normalize it to camelCase.
         data: {
-          schema: overrides.appDataSchema ?? ATTESTATION_SCHEMA,
+          schema: overrides.appDataSchema ?? ATTESTATION_SCHEMA_V2,
           root_hash_hex: "ab12cd",
           release_target: "v0.3.0",
           release_subject: "covenant",
@@ -157,7 +157,7 @@ describe("agent passport route", () => {
     expect(body.attestation.authority).toBe(COVENANT_DATA_AUTHORITY);
     // snake_cased indexer keys must surface as the camelCase contract, coerced.
     expect(body.attestation.payload).toMatchObject({
-      schema: ATTESTATION_SCHEMA,
+      schema: ATTESTATION_SCHEMA_V2,
       rootHashHex: "ab12cd",
       releaseTarget: "v0.3.0",
       releaseScope: "audit-root",

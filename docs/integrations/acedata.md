@@ -1,7 +1,7 @@
 # AceData integration — Attested Generative Capabilities
 
 Status: phases 1–3 shipped (provider + provenance + governance + on-chain-by-construction)
-Branch: `feat/acedatacloud-integration`
+Branch: merged to main
 Crate: `agent-os/crates/covenant-acedata`
 
 ## Summary

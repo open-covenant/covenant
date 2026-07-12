@@ -48,7 +48,7 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "blockchain",
     q: "Does Covenant require a blockchain?",
-    a: "No. Covenant runs fully locally and records settlement receipts to a local ledger by default. On-chain settlement to Solana is an optional, planned boundary; chain fields stay empty unless a settlement integration is configured.",
+    a: "No. Covenant runs fully locally and records settlement receipts to a local ledger by default. The Solana settlement program is live on mainnet, but the daemon anchors receipts locally by default; chain fields stay empty unless the on-chain flush is configured.",
   },
   {
     id: "eight-primitives",
@@ -63,7 +63,7 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "staking",
     q: "What does staking $CVNT do?",
-    a: "Locking $CVNT earns a pro-rata share of protocol revenue, paid in SOL, with longer locks earning more. Distribution amounts reflect actual protocol revenue and are not guaranteed.",
+    a: "Locking $CVNT earns a pro-rata share of protocol revenue, paid in SOL, with longer locks earning more; distribution amounts reflect actual protocol revenue and are not guaranteed. The first-party staking program is being sunset — principal is withdrawable at any time regardless of lock — as staking moves to a partner integration.",
   },
 ];
 

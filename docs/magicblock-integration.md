@@ -28,7 +28,7 @@ MagicBlock ER  ── runs agent work (gasless, optionally private/TEE)
    ├─ bond  → register_agent + stake (CVNT); slash_for_actions burns the bond
    │          with the reason read from the on-chain provenance_root
    └─ trust → verified-ER attestation (SAS) keyed to the validator identity;
-              covenant-tee verifies the Private ER's TDX enclave via DCAP
+              enclave (TDX/DCAP) verification is a planned addition
 ```
 
 Per-action state (counters, provenance roots) lives in the ER, where it is hot and
@@ -89,13 +89,14 @@ slash_for_actions(amount)                                   // reason = on-chain
 via the seed-bound credit account (`[b"credits", operator]`). There is no
 caller-supplied reason to forge; the penalty is tied to the on-chain record.
 
-## 4. Verify the enclave
+## 4. Verify the enclave (planned)
 
-The `covenant-tee` crate (`agent-os/crates/covenant-tee`) pulls a TDX quote from a
-MagicBlock Private ER, verifies it with Intel DCAP against the Phala PCCS, and
-binds an agent plus its provenance root into the 64-byte quote challenge. The
-result is a signed Covenant attestation that ties the agent's record to the enclave
-it ran in. Section 1 uses the same verification.
+Enclave-level verification is a planned addition, not yet in the tree: a
+`covenant-tee` crate would pull a TDX quote from a MagicBlock Private ER, verify it
+with Intel DCAP against the Phala PCCS, and bind an agent plus its provenance root
+into the 64-byte quote challenge — a signed Covenant attestation tying the agent's
+record to the enclave it ran in. The reference deployment below exercises the ER
+metering and slashing loop; enclave attestation is not part of it yet.
 
 ## Reference deployment
 
@@ -112,9 +113,9 @@ record.
 | Agent identity (PDA) | `G2bMkQkGXTPv2rDLZpXqbn5fAehLqKujXWidcJbYHPwj` |
 | Verified ER validator | `MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo` (mainnet-tee) |
 
-The drivers are in `agent-os/programs/settlement-ephemeral/spike/`:
-`reference-run.mjs` (agent work + provenance), `bond-slash.mjs` (bond + slash),
-`er-registry.mjs` and `pick-verified-er.mjs` (SAS attest, resolve, discover).
+The reproducible driver is in `examples/magicblock/verify.mjs`; the ER instructions
+themselves (`consume_credits`, `provenance_root`, `slash_for_actions`) live in
+`agent-os/programs/settlement/src/lib.rs`.
 
 ## Try it
 

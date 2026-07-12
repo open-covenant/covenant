@@ -33,6 +33,9 @@ class FakeSocket implements WebSocketLike {
   fireMessage(data: unknown): void {
     this.emit('message', { data });
   }
+  fireError(ev: unknown): void {
+    this.emit('error', ev);
+  }
   sentFrames(): OutboundFrame[] {
     return this.sent.map((s) => JSON.parse(s) as OutboundFrame);
   }
@@ -120,5 +123,78 @@ describe('WsTransport', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('applies full jitter to the reconnect delay at the upper random bound', async () => {
+    vi.useFakeTimers();
+    try {
+      // exp = min(30_000, 100 * 2**0) = 100; random() => 1 drives the
+      // jittered half to its maximum, so delay = exp/2 + 1 * (exp/2) = 100.
+      // The sibling backoff test pins random() => 0 (delay = exp/2 = 50),
+      // which leaves random() * (exp/2) — the anti-thundering-herd jitter —
+      // at zero and unexercised. The tight 99/100ms boundary below pins the
+      // upper jitter bound so a dropped or mis-scaled term cannot survive.
+      const t = new WsTransport({ url: 'wss://mesh', token: 'T', socketFactory: factory, backoffBaseMs: 100, random: () => 1 });
+      const p = t.connect();
+      const first = FakeSocket.last!;
+      first.fireOpen();
+      await p;
+
+      first.close(); // schedule reconnect at delay = 50 + 1 * 50 = 100ms
+      await vi.advanceTimersByTimeAsync(99);
+      expect(FakeSocket.last).toBe(first); // jitter holds the dial back; nothing fires at 99ms
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeSocket.last).not.toBe(first); // dials at exactly 100ms
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  async function openTransport(): Promise<{ got: InboundFrame[] }> {
+    const t = new WsTransport({ url: 'wss://mesh', token: 'T', socketFactory: factory, reconnect: false });
+    const got: InboundFrame[] = [];
+    t.onFrame((f) => got.push(f));
+    const p = t.connect();
+    FakeSocket.last!.fireOpen();
+    await p;
+    return { got };
+  }
+
+  it('decodes a JSON frame delivered as a binary ArrayBuffer', async () => {
+    const { got } = await openTransport();
+    const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, type: 'ping', ts: 7 }));
+    FakeSocket.last!.fireMessage(bytes.buffer);
+    expect(got).toEqual([{ v: 1, type: 'ping', ts: 7 }]);
+  });
+
+  it('decodes a JSON frame delivered as a binary Uint8Array view', async () => {
+    const { got } = await openTransport();
+    FakeSocket.last!.fireMessage(new TextEncoder().encode(JSON.stringify({ v: 1, type: 'pong', ts: 8 })));
+    expect(got).toEqual([{ v: 1, type: 'pong', ts: 8 }]);
+  });
+
+  it('coerces a stringifiable inbound wrapper via toString', async () => {
+    const { got } = await openTransport();
+    FakeSocket.last!.fireMessage({ toString: () => JSON.stringify({ v: 1, type: 'ping', ts: 5 }) });
+    expect(got).toEqual([{ v: 1, type: 'ping', ts: 5 }]);
+  });
+
+  it('logs a socket error preferring the error object message over its String() form', async () => {
+    const logs: Array<{ msg: string; extra?: Record<string, unknown> }> = [];
+    const t = new WsTransport({
+      url: 'wss://mesh',
+      token: 'T',
+      socketFactory: factory,
+      reconnect: false,
+      log: (msg, extra) => logs.push({ msg, extra }),
+    });
+    const p = t.connect();
+    FakeSocket.last!.fireOpen();
+    await p;
+
+    FakeSocket.last!.fireError({ message: 'boom' });
+    FakeSocket.last!.fireError('raw-error');
+    const errs = logs.filter((l) => l.msg === 'mesh socket error').map((l) => l.extra?.err);
+    expect(errs).toEqual(['boom', 'raw-error']);
   });
 });

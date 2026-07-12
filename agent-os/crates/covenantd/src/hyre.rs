@@ -99,16 +99,7 @@ impl PaidExecutor for DaemonHyreExecutor {
             signer = signer.env(k.clone(), v.clone());
         }
 
-        // Bound the paid HTTP path: a hung Hyre endpoint or a stalled
-        // facilitator retry must not block the caller's tool call (and its
-        // held budget pre-check) forever. connect_timeout fails a dead host
-        // fast; the 60s ceiling matches the challenge's maxTimeoutSeconds so
-        // a real-but-slow facilitator settle round-trip still completes.
-        let http = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let http = covenant_hyre::http_client();
         let out = covenant_hyre::execute_paid(&http, &signer, &req)
             .await
             .map_err(|e| e.to_string())?;
@@ -255,5 +246,32 @@ mod tests {
         bad.method = "BAD METHOD".into(); // space is not a valid method token
         let err = exec.execute(bad).await.expect_err("bad method");
         assert!(err.contains("invalid HTTP method"), "got: {err}");
+    }
+
+    /// An over-budget payer is refused by the read-only pre-check before
+    /// any signer or network activity, and no accounting is written.
+    #[tokio::test]
+    async fn executor_refuses_when_budget_would_exceed() {
+        let settlement = Arc::new(InMemorySettlement::new());
+        let audit = Arc::new(InMemoryAuditLog::new());
+        let budget = Arc::new(InMemoryLedger::new());
+        let payer = agent(1);
+        budget.set_capacity(&payer, 5).await.unwrap(); // 5 < 8 credits
+
+        let exec = DaemonHyreExecutor::new(
+            settlement.clone(),
+            audit.clone(),
+            budget,
+            Arc::new(enabled_x402()),
+            agent(9),
+            payer,
+        );
+        let mut over = req();
+        over.credits = 8; // exceeds the 5-credit bucket
+
+        let err = exec.execute(over).await.expect_err("over budget");
+        assert!(err.contains("exceeded"), "got: {err}");
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
     }
 }

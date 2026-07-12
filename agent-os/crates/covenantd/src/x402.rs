@@ -27,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use reqwest::{Method, Response};
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -87,11 +87,13 @@ impl SubprocessSigner {
         self.env.push((key.into(), value.into()));
         self
     }
-}
 
-#[async_trait::async_trait]
-impl Signer for SubprocessSigner {
-    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String, X402Error> {
+    async fn build_payment_with_limits(
+        &self,
+        requirements: &PaymentRequirements,
+        max_output_bytes: usize,
+        deadline: std::time::Duration,
+    ) -> Result<String, X402Error> {
         let payload = serde_json::to_vec(requirements)
             .map_err(|e| X402Error::Sign(format!("encode requirement: {e}")))?;
 
@@ -102,6 +104,10 @@ impl Signer for SubprocessSigner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // An over-cap flood or an elapsed deadline returns early, dropping
+            // the Child; kill_on_drop reaps the sidecar instead of leaving it
+            // running detached.
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| X402Error::Sign(format!("spawn signer {:?}: {e}", self.program)))?;
 
@@ -117,21 +123,21 @@ impl Signer for SubprocessSigner {
             // Drop closes stdin so the one-shot sidecar sees EOF.
         }
 
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|e| X402Error::Sign(format!("await signer: {e}")))?;
+        let (stdout_bytes, stderr_bytes, status) =
+            read_signer_output(&mut child, max_output_bytes, deadline)
+                .await
+                .map_err(|e| X402Error::Sign(e.message()))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_bytes);
             return Err(X402Error::Sign(format!(
                 "signer exited {}: {}",
-                output.status,
+                status,
                 stderr.trim()
             )));
         }
 
-        let header = String::from_utf8(output.stdout)
+        let header = String::from_utf8(stdout_bytes)
             .map_err(|e| X402Error::Sign(format!("signer stdout not utf-8: {e}")))?;
         let header = header.trim().to_string();
         if header.is_empty() {
@@ -139,6 +145,132 @@ impl Signer for SubprocessSigner {
         }
         Ok(header)
     }
+}
+
+#[async_trait::async_trait]
+impl Signer for SubprocessSigner {
+    async fn build_payment(&self, requirements: &PaymentRequirements) -> Result<String, X402Error> {
+        self.build_payment_with_limits(
+            requirements,
+            MAX_SIGNER_OUTPUT_BYTES,
+            SIGNER_OUTPUT_DEADLINE,
+        )
+        .await
+    }
+}
+
+/// Maximum bytes the daemon buffers from one signer sidecar stream. The x402
+/// and metaplex signer sidecars talk to Solana RPC and DAS, so their stdout and
+/// stderr reflect external responses; an unbounded read lets a runaway, buggy,
+/// or hostile-RPC-fed sidecar exhaust the daemon's memory. The result is a
+/// single line, so 16 MiB sits far above any legitimate payload while still
+/// capping a flood — the memory-axis sibling of the bounded paid-call response
+/// read below and of the runner's `read_agent_output_capped`.
+pub(crate) const MAX_SIGNER_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Wall-clock budget for one signer dispatch, applied independently to the read
+/// phase and to the post-kill reap (the stdin write is not counted), so a
+/// wedged sidecar costs at most ~2× this before it is killed and reaped — the
+/// same two-stage bound the SAP bridge worker uses. `wait_with_output()` had no
+/// deadline at all, letting a sidecar that stalls with a pipe held open hang the
+/// dispatch forever; this also lets the concurrent capped read make progress
+/// when one stream stalls after the other has already returned.
+pub(crate) const SIGNER_OUTPUT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Why a signer sidecar's bounded output could not be read. Callers map each
+/// arm onto their own signer error type (the metaplex signer's `String`, the
+/// x402 signer's [`X402Error::Sign`]) via [`SignerOutputError::message`], so the
+/// wording stays identical across both dispatches.
+#[derive(Debug)]
+pub(crate) enum SignerOutputError {
+    /// stdout exceeded the byte cap; the sidecar was killed before any
+    /// truncated envelope could be parsed.
+    StdoutTooLarge(usize),
+    /// The read-and-reap deadline (seconds) elapsed; the sidecar was killed.
+    Timeout(u64),
+    /// An I/O error reading a stream or reaping the sidecar.
+    Io(std::io::Error),
+}
+
+impl SignerOutputError {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            SignerOutputError::StdoutTooLarge(cap) => {
+                format!("signer stdout exceeded the {cap}-byte cap")
+            }
+            SignerOutputError::Timeout(secs) => format!("signer did not finish within {secs}s"),
+            SignerOutputError::Io(e) => format!("read signer output: {e}"),
+        }
+    }
+}
+
+/// Reads up to `max` bytes from a signer subprocess stream, reporting whether
+/// the stream had more to give. `take` stops the read at the cap instead of
+/// buffering an unbounded body; reading one extra byte lets the caller tell an
+/// exact-fit payload from a truncated flood. The returned buffer is clamped to
+/// `max`.
+async fn read_stream_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut buf = Vec::new();
+    reader.take(max as u64 + 1).read_to_end(&mut buf).await?;
+    let overflowed = buf.len() > max;
+    buf.truncate(max);
+    Ok((buf, overflowed))
+}
+
+/// Reads a one-shot signer sidecar's stdout and stderr — each bounded to `max`
+/// bytes — then reaps it, all within `deadline`. This replaces
+/// `child.wait_with_output()`, which buffered both streams to EOF with no size
+/// cap and no deadline, letting a runaway, buggy, or hostile-RPC-fed sidecar
+/// OOM the daemon or hang the dispatch. The streams are read concurrently (not
+/// stdout-then-stderr) so a sidecar that fills its stderr pipe before closing
+/// stdout cannot starve the stdout read. On overflow or timeout the child is
+/// SIGKILL-reaped before the bounded wait so a sidecar blocked on a full pipe
+/// cannot stall the reap. A stderr-only flood is truncated and tolerated — the
+/// valid stdout envelope still decodes — but stdout overflow fails closed so no
+/// caller parses a truncated envelope.
+pub(crate) async fn read_signer_output(
+    child: &mut tokio::process::Child,
+    max: usize,
+    deadline: std::time::Duration,
+) -> Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus), SignerOutputError> {
+    let mut stdout = child.stdout.take().expect("signer stdout piped");
+    let mut stderr = child.stderr.take().expect("signer stderr piped");
+
+    let read_both = async {
+        tokio::join!(
+            read_stream_capped(&mut stdout, max),
+            read_stream_capped(&mut stderr, max),
+        )
+    };
+    let (out, err) = match tokio::time::timeout(deadline, read_both).await {
+        Ok(pair) => pair,
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(SignerOutputError::Timeout(deadline.as_secs()));
+        }
+    };
+    let (stdout_bytes, stdout_overflowed) = out.map_err(SignerOutputError::Io)?;
+    let (stderr_bytes, _stderr_overflowed) = err.map_err(SignerOutputError::Io)?;
+
+    if stdout_overflowed {
+        let _ = child.start_kill();
+    }
+    let status = match tokio::time::timeout(deadline, child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => return Err(SignerOutputError::Io(e)),
+        Err(_) => {
+            let _ = child.start_kill();
+            return Err(SignerOutputError::Timeout(deadline.as_secs()));
+        }
+    };
+    if stdout_overflowed {
+        return Err(SignerOutputError::StdoutTooLarge(max));
+    }
+    Ok((stdout_bytes, stderr_bytes, status))
 }
 
 /// Subsystem handles the accounting needs, borrowed for the duration
@@ -188,6 +320,11 @@ pub enum X402DaemonError {
     Settlement(String),
     #[error("audit: {0}")]
     Audit(String),
+    /// The paid endpoint's response body exceeded the in-memory read cap
+    /// ([`MAX_RESPONSE_BYTES`]). Holds the offending byte count — the declared
+    /// `Content-Length` or the count observed before the guard tripped.
+    #[error("upstream response body of {0} bytes exceeds the in-memory cap")]
+    ResponseTooLarge(u64),
 }
 
 fn epoch_ms() -> u64 {
@@ -334,6 +471,42 @@ pub async fn pay_and_record(
         response,
         receipt_id,
     })
+}
+
+/// Maximum paid-call response body the daemon will buffer into memory. The
+/// endpoint that answered the paid request is untrusted, so a hostile or
+/// compromised one must not be able to exhaust a worker with an unbounded
+/// success body — the memory-axis ceiling mirroring the x402 client's bounded
+/// 402-challenge read.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read a paid-call response body into a string, refusing anything past
+/// [`MAX_RESPONSE_BYTES`]. [`PaidOutcome::response`] is handed back unread by
+/// the x402 client, so the daemon — not the client — bounds it here.
+pub(crate) async fn read_response_body(resp: Response) -> Result<String, X402DaemonError> {
+    read_capped(resp, MAX_RESPONSE_BYTES).await
+}
+
+/// The `Content-Length` check rejects an oversized declared body before it is
+/// streamed; the running accumulation check is the real guard, since the
+/// header is optional and endpoint-controlled. The body is forwarded as an
+/// opaque string, so the bounded bytes are decoded lossily.
+async fn read_capped(mut resp: Response, max: usize) -> Result<String, X402DaemonError> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(X402DaemonError::ResponseTooLarge(len));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(X402Error::from)? {
+        if buf.len() + chunk.len() > max {
+            return Err(X402DaemonError::ResponseTooLarge(
+                (buf.len() + chunk.len()) as u64,
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 #[cfg(test)]
@@ -502,5 +675,261 @@ mod tests {
             .await
             .expect_err("empty");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("empty header")));
+    }
+
+    #[tokio::test]
+    async fn build_payment_surfaces_non_utf8_signer_stdout() {
+        // The sidecar is external (it talks to Solana RPC); its stdout is
+        // untrusted, so bytes that are not valid UTF-8 must surface the
+        // from_utf8 Sign error rather than fall through to the trim /
+        // empty-header check and return a garbage header. A single 0xFF byte
+        // (printf '\377') is never valid UTF-8.
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; printf '\\377'");
+        let err = signer
+            .build_payment(&requirement())
+            .await
+            .expect_err("non-utf8 stdout must surface, not fall through");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("signer stdout not utf-8")),
+            "a non-UTF-8 signer stdout must surface the from_utf8 Sign error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_payment_with_limits_rejects_oversized_signer_stdout() {
+        // The signer sidecar is external (it talks to Solana RPC); a stdout
+        // flood past the cap must surface a Sign error naming the cap instead
+        // of buffering the whole stream and OOMing the daemon. The fake signer
+        // drains stdin first so the payload write does not race a broken pipe,
+        // then writes 200 bytes; a 64-byte cap forces the overflow branch.
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; head -c 200 /dev/zero");
+        let err = signer
+            .build_payment_with_limits(&requirement(), 64, SIGNER_OUTPUT_DEADLINE)
+            .await
+            .expect_err("over cap");
+        assert!(
+            matches!(&err, X402Error::Sign(m) if m.contains("exceeded") && m.contains("cap")),
+            "an over-cap signer stdout must surface as a cap-breach Sign error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_payment_tolerates_a_bounded_stderr_flood() {
+        // A stderr-only flood is truncated and tolerated: the valid stdout
+        // header still returns. This proves stderr overflow stays bounded
+        // without failing a dispatch whose result is well-formed.
+        let signer = SubprocessSigner::new("sh")
+            .arg("-c")
+            .arg("cat >/dev/null; head -c 200 /dev/zero >&2; printf 'mock-x-payment-header'");
+        let header = signer
+            .build_payment_with_limits(&requirement(), 64, SIGNER_OUTPUT_DEADLINE)
+            .await
+            .expect("a bounded stderr flood is non-fatal");
+        assert_eq!(header, "mock-x-payment-header");
+    }
+
+    #[tokio::test]
+    async fn pay_and_record_refuses_when_budget_would_exceed() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(4);
+        budget.set_capacity(&payer, 5).await.unwrap(); // 5 < 8 credits
+
+        let ctx = SettlementContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let config = X402Config {
+            enabled: true,
+            ..Default::default()
+        };
+        let err = pay_and_record(
+            &ctx,
+            &config,
+            &Client::new(reqwest::Client::new()),
+            &covenant_x402::MockSigner,
+            &payer,
+            &sample_call(),
+        )
+        .await
+        .expect_err("over budget");
+        assert!(matches!(err, X402DaemonError::BudgetExceeded));
+
+        // The pre-check is read-only: a refusal must not spend or record.
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pay_and_record_refuses_when_payer_has_no_capacity() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(5);
+        // No set_capacity: would_exceed resolves to NoCapacity.
+
+        let ctx = SettlementContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let config = X402Config {
+            enabled: true,
+            ..Default::default()
+        };
+        let err = pay_and_record(
+            &ctx,
+            &config,
+            &Client::new(reqwest::Client::new()),
+            &covenant_x402::MockSigner,
+            &payer,
+            &sample_call(),
+        )
+        .await
+        .expect_err("no capacity");
+        assert!(matches!(err, X402DaemonError::NoCapacity));
+
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn paid_response_body_read_is_bounded() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        // The paid endpoint is untrusted: a normal body reads back whole, but a
+        // success body past the cap is refused, not buffered into a worker's
+        // memory after the payment already settled.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let ok = http
+            .get(format!("{}/ok", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(read_capped(ok, 64).await.expect("under cap"), "hello");
+
+        // wiremock always emits Content-Length, so this trips the early
+        // declared-length reject; the running accumulation guard for an absent
+        // or understated header is inspection-verified (same as the x402
+        // client's sibling test).
+        let big = http
+            .get(format!("{}/big", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        let err = read_capped(big, 64).await.expect_err("over cap");
+        assert!(
+            matches!(err, X402DaemonError::ResponseTooLarge(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_capped_reads_a_body_at_the_exact_cap_and_rejects_one_byte_over() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        // read_capped guards memory with `> max` on both the Content-Length
+        // pre-check (x402.rs:496) and the running accumulation check (x402.rs:502),
+        // so a body sized exactly at the cap fits and must read back whole.
+        // paid_response_body_read_is_bounded only brackets the boundary from far
+        // away ("hello"/cap 64 under, 4096/cap 64 over) and its comment concedes
+        // the accumulation guard is inspection-verified, so a `> max -> >= max`
+        // slip on either guard survives it. Serve a body of known length N: at
+        // cap N the original accepts (N is not > N) while the mutant rejects, and
+        // at cap N-1 the body sits one byte over and is refused.
+        const BODY: &str = "covenant daemon x402 paid-call at-cap inclusive boundary fixture";
+        let n = BODY.len();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(BODY))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let resp = http.get(server.uri()).send().await.expect("request");
+        let body = read_capped(resp, n)
+            .await
+            .expect("a body sized exactly at the cap fits and must read back whole");
+        assert_eq!(body, BODY);
+
+        let resp = http.get(server.uri()).send().await.expect("request");
+        let err = read_capped(resp, n - 1)
+            .await
+            .expect_err("a body one byte over the cap must be rejected");
+        assert!(
+            matches!(err, X402DaemonError::ResponseTooLarge(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_stream_capped_treats_an_exact_max_fill_as_an_exact_fit_not_overflow() {
+        // read_stream_capped reads through take(max + 1) and sets
+        // overflowed = buf.len() > max (x402.rs:218), so a signer stream of
+        // exactly max bytes is an exact fit (overflowed false, buffer returned
+        // whole) and only max + 1 is a truncated flood (overflowed true, buffer
+        // clamped to max) — the discriminator the extra read byte exists to
+        // enable. The signer cap tests bracket this from far away:
+        // build_payment_with_limits_rejects_oversized_signer_stdout floods far
+        // past the cap and subprocess_signer_returns_stdout_header sits far
+        // under, so neither lands on buf.len() == max, where a `> max` ->
+        // `>= max` slip flips an exact-max signer stdout to a spurious overflow
+        // that read_signer_output fails closed on with StdoutTooLarge, rejecting
+        // a legal worst-case envelope sized exactly at the cap. Pin the
+        // inclusive endpoint directly.
+        let max = 64;
+
+        let exact = vec![b'x'; max];
+        let mut reader = exact.as_slice();
+        let (buf, overflowed) = read_stream_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            !overflowed,
+            "a stream of exactly max bytes is an exact fit, not a flood"
+        );
+        assert_eq!(
+            buf, exact,
+            "an exact-fit body must be returned whole, not truncated"
+        );
+
+        let flood = vec![b'x'; max + 1];
+        let mut reader = flood.as_slice();
+        let (buf, overflowed) = read_stream_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            overflowed,
+            "a stream of max + 1 bytes is a truncated flood and must report overflow"
+        );
+        assert_eq!(
+            buf.len(),
+            max,
+            "an over-cap read must clamp the returned buffer to max"
+        );
     }
 }

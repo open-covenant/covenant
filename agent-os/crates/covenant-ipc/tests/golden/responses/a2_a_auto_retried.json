@@ -1,0 +1,15 @@
+{
+  "kind": "a2_a_auto_retried",
+  "report": {
+    "policy": {
+      "enabled": false,
+      "min_lease_age_ms": 300000,
+      "max_attempts": 3,
+      "max_requeues": 1,
+      "scan_limit": 100
+    },
+    "considered": 0,
+    "requeued": [],
+    "skipped": []
+  }
+}

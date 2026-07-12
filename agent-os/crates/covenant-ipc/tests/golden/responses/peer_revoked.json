@@ -1,0 +1,6 @@
+{
+  "kind": "peer_revoked",
+  "outcome": {
+    "type": "not_found"
+  }
+}

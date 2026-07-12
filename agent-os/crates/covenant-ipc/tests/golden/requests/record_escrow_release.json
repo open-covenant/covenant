@@ -1,0 +1,12 @@
+{
+  "kind": "record_escrow_release",
+  "escrow_id": "escrow-001",
+  "decision_id": "5e111ed0-0000-0000-0000-000000000002",
+  "hirer_address": "Hirer111111111111111111111111111111111111",
+  "worker_address": "Worker11111111111111111111111111111111111",
+  "amount": "10.00",
+  "asset": "USDC",
+  "network": "solana",
+  "provider": "orbserv",
+  "tx_sig": "2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf"
+}

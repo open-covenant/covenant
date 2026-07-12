@@ -95,6 +95,8 @@ enum ScopeNamespace {
     Identity,
     Chain,
     Settlement,
+    X402,
+    Secret,
 }
 
 impl ScopeNamespace {
@@ -119,6 +121,10 @@ impl ScopeNamespace {
             Some(Self::Chain)
         } else if action.starts_with("settlement.") {
             Some(Self::Settlement)
+        } else if action.starts_with("x402.") {
+            Some(Self::X402)
+        } else if action.starts_with("secret.") {
+            Some(Self::Secret)
         } else {
             None
         }
@@ -146,6 +152,12 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         None => return Err(invalid_scope(action, "non-empty scopes must set version 1")),
     }
 
+    // `max_uses` is a cross-namespace usage budget: it bounds how many times a
+    // grant may authorize an action and is enforced at dispatch, not here, so it
+    // is validated centrally rather than threaded through every namespace arm.
+    // Absent means unlimited, preserving every grant issued before budgets existed.
+    optional_positive_integer(action, obj, "max_uses")?;
+
     match namespace {
         ScopeNamespace::Intent | ScopeNamespace::Agent => Ok(()),
         ScopeNamespace::Tool => validate_tool_scope(action, obj),
@@ -155,6 +167,8 @@ pub fn validate_scope(action: &str, scope: &Value) -> Result<(), PermissionError
         ScopeNamespace::Peers | ScopeNamespace::Identity => validate_peer_scope(action, obj),
         ScopeNamespace::Chain => validate_chain_scope(action, obj),
         ScopeNamespace::Settlement => validate_settlement_scope(action, obj),
+        ScopeNamespace::X402 => validate_x402_scope(action, obj),
+        ScopeNamespace::Secret => validate_secret_scope(action, obj),
     }
 }
 
@@ -560,6 +574,64 @@ pub fn settlement_backfill_scope_allows(
     Ok(scope_allows_apply(obj, apply) && scope_allows_before_ms(obj, before_ms))
 }
 
+/// Dispatch-time gate for an outbound x402 paid call. `x402.outbound.pay` is
+/// the one egress whose destination is free-form caller input — the daemon's
+/// `pay_x402` takes `provider`/`endpoint` straight from the request, so a
+/// blanket grant authorizes payment to *any* destination. A `provider`-bound
+/// scope restricts the grant to one destination class; an empty scope, or one
+/// that omits `provider` (or sets it to `null`), keeps the unbounded blanket
+/// behavior. Capabilities are additive, so several destinations are expressed
+/// as several grants — the same shape as per-tool `tool.call.<name>` grants.
+pub fn x402_pay_scope_allows(
+    action: &str,
+    scope: &Value,
+    provider: &str,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "x402.outbound.pay" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    match obj.get("provider").and_then(Value::as_str) {
+        Some(allowed) => Ok(allowed == provider),
+        None => Ok(true),
+    }
+}
+
+/// Dispatch-time gate for a daemon-mediated secret read. `secret.access` lets
+/// a holder pull a named secret from the daemon's broker instead of the secret
+/// sitting in the agent's environment; the secret `name` is free-form caller
+/// input, so a blanket grant authorizes reading *any* secret. A `name`-bound
+/// scope restricts the grant to one secret; an empty scope, or one that omits
+/// `name` (or sets it to `null`), keeps the unbounded blanket behavior.
+/// Capabilities are additive, so several secrets are expressed as several
+/// grants — the same shape as per-tool `tool.call.<name>` grants.
+pub fn secret_access_scope_allows(
+    action: &str,
+    scope: &Value,
+    name: &str,
+) -> Result<bool, PermissionError> {
+    validate_scope(action, scope)?;
+    if action != "secret.access" {
+        return Ok(false);
+    }
+    let Some(obj) = scope.as_object() else {
+        return Ok(false);
+    };
+    if obj.is_empty() {
+        return Ok(true);
+    }
+    match obj.get("name").and_then(Value::as_str) {
+        Some(allowed) => Ok(allowed == name),
+        None => Ok(true),
+    }
+}
+
 /// Dispatch-time gate for the memory-record receipt-backfill mutator. The
 /// action carries the mode (`memory.backfill.apply` vs
 /// `memory.backfill.dry_run`), so a dry-run-only grant cannot satisfy the
@@ -874,6 +946,16 @@ fn validate_settlement_scope(
 ) -> Result<(), PermissionError> {
     optional_bool(action, obj, "apply")?;
     optional_non_negative_integer_or_null(action, obj, "before_ms")?;
+    Ok(())
+}
+
+fn validate_x402_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_non_empty_string_or_null(action, obj, "provider")?;
+    Ok(())
+}
+
+fn validate_secret_scope(action: &str, obj: &Map<String, Value>) -> Result<(), PermissionError> {
+    optional_non_empty_string_or_null(action, obj, "name")?;
     Ok(())
 }
 
@@ -1202,6 +1284,45 @@ pub fn verify_with_clock_and_trust_root(
     verify_with_clock(signed, now_ms)
 }
 
+/// One capability's usage budget to check and consume. `signature` keys the
+/// capability; `max_uses` is the positive budget read from its signed scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetConsumeRequest {
+    pub signature: [u8; 64],
+    pub max_uses: u64,
+}
+
+/// A capability whose usage budget is already fully spent. `used` equals
+/// `max_uses` at the point of refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExhaustedBudget {
+    pub signature: [u8; 64],
+    pub max_uses: u64,
+    pub used: u64,
+}
+
+/// Outcome of an atomic, all-or-nothing usage-budget consume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BudgetConsumeOutcome {
+    /// Every requested signature had budget remaining; one use was recorded for each.
+    Consumed,
+    /// At least one signature was already at `max_uses`; no budget was recorded.
+    Exhausted(Vec<ExhaustedBudget>),
+}
+
+/// One grant's introspection state: the signed grant, whether it is revoked,
+/// and how many durable uses it has recorded. `used` is the same per-signature
+/// count [`CapabilityStore::consume_uses`] maintains, read without recording a
+/// use, so an operator observes the exact budget the enforcement path would
+/// honor. Keyed implicitly by the ed25519 signature `capability` carries, so
+/// several grants for one action stay distinct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapabilityUsage {
+    pub capability: SignedCapability,
+    pub revoked: bool,
+    pub used: u64,
+}
+
 #[async_trait]
 pub trait CapabilityStore: Send + Sync {
     async fn record(&self, signed: SignedCapability) -> Result<(), PermissionError>;
@@ -1222,6 +1343,26 @@ pub trait CapabilityStore: Send + Sync {
     /// `granted ⊝ revoked` so a grant whose revocation has been purged is
     /// **not** resurrected. Live (non-revoked) grants are never touched.
     async fn purge_revoked_older_than(&self, before_ms: u64) -> Result<u64, PermissionError>;
+    /// Atomically check and consume one unit of usage budget for each distinct
+    /// requested signature. All-or-nothing: if any signature is already at its
+    /// `max_uses`, no budget is consumed and every exhausted signature is
+    /// returned. The count is durable and the whole check-and-consume is
+    /// serialized per store, so two concurrent callers can never both consume
+    /// the final unit. Pass only capabilities that declare a budget; an empty
+    /// request consumes nothing and returns `Consumed`.
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError>;
+    /// Read-only snapshot of every grant in the ledger paired with its
+    /// revocation status and durable use count. Reads the same per-signature
+    /// counts `consume_uses` maintains without recording a use, and joins
+    /// grants to counts and revocations by the ed25519 signature so several
+    /// grants for the same action stay distinct. The snapshot is taken under
+    /// the same lock as `record`/`revoke`/`consume_uses`, so a grant, its
+    /// revocation, and its use count are read consistently with respect to a
+    /// concurrent grant/revoke/consume.
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError>;
 }
 
 /// Revocation record. The daemon writes one of these per `revoke()` call;
@@ -1236,9 +1377,21 @@ pub struct Revocation {
     pub revoked_at: u64,
 }
 
+/// One authorized use of a budgeted capability. The daemon appends one per
+/// authorized use and a capability's used count is the number of these whose
+/// signature matches. Never purged: a `max_uses` budget is a lifetime cap, so
+/// dropping use records would silently refill it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct UseRecord {
+    #[serde(with = "sig_b58")]
+    signature: [u8; 64],
+    at_ms: u64,
+}
+
 pub struct JsonlCapabilityStore {
     granted_path: PathBuf,
     revoked_path: PathBuf,
+    uses_path: PathBuf,
     lock: Arc<Mutex<()>>,
 }
 
@@ -1263,9 +1416,19 @@ impl JsonlCapabilityStore {
             .append(true)
             .open(&revoked_path)
             .await?;
+        let uses_path = granted_path
+            .parent()
+            .map(|p| p.join("uses.jsonl"))
+            .unwrap_or_else(|| PathBuf::from("uses.jsonl"));
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&uses_path)
+            .await?;
         Ok(Self {
             granted_path,
             revoked_path,
+            uses_path,
             lock: Arc::new(Mutex::new(())),
         })
     }
@@ -1445,6 +1608,82 @@ impl CapabilityStore for JsonlCapabilityStore {
         Self::rewrite_atomically(&self.revoked_path, &kept_revocations).await?;
         Ok(purged)
     }
+
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError> {
+        if requests.is_empty() {
+            return Ok(BudgetConsumeOutcome::Consumed);
+        }
+        // The read-count-check-append runs under the same lock as record /
+        // revoke / purge, so the budget cannot be raced: two concurrent checks
+        // for the last unit serialize, and the loser sees the count the winner
+        // appended.
+        let _g = self.lock.lock().await;
+        let mut counts: std::collections::HashMap<[u8; 64], u64> = std::collections::HashMap::new();
+        for use_record in Self::read_jsonl::<UseRecord>(&self.uses_path).await? {
+            *counts.entry(use_record.signature).or_insert(0) += 1;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut to_consume: Vec<[u8; 64]> = Vec::new();
+        let mut exhausted: Vec<ExhaustedBudget> = Vec::new();
+        for req in requests {
+            if !seen.insert(req.signature) {
+                continue;
+            }
+            let used = counts.get(&req.signature).copied().unwrap_or(0);
+            if used >= req.max_uses {
+                exhausted.push(ExhaustedBudget {
+                    signature: req.signature,
+                    max_uses: req.max_uses,
+                    used,
+                });
+            } else {
+                to_consume.push(req.signature);
+            }
+        }
+        if !exhausted.is_empty() {
+            return Ok(BudgetConsumeOutcome::Exhausted(exhausted));
+        }
+        let at_ms = Self::epoch_ms();
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.uses_path)
+            .await?;
+        for signature in to_consume {
+            let line = serde_json::to_string(&UseRecord { signature, at_ms })?;
+            f.write_all(line.as_bytes()).await?;
+            f.write_all(b"\n").await?;
+        }
+        f.flush().await?;
+        Ok(BudgetConsumeOutcome::Consumed)
+    }
+
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError> {
+        let _g = self.lock.lock().await;
+        let revoked: std::collections::HashSet<[u8; 64]> = self
+            .read_all_revocations()
+            .await?
+            .into_iter()
+            .map(|r| r.signature)
+            .collect();
+        let mut counts: std::collections::HashMap<[u8; 64], u64> = std::collections::HashMap::new();
+        for use_record in Self::read_jsonl::<UseRecord>(&self.uses_path).await? {
+            *counts.entry(use_record.signature).or_insert(0) += 1;
+        }
+        Ok(self
+            .read_all_grants()
+            .await?
+            .into_iter()
+            .map(|capability| CapabilityUsage {
+                used: counts.get(&capability.signature).copied().unwrap_or(0),
+                revoked: revoked.contains(&capability.signature),
+                capability,
+            })
+            .collect())
+    }
 }
 
 impl JsonlCapabilityStore {
@@ -1475,6 +1714,7 @@ impl JsonlCapabilityStore {
 pub struct InMemoryCapabilityStore {
     granted: Mutex<Vec<SignedCapability>>,
     revoked: Mutex<std::collections::HashMap<[u8; 64], u64>>,
+    uses: Mutex<std::collections::HashMap<[u8; 64], u64>>,
 }
 
 impl InMemoryCapabilityStore {
@@ -1552,6 +1792,55 @@ impl CapabilityStore for InMemoryCapabilityStore {
         granted.retain(|c| !drop_set.contains(&c.signature));
         Ok(purged)
     }
+
+    async fn consume_uses(
+        &self,
+        requests: &[BudgetConsumeRequest],
+    ) -> Result<BudgetConsumeOutcome, PermissionError> {
+        if requests.is_empty() {
+            return Ok(BudgetConsumeOutcome::Consumed);
+        }
+        let mut uses = self.uses.lock().await;
+        let mut seen = std::collections::HashSet::new();
+        let mut to_consume: Vec<[u8; 64]> = Vec::new();
+        let mut exhausted: Vec<ExhaustedBudget> = Vec::new();
+        for req in requests {
+            if !seen.insert(req.signature) {
+                continue;
+            }
+            let used = uses.get(&req.signature).copied().unwrap_or(0);
+            if used >= req.max_uses {
+                exhausted.push(ExhaustedBudget {
+                    signature: req.signature,
+                    max_uses: req.max_uses,
+                    used,
+                });
+            } else {
+                to_consume.push(req.signature);
+            }
+        }
+        if !exhausted.is_empty() {
+            return Ok(BudgetConsumeOutcome::Exhausted(exhausted));
+        }
+        for signature in to_consume {
+            *uses.entry(signature).or_insert(0) += 1;
+        }
+        Ok(BudgetConsumeOutcome::Consumed)
+    }
+
+    async fn usage_snapshot(&self) -> Result<Vec<CapabilityUsage>, PermissionError> {
+        let revoked = self.revoked.lock().await;
+        let granted = self.granted.lock().await;
+        let uses = self.uses.lock().await;
+        Ok(granted
+            .iter()
+            .map(|capability| CapabilityUsage {
+                used: uses.get(&capability.signature).copied().unwrap_or(0),
+                revoked: revoked.contains_key(&capability.signature),
+                capability: capability.clone(),
+            })
+            .collect())
+    }
 }
 
 /// Plain-English title for a signed capability action. Mirrors the catalog
@@ -1619,6 +1908,112 @@ mod tests {
     fn validate_scope_accepts_empty_and_unknown_scopes() {
         assert!(validate_scope("tool.web_search", &serde_json::json!({})).is_ok());
         assert!(validate_scope("custom.action", &serde_json::json!("opaque")).is_ok());
+    }
+
+    #[test]
+    fn validate_scope_accepts_max_uses_budget_across_namespaces() {
+        // max_uses is cross-cutting: any recognized namespace may carry it.
+        assert!(validate_scope(
+            "tool.call.echo",
+            &serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 3 })
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "intent.publish",
+            &serde_json::json!({ "version": 1, "max_uses": 1 })
+        )
+        .is_ok());
+        assert!(validate_scope(
+            "memory.read",
+            &serde_json::json!({ "version": 1, "max_uses": 100 })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_scope_rejects_non_positive_or_non_integer_max_uses() {
+        for bad in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("5"),
+        ] {
+            let scope = serde_json::json!({ "version": 1, "max_uses": bad });
+            assert!(
+                matches!(
+                    validate_scope("tool.call.echo", &scope),
+                    Err(PermissionError::InvalidScope(_))
+                ),
+                "max_uses = {bad} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn scope_namespace_inventory_is_frozen() {
+        // Compile-time tripwire for the capability namespace grammar. A new
+        // ScopeNamespace variant makes the `prefix` match non-exhaustive and
+        // breaks the build, forcing a matching golden vector under
+        // tests/golden/capabilities/ and a bump to EXPECTED_NAMESPACES in
+        // tests/golden_capabilities.rs. The asserted list freezes the inventory
+        // and its order; each entry is the action's leading namespace segment.
+        fn prefix(ns: ScopeNamespace) -> &'static str {
+            match ns {
+                ScopeNamespace::Intent => "intent",
+                ScopeNamespace::Tool => "tool",
+                ScopeNamespace::Memory => "memory",
+                ScopeNamespace::Agent => "agent",
+                ScopeNamespace::A2a => "a2a",
+                ScopeNamespace::Audit => "audit",
+                ScopeNamespace::Peers => "peers",
+                ScopeNamespace::Identity => "identity",
+                ScopeNamespace::Chain => "chain",
+                ScopeNamespace::Settlement => "settlement",
+                ScopeNamespace::X402 => "x402",
+                ScopeNamespace::Secret => "secret",
+            }
+        }
+        let inventory: Vec<&str> = [
+            ScopeNamespace::Intent,
+            ScopeNamespace::Tool,
+            ScopeNamespace::Memory,
+            ScopeNamespace::Agent,
+            ScopeNamespace::A2a,
+            ScopeNamespace::Audit,
+            ScopeNamespace::Peers,
+            ScopeNamespace::Identity,
+            ScopeNamespace::Chain,
+            ScopeNamespace::Settlement,
+            ScopeNamespace::X402,
+            ScopeNamespace::Secret,
+        ]
+        .into_iter()
+        .map(prefix)
+        .collect();
+        assert_eq!(
+            inventory,
+            [
+                "intent",
+                "tool",
+                "memory",
+                "agent",
+                "a2a",
+                "audit",
+                "peers",
+                "identity",
+                "chain",
+                "settlement",
+                "x402",
+                "secret",
+            ],
+            "capability namespace inventory changed — freeze the new namespace as a golden vector in tests/golden/capabilities/ and update EXPECTED_NAMESPACES in tests/golden_capabilities.rs",
+        );
+        for namespace in &inventory {
+            assert!(
+                ScopeNamespace::from_action(&format!("{namespace}.example")).is_some(),
+                "every frozen namespace prefix must route through the live matcher",
+            );
+        }
     }
 
     #[test]
@@ -3363,6 +3758,160 @@ mod tests {
     }
 
     #[test]
+    fn x402_pay_scope_allows_unscoped_grant_permits_any_provider() {
+        // An empty scope and a version-only scope are both unbounded: a blanket
+        // x402.outbound.pay grant authorizes payment to any destination. A
+        // regression that treated the version-only scope as a deny-all would
+        // break every existing unscoped grant.
+        for scope in [serde_json::json!({}), serde_json::json!({ "version": 1 })] {
+            assert!(
+                x402_pay_scope_allows("x402.outbound.pay", &scope, "xona").unwrap(),
+                "unscoped grant must permit any provider: {scope}"
+            );
+            assert!(
+                x402_pay_scope_allows("x402.outbound.pay", &scope, "anything-else").unwrap(),
+                "unscoped grant must permit any provider: {scope}"
+            );
+        }
+    }
+
+    #[test]
+    fn x402_pay_scope_allows_binds_grant_to_destination_class() {
+        // A provider-bound scope is the least-privilege case: it authorizes the
+        // named destination class and refuses every other. This is the security
+        // property — an agent granted egress to "xona" cannot pay "evil-corp".
+        let scope = serde_json::json!({ "version": 1, "provider": "xona" });
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &scope, "xona").unwrap());
+        assert!(
+            !x402_pay_scope_allows("x402.outbound.pay", &scope, "evil-corp").unwrap(),
+            "a provider-bound grant must refuse a destination outside its class"
+        );
+        // A null provider is the documented unbounded marker, distinct from an
+        // out-of-class string: it permits any destination, mirroring tool/null.
+        let null_scope = serde_json::json!({ "version": 1, "provider": null });
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &null_scope, "xona").unwrap());
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &null_scope, "evil-corp").unwrap());
+    }
+
+    #[test]
+    fn x402_pay_scope_allows_rejects_action_mismatch() {
+        // The matcher binds only the x402.outbound.pay action. A grant for any
+        // other action string must not satisfy an egress dispatch, even with a
+        // matching provider — a swap that dropped the action guard would let an
+        // unrelated grant authorize outbound payments.
+        let scope = serde_json::json!({ "version": 1, "provider": "xona" });
+        assert!(!x402_pay_scope_allows("x402.outbound.other", &scope, "xona").unwrap());
+        assert!(!x402_pay_scope_allows("tool.call.echo", &scope, "xona").unwrap());
+    }
+
+    #[test]
+    fn x402_pay_scope_allows_propagates_malformed_provider_rejection() {
+        // provider is validated as a non-empty string or null. A non-string or
+        // empty-string provider is a malformed grant the matcher must surface as
+        // an Err (caller fails closed), not silently treat as unbounded.
+        let non_string = serde_json::json!({ "version": 1, "provider": 42 });
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &non_string, "xona").is_err());
+        let empty = serde_json::json!({ "version": 1, "provider": "" });
+        assert!(x402_pay_scope_allows("x402.outbound.pay", &empty, "xona").is_err());
+    }
+
+    #[test]
+    fn validate_x402_scope_routes_and_rejects_bad_provider() {
+        // x402.* must route to validate_x402_scope: a non-string provider is
+        // rejected at grant time, and a valid provider string is accepted.
+        assert!(validate_scope(
+            "x402.outbound.pay",
+            &serde_json::json!({ "version": 1, "provider": 42 })
+        )
+        .is_err());
+        assert!(validate_scope(
+            "x402.outbound.pay",
+            &serde_json::json!({ "version": 1, "provider": "xona" })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn secret_access_scope_allows_unscoped_grant_permits_any_secret() {
+        // An empty scope and a version-only scope are both unbounded: a blanket
+        // secret.access grant authorizes reading any named secret. A regression
+        // that treated the version-only scope as a deny-all would break every
+        // existing unscoped grant.
+        for scope in [serde_json::json!({}), serde_json::json!({ "version": 1 })] {
+            assert!(
+                secret_access_scope_allows("secret.access", &scope, "openai-api-key").unwrap(),
+                "unscoped grant must permit any secret: {scope}"
+            );
+            assert!(
+                secret_access_scope_allows("secret.access", &scope, "anything-else").unwrap(),
+                "unscoped grant must permit any secret: {scope}"
+            );
+        }
+    }
+
+    #[test]
+    fn secret_access_scope_allows_binds_grant_to_named_secret() {
+        // A name-bound scope is the least-privilege case: it authorizes the one
+        // named secret and refuses every other. This is the security property —
+        // an agent granted "openai-api-key" cannot read "stripe-secret-key".
+        let scope = serde_json::json!({ "version": 1, "name": "openai-api-key" });
+        assert!(secret_access_scope_allows("secret.access", &scope, "openai-api-key").unwrap());
+        assert!(
+            !secret_access_scope_allows("secret.access", &scope, "stripe-secret-key").unwrap(),
+            "a name-bound grant must refuse a secret outside its name"
+        );
+        // A null name is the documented unbounded marker, distinct from an
+        // out-of-scope string: it permits any secret, mirroring tool/null.
+        let null_scope = serde_json::json!({ "version": 1, "name": null });
+        assert!(
+            secret_access_scope_allows("secret.access", &null_scope, "openai-api-key").unwrap()
+        );
+        assert!(
+            secret_access_scope_allows("secret.access", &null_scope, "stripe-secret-key").unwrap()
+        );
+    }
+
+    #[test]
+    fn secret_access_scope_allows_rejects_action_mismatch() {
+        // The matcher binds only the secret.access action. A grant for any other
+        // action string must not satisfy a secret read, even with a matching
+        // name — a swap that dropped the action guard would let an unrelated
+        // grant authorize secret access.
+        let scope = serde_json::json!({ "version": 1, "name": "openai-api-key" });
+        assert!(!secret_access_scope_allows("secret.read", &scope, "openai-api-key").unwrap());
+        assert!(!secret_access_scope_allows("tool.call.echo", &scope, "openai-api-key").unwrap());
+    }
+
+    #[test]
+    fn secret_access_scope_allows_propagates_malformed_name_rejection() {
+        // name is validated as a non-empty string or null. A non-string or
+        // empty-string name is a malformed grant the matcher must surface as an
+        // Err (caller fails closed), not silently treat as unbounded.
+        let non_string = serde_json::json!({ "version": 1, "name": 42 });
+        assert!(
+            secret_access_scope_allows("secret.access", &non_string, "openai-api-key").is_err()
+        );
+        let empty = serde_json::json!({ "version": 1, "name": "" });
+        assert!(secret_access_scope_allows("secret.access", &empty, "openai-api-key").is_err());
+    }
+
+    #[test]
+    fn validate_secret_scope_routes_and_rejects_bad_name() {
+        // secret.* must route to validate_secret_scope: a non-string name is
+        // rejected at grant time, and a valid name string is accepted.
+        assert!(validate_scope(
+            "secret.access",
+            &serde_json::json!({ "version": 1, "name": 42 })
+        )
+        .is_err());
+        assert!(validate_scope(
+            "secret.access",
+            &serde_json::json!({ "version": 1, "name": "openai-api-key" })
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn memory_backfill_scope_allows_apply_and_before_ms() {
         let scope = serde_json::json!({
             "version": 1,
@@ -4018,6 +4567,57 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn verify_with_clock_and_trust_root_pins_signature_check_for_trusted_grantor() {
+        // verify_with_clock_and_trust_root (line 1152) checks
+        // granted_by == trust_root FIRST, then delegates to
+        // verify_with_clock -> verify for the ed25519 signature. The
+        // boundary test above pins (a) match+valid -> Ok, (b) mismatch+
+        // valid -> UntrustedGrantor, (c) mismatch+tampered -> UntrustedGrantor
+        // (the gate short-circuits before signature verification), and
+        // (d) match+expired -> Expired. None of them probe the symmetric
+        // ordering property: a grantor that MATCHES the trust root is still
+        // fully signature-verified.
+        //
+        // That is the residual attack after the trust-root gate. The doc
+        // comment names the out-of-band granted.jsonl writer who self-signs
+        // with their own key — closed by (b)/(c). But the same file access
+        // lets an attacker copy the trust root's PUBLIC key into granted_by
+        // and append an escalated capability; they cannot produce a valid
+        // signature (they lack the secret key), so the only thing rejecting
+        // the forgery is verify() inside the wrapper. A refactor that
+        // short-circuited a trusted grantor to an expiry-only check
+        // ('granted_by is us, just confirm it has not expired') would pass
+        // (a) and (b)/(c) unchanged; (d) catches a pure return-Ok short-
+        // circuit but NOT the trusted-then-expiry-only variant, which would
+        // accept this forgery as Ok.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let mut tampered = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), Some(1000)),
+            issuer.signing_key(),
+        );
+        // Escalate the action after signing: granted_by still names the
+        // trust root, so the gate passes, but canonical_message no longer
+        // matches the signature.
+        tampered.capability.action = "tool.gpu_inference".into();
+
+        // now_ms (999) is strictly BEFORE expiry (1000) so the expiry arm
+        // cannot mask a skipped signature check — a trusted-then-expiry-only
+        // short-circuit would return Ok here instead of BadSignature.
+        assert!(
+            matches!(
+                verify_with_clock_and_trust_root(&tampered, 999, issuer.pubkey_bytes()),
+                Err(PermissionError::BadSignature)
+            ),
+            "a capability whose granted_by matches the trust_root but whose \
+             signed content was tampered must surface as BadSignature, not \
+             Ok — the trust-root gate must not bypass ed25519 verification \
+             for a matching grantor, or anyone who can write the trust \
+             root's public key into granted.jsonl could forge capabilities",
+        );
+    }
+
     #[tokio::test]
     async fn in_memory_store_filters_by_subject() {
         let issuer = LocalIdentity::generate("authority@local");
@@ -4062,6 +4662,428 @@ mod tests {
         let recent = s2.recent(10).await.unwrap();
         assert_eq!(recent.len(), 1);
         assert!(verify(&recent[0]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn in_memory_consume_uses_allows_up_to_max_then_exhausts() {
+        let store = InMemoryCapabilityStore::new();
+        let reqs = [BudgetConsumeRequest {
+            signature: [3u8; 64],
+            max_uses: 2,
+        }];
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        assert_eq!(
+            store.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: [3u8; 64],
+                max_uses: 2,
+                used: 2,
+            }]),
+            "the use after the budget is spent must refuse and report used == max_uses",
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_consume_uses_is_all_or_nothing_across_signatures() {
+        let store = InMemoryCapabilityStore::new();
+        let spent = [4u8; 64];
+        let fresh = [5u8; 64];
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: spent,
+                max_uses: 1,
+            }])
+            .await
+            .unwrap();
+
+        // Batch mixes the already-spent signature with a fresh one. The whole
+        // batch must refuse, and the fresh signature must NOT be consumed.
+        let outcome = store
+            .consume_uses(&[
+                BudgetConsumeRequest {
+                    signature: spent,
+                    max_uses: 1,
+                },
+                BudgetConsumeRequest {
+                    signature: fresh,
+                    max_uses: 1,
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: spent,
+                max_uses: 1,
+                used: 1,
+            }])
+        );
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: fresh,
+                    max_uses: 1,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "the fresh signature must still have its full budget — the failed batch consumed nothing",
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_consume_uses_charges_a_duplicated_signature_once_per_batch() {
+        let store = InMemoryCapabilityStore::new();
+        let sig = [7u8; 64];
+
+        // A batch that repeats one signature must charge it once, not once per
+        // copy: the dedup arm (`if !seen.insert(..) { continue }`) is what stops
+        // a duplicated request from debiting a max_uses:2 grant twice in a single
+        // call and spending its whole budget at once.
+        assert_eq!(
+            store
+                .consume_uses(&[
+                    BudgetConsumeRequest {
+                        signature: sig,
+                        max_uses: 2,
+                    },
+                    BudgetConsumeRequest {
+                        signature: sig,
+                        max_uses: 2,
+                    },
+                ])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+
+        // Exactly one unit was consumed, so a second real use still fits. Without
+        // the dedup this call would already be Exhausted.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "the duplicate batch must consume one unit, leaving budget for one more",
+        );
+
+        // And the budget is exactly spent at used == max_uses, not over-spent.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: sig,
+                max_uses: 2,
+                used: 2,
+            }]),
+        );
+    }
+
+    #[tokio::test]
+    async fn consume_uses_empty_request_consumes_nothing() {
+        let store = InMemoryCapabilityStore::new();
+        assert_eq!(
+            store.consume_uses(&[]).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_persists_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let reqs = [BudgetConsumeRequest {
+            signature: [9u8; 64],
+            max_uses: 1,
+        }];
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        assert_eq!(
+            s.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        drop(s);
+
+        // A fresh store over the same directory must see the spent budget: the
+        // count lives in uses.jsonl, not in memory, so a daemon restart cannot
+        // refill it.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        assert_eq!(
+            s2.consume_uses(&reqs).await.unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: [9u8; 64],
+                max_uses: 1,
+                used: 1,
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_charges_a_duplicated_signature_once_across_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let sig = [13u8; 64];
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        assert_eq!(
+            s.consume_uses(&[
+                BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                },
+                BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                },
+            ])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Consumed
+        );
+        drop(s);
+
+        // The durable ledger must hold exactly one UseRecord for the duplicated
+        // batch. A fresh store replays the count from uses.jsonl, so a second
+        // real use still fits and only the third exhausts the max_uses:2 budget.
+        // Two appended lines would leave the reopened budget already spent.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        assert_eq!(
+            s2.consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+            "a duplicated request must append one UseRecord, not two",
+        );
+        assert_eq!(
+            s2.consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap(),
+            BudgetConsumeOutcome::Exhausted(vec![ExhaustedBudget {
+                signature: sig,
+                max_uses: 2,
+                used: 2,
+            }]),
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_consume_uses_serializes_concurrent_last_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let store = JsonlCapabilityStore::open(path).await.unwrap();
+        let reqs = [BudgetConsumeRequest {
+            signature: [11u8; 64],
+            max_uses: 1,
+        }];
+
+        // Two checks race for the single remaining unit. Exactly one may win.
+        let (r1, r2) = tokio::join!(store.consume_uses(&reqs), store.consume_uses(&reqs));
+        let outcomes = [r1.unwrap(), r2.unwrap()];
+        let consumed = outcomes
+            .iter()
+            .filter(|o| matches!(o, BudgetConsumeOutcome::Consumed))
+            .count();
+        let exhausted = outcomes
+            .iter()
+            .filter(|o| matches!(o, BudgetConsumeOutcome::Exhausted(_)))
+            .count();
+        assert_eq!(
+            consumed, 1,
+            "exactly one concurrent check may consume the last unit"
+        );
+        assert_eq!(exhausted, 1, "the loser must be refused, not also pass");
+    }
+
+    #[tokio::test]
+    async fn in_memory_usage_snapshot_reports_durable_count_without_recording() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let store = InMemoryCapabilityStore::new();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        store.record(signed).await.unwrap();
+
+        let snap = store.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert_eq!(
+            snap[0].used, 0,
+            "a grant with no recorded use reports used == 0"
+        );
+        assert!(!snap[0].revoked);
+
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 2,
+            }])
+            .await
+            .unwrap();
+
+        // Reading the snapshot is observation, not consumption: repeated reads
+        // never bump the count.
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 1);
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 1);
+
+        // The used count the snapshot reports is the exact budget the
+        // enforcement path honors: one unit remains, so one more consume passes
+        // and the next is refused. Had the snapshot recorded a use, this consume
+        // would already be exhausted.
+        assert_eq!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Consumed,
+        );
+        assert!(matches!(
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig,
+                    max_uses: 2,
+                }])
+                .await
+                .unwrap(),
+            BudgetConsumeOutcome::Exhausted(_),
+        ));
+        assert_eq!(store.usage_snapshot().await.unwrap()[0].used, 2);
+    }
+
+    #[tokio::test]
+    async fn jsonl_usage_snapshot_reads_durable_ledger_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        s.record(signed).await.unwrap();
+        s.consume_uses(&[BudgetConsumeRequest {
+            signature: sig,
+            max_uses: 3,
+        }])
+        .await
+        .unwrap();
+        drop(s);
+
+        // A fresh store over the same directory recomputes the count from
+        // uses.jsonl — the same on-disk ledger consume_uses folds — so the
+        // snapshot cannot advertise a budget a restart would have refilled.
+        let s2 = JsonlCapabilityStore::open(path).await.unwrap();
+        let snap = s2.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert_eq!(snap[0].used, 1);
+        assert!(!snap[0].revoked);
+    }
+
+    #[tokio::test]
+    async fn jsonl_usage_snapshot_keys_use_count_by_signature_not_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("capabilities").join("granted.jsonl");
+        let issuer = LocalIdentity::generate("authority@local");
+        let alice = LocalIdentity::generate("alice@local").agent_id();
+        let bob = LocalIdentity::generate("bob@local").agent_id();
+        let store = JsonlCapabilityStore::open(path).await.unwrap();
+
+        // Two grants for the SAME action but distinct subjects, so distinct
+        // signatures. A join keyed on the action would smear their budgets
+        // together; keyed on the signature they stay separate.
+        let a = sign(
+            cap(alice, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let b = sign(
+            cap(bob, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        assert_ne!(sig_a, sig_b);
+        store.record(a).await.unwrap();
+        store.record(b).await.unwrap();
+
+        for _ in 0..2 {
+            store
+                .consume_uses(&[BudgetConsumeRequest {
+                    signature: sig_a,
+                    max_uses: 9,
+                }])
+                .await
+                .unwrap();
+        }
+        store
+            .consume_uses(&[BudgetConsumeRequest {
+                signature: sig_b,
+                max_uses: 9,
+            }])
+            .await
+            .unwrap();
+
+        let snap = store.usage_snapshot().await.unwrap();
+        let used_of = |sig: [u8; 64]| {
+            snap.iter()
+                .find(|u| u.capability.signature == sig)
+                .unwrap()
+                .used
+        };
+        assert_eq!(used_of(sig_a), 2);
+        assert_eq!(used_of(sig_b), 1);
+    }
+
+    #[tokio::test]
+    async fn usage_snapshot_includes_revoked_grants_flagged() {
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let store = InMemoryCapabilityStore::new();
+        let signed = sign(
+            cap(subject, "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let sig = signed.signature;
+        store.record(signed).await.unwrap();
+        assert!(store.revoke(sig).await.unwrap());
+
+        // A revoked grant still appears, flagged, so the operator sees the full
+        // delegated-authority history — the live set (recent/list_for_subject)
+        // drops it.
+        let snap = store.usage_snapshot().await.unwrap();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].capability.signature, sig);
+        assert!(snap[0].revoked);
     }
 
     #[tokio::test]
@@ -4701,6 +5723,181 @@ mod tests {
         assert!(!s.is_revoked(dead.signature).await.unwrap());
         assert!(s.recent(10).await.unwrap().is_empty());
         assert!(s.list_for_subject(subject.pubkey).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn in_memory_purge_revoked_older_than_keeps_revocation_stamped_exactly_at_cutoff() {
+        // InMemoryCapabilityStore::purge_revoked_older_than drops a revocation
+        // (and its grant in lockstep) only when its timestamp is STRICTLY less
+        // than the cutoff: `filter(|(_, ts)| **ts < before_ms)`. The trait
+        // contract says "Drop every revocation with revoked_at < before_ms", so
+        // a revocation stamped EXACTLY at before_ms survives. The existing purge
+        // tests stamp revoked_at=50 with cutoff 100, so no revocation lands on
+        // the cutoff and the equality keep arm is untested. A `<` -> `<=` flip
+        // would purge cutoff-equal revocations (and their grants) a tick early
+        // on every retention cycle whose cutoff aligns to a revocation
+        // timestamp, with the strict-less-than test still green.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let s = InMemoryCapabilityStore::new();
+
+        let below = sign(
+            cap(subject.clone(), "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let boundary = sign(
+            cap(subject.clone(), "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let above = sign(
+            cap(subject.clone(), "memory.read", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        s.record(below.clone()).await.unwrap();
+        s.record(boundary.clone()).await.unwrap();
+        s.record(above.clone()).await.unwrap();
+        assert!(s.revoke(below.signature).await.unwrap());
+        assert!(s.revoke(boundary.signature).await.unwrap());
+        assert!(s.revoke(above.signature).await.unwrap());
+
+        // Override the epoch_ms revoke stamps with deterministic timestamps
+        // bracketing the cutoff: below=100, boundary=200, above=300.
+        {
+            let mut r = s.revoked.lock().await;
+            r.insert(below.signature, 100);
+            r.insert(boundary.signature, 200);
+            r.insert(above.signature, 300);
+        }
+
+        // cutoff=200: below(100) strictly older -> purged; boundary(200) on the
+        // cutoff -> kept; above(300) -> kept.
+        let purged = s.purge_revoked_older_than(200).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must purge only the 100-stamped revocation; the \
+             200-stamped revocation sits on the cutoff and `<` keeps it. A flip \
+             to `<=` would purge both and return 2, dropping the cutoff-equal \
+             revocation and its grant a cycle early. got: {purged}",
+        );
+        assert!(
+            !s.is_revoked(below.signature).await.unwrap(),
+            "the below-cutoff revocation (100) must be purged",
+        );
+        assert!(
+            s.is_revoked(boundary.signature).await.unwrap(),
+            "the cutoff-equal revocation (200) must survive — `<` keeps it",
+        );
+        assert!(
+            s.is_revoked(above.signature).await.unwrap(),
+            "the above-cutoff revocation (300) must survive",
+        );
+
+        // Re-purge with the boundary moved to 300 so the equality arm is pinned
+        // on a second cutoff value, not a phase-1 coincidence.
+        let purged = s.purge_revoked_older_than(300).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge at cutoff=300 drops the now-strictly-less 200 while \
+             keeping the cutoff-equal 300. got: {purged}",
+        );
+        assert!(
+            !s.is_revoked(boundary.signature).await.unwrap(),
+            "200 is now strictly less than 300 and must be purged",
+        );
+        assert!(
+            s.is_revoked(above.signature).await.unwrap(),
+            "the cutoff-equal revocation (300) must survive the second cycle",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_purge_revoked_older_than_keeps_revocation_stamped_exactly_at_cutoff() {
+        // JsonlCapabilityStore::purge_revoked_older_than uses the same strict
+        // cutoff as the in-memory backend: `filter(|r| r.revoked_at < before_ms)`,
+        // so a Revocation stamped EXACTLY at before_ms survives the rewrite.
+        // jsonl_purge_rewrites_both_files_and_keeps_live_grants stamps
+        // revoked_at=50 with cutoff 100 and never lands a revocation on the
+        // cutoff. Mirror the in-memory equality pin so the two backends align.
+        let issuer = LocalIdentity::generate("authority@local");
+        let subject = LocalIdentity::generate("research@local").agent_id();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("granted.jsonl");
+        let s = JsonlCapabilityStore::open(path.clone()).await.unwrap();
+
+        let below = sign(
+            cap(subject.clone(), "tool.web_search", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let boundary = sign(
+            cap(subject.clone(), "memory.write", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        let above = sign(
+            cap(subject.clone(), "memory.read", issuer.agent_id(), None),
+            issuer.signing_key(),
+        );
+        s.record(below.clone()).await.unwrap();
+        s.record(boundary.clone()).await.unwrap();
+        s.record(above.clone()).await.unwrap();
+        assert!(s.revoke(below.signature).await.unwrap());
+        assert!(s.revoke(boundary.signature).await.unwrap());
+        assert!(s.revoke(above.signature).await.unwrap());
+
+        // Rewrite revoked.jsonl with deterministic timestamps bracketing the
+        // cutoff: below=100, boundary=200, above=300.
+        let rev_path = dir.path().join("revoked.jsonl");
+        let rows = [
+            (below.signature, 100u64),
+            (boundary.signature, 200),
+            (above.signature, 300),
+        ]
+        .iter()
+        .map(|(signature, revoked_at)| {
+            serde_json::to_string(&Revocation {
+                signature: *signature,
+                revoked_at: *revoked_at,
+            })
+            .unwrap()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+        std::fs::write(&rev_path, format!("{rows}\n")).unwrap();
+
+        let purged = s.purge_revoked_older_than(200).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must purge only the 100-stamped revocation; the \
+             200-stamped revocation sits on the cutoff and `<` keeps it. A flip \
+             to `<=` would rewrite both out of revoked.jsonl and return 2. \
+             got: {purged}",
+        );
+        assert!(
+            !s.is_revoked(below.signature).await.unwrap(),
+            "the below-cutoff revocation (100) must be purged",
+        );
+        assert!(
+            s.is_revoked(boundary.signature).await.unwrap(),
+            "the cutoff-equal revocation (200) must survive — `<` keeps it",
+        );
+        assert!(
+            s.is_revoked(above.signature).await.unwrap(),
+            "the above-cutoff revocation (300) must survive",
+        );
+
+        let purged = s.purge_revoked_older_than(300).await.unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge at cutoff=300 drops the now-strictly-less 200 while \
+             keeping the cutoff-equal 300. got: {purged}",
+        );
+        assert!(
+            !s.is_revoked(boundary.signature).await.unwrap(),
+            "200 is now strictly less than 300 and must be purged",
+        );
+        assert!(
+            s.is_revoked(above.signature).await.unwrap(),
+            "the cutoff-equal revocation (300) must survive the second cycle",
+        );
     }
 
     #[test]

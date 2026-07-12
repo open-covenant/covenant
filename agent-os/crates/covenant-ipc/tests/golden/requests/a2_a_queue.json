@@ -1,0 +1,7 @@
+{
+  "kind": "a2_a_queue",
+  "limit": 25,
+  "min_lease_age_ms": 5000,
+  "deadline_within_ms": 60000,
+  "state_filter": "in_flight"
+}

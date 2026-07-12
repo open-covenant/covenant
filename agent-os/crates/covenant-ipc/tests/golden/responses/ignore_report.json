@@ -1,0 +1,6 @@
+{
+  "kind": "ignore_report",
+  "ignored": true,
+  "matched_pattern": "deploy production rollout",
+  "rules_loaded": 1
+}

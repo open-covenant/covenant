@@ -1,0 +1,12 @@
+{
+  "kind": "repair_a2_a_task",
+  "request": {
+    "task_id": "a2a5eede-f00d-cafe-0000-0000babebeef",
+    "command": {
+      "action": "requeue",
+      "lease_id": "0badc0de-0bad-c0de-0bad-c0de0badc0de",
+      "duplicate_risk": "idempotent"
+    },
+    "reason": "stale lease, idempotent task"
+  }
+}

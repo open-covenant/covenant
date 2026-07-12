@@ -1,0 +1,22 @@
+## Multi-stage Dockerfile for the covenant-ens-gateway (CCIP-Read resolver) on Render.
+## Build context: repository root (so agent-os/ is visible).
+## Builds only the gateway bin and its dependency subtree, not the full workspace.
+
+FROM rust:1.90-slim-bookworm AS builder
+ENV CARGO_TERM_COLOR=always
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY agent-os/ ./agent-os/
+WORKDIR /src/agent-os
+RUN cargo build --release --bin covenant-ens-gateway
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /src/agent-os/target/release/covenant-ens-gateway /usr/local/bin/covenant-ens-gateway
+EXPOSE 8080
+CMD ["/usr/local/bin/covenant-ens-gateway"]

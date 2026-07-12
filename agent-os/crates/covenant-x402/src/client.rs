@@ -2,13 +2,36 @@
 
 use reqwest::{Method, Response, StatusCode};
 use serde_json::Value;
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::{
+    http::{read_capped, MAX_RESPONSE_BYTES},
     signer::Signer,
     types::{Capability, PaymentRequirements},
     Result, X402Error,
 };
+
+/// Total per-request ceiling for the paid loop. The endpoint and its
+/// facilitator are untrusted, so a hung or never-completing response must
+/// not wedge the daemon worker forever. It is a safety ceiling, not an
+/// enforcement of a per-challenge window: the paid retry settles
+/// synchronously, so the ceiling sits well above a typical settlement to
+/// avoid aborting a legitimate payment after funds may be committed.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The reqwest client the daemon should drive [`Client::request_paid`]
+/// with — bounded so an unresponsive endpoint cannot block a worker.
+pub fn http_client() -> reqwest::Client {
+    http_client_with_timeout(REQUEST_TIMEOUT)
+}
+
+fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// Outbound x402 client.
 ///
@@ -16,11 +39,16 @@ use crate::{
 /// instance across many capability-scoped calls.
 pub struct Client {
     http: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl Client {
     pub fn new(http: reqwest::Client) -> Self {
-        Self { http }
+        Self::with_limits(http, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(http: reqwest::Client, max_bytes: usize) -> Self {
+        Self { http, max_bytes }
     }
 
     /// Issue a paid request.
@@ -55,7 +83,8 @@ impl Client {
             return Err(X402Error::UnexpectedStatus(status.as_u16()));
         }
 
-        let challenge_text = initial.text().await?;
+        let challenge_text =
+            read_capped(initial, self.max_bytes, X402Error::DecodeChallenge).await?;
         let requirements: Vec<PaymentRequirements> = serde_json::from_str(&challenge_text)
             .map_err(|e| X402Error::DecodeChallenge(e.to_string()))?;
 
@@ -92,8 +121,10 @@ impl Client {
 
 /// Picks the first requirement that matches the capability.
 ///
-/// Returns None when no requirement is on the right chain + asset
-/// or all matching requirements exceed the per-call cap.
+/// Returns None when no requirement is on the right chain + asset,
+/// or every matching requirement is priced at zero or above the
+/// per-call cap — a zero price is a malformed challenge, not a free
+/// call, and must never be signed.
 fn pick_requirement<'a>(
     requirements: &'a [PaymentRequirements],
     capability: &Capability,
@@ -103,7 +134,7 @@ fn pick_requirement<'a>(
             return false;
         }
         match r.amount.parse::<u128>() {
-            Ok(n) => n <= capability.per_call_cap,
+            Ok(n) => n > 0 && n <= capability.per_call_cap,
             Err(_) => {
                 warn!(amount = %r.amount, "x402 requirement has unparseable amount");
                 false
@@ -161,10 +192,103 @@ mod tests {
     }
 
     #[test]
+    fn pick_rejects_zero_amount() {
+        // A "0" amount parses cleanly and is trivially <= any cap, so without a
+        // positive lower bound pick_requirement would hand it to build_payment
+        // and sign a zero-price authorization — the zero-transfer hazard the
+        // pick_skips_unparseable_amount comment names but does not itself cover.
+        let reqs = vec![req("solana:mainnet", "usdc-sol", "0")];
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+        assert!(pick_requirement(&reqs, &c).is_none());
+    }
+
+    #[test]
+    fn pick_accepts_amount_exactly_at_cap() {
+        // The per-call cap is inclusive: an amount equal to the cap is the
+        // largest spend the operator authorized, so it must be picked, not
+        // rejected. Guards the `<=` upper bound against a `<` regression that
+        // would silently make the cap exclusive and drop an at-budget call.
+        let reqs = vec![req("solana:mainnet", "usdc-sol", "100000")];
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+        let picked = pick_requirement(&reqs, &c).expect("at-cap amount must be accepted");
+        assert_eq!(picked.amount, "100000");
+    }
+
+    #[test]
     fn pick_rejects_wrong_chain() {
         let reqs = vec![req("base:8453", "usdc-base", "80000")];
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         assert!(pick_requirement(&reqs, &c).is_none());
+    }
+
+    #[test]
+    fn pick_enforces_network_and_asset_scope_independently() {
+        // pick_rejects_wrong_chain differs in BOTH network and asset, so the
+        // `network != cap.network || asset != cap.asset` skip survives a ||->&&
+        // mutation (both-must-differ) and neither single-dimension arm is pinned.
+        // The capability's network and asset are independent scopes: an at-budget
+        // requirement that matches only one must still be skipped, never signed.
+        let c = cap("solana:mainnet", "usdc-sol", 100_000);
+
+        // Right chain, wrong token: a usdc-sol capability must not pay a
+        // different Solana mint just because the network matches.
+        let wrong_asset = vec![req("solana:mainnet", "usdt-sol", "80000")];
+        assert!(
+            pick_requirement(&wrong_asset, &c).is_none(),
+            "matching network with a wrong asset must not be picked"
+        );
+
+        // Right token, wrong chain: a solana:mainnet capability must not pay a
+        // base-chain requirement that happens to share the asset label.
+        let wrong_network = vec![req("base:8453", "usdc-sol", "80000")];
+        assert!(
+            pick_requirement(&wrong_network, &c).is_none(),
+            "matching asset with a wrong network must not be picked"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_endpoint_times_out_instead_of_hanging() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/image/creative-director"))
+            .respond_with(ResponseTemplate::new(402).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let client = Client::new(http_client_with_timeout(Duration::from_millis(50)));
+        let err = client
+            .request_paid(
+                Method::POST,
+                &format!("{}/image/creative-director", server.uri()),
+                None,
+                &cap("solana:mainnet", "usdc-sol", 100_000),
+                &MockSigner,
+            )
+            .await
+            .expect_err("must time out");
+        assert!(matches!(err, X402Error::Http(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_challenge_body_is_rejected_instead_of_buffered() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/image/creative-director"))
+            .respond_with(ResponseTemplate::new(402).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let client = Client::with_limits(reqwest::Client::new(), 64);
+        let err = client
+            .request_paid(
+                Method::POST,
+                &format!("{}/image/creative-director", server.uri()),
+                None,
+                &cap("solana:mainnet", "usdc-sol", 100_000),
+                &MockSigner,
+            )
+            .await
+            .expect_err("must reject an oversized challenge");
+        assert!(matches!(err, X402Error::DecodeChallenge(_)), "got {err:?}");
     }
 
     #[tokio::test]

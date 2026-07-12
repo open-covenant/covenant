@@ -12,6 +12,12 @@
 //! falling back to Ollama if reachable and to [`MockProvider`]
 //! otherwise.
 //!
+//! [`Router`] composes an ordered list of providers into a single
+//! [`Provider`]: it serves identical requests from an injectable
+//! [`ResponseCache`] (a bounded in-memory LRU by default), advances to
+//! the next provider only on a retryable transport error, and emits one
+//! [`CostRecord`] per upstream completion to an injectable [`CostSink`].
+//!
 //! A separate [`Embedder`] trait covers the embedding side, with two
 //! implementations: [`MockEmbedder`] (tests, no I/O) and
 //! [`OllamaEmbedder`] (the local embedding endpoint at
@@ -22,7 +28,9 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 use tracing::debug;
 
@@ -85,6 +93,41 @@ pub enum ProviderError {
     /// plans / compaction summaries entirely.
     #[error("provider response truncated at max_tokens={max_tokens} ({partial_len} chars partial)", partial_len = partial.len())]
     Truncated { max_tokens: u32, partial: String },
+    #[error("response body exceeds the {limit}-byte cap")]
+    ResponseTooLarge { limit: usize },
+}
+
+/// Maximum provider response body the client will buffer into memory. The
+/// endpoints are operator-configured model gateways reached with the operator's
+/// api_key (and base_url, for the OpenAI-compatible and Ollama paths); a
+/// compromised or malicious endpoint must not be able to exhaust a daemon
+/// worker's memory with an unbounded body. 16 MiB sits far above any real
+/// completion or embedding yet stops a runaway stream — the memory-axis sibling
+/// of each provider's request timeout.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Buffer a response body, refusing anything past `max`. The `Content-Length`
+/// check rejects an oversized declared body before it is streamed; the running
+/// accumulation check is the real guard, since the header is optional and
+/// provider-controlled. A mid-stream transport fault surfaces as
+/// [`ProviderError::Http`]; an over-cap body as [`ProviderError::ResponseTooLarge`].
+async fn read_body_capped(
+    mut resp: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>, ProviderError> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(ProviderError::ResponseTooLarge { limit: max });
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if buf.len() + chunk.len() > max {
+            return Err(ProviderError::ResponseTooLarge { limit: max });
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 #[async_trait]
@@ -126,10 +169,19 @@ pub struct OllamaProvider {
     pub endpoint: String,
     pub model: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl OllamaProvider {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::with_limits(endpoint, model, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        endpoint: impl Into<String>,
+        model: impl Into<String>,
+        max_bytes: usize,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -138,6 +190,7 @@ impl OllamaProvider {
             endpoint: endpoint.into(),
             model: model.into(),
             client,
+            max_bytes,
         }
     }
 
@@ -156,11 +209,37 @@ struct OllamaChatRequest<'a> {
 #[derive(Deserialize)]
 struct OllamaChatResponse {
     message: OllamaMessage,
+    #[serde(default)]
+    done_reason: Option<String>,
+    #[serde(default)]
+    eval_count: u32,
 }
 
 #[derive(Deserialize)]
 struct OllamaMessage {
     content: String,
+}
+
+/// Post-process a parsed Ollama `/api/chat` response: surface a
+/// [`ProviderError::Truncated`] when `done_reason` is `"length"` (the model hit
+/// the `num_predict` ceiling), otherwise return the message text. Mirrors
+/// [`process_openai_response`] and [`process_anthropic_response`] so the
+/// truncation contract is unit-testable without a live HTTP path. Ollama does
+/// not echo the configured limit, so the reported `max_tokens` is `eval_count` —
+/// the number of tokens generated before the cut (0 if the build omits it). The
+/// `partial` text is always carried so a truncated plan / compaction summary
+/// stays inspectable instead of being returned as if it were complete.
+fn process_ollama_response(response: OllamaChatResponse) -> Result<String, ProviderError> {
+    if response.done_reason.as_deref() == Some("length") {
+        return Err(ProviderError::Truncated {
+            max_tokens: response.eval_count,
+            partial: response.message.content,
+        });
+    }
+    if response.message.content.is_empty() {
+        return Err(ProviderError::Empty);
+    }
+    Ok(response.message.content)
 }
 
 #[async_trait]
@@ -179,17 +258,18 @@ impl Provider for OllamaProvider {
         let resp = self.client.post(&url).json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: OllamaChatResponse = resp.json().await?;
-        if parsed.message.content.is_empty() {
-            return Err(ProviderError::Empty);
-        }
-        Ok(parsed.message.content)
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: OllamaChatResponse = serde_json::from_slice(&bytes)?;
+        process_ollama_response(parsed)
     }
 }
 
@@ -199,7 +279,9 @@ pub struct AnthropicProvider {
     pub api_key: String,
     pub model: String,
     pub max_tokens: u32,
+    endpoint: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 /// Default token ceiling for an Anthropic response. 4096 is the practical
@@ -208,8 +290,19 @@ pub struct AnthropicProvider {
 /// error to the caller.
 pub const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4096;
 
+const ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
+
 impl AnthropicProvider {
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::with_limits(api_key, model, ANTHROPIC_ENDPOINT, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        endpoint: impl Into<String>,
+        max_bytes: usize,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             .build()
@@ -218,7 +311,9 @@ impl AnthropicProvider {
             api_key: api_key.into(),
             model: model.into(),
             max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+            endpoint: endpoint.into(),
             client,
+            max_bytes,
         }
     }
 
@@ -341,7 +436,7 @@ impl Provider for AnthropicProvider {
         };
         let resp = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(&self.endpoint)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&body)
@@ -349,13 +444,17 @@ impl Provider for AnthropicProvider {
             .await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: AnthropicResponse = resp.json().await?;
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: AnthropicResponse = serde_json::from_slice(&bytes)?;
         process_anthropic_response(parsed, self.max_tokens)
     }
 }
@@ -367,6 +466,7 @@ pub struct OpenAiProvider {
     pub base_url: String,
     pub model: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl OpenAiProvider {
@@ -374,6 +474,15 @@ impl OpenAiProvider {
         api_key: impl Into<String>,
         base_url: impl Into<String>,
         model: impl Into<String>,
+    ) -> Self {
+        Self::with_limits(api_key, base_url, model, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        max_bytes: usize,
     ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
@@ -384,6 +493,7 @@ impl OpenAiProvider {
             base_url: base_url.into(),
             model: model.into(),
             client,
+            max_bytes,
         }
     }
 
@@ -405,16 +515,52 @@ struct OpenAiRequest<'a> {
 #[derive(Deserialize)]
 struct OpenAiResponse {
     choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
 }
 
 #[derive(Deserialize)]
 struct OpenAiChoice {
     message: OpenAiMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct OpenAiMessage {
     content: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAiUsage {
+    #[serde(default)]
+    completion_tokens: u32,
+}
+
+/// Post-process a parsed OpenAI-compatible response: surface a [`ProviderError::Truncated`]
+/// when the first choice's `finish_reason` is `"length"`, otherwise return the
+/// first choice's text. Extracted from `complete` so the truncation contract is
+/// unit-testable without a live HTTP path, mirroring [`process_anthropic_response`].
+/// OpenAI does not echo the request ceiling, so the reported `max_tokens` is
+/// `usage.completion_tokens` — the token count at which the model hit its output
+/// limit (0 if the endpoint omits `usage`). The `partial` text is always carried
+/// so a truncated plan / compaction summary stays inspectable instead of being
+/// returned as if it were complete.
+fn process_openai_response(response: OpenAiResponse) -> Result<String, ProviderError> {
+    let completion_tokens = response.usage.map(|u| u.completion_tokens).unwrap_or(0);
+    let choice = response.choices.into_iter().next();
+    let truncated = choice.as_ref().and_then(|c| c.finish_reason.as_deref()) == Some("length");
+    let text = choice.map(|c| c.message.content).unwrap_or_default();
+    if truncated {
+        return Err(ProviderError::Truncated {
+            max_tokens: completion_tokens,
+            partial: text,
+        });
+    }
+    if text.is_empty() {
+        return Err(ProviderError::Empty);
+    }
+    Ok(text)
 }
 
 #[async_trait]
@@ -444,23 +590,18 @@ impl Provider for OpenAiProvider {
             .await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: OpenAiResponse = resp.json().await?;
-        let text = parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .unwrap_or_default();
-        if text.is_empty() {
-            return Err(ProviderError::Empty);
-        }
-        Ok(text)
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: OpenAiResponse = serde_json::from_slice(&bytes)?;
+        process_openai_response(parsed)
     }
 }
 
@@ -549,6 +690,261 @@ pub async fn pick_provider(secrets_path: &Path) -> Box<dyn Provider> {
     ))
 }
 
+// ---------- Router ----------
+
+/// Completion responses the in-memory cache retains before evicting the
+/// least-recently-used entry. Bounded so a long-running daemon cannot grow the
+/// cache without limit; an operator can override the capacity (or disable
+/// caching with `0`) by injecting a custom [`InMemoryLruCache`].
+const DEFAULT_CACHE_CAPACITY: usize = 256;
+
+/// A completion cache, keyed by [`cache_key`] (a digest of the model identity
+/// and the message sequence) so an identical request is served without
+/// re-billing an upstream provider. `complete` runs behind `&self`, so
+/// implementors use interior mutability.
+pub trait ResponseCache: Send + Sync {
+    fn get(&self, key: &str) -> Option<String>;
+    fn put(&self, key: &str, value: String);
+}
+
+/// Bounded in-memory LRU cache. No I/O, so it is safe as a default in tests and
+/// in the daemon. Capacity `0` disables caching — every `get` misses and every
+/// `put` is a no-op — without needing a separate type.
+pub struct InMemoryLruCache {
+    inner: Mutex<LruInner>,
+}
+
+struct LruInner {
+    cap: usize,
+    map: HashMap<String, String>,
+    order: VecDeque<String>,
+}
+
+impl InMemoryLruCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(LruInner {
+                cap: capacity,
+                map: HashMap::new(),
+                order: VecDeque::new(),
+            }),
+        }
+    }
+}
+
+impl ResponseCache for InMemoryLruCache {
+    fn get(&self, key: &str) -> Option<String> {
+        let mut g = self.inner.lock().expect("cache mutex");
+        let value = g.map.get(key)?.clone();
+        touch(&mut g.order, key);
+        Some(value)
+    }
+
+    fn put(&self, key: &str, value: String) {
+        let mut g = self.inner.lock().expect("cache mutex");
+        if g.cap == 0 {
+            return;
+        }
+        if g.map.insert(key.to_string(), value).is_some() {
+            touch(&mut g.order, key);
+        } else {
+            g.order.push_back(key.to_string());
+        }
+        while g.order.len() > g.cap {
+            if let Some(evicted) = g.order.pop_front() {
+                g.map.remove(&evicted);
+            }
+        }
+    }
+}
+
+/// Move `key` to the most-recently-used end of the access order.
+fn touch(order: &mut VecDeque<String>, key: &str) {
+    if let Some(pos) = order.iter().position(|k| k == key) {
+        order.remove(pos);
+    }
+    order.push_back(key.to_string());
+}
+
+/// A per-completion cost record, emitted once per actual upstream completion —
+/// never on a cache hit, never per failed fallback attempt. Token counts are
+/// heuristic estimates: the [`Provider::complete`] boundary returns text only,
+/// so exact usage is unavailable until the trait surfaces it. `estimated_cost`
+/// is populated only when the [`Router`] is given [`Pricing`]; downstream
+/// consumers (e.g. a budget ledger) otherwise apply their own rates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CostRecord {
+    pub provider: &'static str,
+    pub model: String,
+    pub prompt_tokens: Option<u32>,
+    pub completion_tokens: Option<u32>,
+    pub estimated_cost: Option<f64>,
+}
+
+/// Sink for [`CostRecord`]s. `record` runs behind `&self`. The default
+/// [`NoopSink`] drops records, keeping cost tracking opt-in and covenant-llm
+/// decoupled from any budget crate.
+pub trait CostSink: Send + Sync {
+    fn record(&self, record: &CostRecord);
+}
+
+pub struct NoopSink;
+
+impl CostSink for NoopSink {
+    fn record(&self, _record: &CostRecord) {}
+}
+
+/// Per-1K-token rates used to derive [`CostRecord::estimated_cost`]. Rates are
+/// provider- and operator-specific and change often, so they are injected
+/// rather than hardcoded in covenant-llm.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pricing {
+    pub prompt_usd_per_1k: f64,
+    pub completion_usd_per_1k: f64,
+}
+
+/// An ordered, configurable fallback router over a list of providers, with an
+/// injectable response cache and cost sink. Implements [`Provider`], so it drops
+/// in anywhere a single backend is expected (and nests inside another router).
+///
+/// `complete` serves an identical request from cache when possible; otherwise it
+/// tries providers in order, advancing to the next only on a retryable transport
+/// fault ([`is_retryable`]) and surfacing any deterministic error immediately. On
+/// success it caches the reply and emits exactly one [`CostRecord`]; when every
+/// provider fails it returns the last error.
+pub struct Router {
+    model: String,
+    providers: Vec<Box<dyn Provider>>,
+    cache: Box<dyn ResponseCache>,
+    cost_sink: Box<dyn CostSink>,
+    pricing: Option<Pricing>,
+}
+
+impl Router {
+    /// `model` is the logical model identity this router serves: it scopes the
+    /// cache key (so a different model misses) and labels each cost record. The
+    /// providers are expected to serve that same model class.
+    pub fn new(model: impl Into<String>, providers: Vec<Box<dyn Provider>>) -> Self {
+        Self {
+            model: model.into(),
+            providers,
+            cache: Box::new(InMemoryLruCache::new(DEFAULT_CACHE_CAPACITY)),
+            cost_sink: Box::new(NoopSink),
+            pricing: None,
+        }
+    }
+
+    pub fn with_cache(mut self, cache: Box<dyn ResponseCache>) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    pub fn with_cost_sink(mut self, sink: Box<dyn CostSink>) -> Self {
+        self.cost_sink = sink;
+        self
+    }
+
+    pub fn with_pricing(mut self, pricing: Pricing) -> Self {
+        self.pricing = Some(pricing);
+        self
+    }
+
+    fn cost_record(
+        &self,
+        provider: &'static str,
+        messages: &[ChatMessage],
+        reply: &str,
+    ) -> CostRecord {
+        let prompt_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
+        let prompt_tokens = estimate_tokens(prompt_chars);
+        let completion_tokens = estimate_tokens(reply.chars().count());
+        let estimated_cost = self.pricing.map(|p| {
+            (prompt_tokens as f64 / 1000.0) * p.prompt_usd_per_1k
+                + (completion_tokens as f64 / 1000.0) * p.completion_usd_per_1k
+        });
+        CostRecord {
+            provider,
+            model: self.model.clone(),
+            prompt_tokens: Some(prompt_tokens),
+            completion_tokens: Some(completion_tokens),
+            estimated_cost,
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for Router {
+    fn name(&self) -> &'static str {
+        "router"
+    }
+
+    async fn complete(&self, messages: &[ChatMessage]) -> Result<String, ProviderError> {
+        let key = cache_key(&self.model, messages);
+        if let Some(k) = &key {
+            if let Some(hit) = self.cache.get(k) {
+                return Ok(hit);
+            }
+        }
+        let mut last_err: Option<ProviderError> = None;
+        for provider in &self.providers {
+            match provider.complete(messages).await {
+                Ok(text) => {
+                    if let Some(k) = &key {
+                        self.cache.put(k, text.clone());
+                    }
+                    self.cost_sink
+                        .record(&self.cost_record(provider.name(), messages, &text));
+                    return Ok(text);
+                }
+                Err(e) if is_retryable(&e) => last_err = Some(e),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err.unwrap_or(ProviderError::Empty))
+    }
+}
+
+/// A provider error is retryable only when it is a transport-level fault
+/// (`Http`/`Io`): the upstream was unreachable or the connection dropped mid
+/// request, so a different provider may answer. Every other variant is a
+/// definite response — a malformed body, a non-2xx status, a truncated or empty
+/// completion, a missing key, an oversized body, or a config parse error — and
+/// re-sending the identical request to the next provider would only re-bill the
+/// same deterministic outcome, so the router surfaces it immediately rather than
+/// masking it behind a fallback.
+fn is_retryable(err: &ProviderError) -> bool {
+    matches!(err, ProviderError::Http(_) | ProviderError::Io(_))
+}
+
+/// Canonical cache key: a stable 128-bit FNV-1a digest of the model identity and
+/// the exact message sequence. Nothing volatile (no nonce, no provider identity)
+/// enters the digest, so a retried identical request hits cache while a model
+/// change or any message edit misses. Returns `None` if the request cannot be
+/// serialized, in which case the caller bypasses the cache.
+fn cache_key(model: &str, messages: &[ChatMessage]) -> Option<String> {
+    #[derive(Serialize)]
+    struct KeyInput<'a> {
+        model: &'a str,
+        messages: &'a [ChatMessage],
+    }
+    let bytes = serde_json::to_vec(&KeyInput { model, messages }).ok()?;
+    const OFFSET: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+    let mut h = OFFSET;
+    for b in &bytes {
+        h ^= *b as u128;
+        h = h.wrapping_mul(PRIME);
+    }
+    Some(format!("{h:032x}"))
+}
+
+/// Rough token estimate (~4 chars per token). The [`Provider::complete`] boundary
+/// returns text only, so this is a heuristic for budgeting, not an exact upstream
+/// usage count.
+fn estimate_tokens(chars: usize) -> u32 {
+    (chars.div_ceil(4).min(u32::MAX as usize)) as u32
+}
+
 // ---------- Embeddings ----------
 
 #[async_trait]
@@ -597,10 +993,19 @@ pub struct OllamaEmbedder {
     pub endpoint: String,
     pub model: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl OllamaEmbedder {
     pub fn new(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::with_limits(endpoint, model, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        endpoint: impl Into<String>,
+        model: impl Into<String>,
+        max_bytes: usize,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -609,6 +1014,7 @@ impl OllamaEmbedder {
             endpoint: endpoint.into(),
             model: model.into(),
             client,
+            max_bytes,
         }
     }
 
@@ -643,13 +1049,17 @@ impl Embedder for OllamaEmbedder {
         let resp = self.client.post(&url).json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(ProviderError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: OllamaEmbedResponse = resp.json().await?;
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: OllamaEmbedResponse = serde_json::from_slice(&bytes)?;
         if parsed.embedding.is_empty() {
             return Err(ProviderError::Empty);
         }
@@ -861,10 +1271,12 @@ mod tests {
 
     #[test]
     fn provider_error_display_messages_pin_three_string_variant_format_strings() {
-        // ProviderError has seven variants. Five wrap external errors
-        // via #[from]; the three string-literal variants (Empty, Status,
-        // MissingKey) emit operator-facing format strings that no
-        // existing test inspects. anthropic_without_key_returns_missing_key
+        // ProviderError has nine variants. Four wrap external errors
+        // via #[from] (Http, Serde, Io, Toml); the three string-literal
+        // variants (Empty, Status, MissingKey) emit operator-facing format
+        // strings that no existing test inspects (Truncated and
+        // ResponseTooLarge carry their own dynamic messages).
+        // anthropic_without_key_returns_missing_key
         // and openai_without_key_returns_missing_key assert
         // MissingKey via `matches!` which ignores the Display rendering;
         // Empty and Status have no test at all. A thiserror format-
@@ -993,6 +1405,21 @@ provider = "ollama"
 provider = "made-up"
 "#;
         let cfg: ProviderConfig = toml::from_str(toml_src).unwrap();
+        assert!(provider_from_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn provider_from_config_returns_none_when_no_llm_block_configured() {
+        // Distinct from the unknown-provider None above: that arm means
+        // a provider was named but isn't recognized; this one means no
+        // [llm] block exists at all, the default for a daemon that never
+        // configured an LLM. pick_provider depends on this None to fall
+        // back to the Ollama/mock ladder — an unwrap here would crash
+        // that default daemon, a default provider would silently enable
+        // an LLM no operator asked for. The serde test pins the struct
+        // field (default_cfg.llm.is_none()) but never drives the fn.
+        let cfg = ProviderConfig::default();
+        assert!(cfg.llm.is_none(), "default config has no [llm] block");
         assert!(provider_from_config(&cfg).is_none());
     }
 
@@ -1652,6 +2079,22 @@ provider = "made-up"
         );
     }
 
+    #[test]
+    fn embedder_from_config_returns_none_when_no_embed_block_configured() {
+        // Distinct from the unknown-provider None above: that arm means
+        // a provider was named but isn't recognized; this one means no
+        // [embed] block exists at all, the default for a daemon that
+        // never configured an embedder. pick_embedder depends on this
+        // None to fall back to the no-embedder path — an unwrap here
+        // would crash that default daemon, a default embedder would
+        // silently enable embeddings no operator asked for. The serde
+        // test pins the struct field (default_cfg.embed.is_none()) but
+        // never drives the fn.
+        let cfg = EmbedderConfig::default();
+        assert!(cfg.embed.is_none(), "default config has no [embed] block");
+        assert!(embedder_from_config(&cfg).is_none());
+    }
+
     #[tokio::test]
     async fn from_config_mock_arms_pin_canonical_default_canned_string_and_dim() {
         // provider_from_config and embedder_from_config both carry
@@ -2236,5 +2679,882 @@ model = "nomic-embed-text"
             matches!(err, ProviderError::Empty),
             "non-text-only response must be Empty, not Truncated: {err:?}"
         );
+    }
+
+    #[test]
+    fn openai_provider_surfaces_truncated_when_finish_reason_is_length() {
+        // OpenAI / DeepSeek / OpenAI-compatible endpoints set
+        // finish_reason="length" when the completion was cut at the output
+        // ceiling. The prior parser ignored finish_reason and returned the
+        // partial content via Ok, so a long plan / compaction summary
+        // silently lost its tail — the same silent-truncation failure mode
+        // hardened on the Anthropic path. The Truncated error gives callers a
+        // signal to raise the cap and retry, and carries the completion_tokens
+        // at which the ceiling was hit (OpenAI does not echo the request
+        // limit) plus the partial text that arrived.
+        let raw = r#"{
+            "choices": [
+                {"message": {"content": "step 1: outline the fix\nstep 2: "}, "finish_reason": "length"}
+            ],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4096, "total_tokens": 4108}
+        }"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let err = process_openai_response(response).expect_err("length finish_reason must error");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(
+                    max_tokens, 4096,
+                    "Truncated.max_tokens must carry usage.completion_tokens — the token \
+                     count at which the OpenAI-compatible model hit its output ceiling",
+                );
+                assert_eq!(
+                    partial, "step 1: outline the fix\nstep 2: ",
+                    "Truncated.partial must carry the content that arrived before the cut \
+                     so the operator can inspect it and retry with a higher cap; dropping \
+                     it would re-introduce the silent data-loss failure mode for the \
+                     plan / compaction-summary workloads",
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn openai_normal_finish_reason_returns_text_and_missing_usage_defaults_to_zero() {
+        // A normal stop must NOT trip the truncation guard — the content is
+        // returned verbatim. A second response with finish_reason="length" but
+        // no usage object pins that the completion_tokens fallback is 0 and the
+        // partial is still surfaced, so an OpenAI-compatible endpoint that omits
+        // usage cannot turn a truncation into a swallowed Ok.
+        let raw = r#"{
+            "choices": [{"message": {"content": "the whole answer"}, "finish_reason": "stop"}]
+        }"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let text = process_openai_response(response).expect("a normal stop must return Ok(text)");
+        assert_eq!(text, "the whole answer");
+
+        let raw = r#"{
+            "choices": [{"message": {"content": "cut off here"}, "finish_reason": "length"}]
+        }"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let err =
+            process_openai_response(response).expect_err("length must error even without usage");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(
+                    max_tokens, 0,
+                    "missing usage must default completion_tokens to 0"
+                );
+                assert_eq!(
+                    partial, "cut off here",
+                    "the partial must survive a missing usage object"
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn openai_empty_response_surfaces_empty_not_ok() {
+        // The Empty arm distinguishes "the model produced no usable text"
+        // from a valid completion. An OpenAI-compatible endpoint can return a
+        // zero-length `choices` array (a content-filter block or degenerate
+        // turn) or a single choice whose content is "" — both must surface
+        // ProviderError::Empty, never an Ok("") that a plan / compaction caller
+        // would treat as the model's answer. The anthropic path pins this arm;
+        // the openai path was the only sibling left without it.
+        let raw = r#"{"choices": [], "usage": {"completion_tokens": 0}}"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let err = process_openai_response(response)
+            .expect_err("a response with no choices must surface Empty, not Ok");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "zero choices must be Empty: {err:?}"
+        );
+
+        let raw = r#"{"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]}"#;
+        let response: OpenAiResponse = serde_json::from_str(raw).unwrap();
+        let err = process_openai_response(response)
+            .expect_err("an empty-content choice must surface Empty, not Ok");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "empty content on a normal stop must be Empty: {err:?}"
+        );
+    }
+
+    #[test]
+    fn ollama_provider_surfaces_truncated_when_done_reason_is_length() {
+        // Ollama sets done_reason="length" when /api/chat stops at the
+        // num_predict ceiling. The prior parser read only message.content and
+        // ignored done_reason, so a truncated plan / compaction summary was
+        // returned via Ok exactly like the pre-hardening Anthropic and OpenAI
+        // paths. Truncated gives callers a signal to raise the cap and retry,
+        // carrying eval_count (Ollama's generated-token count, its analog of
+        // the ceiling that was hit) and the partial text.
+        let raw = r#"{
+            "message": {"role": "assistant", "content": "draft plan:\n1. "},
+            "done": true,
+            "done_reason": "length",
+            "eval_count": 256
+        }"#;
+        let response: OllamaChatResponse = serde_json::from_str(raw).unwrap();
+        let err = process_ollama_response(response).expect_err("length done_reason must error");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(
+                    max_tokens, 256,
+                    "Truncated.max_tokens must carry eval_count — the number of tokens \
+                     Ollama generated before hitting the num_predict ceiling",
+                );
+                assert_eq!(
+                    partial, "draft plan:\n1. ",
+                    "Truncated.partial must carry the content that arrived before the cut \
+                     so the operator can inspect it and retry with a higher cap",
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ollama_normal_done_reason_returns_text_and_missing_eval_count_defaults_to_zero() {
+        // A normal stop must NOT trip the truncation guard. A second response
+        // with done_reason="length" but no eval_count pins the 0 fallback and
+        // that the partial still surfaces, so an Ollama build omitting eval_count
+        // cannot turn a truncation into a swallowed Ok.
+        let raw = r#"{
+            "message": {"role": "assistant", "content": "the whole answer"},
+            "done": true,
+            "done_reason": "stop"
+        }"#;
+        let response: OllamaChatResponse = serde_json::from_str(raw).unwrap();
+        let text = process_ollama_response(response).expect("a normal stop must return Ok(text)");
+        assert_eq!(text, "the whole answer");
+
+        let raw = r#"{
+            "message": {"role": "assistant", "content": "cut"},
+            "done_reason": "length"
+        }"#;
+        let response: OllamaChatResponse = serde_json::from_str(raw).unwrap();
+        let err = process_ollama_response(response)
+            .expect_err("length must error even without eval_count");
+        match err {
+            ProviderError::Truncated {
+                max_tokens,
+                partial,
+            } => {
+                assert_eq!(max_tokens, 0, "missing eval_count must default to 0");
+                assert_eq!(
+                    partial, "cut",
+                    "the partial must survive a missing eval_count"
+                );
+            }
+            other => panic!("expected ProviderError::Truncated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ollama_empty_response_surfaces_empty_not_ok() {
+        // A normal-stop Ollama response whose message.content is empty must
+        // surface ProviderError::Empty rather than Ok(""), matching the
+        // anthropic and openai Empty-arm contract. Empty stays reserved for
+        // "model produced no text"; the length done_reason owns Truncated.
+        let raw = r#"{"message": {"role": "assistant", "content": ""}, "done": true, "done_reason": "stop"}"#;
+        let response: OllamaChatResponse = serde_json::from_str(raw).unwrap();
+        let err = process_ollama_response(response)
+            .expect_err("empty content on a normal stop must surface Empty, not Ok");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "empty content must be Empty: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ollama_provider_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // The four HTTP-backed providers buffer the whole response into
+        // memory. Each per-request timeout bounds the time axis;
+        // read_body_capped bounds the memory axis so a compromised or buggy
+        // endpoint cannot OOM the daemon worker with a multi-GB body. A
+        // small valid body is served to every POST: a generous cap reads
+        // and parses it, a tiny cap rejects it. with_limits points the
+        // provider at the wiremock server.
+        //
+        // wiremock always sets Content-Length, so the over-cap assertion
+        // exercises the early-reject branch; the running chunk-accumulation
+        // guard (the real defense against an omitted/understated header) is
+        // inspection-verified, mirroring the das.rs precedent.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"message":{"content":"hello world"}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let text = OllamaProvider::with_limits(server.uri(), "m", 16 * 1024)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect("an under-cap Ollama body must read back through read_body_capped");
+        assert_eq!(text, "hello world");
+
+        let err = OllamaProvider::with_limits(server.uri(), "m", 8)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect_err("an over-cap Ollama body must be rejected, not buffered");
+        assert!(
+            matches!(err, ProviderError::ResponseTooLarge { limit: 8 }),
+            "Ollama over-cap read must surface ProviderError::ResponseTooLarge {{ limit: 8 }} so a \
+             malicious endpoint cannot OOM the daemon worker; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn ollama_provider_reads_body_sized_exactly_at_cap() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // read_body_capped's byte cap is INCLUSIVE: a body whose length is
+        // exactly `max` is read back, only a longer body is rejected. The
+        // sibling *_caps_oversized_body_and_reads_a_small_body tests pin
+        // strictly-under and strictly-over but never the at-cap case, so a
+        // `>` -> `>=` regression on either guard would silently make the cap
+        // exclusive and drop an at-limit response. Setting the cap to the
+        // body's exact byte length pins both guards at once: the Content-Length
+        // pre-check passes at len == max, so execution reaches the running
+        // accumulation guard (which the over-cap test never exercises, since
+        // its Content-Length pre-check short-circuits), and that guard also
+        // passes at exactly max.
+        let server = MockServer::start().await;
+        let body = r#"{"message":{"content":"hello world"}}"#;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let text = OllamaProvider::with_limits(server.uri(), "m", body.len())
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect(
+                "a body whose length equals the cap must read back: read_body_capped is inclusive",
+            );
+        assert_eq!(text, "hello world");
+    }
+
+    #[tokio::test]
+    async fn anthropic_provider_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"content":[{"type":"text","text":"hello world"}],"stop_reason":"end_turn"}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let text = AnthropicProvider::with_limits("k", "m", server.uri(), 16 * 1024)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect("an under-cap Anthropic body must read back through read_body_capped");
+        assert_eq!(text, "hello world");
+
+        let err = AnthropicProvider::with_limits("k", "m", server.uri(), 8)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect_err("an over-cap Anthropic body must be rejected, not buffered");
+        assert!(
+            matches!(err, ProviderError::ResponseTooLarge { limit: 8 }),
+            "Anthropic over-cap read must surface ProviderError::ResponseTooLarge {{ limit: 8 }} so a \
+             compromised or proxied endpoint cannot OOM the daemon worker; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_provider_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"choices":[{"message":{"content":"hello world"}}]}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let text = OpenAiProvider::with_limits("k", server.uri(), "m", 16 * 1024)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect("an under-cap OpenAI body must read back through read_body_capped");
+        assert_eq!(text, "hello world");
+
+        let err = OpenAiProvider::with_limits("k", server.uri(), "m", 8)
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .expect_err("an over-cap OpenAI body must be rejected, not buffered");
+        assert!(
+            matches!(err, ProviderError::ResponseTooLarge { limit: 8 }),
+            "OpenAI over-cap read must surface ProviderError::ResponseTooLarge {{ limit: 8 }} so a \
+             compromised or operator-configured base_url endpoint cannot OOM the daemon worker; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn providers_surface_status_error_on_non_success_http() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A non-2xx provider response (429 rate limit, 401 auth, 5xx upstream)
+        // must surface ProviderError::Status carrying the real status code and
+        // the provider's error body: the operator needs the body to see why, and
+        // is_retryable classifies Status as a definite, non-retryable response so
+        // the router stops rather than re-billing the next provider. The caps
+        // tests only serve 200s; this pins the non-success arm of every chat
+        // provider's complete(). One method-only mock answers all three provider
+        // paths (/api/chat, the anthropic endpoint, /v1/chat/completions).
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .set_body_string(r#"{"error":{"message":"rate limited"}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        fn assert_429(err: ProviderError) {
+            match err {
+                ProviderError::Status { status, body } => {
+                    assert_eq!(
+                        status, 429,
+                        "the real upstream status must be carried, not a hardcoded code"
+                    );
+                    assert!(
+                        body.contains("rate limited"),
+                        "the provider error body must be surfaced for operator diagnostics: {body:?}"
+                    );
+                }
+                other => {
+                    panic!("a non-2xx response must surface ProviderError::Status, got {other:?}")
+                }
+            }
+        }
+
+        assert_429(
+            OllamaProvider::with_limits(server.uri(), "m", 16 * 1024)
+                .complete(&[ChatMessage::user("hi")])
+                .await
+                .expect_err("a 429 must be Status, not Ok or a parse error"),
+        );
+        assert_429(
+            AnthropicProvider::with_limits("k", "m", server.uri(), 16 * 1024)
+                .complete(&[ChatMessage::user("hi")])
+                .await
+                .expect_err("a 429 must be Status, not Ok or a parse error"),
+        );
+        assert_429(
+            OpenAiProvider::with_limits("k", server.uri(), "m", 16 * 1024)
+                .complete(&[ChatMessage::user("hi")])
+                .await
+                .expect_err("a 429 must be Status, not Ok or a parse error"),
+        );
+    }
+
+    #[tokio::test]
+    async fn ollama_embedder_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"embedding":[0.5,0.5]}"#))
+            .mount(&server)
+            .await;
+
+        let v = OllamaEmbedder::with_limits(server.uri(), "m", 16 * 1024)
+            .embed("hi")
+            .await
+            .expect("an under-cap Ollama embedding body must read back through read_body_capped");
+        assert_eq!(v, vec![0.5_f32, 0.5]);
+
+        let err = OllamaEmbedder::with_limits(server.uri(), "m", 8)
+            .embed("hi")
+            .await
+            .expect_err("an over-cap Ollama embedding body must be rejected, not buffered");
+        assert!(
+            matches!(err, ProviderError::ResponseTooLarge { limit: 8 }),
+            "Ollama embedder over-cap read must surface ProviderError::ResponseTooLarge {{ limit: 8 }} \
+             so a malicious endpoint cannot OOM the daemon worker; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn ollama_embedder_surfaces_status_and_empty_on_degenerate_responses() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // embed() is the memory-vectorization boundary. A non-2xx embeddings
+        // response must surface ProviderError::Status (carrying the real code
+        // and body), and a 200 whose embedding vector is empty must surface
+        // ProviderError::Empty — never Ok(vec![]). A zero-length embedding
+        // stored as a memory vector cannot be normalized or cosine-compared, so
+        // an empty array slipping through as Ok would silently corrupt
+        // similarity search. The caps test only serves a valid 200; this pins
+        // the embedder's two error arms.
+        let failing = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(429).set_body_string(r#"{"error":"rate limited"}"#))
+            .mount(&failing)
+            .await;
+        let err = OllamaEmbedder::with_limits(failing.uri(), "m", 16 * 1024)
+            .embed("hi")
+            .await
+            .expect_err("a non-2xx embeddings response must be Status, not Ok or a parse error");
+        match err {
+            ProviderError::Status { status, body } => {
+                assert_eq!(status, 429, "the real upstream status must be carried");
+                assert!(
+                    body.contains("rate limited"),
+                    "the embeddings error body must be surfaced for diagnostics: {body:?}"
+                );
+            }
+            other => panic!("a non-2xx response must surface ProviderError::Status, got {other:?}"),
+        }
+
+        let empty = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"embedding":[]}"#))
+            .mount(&empty)
+            .await;
+        let err = OllamaEmbedder::with_limits(empty.uri(), "m", 16 * 1024)
+            .embed("hi")
+            .await
+            .expect_err("an empty embedding vector must be Empty, not Ok(vec![])");
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "an empty embedding array must surface ProviderError::Empty so a zero-length \
+             vector never reaches the memory store; got {err:?}"
+        );
+    }
+
+    // ---------- Router ----------
+
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone, Copy)]
+    enum Probe {
+        Reply(&'static str),
+        FailIo(&'static str),
+        FailSerde,
+    }
+
+    struct CountingProvider {
+        name: &'static str,
+        probe: Probe,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Provider for CountingProvider {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        async fn complete(&self, _messages: &[ChatMessage]) -> Result<String, ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match self.probe {
+                Probe::Reply(s) => Ok(s.to_string()),
+                Probe::FailIo(msg) => Err(ProviderError::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    msg,
+                ))),
+                Probe::FailSerde => Err(serde_json::from_str::<serde_json::Value>("{")
+                    .unwrap_err()
+                    .into()),
+            }
+        }
+    }
+
+    struct RecordingSink {
+        records: Arc<Mutex<Vec<CostRecord>>>,
+    }
+
+    impl CostSink for RecordingSink {
+        fn record(&self, record: &CostRecord) {
+            self.records.lock().unwrap().push(record.clone());
+        }
+    }
+
+    fn counting(name: &'static str, probe: Probe) -> (Box<dyn Provider>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider: Box<dyn Provider> = Box::new(CountingProvider {
+            name,
+            probe,
+            calls: calls.clone(),
+        });
+        (provider, calls)
+    }
+
+    #[tokio::test]
+    async fn router_falls_back_on_retryable_transport_error() {
+        let (down, down_calls) = counting("down", Probe::FailIo("transport down"));
+        let (up, up_calls) = counting("up", Probe::Reply("served"));
+        let router = Router::new("m", vec![down, up]);
+
+        let out = router.complete(&[ChatMessage::user("hi")]).await.unwrap();
+
+        assert_eq!(out, "served");
+        assert_eq!(
+            down_calls.load(Ordering::SeqCst),
+            1,
+            "the first provider must be attempted",
+        );
+        assert_eq!(
+            up_calls.load(Ordering::SeqCst),
+            1,
+            "the router must advance to the next provider on a transport fault",
+        );
+    }
+
+    #[tokio::test]
+    async fn router_does_not_fall_back_on_deterministic_error() {
+        // A Serde/validation error means the request itself is bad; advancing to
+        // the next provider would only re-bill the same rejection, so it must
+        // surface immediately and the second provider must never be called.
+        let (bad, bad_calls) = counting("bad", Probe::FailSerde);
+        let (never, never_calls) = counting("never", Probe::Reply("unreached"));
+        let router = Router::new("m", vec![bad, never]);
+
+        let err = router
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ProviderError::Serde(_)),
+            "a deterministic error must surface immediately, got {err:?}",
+        );
+        assert_eq!(bad_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            never_calls.load(Ordering::SeqCst),
+            0,
+            "a non-retryable error must NOT advance to the next provider",
+        );
+    }
+
+    #[tokio::test]
+    async fn router_cache_hit_skips_provider_and_cost() {
+        let (up, calls) = counting("up", Probe::Reply("cached"));
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let router = Router::new("m", vec![up]).with_cost_sink(Box::new(RecordingSink {
+            records: records.clone(),
+        }));
+
+        let msgs = [ChatMessage::user("same prompt")];
+        let first = router.complete(&msgs).await.unwrap();
+        let second = router.complete(&msgs).await.unwrap();
+
+        assert_eq!(first, "cached");
+        assert_eq!(second, "cached");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the second identical request must be served from cache, not the provider",
+        );
+        assert_eq!(
+            records.lock().unwrap().len(),
+            1,
+            "a cache hit must not emit a cost record",
+        );
+    }
+
+    #[tokio::test]
+    async fn router_emits_one_cost_record_for_the_succeeding_provider() {
+        let (down, _) = counting("down", Probe::FailIo("down"));
+        let (up, _) = counting("up", Probe::Reply("ok"));
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let router = Router::new("claude-haiku-4-5", vec![down, up]).with_cost_sink(Box::new(
+            RecordingSink {
+                records: records.clone(),
+            },
+        ));
+
+        router.complete(&[ChatMessage::user("hi")]).await.unwrap();
+
+        let recs = records.lock().unwrap();
+        assert_eq!(
+            recs.len(),
+            1,
+            "exactly one cost record per upstream completion, not one per attempted provider",
+        );
+        assert_eq!(
+            recs[0].provider, "up",
+            "the record must name the provider that actually completed, not a failed one",
+        );
+        assert_eq!(recs[0].model, "claude-haiku-4-5");
+        assert!(recs[0].prompt_tokens.is_some());
+        assert!(recs[0].completion_tokens.is_some());
+        assert!(
+            recs[0].estimated_cost.is_none(),
+            "no pricing configured -> no cost estimate",
+        );
+    }
+
+    #[tokio::test]
+    async fn router_exhaustion_surfaces_last_error() {
+        // Both providers fail with a retryable transport error; the router must
+        // surface the LAST one so the operator sees the final upstream cause
+        // rather than a generic exhaustion error.
+        let (a, _) = counting("a", Probe::FailIo("first down"));
+        let (b, _) = counting("b", Probe::FailIo("second down"));
+        let router = Router::new("m", vec![a, b]);
+
+        let err = router
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ProviderError::Io(_)));
+        assert!(
+            err.to_string().contains("second down"),
+            "exhausting all providers must surface the last error, got {err}",
+        );
+    }
+
+    #[tokio::test]
+    async fn router_with_zero_capacity_cache_does_not_dedupe() {
+        let (up, calls) = counting("up", Probe::Reply("x"));
+        let router = Router::new("m", vec![up]).with_cache(Box::new(InMemoryLruCache::new(0)));
+
+        let msgs = [ChatMessage::user("p")];
+        router.complete(&msgs).await.unwrap();
+        router.complete(&msgs).await.unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "capacity 0 disables caching, so the provider is hit on every call",
+        );
+    }
+
+    #[tokio::test]
+    async fn router_with_pricing_emits_estimated_cost() {
+        let (up, _) = counting("up", Probe::Reply("0123456789012345")); // 16 chars -> 4 tokens
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let router = Router::new("m", vec![up])
+            .with_pricing(Pricing {
+                prompt_usd_per_1k: 1.0,
+                completion_usd_per_1k: 2.0,
+            })
+            .with_cost_sink(Box::new(RecordingSink {
+                records: records.clone(),
+            }));
+
+        router
+            .complete(&[ChatMessage::user("01234567")]) // 8 chars -> 2 tokens
+            .await
+            .unwrap();
+
+        let recs = records.lock().unwrap();
+        assert_eq!(recs[0].prompt_tokens, Some(2));
+        assert_eq!(recs[0].completion_tokens, Some(4));
+        let cost = recs[0]
+            .estimated_cost
+            .expect("pricing configured -> Some estimated cost");
+        // 2/1000 * 1.0 + 4/1000 * 2.0 = 0.002 + 0.008 = 0.010
+        assert!((cost - 0.010).abs() < 1e-9, "got {cost}");
+    }
+
+    #[test]
+    fn estimate_tokens_rounds_partial_tokens_up() {
+        // ~4 chars per token, rounding UP so a fractional token still budgets a
+        // whole one — conservative for cost_record's prompt/completion counts.
+        // The only test that pins concrete token values
+        // (router_with_pricing_emits_estimated_cost) uses 8- and 16-char inputs,
+        // both exact multiples of 4, where div_ceil(4) and a plain `/ 4` agree;
+        // non-multiple inputs are what pin the ceiling and the divisor. A
+        // div_ceil -> floor regression would under-count tokens and under-charge
+        // the budget. The .min(u32::MAX) saturation clamp is pinned separately by
+        // estimate_tokens_saturates_at_u32_max_instead_of_wrapping.
+        assert_eq!(estimate_tokens(0), 0);
+        assert_eq!(estimate_tokens(1), 1);
+        assert_eq!(estimate_tokens(4), 1);
+        assert_eq!(estimate_tokens(5), 2);
+        assert_eq!(estimate_tokens(7), 2);
+        assert_eq!(estimate_tokens(8), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_saturates_at_u32_max_instead_of_wrapping() {
+        // estimate_tokens takes a char count as usize, so on a 64-bit host
+        // div_ceil(4) can exceed u32::MAX. The .min(u32::MAX as usize) clamp keeps
+        // the `as u32` cast from wrapping a gigantic prompt back down to a tiny —
+        // or zero — token count, which would silently under-report cost through
+        // cost_record into the budget ledger. Drop the clamp and the cast wraps:
+        // the two over-cap inputs below land on 0, not u32::MAX.
+        let max = u32::MAX as usize;
+
+        // u32::MAX * 4 chars is the largest input whose div_ceil(4) lands exactly
+        // on u32::MAX: the natural ceiling meets the clamp with no gap, so clamped
+        // and unclamped agree here. One char more tips div_ceil over 2^32.
+        assert_eq!(estimate_tokens(max * 4), u32::MAX);
+
+        // First char count whose div_ceil(4) is 2^32; an unclamped cast wraps it
+        // to 0, reporting zero tokens for ~17 GB of input. The clamp holds u32::MAX.
+        assert_eq!(estimate_tokens(max * 4 + 1), u32::MAX);
+
+        // Fully saturated: usize::MAX chars also wrap to 0 without the clamp.
+        assert_eq!(estimate_tokens(usize::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn cache_key_is_stable_and_sensitive_to_model_and_messages() {
+        let a = [ChatMessage::user("hello"), ChatMessage::assistant("hi")];
+        let k = cache_key("model-x", &a).unwrap();
+
+        assert_eq!(
+            k,
+            cache_key("model-x", &a).unwrap(),
+            "identical input must be stable"
+        );
+        assert_ne!(
+            k,
+            cache_key("model-y", &a).unwrap(),
+            "a model change must miss so a cheap model never serves an expensive request",
+        );
+        let edited = [ChatMessage::user("hello!"), ChatMessage::assistant("hi")];
+        assert_ne!(
+            k,
+            cache_key("model-x", &edited).unwrap(),
+            "an edited message must miss"
+        );
+        let reordered = [ChatMessage::assistant("hi"), ChatMessage::user("hello")];
+        assert_ne!(
+            k,
+            cache_key("model-x", &reordered).unwrap(),
+            "a turn swap must miss"
+        );
+
+        assert_eq!(k.len(), 32, "a 128-bit digest is 32 hex chars");
+        assert!(k.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn is_retryable_advances_only_on_transport_faults() {
+        assert!(
+            is_retryable(&ProviderError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "t",
+            ))),
+            "a transport fault must advance to the next provider",
+        );
+        // Http shares the Io arm (both transport); constructing a reqwest::Error
+        // needs a live request, so the Io case pins the retryable branch.
+        let serde_err: ProviderError = serde_json::from_str::<serde_json::Value>("{")
+            .unwrap_err()
+            .into();
+        let toml_err: ProviderError = toml::from_str::<i32>("=").unwrap_err().into();
+        for e in [
+            serde_err,
+            toml_err,
+            ProviderError::Empty,
+            ProviderError::Status {
+                status: 503,
+                body: "busy".into(),
+            },
+            ProviderError::Status {
+                status: 400,
+                body: "bad".into(),
+            },
+            ProviderError::MissingKey("openai"),
+            ProviderError::Truncated {
+                max_tokens: 8,
+                partial: "x".into(),
+            },
+            ProviderError::ResponseTooLarge { limit: 16 },
+        ] {
+            assert!(
+                !is_retryable(&e),
+                "a deterministic error must not advance, got {e}",
+            );
+        }
+    }
+
+    #[test]
+    fn in_memory_lru_cache_evicts_least_recently_used() {
+        let cache = InMemoryLruCache::new(2);
+        cache.put("a", "1".into());
+        cache.put("b", "2".into());
+        assert_eq!(cache.get("a"), Some("1".into())); // a is now MRU
+        cache.put("c", "3".into()); // capacity exceeded -> evict the LRU (b)
+
+        assert_eq!(
+            cache.get("b"),
+            None,
+            "the least-recently-used entry must be evicted"
+        );
+        assert_eq!(cache.get("a"), Some("1".into()));
+        assert_eq!(cache.get("c"), Some("3".into()));
+    }
+
+    #[tokio::test]
+    async fn router_with_no_providers_surfaces_empty() {
+        // An empty provider list leaves nothing to try and no upstream error to
+        // surface, so the fallback loop falls through to its terminal arm. That
+        // arm must yield the deterministic Empty rather than panic on an unwrap
+        // of the never-set last error. The exhaustion test covers the populated
+        // case (every provider fails retryably); this pins the empty case.
+        let router = Router::new("m", vec![]);
+
+        let err = router
+            .complete(&[ChatMessage::user("hi")])
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ProviderError::Empty),
+            "a router with no providers must surface Empty, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn in_memory_lru_cache_reput_updates_value_without_consuming_a_second_slot() {
+        // Re-putting an existing key must overwrite its value and refresh
+        // recency through the single order-deque entry it already owns. Pushing
+        // a second entry would double-count the key against capacity and evict a
+        // still-live key; the eviction test only ever puts distinct keys.
+        let cache = InMemoryLruCache::new(2);
+        cache.put("a", "1".into());
+        cache.put("a", "2".into());
+
+        assert_eq!(
+            cache.get("a"),
+            Some("2".into()),
+            "re-putting a key must overwrite its value",
+        );
+
+        cache.put("b", "3".into());
+
+        assert_eq!(
+            cache.get("a"),
+            Some("2".into()),
+            "the re-put key must occupy one slot, so b fits without evicting a",
+        );
+        assert_eq!(cache.get("b"), Some("3".into()));
     }
 }

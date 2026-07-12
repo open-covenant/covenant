@@ -5,10 +5,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/index.mjs"
+    "start": "node src/index.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.30.1",
     "@solana/web3.js": "^1.98.4"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
   }
 }

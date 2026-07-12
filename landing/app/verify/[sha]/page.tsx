@@ -7,7 +7,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
-import { clean } from "@/lib/agentStream.mjs";
+import { redactAuthor } from "@/lib/verify/author";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,18 +51,6 @@ type VerifyPayload = {
     href: string;
   };
 };
-
-// Reuse the runtime-derived token scan from lib/agentStream.mjs so this file
-// never enumerates operator-identifying literals. clean() returns null when
-// the input contains a banned token; we substitute a public legacy author
-// label in that case so pre-cutover commits still render their metadata
-// without leaking.
-function redactAuthor(name: string, email: string): { display: string; email: string } {
-  if (clean(name) === null || clean(email) === null) {
-    return { display: "Covenant Legacy", email: "legacy@opencovenant.org" };
-  }
-  return { display: name, email };
-}
 
 async function fetchWitness(sha: string): Promise<VerifyPayload | null> {
   // Resolve the API on the host this request arrived on — the app is reachable

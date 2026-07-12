@@ -37,6 +37,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 use uuid::Uuid;
 
+mod signed;
+pub use signed::{A2AEnvelopeError, SignedA2ATask};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum A2ATaskStatus {
@@ -457,6 +460,11 @@ fn validate_repair_request(request: &A2ARepairRequest) -> Result<(), A2AError> {
 }
 
 fn validate_task(task: &A2ATask) -> Result<(), A2AError> {
+    if task.intent_text.trim().is_empty() {
+        return Err(A2AError::InvalidTask(
+            "intent_text must not be empty".into(),
+        ));
+    }
     if task
         .task_kind
         .as_deref()
@@ -4669,6 +4677,34 @@ mod tests {
     }
 
     #[test]
+    fn validate_task_rejects_empty_intent_text() {
+        // intent_text is a required wire field and the router's primary
+        // routing signal; an empty or whitespace-only value yields an
+        // unroutable task and collapses the idempotency_cache_key
+        // discriminator fallback used when task_kind is absent. Reject it at
+        // the send boundary like task_kind. trim() is required so a
+        // whitespace-only value cannot bypass the check.
+        for empty in ["", "   ", "\t\n"] {
+            let mut t = dummy_task();
+            t.intent_text = empty.into();
+            let err = validate_task(&t).unwrap_err();
+            match err {
+                A2AError::InvalidTask(message) => assert!(
+                    message.contains("intent_text must not be empty"),
+                    "unexpected InvalidTask payload: {message:?}",
+                ),
+                other => panic!("expected InvalidTask, got {other:?}"),
+            }
+        }
+
+        // A non-empty intent_text validates. An inverted trim().is_empty()
+        // check would block every legitimate send, so pin the accept path.
+        let mut ok = dummy_task();
+        ok.intent_text = "find recent papers".into();
+        assert!(validate_task(&ok).is_ok());
+    }
+
+    #[test]
     fn validate_repair_request_pins_reason_and_force_error_message_arms() {
         let task_id = Uuid::new_v4();
         let requeue = || A2ARepairCommand::Requeue {
@@ -6004,6 +6040,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_taskrecv_replay_leased_to_recipient() {
+        // A replayed MailboxEvent::TaskRecv leases with leased_to=None
+        // (lib.rs:973), so lease_task falls back to task.recipient
+        // (lib.rs:1039). Production only ever appends TaskLeased with an
+        // explicit lessee; TaskRecv is the legacy-JSONL replay path that fixes
+        // in-flight lease ownership after a daemon restart from such a log. The
+        // sibling reopen test drives try_recv_task_for (the Some(leased_to)
+        // arm), so this recipient fallback is otherwise never exercised.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let task = dummy_task();
+        assert_ne!(
+            task.sender, task.recipient,
+            "the fallback attributes to recipient, not sender — they must differ \
+             for the assertion to distinguish the two",
+        );
+
+        let log = [
+            MailboxEvent::TaskSent { task: task.clone() },
+            MailboxEvent::TaskRecv { task_id: task.id },
+        ];
+        let body = log
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let m = JsonlMailbox::open(path).await.unwrap();
+        let queue = m.task_queue(10).await.unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].state, A2ATaskQueueState::InFlight);
+        assert_eq!(queue[0].task.id, task.id);
+        assert_eq!(queue[0].attempt, 1);
+        assert_eq!(
+            queue[0].leased_to.as_ref(),
+            Some(&task.recipient),
+            "a TaskRecv-replayed lease (leased_to=None) must default the lessee \
+             to the task recipient, not the sender",
+        );
+    }
+
+    #[tokio::test]
     async fn result_post_clears_in_flight_queue_state() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.jsonl");
@@ -6050,6 +6129,204 @@ mod tests {
         let _ = m.try_recv_task_for(&task.recipient).await.unwrap().unwrap();
         let leased_again = m.task_queue(10).await.unwrap();
         assert_eq!(leased_again[0].attempt, 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_task_queue_binding_limit_keeps_queued_before_leased() {
+        let m = InMemoryMailbox::new();
+        let tasks: Vec<A2ATask> = (0..4).map(|_| dummy_task()).collect();
+        for task in &tasks {
+            m.send_task(task.clone()).await.unwrap();
+        }
+        // Lease the first two in FIFO order, leaving tasks[2] and tasks[3]
+        // queued and tasks[0], tasks[1] in flight.
+        let recipient = tasks[0].recipient.clone();
+        for _ in 0..2 {
+            m.try_recv_task_for(&recipient).await.unwrap().unwrap();
+        }
+
+        // A limit equal to the queued count must keep exactly the queued
+        // head, in order, and drop every leased entry: queued sorts ahead
+        // of leased, then truncate caps the tail. A leased-before-queued
+        // reorder would surface the in-flight ids here; truncating before
+        // the extend would overrun the cap.
+        let bound = m.task_queue(2).await.unwrap();
+        assert_eq!(
+            bound.iter().map(|e| e.task.id).collect::<Vec<_>>(),
+            vec![tasks[2].id, tasks[3].id],
+            "binding limit must keep the queued head in order, not the leased entries",
+        );
+        assert!(
+            bound.iter().all(|e| e.state == A2ATaskQueueState::Queued),
+            "limit == queued count must drop every leased entry",
+        );
+
+        // A slack limit proves the leased entries exist past the cap, so
+        // the binding case dropped them by truncation, not by absence.
+        let full = m.task_queue(10).await.unwrap();
+        assert_eq!(
+            full.len(),
+            4,
+            "slack limit must surface all queued + leased entries"
+        );
+        assert_eq!(
+            full.iter()
+                .filter(|e| e.state == A2ATaskQueueState::InFlight)
+                .count(),
+            2,
+            "the two leased tasks must be present past the binding cap",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_task_queue_binding_limit_keeps_queued_before_leased() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let m = JsonlMailbox::open(path).await.unwrap();
+        let tasks: Vec<A2ATask> = (0..4).map(|_| dummy_task()).collect();
+        for task in &tasks {
+            m.send_task(task.clone()).await.unwrap();
+        }
+        let recipient = tasks[0].recipient.clone();
+        for _ in 0..2 {
+            m.try_recv_task_for(&recipient).await.unwrap().unwrap();
+        }
+
+        let bound = m.task_queue(2).await.unwrap();
+        assert_eq!(
+            bound.iter().map(|e| e.task.id).collect::<Vec<_>>(),
+            vec![tasks[2].id, tasks[3].id],
+            "binding limit must keep the queued head in order, not the leased entries",
+        );
+        assert!(
+            bound.iter().all(|e| e.state == A2ATaskQueueState::Queued),
+            "limit == queued count must drop every leased entry",
+        );
+
+        let full = m.task_queue(10).await.unwrap();
+        assert_eq!(
+            full.len(),
+            4,
+            "slack limit must surface all queued + leased entries"
+        );
+        assert_eq!(
+            full.iter()
+                .filter(|e| e.state == A2ATaskQueueState::InFlight)
+                .count(),
+            2,
+            "the two leased tasks must be present past the binding cap",
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_task_queue_orders_leased_entries_by_lease_age_then_task_id() {
+        // task_queue sorts leased entries by (leased_at_ms asc, task.id asc)
+        // at lib.rs:775. in_flight is a HashMap, so its .values() order is
+        // process-random; the task.id tie-break is the only thing that makes
+        // a queue listing reproducible when several leases share a
+        // millisecond. The binding-limit test pins only the queued head and
+        // the leased count, so a b.cmp(a) flip on either key, or an
+        // Ordering::Equal tie-break, survives it. The public lease path
+        // stamps leased_at_ms from the wall clock and cannot force an
+        // equal-ms tie, so insert the leases directly to build the three-way
+        // tie the tie-break exists to resolve.
+        let m = InMemoryMailbox::new();
+        let tasks: Vec<A2ATask> = (0..5).map(|_| dummy_task()).collect();
+        let leases = [
+            (0usize, 2_000u64),
+            (1, 2_000),
+            (2, 2_000),
+            (3, 1_000),
+            (4, 3_000),
+        ];
+        {
+            let mut in_flight = m.in_flight.lock();
+            for &(i, leased_at_ms) in &leases {
+                let task = &tasks[i];
+                in_flight.insert(
+                    task.id,
+                    TaskLease {
+                        lease_id: Uuid::new_v4(),
+                        task: task.clone(),
+                        leased_to: task.recipient.clone(),
+                        leased_at_ms,
+                        attempt: 1,
+                    },
+                );
+            }
+        }
+
+        let mut tied = [tasks[0].id, tasks[1].id, tasks[2].id];
+        tied.sort();
+        let expected = vec![tasks[3].id, tied[0], tied[1], tied[2], tasks[4].id];
+
+        let queue = m.task_queue(10).await.unwrap();
+        assert_eq!(
+            queue.iter().map(|e| e.task.id).collect::<Vec<_>>(),
+            expected,
+            "leased entries must sort by lease age then task id: the 1_000ms \
+             lease first, the three 2_000ms leases in ascending id order (the \
+             HashMap-order tie-break at lib.rs:778), then the 3_000ms lease",
+        );
+        assert!(
+            queue.iter().all(|e| e.state == A2ATaskQueueState::InFlight),
+            "every task is leased, so no queued head can mask the leased ordering",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_task_queue_orders_leased_entries_by_lease_age_then_task_id() {
+        // Parity with the in-memory backend: JsonlMailbox::task_queue
+        // (lib.rs:1318) delegates to MailboxState::task_queue (lib.rs:1054),
+        // whose own copy of the leased comparator lives at lib.rs:1073. Seed
+        // the event log with TaskLeased rows carrying a controlled
+        // leased_at_ms so replay rebuilds the same three-way tie, then open
+        // and read the queue back through the real deserialize + replay path.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let tasks: Vec<A2ATask> = (0..5).map(|_| dummy_task()).collect();
+
+        let mut log = String::new();
+        for task in &tasks {
+            log.push_str(
+                &serde_json::to_string(&MailboxEvent::TaskSent { task: task.clone() }).unwrap(),
+            );
+            log.push('\n');
+        }
+        let leases = [
+            (0usize, 2_000u64),
+            (1, 2_000),
+            (2, 2_000),
+            (3, 1_000),
+            (4, 3_000),
+        ];
+        for &(i, leased_at_ms) in &leases {
+            let task = &tasks[i];
+            let event = MailboxEvent::TaskLeased {
+                task_id: task.id,
+                lease_id: Uuid::new_v4(),
+                leased_to: task.recipient.clone(),
+                leased_at_ms,
+                attempt: 1,
+            };
+            log.push_str(&serde_json::to_string(&event).unwrap());
+            log.push('\n');
+        }
+        tokio::fs::write(&path, log).await.unwrap();
+
+        let m = JsonlMailbox::open(path).await.unwrap();
+
+        let mut tied = [tasks[0].id, tasks[1].id, tasks[2].id];
+        tied.sort();
+        let expected = vec![tasks[3].id, tied[0], tied[1], tied[2], tasks[4].id];
+
+        let queue = m.task_queue(10).await.unwrap();
+        assert_eq!(
+            queue.iter().map(|e| e.task.id).collect::<Vec<_>>(),
+            expected,
+            "JsonlMailbox must order leased entries by lease age then task id \
+             after replay, matching the in-memory backend (lib.rs:1073)",
+        );
     }
 
     #[tokio::test]

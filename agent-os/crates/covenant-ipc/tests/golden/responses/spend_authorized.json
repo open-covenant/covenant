@@ -1,0 +1,6 @@
+{
+  "kind": "spend_authorized",
+  "approved": true,
+  "decision_id": "5e111ed0-0000-0000-0000-000000000001",
+  "reason": "within per-call cap"
+}

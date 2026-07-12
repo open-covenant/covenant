@@ -79,9 +79,13 @@ impl Endpoint {
     }
 
     /// USD-pegged budget credits (cents). $0.08 → 8 credits, matching
-    /// the daemon's existing x402 accounting convention.
+    /// the daemon's existing x402 accounting convention. A price beyond
+    /// the u64 credit range saturates to `u64::MAX` rather than wrapping
+    /// to a smaller cost — an unrepresentable price is unaffordable, not
+    /// free — since the price is manifest-derived and only bounded to
+    /// `u128::MAX`.
     pub fn credits(&self) -> u64 {
-        (self.price_micro_usdc / 10_000) as u64
+        u64::try_from(self.price_micro_usdc / 10_000).unwrap_or(u64::MAX)
     }
 }
 
@@ -210,7 +214,10 @@ fn parse_body(raw: Option<&Value>) -> Vec<BodyField> {
 
 /// Convert a fixed USD decimal string (e.g. `"0.080000"`) to atomic
 /// USDC. Parses the decimal directly to avoid float rounding on prices
-/// that must settle exactly on-chain.
+/// that must settle exactly on-chain. A zero price is rejected: a paid
+/// endpoint priced at `"0"` is malformed (a genuinely free endpoint
+/// omits `x-payment-info` and is skipped by [`parse`]). A price large
+/// enough to overflow `u128` when scaled is rejected too, not panicked.
 fn usd_to_micro(usd: &str) -> Result<u128> {
     let (whole, frac) = usd.split_once('.').unwrap_or((usd, ""));
     let whole: u128 = whole
@@ -234,7 +241,22 @@ fn usd_to_micro(usd: &str) -> Result<u128> {
             .parse()
             .map_err(|_| HyreError::Manifest(format!("price fraction: {usd:?}")))?
     };
-    Ok(whole * 10u128.pow(USDC_DECIMALS) + frac)
+    // The integer part is parsed straight from the untrusted manifest with no
+    // upper bound, so scaling it can overflow u128. Reject that rather than
+    // panic (overflow-checks is on for release too) the way the parser already
+    // rejects every other malformed price.
+    let micro = whole
+        .checked_mul(10u128.pow(USDC_DECIMALS))
+        .and_then(|scaled| scaled.checked_add(frac))
+        .ok_or_else(|| HyreError::Manifest(format!("price overflows u128: {usd:?}")))?;
+    if micro == 0 {
+        // An explicit "0" is a malformed paid endpoint: it would register a
+        // zero-credit tool and settle a zero-credit debit/receipt the audit
+        // verifier treats as drift. Free endpoints omit x-payment-info and
+        // never reach here.
+        return Err(HyreError::Manifest(format!("price is zero: {usd:?}")));
+    }
+    Ok(micro)
 }
 
 #[cfg(test)]
@@ -288,6 +310,81 @@ mod tests {
     }
 
     #[test]
+    fn usd_to_micro_rejects_zero_price() {
+        // A genuinely free endpoint omits x-payment-info (parse() skips it), so
+        // every spelling of an explicit zero price is a malformed paid endpoint
+        // and must be rejected, not converted to a zero-credit tool.
+        for z in ["0", "0.0", "0.000000"] {
+            assert!(
+                matches!(usd_to_micro(z), Err(HyreError::Manifest(m)) if m.contains("zero")),
+                "zero price {z:?} must be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_zero_priced_endpoint() {
+        // The manifest is fetched from an untrusted provider URL; a paid
+        // endpoint advertised at "0" must fail the whole refresh closed rather
+        // than register a zero-credit paid tool the daemon would settle for free.
+        let json = doc(serde_json::json!({
+            "/trenches/new-tokens": { "get": priced_op("0") },
+        }));
+        assert!(
+            matches!(parse(&json), Err(HyreError::Manifest(m)) if m.contains("zero")),
+            "a zero-priced paid endpoint must be rejected",
+        );
+    }
+
+    #[test]
+    fn usd_to_micro_rejects_overflowing_price() {
+        // The integer part is an unbounded u128 parsed from an untrusted
+        // manifest. u128::MAX parses cleanly but overflows when scaled to
+        // atomic USDC; with overflow-checks on (release included) the bare
+        // multiply would panic the refresh rather than convert, so it must
+        // reject like every other malformed price.
+        let huge = u128::MAX.to_string();
+        assert!(
+            matches!(usd_to_micro(&huge), Err(HyreError::Manifest(m)) if m.contains("overflow")),
+            "a price that overflows u128 when scaled must be rejected",
+        );
+    }
+
+    #[test]
+    fn usd_to_micro_rejects_fractional_price_that_overflows_the_micro_add() {
+        // usd_to_micro scales whole*10^6 then ADDS the six-decimal fraction
+        // (manifest.rs:248-251), with checked_mul AND checked_add both guarding
+        // overflow. The sibling overflow tests feed u128::MAX, which fails the
+        // checked_mul and short-circuits the .and_then, so the second guard
+        // (scaled.checked_add(frac)) never runs. Pick whole = u128::MAX/10^6:
+        // the multiply fits with 211_455 of headroom, but a ".999999" fraction
+        // (999_999 > 211_455) overflows the add. The real checked_add rejects;
+        // a wrapping_add would wrap to 788_543 and sign that garbage price.
+        let whole = u128::MAX / 1_000_000;
+        let usd = format!("{whole}.999999");
+        let err = usd_to_micro(&usd).unwrap_err();
+        assert!(
+            matches!(&err, HyreError::Manifest(m) if m.contains("overflow")),
+            "a fraction that overflows the micro-USDC add must be rejected, \
+             not wrapped to a tiny garbage price: {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_overflowing_priced_endpoint() {
+        // A remote provider can advertise any integer price string; one large
+        // enough to overflow the atomic-USDC scaling must fail the refresh
+        // closed rather than panic the parser mid-manifest.
+        let json = doc(serde_json::json!({
+            "/trenches/new-tokens": { "get": priced_op(&u128::MAX.to_string()) },
+        }));
+        assert!(
+            matches!(parse(&json), Err(HyreError::Manifest(m)) if m.contains("overflow")),
+            "an overflowing paid endpoint price must be rejected",
+        );
+    }
+
+    #[test]
     fn credits_are_cents() {
         let ep = Endpoint {
             path: "/x".into(),
@@ -300,6 +397,25 @@ mod tests {
             body: vec![],
         };
         assert_eq!(ep.credits(), 8);
+    }
+
+    #[test]
+    fn credits_saturate_above_u64_range() {
+        // price_micro_usdc is manifest-derived and only bounded to u128::MAX,
+        // so a price whose cent value exceeds u64::MAX must saturate to
+        // u64::MAX (unaffordable) rather than wrap through `as u64` to a small
+        // cost the daemon would settle as a cheap tool.
+        let ep = Endpoint {
+            path: "/x".into(),
+            method: "GET".into(),
+            operation_id: String::new(),
+            summary: String::new(),
+            description: String::new(),
+            price_micro_usdc: u128::MAX,
+            params: vec![],
+            body: vec![],
+        };
+        assert_eq!(ep.credits(), u64::MAX);
     }
 
     #[test]
@@ -349,6 +465,55 @@ mod tests {
         assert!(p[0].required);
         assert_eq!(p[1].name, "curve_key");
         assert_eq!(p[1].location, ParamIn::Query);
+    }
+
+    #[test]
+    fn parse_merges_path_item_level_shared_parameters_into_each_operation() {
+        // OpenAPI lets a path item declare `parameters` once for every
+        // operation under it — the natural home for a path template's
+        // `{mint}`. parse() models this by seeding each operation's parameter
+        // list with the path-item-level shared params (manifest.rs:110,124)
+        // before extending with the operation's own, then re-running the
+        // Authorization strip over the merged list (manifest.rs:126). The
+        // vendored manifest declares every parameter at the operation level, so
+        // a regression that ignored the shared list, or that stripped
+        // Authorization before the merge, would pass every other test while
+        // dropping a required path argument or leaking a daemon-supplied
+        // credential slot into a generated tool's schema.
+        let mut op = priced_op("0.010000");
+        op["parameters"] = serde_json::json!([
+            { "name": "curve_key", "in": "query", "required": false, "description": "Curve" },
+        ]);
+        let item = serde_json::json!({
+            "parameters": [
+                { "name": "mint", "in": "path", "required": true, "description": "Token mint" },
+                { "name": "Authorization", "in": "query", "required": false, "description": "MPP credential" },
+            ],
+            "get": op,
+        });
+        let json = doc(serde_json::json!({ "/trenches/curve/{mint}": item }));
+
+        let eps = parse(&json).unwrap();
+        let p = &eps[0].params;
+        assert_eq!(
+            p.len(),
+            2,
+            "the shared path param and the operation's query param survive; the \
+             path-item-level Authorization credential is stripped after the merge"
+        );
+        assert_eq!(
+            p[0].name, "mint",
+            "shared params are merged ahead of the operation's own"
+        );
+        assert_eq!(p[0].location, ParamIn::Path);
+        assert!(p[0].required, "a required shared path param stays required");
+        assert_eq!(p[1].name, "curve_key");
+        assert_eq!(p[1].location, ParamIn::Query);
+        assert!(
+            !p.iter().any(|x| x.name == "Authorization"),
+            "an Authorization credential declared at the path-item level must be \
+             stripped after the merge, never surfaced as a tool argument"
+        );
     }
 
     #[test]
@@ -410,6 +575,92 @@ mod tests {
         assert!(
             matches!(parse(&all_filtered), Err(HyreError::Manifest(m)) if m.contains("no priced endpoints")),
             "a manifest that filters down to nothing must be rejected as no-priced-endpoints",
+        );
+    }
+
+    #[test]
+    fn parse_params_drops_non_path_query_and_malformed_entries() {
+        // The tool layer models only path and query arguments. A header or
+        // cookie param (e.g. an auth header) must never reach a generated
+        // tool's schema, and a param object missing `name` or `in` must be
+        // skipped — one malformed operation shouldn't abort the parse and
+        // erase every tool Hyre publishes.
+        let raw = serde_json::json!([
+            { "name": "mint", "in": "path", "required": true, "description": "Token mint" },
+            { "name": "X-Trace", "in": "header", "required": true },
+            { "name": "session", "in": "cookie" },
+            { "in": "query", "description": "no name" },
+            { "name": "noLocation", "description": "no in" },
+        ]);
+        let params = parse_params(Some(&raw));
+        assert_eq!(params.len(), 1, "only the path param survives the filter");
+        assert_eq!(params[0].name, "mint");
+        assert_eq!(params[0].location, ParamIn::Path);
+    }
+
+    #[test]
+    fn parse_params_defaults_required_false_and_empty_description() {
+        // `required` and `description` are optional in the manifest; a param
+        // that omits them must distill to an optional arg with no help text,
+        // not panic or inherit a stale value.
+        let raw = serde_json::json!([{ "name": "curve_key", "in": "query" }]);
+        let params = parse_params(Some(&raw));
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].location, ParamIn::Query);
+        assert!(!params[0].required);
+        assert_eq!(params[0].description, "");
+    }
+
+    #[test]
+    fn parse_body_without_json_schema_is_empty() {
+        // A body advertised only as multipart/form-data carries no schema we
+        // model, so it must distill to zero body fields rather than a tool
+        // argument the agent can't satisfy.
+        let raw = serde_json::json!({
+            "required": true,
+            "content": { "multipart/form-data": { "schema": { "type": "object" } } }
+        });
+        assert!(parse_body(Some(&raw)).is_empty());
+        assert!(parse_body(None).is_empty());
+    }
+
+    #[test]
+    fn parse_body_without_properties_is_empty() {
+        let raw = serde_json::json!({
+            "content": { "application/json": { "schema": { "type": "object" } } }
+        });
+        assert!(
+            parse_body(Some(&raw)).is_empty(),
+            "a schema with no properties object yields no body fields"
+        );
+    }
+
+    #[test]
+    fn parse_body_absent_required_array_marks_all_optional() {
+        // With no `required` array every body field must default to optional;
+        // marking them required would make the generated tool reject calls
+        // Hyre itself accepts. A field without a description gets an empty one.
+        let raw = serde_json::json!({
+            "content": { "application/json": { "schema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "NL question" },
+                    "limit": { "type": "integer" }
+                }
+            }}}
+        });
+        let body = parse_body(Some(&raw));
+        assert_eq!(body.len(), 2);
+        assert!(
+            body.iter().all(|f| !f.required),
+            "no required array -> every field optional"
+        );
+        let query = body.iter().find(|f| f.name == "query").unwrap();
+        assert_eq!(query.description, "NL question");
+        let limit = body.iter().find(|f| f.name == "limit").unwrap();
+        assert_eq!(
+            limit.description, "",
+            "a field without a description gets an empty one"
         );
     }
 }

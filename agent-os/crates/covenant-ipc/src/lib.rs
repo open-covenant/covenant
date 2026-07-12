@@ -12,7 +12,7 @@ use covenant_a2a::{
     A2AAutoRetryPolicy, A2AAutoRetryReport, A2ARepairOutcome, A2ARepairRequest, A2ATask,
     A2ATaskQueueEntry, A2ATaskQueueState, A2ATaskResult,
 };
-use covenant_audit::{AuditEvent, AuditInclusionProof, AuditIntegrityReport};
+use covenant_audit::{AuditEvent, AuditInclusionProof, AuditIntegrityReport, PrivilegedAction};
 use covenant_budget::BudgetDebit;
 use covenant_mcp::{Content, ToolSpec};
 use covenant_peer_auth::{PeerStatusFilter, PeerSummary, RevokeOutcome};
@@ -625,6 +625,13 @@ pub enum Request {
         #[serde(default)]
         arguments: serde_json::Value,
     },
+    /// Fetch a named secret from the daemon's secret broker. Gated by the
+    /// `secret.access` capability, whose scope may bind the grant to one
+    /// `name`. Returns [`Response::Secret`] on success; the value is never
+    /// written to the audit chain or daemon logs.
+    GetSecret {
+        name: String,
+    },
     /// Recent audit events scoped to the calling peer's pubkey.
     ///
     /// `since_ms` narrows the result to entries with `timestamp_ms >=
@@ -865,6 +872,45 @@ pub enum Request {
         #[serde(default)]
         expires_at_unix: Option<u64>,
     },
+    /// Operator-only provenance query: every privileged action in a
+    /// window, projected from the capability family of audit kinds and
+    /// filtered by actor, approver, authorizing rule, and outcome. The
+    /// daemon verifies the audit hash-chain and returns the verdict
+    /// alongside the rows in [`Response::ProvenanceActions`], so a
+    /// provenance answer can never silently read tampered rows. Gated on
+    /// the operator identity (mirrors [`Request::VerifyAuditIntegrity`])
+    /// because the response carries the global integrity report and a
+    /// cross-actor view, not the caller's own feed.
+    ///
+    /// `since_ms`/`until_ms` bound the window inclusively; absent fields
+    /// leave that end open. `actor`, `approver`, and `outcome` are exact
+    /// matches; `rule` matches a base58 signature prefix. `limit` bounds
+    /// the result to the most recent matching rows (chronological order,
+    /// matching the other recent-tail verbs) — the same silent-default
+    /// reasoning, so a frame that omits it scans the window but truncates
+    /// to a bounded slice rather than streaming an unbounded result.
+    QueryProvenance {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approver: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+        #[serde(default = "default_recent_limit")]
+        limit: usize,
+    },
+    /// Operator-only read of capability state: every grant in the ledger with
+    /// its action, expiry, revocation status, and — for grants that declared a
+    /// `max_uses` budget — how many uses are spent and how many remain.
+    /// Read-only; records no use. IPC-only, gated on the operator identity like
+    /// [`Request::QueryProvenance`].
+    CapabilityUsage,
 }
 
 fn default_recent_limit() -> usize {
@@ -984,6 +1030,13 @@ pub enum Response {
     ToolResult {
         content: Vec<Content>,
         is_error: bool,
+    },
+    /// The named secret released by the broker for an authorized
+    /// [`Request::GetSecret`]. `value` is the live secret material — callers
+    /// must treat it as sensitive; the daemon never audits or logs it.
+    Secret {
+        name: String,
+        value: String,
     },
     AuditEvents {
         events: Vec<AuditEvent>,
@@ -1182,9 +1235,93 @@ pub enum Response {
         agent_pda: String,
         signature: String,
     },
+    /// Result of a [`Request::QueryProvenance`]. `actions` are the
+    /// projected privileged-action rows matching the filter — the most
+    /// recent matches in chronological order, bounded by the request
+    /// `limit`. `integrity` is the
+    /// audit hash-chain verdict computed during the same query so the
+    /// operator sees whether the underlying rows are tamper-evident.
+    /// `scanned` is the number of audit events examined within the
+    /// window, so the cost and coverage of the answer are visible.
+    ProvenanceActions {
+        integrity: AuditIntegrityReport,
+        actions: Vec<PrivilegedAction>,
+        scanned: u64,
+    },
+    /// Result of a [`Request::CapabilityUsage`] query. One
+    /// [`CapabilityUsageEntry`] per grant in the ledger — live and
+    /// revoked-but-not-yet-purged — joined to its durable use count by
+    /// signature.
+    CapabilityUsage {
+        grants: Vec<CapabilityUsageEntry>,
+    },
     Error {
         message: String,
     },
+}
+
+/// One grant's row in a [`Response::CapabilityUsage`] reply. `signature_b58`
+/// is the base58 ed25519 signature that uniquely identifies the grant — the
+/// join key, so several grants for one `action` stay distinct. `scope` is the
+/// signed scope verbatim — the constraints that bound what the authority
+/// permits within its `action` (the tool a `tool.call` grant is pinned to, an
+/// `a2a.send` recipient, a `max_uses` budget) — so two grants for one action
+/// with different scopes stay distinguishable rather than collapsing onto the
+/// action verb. `subject_display` and `subject_pubkey_b58` name the agent the
+/// authority is delegated to (the holder), the pubkey being the stable identity
+/// and the display the human label. `expires_at` is epoch-ms (`None` is
+/// perpetual). `effective` is the daemon's own verdict on whether the grant
+/// would authorize an action right now. `budget` is present only for grants
+/// that declared a `max_uses` usage budget.
+///
+/// Carries a `serde_json::Value` scope, so — like [`Request`] and [`Response`]
+/// — it derives `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CapabilityUsageEntry {
+    pub signature_b58: String,
+    pub action: String,
+    pub scope: serde_json::Value,
+    pub subject_display: String,
+    pub subject_pubkey_b58: String,
+    pub expires_at: Option<u64>,
+    pub revoked: bool,
+    pub effective: CapabilityEffectiveStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<CapabilityUsageBudget>,
+}
+
+/// The daemon's verdict on whether a grant would authorize an action right now,
+/// derived with the daemon clock and the same predicates the enforcement path
+/// applies. Reported so an operator reads the daemon's own decision rather than
+/// re-deriving it from the raw `expires_at`/`revoked`/`budget` fields, where a
+/// different clock or precedence could disagree with enforcement. Precedence
+/// matches enforcement order: a revoked grant is dropped from the live set
+/// before expiry is checked, and a grant's budget is consumed only after the
+/// expiry-aware signature check passes, so `Revoked` dominates `Expired`, which
+/// dominates `Exhausted`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityEffectiveStatus {
+    /// Authorizes now: not revoked, not past `expires_at`, and any usage budget
+    /// has uses remaining.
+    Live,
+    /// Past its `expires_at` (and not revoked). The enforcement clock rejects it.
+    Expired,
+    /// Revoked. Authority is withdrawn regardless of expiry or remaining budget.
+    Revoked,
+    /// A `max_uses` budget that is fully spent (and the grant is neither revoked
+    /// nor expired). The next invocation is refused.
+    Exhausted,
+}
+
+/// Usage-budget state for a budgeted grant. `used` is the durable count the
+/// enforcement path has recorded against `max_uses`; `remaining` is
+/// `max_uses - used` saturated at zero.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityUsageBudget {
+    pub max_uses: u64,
+    pub used: u64,
+    pub remaining: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -3409,6 +3546,92 @@ mod tests {
              capabilities-listing behaviour diverges from the \
              documented contract without a single error surface",
         );
+    }
+
+    #[test]
+    fn request_capability_usage_is_a_bare_kind_tagged_unit_variant() {
+        let wire = serde_json::to_value(Request::CapabilityUsage).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({ "kind": "capability_usage" }),
+            "Request::CapabilityUsage is parameterless — its wire form must be \
+             exactly the kind tag, so a stale operator client can issue the \
+             query with no body",
+        );
+        let decoded: Request = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded, Request::CapabilityUsage);
+    }
+
+    #[test]
+    fn capability_usage_entry_omits_budget_when_absent_and_round_trips_both_shapes() {
+        // A budgeted grant carries the budget sub-object; an unbudgeted grant
+        // omits the field entirely (skip_serializing_if) rather than emitting
+        // null, so the wire row stays clean for the common unbudgeted case.
+        let budgeted = CapabilityUsageEntry {
+            signature_b58: "sig-budgeted".into(),
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 5 }),
+            subject_display: "agent@host".into(),
+            subject_pubkey_b58: "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM".into(),
+            expires_at: Some(1_700_000_000_000),
+            revoked: false,
+            effective: CapabilityEffectiveStatus::Live,
+            budget: Some(CapabilityUsageBudget {
+                max_uses: 5,
+                used: 2,
+                remaining: 3,
+            }),
+        };
+        let unbudgeted = CapabilityUsageEntry {
+            signature_b58: "sig-perpetual".into(),
+            action: "memory.read".into(),
+            scope: serde_json::Value::Null,
+            subject_display: "reader@host".into(),
+            subject_pubkey_b58: "7mFqWd3rNpK8sVtY2hLxAe6BcZ4uJg9oQiXnRbDvCfMa".into(),
+            expires_at: None,
+            revoked: true,
+            effective: CapabilityEffectiveStatus::Revoked,
+            budget: None,
+        };
+
+        let budgeted_wire = serde_json::to_value(&budgeted).unwrap();
+        assert_eq!(budgeted_wire["budget"]["remaining"], 3);
+        assert_eq!(
+            budgeted_wire["scope"]["tool"], "echo",
+            "the signed scope surfaces verbatim on the row: {budgeted_wire}",
+        );
+        assert_eq!(
+            budgeted_wire["effective"], "live",
+            "effective serializes as a snake_case string: {budgeted_wire}",
+        );
+        assert_eq!(
+            budgeted_wire["subject_display"], "agent@host",
+            "the grant subject's display surfaces on the row: {budgeted_wire}",
+        );
+        assert_eq!(
+            budgeted_wire["subject_pubkey_b58"], "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM",
+            "the grant subject's base58 pubkey surfaces on the row: {budgeted_wire}",
+        );
+        let unbudgeted_wire = serde_json::to_value(&unbudgeted).unwrap();
+        assert!(
+            unbudgeted_wire.get("budget").is_none(),
+            "an unbudgeted grant must omit the budget field, not emit null: {unbudgeted_wire}",
+        );
+        assert_eq!(unbudgeted_wire["effective"], "revoked");
+        assert_eq!(unbudgeted_wire["expires_at"], serde_json::Value::Null);
+        // scope is always present and verbatim — an unscoped grant emits its
+        // signed null rather than omitting the field, so the wire shape is stable.
+        assert!(
+            unbudgeted_wire.get("scope").is_some(),
+            "scope is always present, even for an unscoped grant: {unbudgeted_wire}",
+        );
+        assert_eq!(unbudgeted_wire["scope"], serde_json::Value::Null);
+
+        for entry in [budgeted, unbudgeted] {
+            let decoded: CapabilityUsageEntry =
+                serde_json::from_value(serde_json::to_value(&entry).unwrap()).unwrap();
+            assert_eq!(decoded, entry, "CapabilityUsageEntry must round-trip");
+        }
     }
 
     #[test]
@@ -10606,6 +10829,49 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn frame_round_trips_a_payload_of_exactly_max_frame_bytes() {
+        // MAX_FRAME is the INCLUSIVE cap: the module contract is that frames
+        // *over* MAX_FRAME bytes are rejected, so a frame whose payload is
+        // exactly MAX_FRAME bytes must traverse the wire. The over-cap tests
+        // (rejects_oversized_frame_header, write_frame_rejects_oversized_payload)
+        // both probe MAX_FRAME + 1, which a `len > MAX_FRAME` -> `len >= MAX_FRAME`
+        // slip on either side still rejects — so they cannot see the cap shrink
+        // by one byte and silently turn legitimate 8 MiB frames into FrameTooLarge.
+        // Pin the inclusive endpoint end-to-end: a value serializing to exactly
+        // MAX_FRAME bytes is written by write_frame and read back by read_frame.
+        let payload = "a".repeat(MAX_FRAME as usize - 2);
+        assert_eq!(
+            serde_json::to_vec(&payload).unwrap().len(),
+            MAX_FRAME as usize,
+            "fixture must serialize to exactly the cap so the inclusive boundary is the value under test",
+        );
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_frame(&mut buf, &payload).await.expect(
+            "a value serializing to exactly MAX_FRAME bytes must be written, not rejected as FrameTooLarge",
+        );
+        assert_eq!(
+            buf.len(),
+            4 + MAX_FRAME as usize,
+            "the framed bytes must be the 4-byte length prefix plus exactly MAX_FRAME payload bytes",
+        );
+        assert_eq!(
+            u32::from_be_bytes(buf[..4].try_into().unwrap()),
+            MAX_FRAME,
+            "the length prefix must carry exactly MAX_FRAME",
+        );
+
+        let mut reader = std::io::Cursor::new(buf);
+        let decoded: String = read_frame(&mut reader).await.expect(
+            "a length prefix of exactly MAX_FRAME must be read, not rejected as FrameTooLarge",
+        );
+        assert_eq!(
+            decoded, payload,
+            "the exactly-cap-sized payload must survive the write_frame -> read_frame round-trip intact",
+        );
+    }
+
     #[test]
     fn ipc_error_frame_too_large_display_message_pins_prefix_got_payload_and_max_frame_value() {
         let err = IpcError::FrameTooLarge { got: 9_999_999 };
@@ -12023,5 +12289,122 @@ mod tests {
             }
             other => panic!("expected Ipc(Io(UnexpectedEof)), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn request_query_provenance_serde_pins_slug_and_omits_absent_filters() {
+        // Request::QueryProvenance is the operator provenance query.
+        // With #[serde(tag = "kind", rename_all = "snake_case")] and
+        // skip_serializing_if on every optional filter, a query with
+        // only a since_ms bound must serialize to exactly the kind
+        // slug, since_ms, and the defaulted limit — no null actor /
+        // approver / rule / outcome / until_ms keys. A regression that
+        // dropped skip_serializing_if would widen every frame with
+        // nulls and a slug regression would strand the query at the
+        // daemon's catch-all Error arm, hiding the privileged-action
+        // provenance the operator queried for.
+        let event = Request::QueryProvenance {
+            since_ms: Some(1_000),
+            until_ms: None,
+            actor: None,
+            approver: None,
+            rule: None,
+            outcome: None,
+            limit: 10,
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("Request serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["kind", "limit", "since_ms"],
+            "an only-since_ms QueryProvenance frame must carry exactly \
+             kind, limit, and since_ms — absent optional filters are \
+             dropped, not serialized as null",
+        );
+        assert_eq!(
+            obj.get("kind"),
+            Some(&serde_json::json!("query_provenance")),
+            "Request discriminator slug must be the durable \
+             'query_provenance'; a slug regression strands the \
+             provenance query at the daemon Error arm",
+        );
+
+        let full = Request::QueryProvenance {
+            since_ms: Some(1),
+            until_ms: Some(2),
+            actor: Some("research@agent".into()),
+            approver: Some("operator@local".into()),
+            rule: Some("Sig".into()),
+            outcome: Some("granted".into()),
+            limit: 5,
+        };
+        let back: Request = serde_json::from_value(serde_json::to_value(&full).unwrap()).unwrap();
+        assert_eq!(
+            back, full,
+            "Request::QueryProvenance must round-trip every filter field verbatim",
+        );
+
+        let defaulted: Request =
+            serde_json::from_value(serde_json::json!({"kind": "query_provenance"})).unwrap();
+        assert_eq!(
+            defaulted,
+            Request::QueryProvenance {
+                since_ms: None,
+                until_ms: None,
+                actor: None,
+                approver: None,
+                rule: None,
+                outcome: None,
+                limit: 10,
+            },
+            "a bare query_provenance frame defaults limit to default_recent_limit and leaves \
+             every filter open",
+        );
+    }
+
+    #[test]
+    fn response_provenance_actions_serde_pins_slug_and_round_trips() {
+        // Response::ProvenanceActions pairs with QueryProvenance and
+        // carries the projected privileged-action rows plus the audit
+        // chain integrity verdict the operator relies on to know the
+        // rows are tamper-evident. Pin the kind slug and a full
+        // round-trip so a discriminator or field regression can't
+        // silently strand the provenance answer.
+        let event = Response::ProvenanceActions {
+            integrity: AuditIntegrityReport {
+                events: 3,
+                anchors: 3,
+                valid: true,
+                root_hash_hex: "ab".repeat(32),
+                failures: vec![],
+            },
+            actions: vec![PrivilegedAction {
+                event_id: uuid::Uuid::nil(),
+                timestamp_ms: 1_000,
+                kind: "capability_granted".into(),
+                actor: "research@agent".into(),
+                action: "memory.write".into(),
+                approver: Some("operator@local".into()),
+                rule: Some("GrantSig".into()),
+                outcome: "granted".into(),
+            }],
+            scanned: 7,
+        };
+        let wire = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            wire.get("kind"),
+            Some(&serde_json::json!("provenance_actions")),
+            "Response discriminator slug must be the durable 'provenance_actions'",
+        );
+        let back: Response = serde_json::from_value(wire).unwrap();
+        assert_eq!(
+            back, event,
+            "Response::ProvenanceActions must round-trip the integrity report, action rows, \
+             and scanned count verbatim",
+        );
     }
 }

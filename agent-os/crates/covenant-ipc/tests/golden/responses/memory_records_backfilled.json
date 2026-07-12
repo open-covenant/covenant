@@ -1,0 +1,6 @@
+{
+  "kind": "memory_records_backfilled",
+  "row_count": 7,
+  "savepoint_name": "backfill_receipt_correlation",
+  "dry_run": false
+}

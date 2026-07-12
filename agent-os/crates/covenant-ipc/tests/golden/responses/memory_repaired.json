@@ -1,0 +1,10 @@
+{
+  "kind": "memory_repaired",
+  "outcome": {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "action": "detach_parent",
+    "mode": "dry_run",
+    "would_change": false,
+    "changed": false
+  }
+}

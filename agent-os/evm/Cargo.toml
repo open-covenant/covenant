@@ -1,0 +1,21 @@
+[package]
+name = "covenant-erc8004-register"
+version = "0.1.0"
+edition = "2021"
+description = "Stage (build + dry-run) an ERC-8004 Identity Registry registration for a Covenant agent on EVM chains. Signing and on-chain submission are operator-gated."
+publish = false
+
+# Detached from the agent-os workspace on purpose: this is on-chain staging tooling,
+# not one of the in-workspace off-chain trust crates, and it keeps its own lockfile so
+# it never perturbs the workspace dependency graph.
+[workspace]
+
+[dependencies]
+sha3 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "stage-register"
+path = "src/main.rs"

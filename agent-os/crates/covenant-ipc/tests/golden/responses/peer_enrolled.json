@@ -1,0 +1,10 @@
+{
+  "kind": "peer_enrolled",
+  "token_b58": "11111111111111111111111111111111",
+  "pubkey_b58": "So11111111111111111111111111111111111111112",
+  "display": "peer@example",
+  "granted": [
+    "a2a.task.send",
+    "a2a.result.read"
+  ]
+}

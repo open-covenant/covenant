@@ -281,10 +281,12 @@ pub mod settlement {
     }
 
     pub fn create_task(ctx: Context<CreateTask>, args: CreateTaskArgs) -> Result<()> {
-        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(args.amount_covnt > 0, CovenantError::ZeroAmount);
         require!(ctx.accounts.agent.active, CovenantError::AgentInactive);
+        require!(args.review_window >= 0, CovenantError::InvalidReviewWindow);
+        let now = Clock::get()?.unix_timestamp;
+        require!(args.deadline > now, CovenantError::InvalidDeadline);
 
         token_interface::transfer_checked(
             ctx.accounts.task_fund_ctx(),
@@ -297,10 +299,12 @@ pub mod settlement {
         task.client = ctx.accounts.client.key();
         task.agent_key = ctx.accounts.agent.agent_key;
         task.provider = args.provider;
+        task.arbiter = args.arbiter;
         task.amount_covnt = args.amount_covnt;
         task.task_hash = args.task_hash;
         task.criteria_hash = args.criteria_hash;
         task.deadline = args.deadline;
+        task.review_window = args.review_window;
         task.status = TASK_FUNDED;
         task.bump = ctx.bumps.task;
 
@@ -309,20 +313,25 @@ pub mod settlement {
             client: task.client,
             agent_key: task.agent_key,
             provider: task.provider,
+            arbiter: task.arbiter,
             amount_covnt: task.amount_covnt,
             task_hash: task.task_hash,
             criteria_hash: task.criteria_hash,
             deadline: task.deadline,
+            review_window: task.review_window,
         });
         Ok(())
     }
 
-    pub fn release_task(
-        ctx: Context<ReleaseTask>,
+    /// The provider posts proof of delivery on-chain, moving the task from
+    /// FUNDED to SUBMITTED and starting the review window. Only the named
+    /// provider may submit, and only before the deadline, so a late delivery
+    /// cannot settle out from under the client's refund right.
+    pub fn submit_task(
+        ctx: Context<SubmitTask>,
         result_hash: [u8; 32],
         receipt_hash: [u8; 32],
     ) -> Result<()> {
-        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(
             ctx.accounts.task.status == TASK_FUNDED,
@@ -334,6 +343,38 @@ pub mod settlement {
             CovenantError::TaskExpired
         );
 
+        let task = &mut ctx.accounts.task;
+        task.result_hash = result_hash;
+        task.receipt_hash = receipt_hash;
+        task.submitted_at = now;
+        task.status = TASK_SUBMITTED;
+
+        emit!(TaskSubmitted {
+            task_id: task.task_id,
+            provider: task.provider,
+            submitted_at: now,
+            result_hash,
+            receipt_hash,
+        });
+        Ok(())
+    }
+
+    /// Release the escrow to the provider for delivered work. Signed by the
+    /// client (approving the submission) or, when one is set, the arbiter
+    /// (resolving a dispute in the provider's favour). Requires a prior
+    /// submission, so funds only move against on-chain proof of delivery.
+    pub fn release_task(ctx: Context<ReleaseTask>) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        require!(
+            ctx.accounts.task.status == TASK_SUBMITTED,
+            CovenantError::WrongTaskStatus
+        );
+        let signer = ctx.accounts.authority.key();
+        let is_client = signer == ctx.accounts.task.client;
+        let is_arbiter =
+            ctx.accounts.task.arbiter != Pubkey::default() && signer == ctx.accounts.task.arbiter;
+        require!(is_client || is_arbiter, CovenantError::Unauthorized);
+
         let task_id = ctx.accounts.task.task_id;
         let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
         token_interface::transfer_checked(
@@ -343,36 +384,87 @@ pub mod settlement {
         )?;
 
         ctx.accounts.task.status = TASK_RELEASED;
-        ctx.accounts.task.result_hash = result_hash;
 
         emit!(TaskReleased {
             task_id,
             provider: ctx.accounts.task.provider,
             amount_covnt: ctx.accounts.task.amount_covnt,
-            result_hash,
-            receipt_hash,
+            result_hash: ctx.accounts.task.result_hash,
+            receipt_hash: ctx.accounts.task.receipt_hash,
         });
         Ok(())
     }
 
-    /// Refund the escrowed COVNT back to the client after the task
-    /// deadline has passed. Only the client signs; the provider has no
-    /// recourse here. Mirrors the escrow-agent norm where the funder
-    /// recovers their funds when the counterparty failed to deliver in
-    /// time. Pause check matches `release_task` so a paused protocol
-    /// halts all escrow movement uniformly.
-    pub fn refund_task(ctx: Context<RefundTask>) -> Result<()> {
-        require!(cfg!(feature = "task-escrow"), CovenantError::TasksDisabled);
+    /// Provider recourse: once the review window after submission has elapsed
+    /// with no release and no arbiter refund, the provider claims the escrow
+    /// itself. This is what stops a silent client from stranding delivered
+    /// work, the exact gap that kept task escrow disabled before.
+    pub fn claim_task(ctx: Context<ClaimTask>) -> Result<()> {
         require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
         require!(
-            ctx.accounts.task.status == TASK_FUNDED,
+            ctx.accounts.task.status == TASK_SUBMITTED,
             CovenantError::WrongTaskStatus
         );
         let now = Clock::get()?.unix_timestamp;
-        require!(
-            now > ctx.accounts.task.deadline,
-            CovenantError::TaskNotExpired
-        );
+        let claimable_at = ctx
+            .accounts
+            .task
+            .submitted_at
+            .checked_add(ctx.accounts.task.review_window)
+            .ok_or(CovenantError::Overflow)?;
+        require!(now >= claimable_at, CovenantError::ReviewWindowNotElapsed);
+
+        let task_id = ctx.accounts.task.task_id;
+        let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
+        token_interface::transfer_checked(
+            ctx.accounts.task_release_ctx().with_signer(&[signer_seeds]),
+            ctx.accounts.task.amount_covnt,
+            ctx.accounts.covnt_mint.decimals,
+        )?;
+
+        ctx.accounts.task.status = TASK_RELEASED;
+
+        emit!(TaskClaimed {
+            task_id,
+            provider: ctx.accounts.task.provider,
+            amount_covnt: ctx.accounts.task.amount_covnt,
+            claimed_at: now,
+        });
+        Ok(())
+    }
+
+    /// Return the escrow to the client. Two paths: the client reclaims after
+    /// the deadline passes with no submission (provider never delivered), or
+    /// a set arbiter refunds during the review window (dispute resolved in
+    /// the client's favour). Pause check matches the release path.
+    pub fn refund_task(ctx: Context<RefundTask>) -> Result<()> {
+        require!(!ctx.accounts.config.paused, CovenantError::ProtocolPaused);
+        let now = Clock::get()?.unix_timestamp;
+        let signer = ctx.accounts.authority.key();
+        let is_client = signer == ctx.accounts.task.client;
+        let is_arbiter =
+            ctx.accounts.task.arbiter != Pubkey::default() && signer == ctx.accounts.task.arbiter;
+        require!(is_client || is_arbiter, CovenantError::Unauthorized);
+
+        match ctx.accounts.task.status {
+            TASK_FUNDED => {
+                require!(
+                    now > ctx.accounts.task.deadline,
+                    CovenantError::TaskNotExpired
+                );
+            }
+            TASK_SUBMITTED => {
+                require!(is_arbiter, CovenantError::NotArbiter);
+                let window_end = ctx
+                    .accounts
+                    .task
+                    .submitted_at
+                    .checked_add(ctx.accounts.task.review_window)
+                    .ok_or(CovenantError::Overflow)?;
+                require!(now < window_end, CovenantError::ReviewWindowElapsed);
+            }
+            _ => return err!(CovenantError::WrongTaskStatus),
+        }
 
         let task_id = ctx.accounts.task.task_id;
         let signer_seeds: &[&[u8]] = &[b"task", task_id.as_ref(), &[ctx.accounts.task.bump]];
@@ -918,6 +1010,23 @@ impl<'info> CreateTask<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SubmitTask<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"task", task.task_id.as_ref()],
+        bump = task.bump,
+        constraint = task.provider == provider.key() @ CovenantError::Unauthorized,
+    )]
+    pub task: Box<Account<'info, Task>>,
+    pub provider: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct ReleaseTask<'info> {
     #[account(
         seeds = [b"config"],
@@ -928,10 +1037,10 @@ pub struct ReleaseTask<'info> {
         mut,
         seeds = [b"task", task.task_id.as_ref()],
         bump = task.bump,
-        has_one = client @ CovenantError::Unauthorized,
     )]
     pub task: Box<Account<'info, Task>>,
-    pub client: Signer<'info>,
+    /// Client (approving) or arbiter (dispute ruling); verified in the handler.
+    pub authority: Signer<'info>,
     #[account(
         mut,
         constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
@@ -964,6 +1073,52 @@ impl<'info> ReleaseTask<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ClaimTask<'info> {
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+    #[account(
+        mut,
+        seeds = [b"task", task.task_id.as_ref()],
+        bump = task.bump,
+        constraint = task.provider == provider.key() @ CovenantError::Unauthorized,
+    )]
+    pub task: Box<Account<'info, Task>>,
+    pub provider: Signer<'info>,
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
+        constraint = escrow_vault.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        constraint = provider_covnt.owner == task.provider @ CovenantError::Unauthorized,
+        constraint = provider_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
+    )]
+    pub provider_covnt: InterfaceAccount<'info, TokenAccount>,
+    #[account(constraint = covnt_mint.key() == config.covnt_mint @ CovenantError::WrongMint)]
+    pub covnt_mint: InterfaceAccount<'info, Mint>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+impl<'info> ClaimTask<'info> {
+    fn task_release_ctx(&self) -> CpiContext<'_, '_, '_, 'info, TransferChecked<'info>> {
+        CpiContext::new(
+            self.token_program.to_account_info(),
+            TransferChecked {
+                mint: self.covnt_mint.to_account_info(),
+                from: self.escrow_vault.to_account_info(),
+                to: self.provider_covnt.to_account_info(),
+                authority: self.task.to_account_info(),
+            },
+        )
+    }
+}
+
+#[derive(Accounts)]
 pub struct RefundTask<'info> {
     #[account(
         seeds = [b"config"],
@@ -974,10 +1129,10 @@ pub struct RefundTask<'info> {
         mut,
         seeds = [b"task", task.task_id.as_ref()],
         bump = task.bump,
-        has_one = client @ CovenantError::Unauthorized,
     )]
     pub task: Box<Account<'info, Task>>,
-    pub client: Signer<'info>,
+    /// Client (post-deadline reclaim) or arbiter (dispute ruling); verified in the handler.
+    pub authority: Signer<'info>,
     #[account(
         mut,
         constraint = escrow_vault.owner == task.key() @ CovenantError::Unauthorized,
@@ -986,7 +1141,7 @@ pub struct RefundTask<'info> {
     pub escrow_vault: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
-        constraint = client_covnt.owner == client.key() @ CovenantError::Unauthorized,
+        constraint = client_covnt.owner == task.client @ CovenantError::Unauthorized,
         constraint = client_covnt.mint == config.covnt_mint @ CovenantError::WrongMint,
     )]
     pub client_covnt: InterfaceAccount<'info, TokenAccount>,
@@ -1133,10 +1288,12 @@ pub struct RegisterAgentArgs {
 pub struct CreateTaskArgs {
     pub task_id: [u8; 32],
     pub provider: Pubkey,
+    pub arbiter: Pubkey,
     pub amount_covnt: u64,
     pub task_hash: [u8; 32],
     pub criteria_hash: [u8; 32],
     pub deadline: i64,
+    pub review_window: i64,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -1147,8 +1304,9 @@ pub struct AnchorReceiptBatchArgs {
 }
 
 pub const TASK_FUNDED: u8 = 1;
-pub const TASK_RELEASED: u8 = 2;
-pub const TASK_REFUNDED: u8 = 3;
+pub const TASK_SUBMITTED: u8 = 2;
+pub const TASK_RELEASED: u8 = 3;
+pub const TASK_REFUNDED: u8 = 4;
 
 #[account]
 #[derive(InitSpace)]
@@ -1205,11 +1363,22 @@ pub struct Task {
     pub client: Pubkey,
     pub agent_key: [u8; 32],
     pub provider: Pubkey,
+    /// Neutral dispute resolver. `Pubkey::default()` means no arbiter, in
+    /// which case delivered work settles to the provider after the review
+    /// window and the client's only recourse is a pre-submission refund.
+    pub arbiter: Pubkey,
     pub amount_covnt: u64,
     pub task_hash: [u8; 32],
     pub criteria_hash: [u8; 32],
     pub result_hash: [u8; 32],
+    pub receipt_hash: [u8; 32],
+    /// Submission deadline. The provider must submit by this time or the
+    /// client can reclaim the escrow.
     pub deadline: i64,
+    /// Set when the provider submits; 0 while FUNDED.
+    pub submitted_at: i64,
+    /// Seconds after submission before the provider may self-claim.
+    pub review_window: i64,
     pub status: u8,
     pub bump: u8,
 }
@@ -1304,10 +1473,29 @@ pub struct TaskCreated {
     pub client: Pubkey,
     pub agent_key: [u8; 32],
     pub provider: Pubkey,
+    pub arbiter: Pubkey,
     pub amount_covnt: u64,
     pub task_hash: [u8; 32],
     pub criteria_hash: [u8; 32],
     pub deadline: i64,
+    pub review_window: i64,
+}
+
+#[event]
+pub struct TaskSubmitted {
+    pub task_id: [u8; 32],
+    pub provider: Pubkey,
+    pub submitted_at: i64,
+    pub result_hash: [u8; 32],
+    pub receipt_hash: [u8; 32],
+}
+
+#[event]
+pub struct TaskClaimed {
+    pub task_id: [u8; 32],
+    pub provider: Pubkey,
+    pub amount_covnt: u64,
+    pub claimed_at: i64,
 }
 
 #[event]
@@ -1419,6 +1607,14 @@ pub enum CovenantError {
     StakeStillActive,
     #[msg("lock_until is shorter than the protocol minimum stake lock")]
     LockTooShort,
-    #[msg("task escrow is disabled in this build")]
-    TasksDisabled,
+    #[msg("only the task arbiter may take this action")]
+    NotArbiter,
+    #[msg("the review window has not elapsed yet; provider cannot claim")]
+    ReviewWindowNotElapsed,
+    #[msg("the review window has elapsed; arbiter refund no longer allowed")]
+    ReviewWindowElapsed,
+    #[msg("review window must be zero or positive")]
+    InvalidReviewWindow,
+    #[msg("deadline must be in the future")]
+    InvalidDeadline,
 }

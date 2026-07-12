@@ -41,6 +41,24 @@ pub trait Settlement: Send + Sync {
         receipt_ids: &[uuid::Uuid],
         confirmation: ChainConfirmation,
     ) -> Result<u64, SettlementError>;
+
+    /// Apply the legacy-receipt correlation backfill to this store's durable
+    /// receipts. The file-backed store overrides this to hold its write lock
+    /// across the read-modify-write so a receipt recorded concurrently is not
+    /// lost to the atomic rewrite. The default is a no-op for backends without
+    /// a durable file (in-memory and disabled stores).
+    async fn backfill(
+        &self,
+        dry_run: bool,
+        correlations: &[ReceiptBackfillCorrelation],
+    ) -> Result<BackfillOutcome, SettlementError> {
+        let _ = correlations;
+        Ok(BackfillOutcome {
+            row_count: 0,
+            rollback_path: None,
+            dry_run,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,14 +200,10 @@ pub fn receipt_migration_plan_json(receipts: &[SettlementReceipt]) -> serde_json
     })
 }
 
-pub async fn backfill_receipts(
-    store_path: impl AsRef<Path>,
-    dry_run: bool,
-) -> Result<BackfillOutcome, SettlementError> {
-    backfill_receipts_with_correlations(store_path, dry_run, &[]).await
-}
-
-pub async fn backfill_receipts_with_correlations(
+// Lock-free file backfill logic. Reachable only through `JsonlReceiptStore::backfill`,
+// which holds the store write lock; callers must not invoke it directly on a path a
+// live store also writes, or a concurrent record() can be lost to the rewrite.
+pub(crate) async fn backfill_receipts_with_correlations(
     store_path: impl AsRef<Path>,
     dry_run: bool,
     correlations: &[ReceiptBackfillCorrelation],
@@ -493,6 +507,19 @@ impl Settlement for JsonlReceiptStore {
         drop(out);
         fs::rename(&tmp, &self.path).await?;
         Ok(updated)
+    }
+
+    async fn backfill(
+        &self,
+        dry_run: bool,
+        correlations: &[ReceiptBackfillCorrelation],
+    ) -> Result<BackfillOutcome, SettlementError> {
+        // Hold the same lock as record()/recent()/mark_batch_confirmed():
+        // the backfill reads the store, then atomically renames a rewritten
+        // copy over it. Without this guard a receipt appended between the
+        // read and the rename is silently clobbered (a lost settlement row).
+        let _guard = self.lock.lock().await;
+        backfill_receipts_with_correlations(&self.path, dry_run, correlations).await
     }
 }
 
@@ -842,6 +869,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jsonl_backfill_trait_method_applies_correlations_through_the_store() {
+        // The trait method delegates to the same file logic under the store
+        // lock; it must produce the identical outcome to the free function so
+        // the lock wrapper provably does not alter the rewrite.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.jsonl");
+        let legacy_id = Uuid::from_u128(0x10);
+        let mut legacy = receipt(10);
+        legacy.id = legacy_id;
+        std::fs::write(
+            &path,
+            format!("{}\n", legacy_receipt_wire_without_defaults(&legacy)),
+        )
+        .unwrap();
+
+        let store = JsonlReceiptStore::open(path.clone()).await.unwrap();
+        let memory_record_id = Uuid::from_u128(0x100);
+        let outcome = store
+            .backfill(
+                false,
+                &[ReceiptBackfillCorrelation {
+                    receipt_id: legacy_id,
+                    memory_record_id,
+                }],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.row_count, 1);
+        assert!(outcome.rollback_path.is_some());
+        let rows = read_receipt_file(&path);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].memory_record_id, Some(memory_record_id));
+    }
+
+    #[tokio::test]
+    async fn jsonl_backfill_does_not_drop_a_concurrently_recorded_receipt() {
+        // Regression: backfill must hold the store write lock across its
+        // read-modify-rename. The daemon records settlement receipts during
+        // intent dispatch while a backfill request runs; without the lock a
+        // receipt appended between the backfill's read and its atomic rename is
+        // silently clobbered. With the lock either interleaving is safe.
+        for i in 0..12u128 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("receipts.jsonl");
+            let legacy_id = Uuid::from_u128(0x10);
+            let mut legacy = receipt(10);
+            legacy.id = legacy_id;
+            std::fs::write(
+                &path,
+                format!("{}\n", legacy_receipt_wire_without_defaults(&legacy)),
+            )
+            .unwrap();
+            let store = JsonlReceiptStore::open(path.clone()).await.unwrap();
+
+            let fresh_id = Uuid::from_u128(0x900 + i);
+            let mut fresh = receipt(99);
+            fresh.id = fresh_id;
+            let correlations = [ReceiptBackfillCorrelation {
+                receipt_id: legacy_id,
+                memory_record_id: Uuid::from_u128(0x100),
+            }];
+
+            let (backfill_res, record_res) =
+                tokio::join!(store.backfill(false, &correlations), store.record(fresh));
+            backfill_res.unwrap();
+            record_res.unwrap();
+
+            let ids: Vec<Uuid> = read_receipt_file(&path).into_iter().map(|r| r.id).collect();
+            assert!(
+                ids.contains(&fresh_id),
+                "iteration {i}: a receipt recorded concurrently with backfill was lost: {ids:?}",
+            );
+            assert!(
+                ids.contains(&legacy_id),
+                "iteration {i}: the backfilled legacy receipt is missing: {ids:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn backfill_receipts_dry_run_reports_without_writes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("receipts.jsonl");
@@ -946,7 +1054,9 @@ mod tests {
         let original = legacy_receipt_wire_without_defaults(&legacy);
         std::fs::write(&path, format!("{original}\n")).unwrap();
 
-        let outcome = backfill_receipts(&path, false).await.unwrap();
+        let outcome = backfill_receipts_with_correlations(&path, false, &[])
+            .await
+            .unwrap();
 
         assert_eq!(outcome.row_count, 1);
         assert!(outcome.rollback_path.is_some());
@@ -966,7 +1076,9 @@ mod tests {
         let original = format!("{}\n", serde_json::to_string(&row).unwrap());
         std::fs::write(&path, &original).unwrap();
 
-        let outcome = backfill_receipts(&path, false).await.unwrap();
+        let outcome = backfill_receipts_with_correlations(&path, false, &[])
+            .await
+            .unwrap();
 
         assert_eq!(outcome.row_count, 0);
         assert_eq!(outcome.rollback_path, None);
@@ -996,6 +1108,39 @@ mod tests {
         let batch_a = build_receipt_batch(&[a]).unwrap();
         let batch_b = build_receipt_batch(&[b]).unwrap();
         assert_ne!(batch_a.merkle_root, batch_b.merkle_root);
+    }
+
+    #[test]
+    fn build_receipt_batch_rejects_an_empty_or_all_settled_batch() {
+        // The unsettled-is-empty guard is what stops build_receipt_batch from
+        // indexing an empty merkle level: with no unsettled receipts the
+        // `while level.len() > 1` loop never runs and the `level[0]` read would
+        // panic on an empty Vec. The guard converts that into a clean
+        // Err(EmptyBatch) — a benign "nothing to flush", not a crash. The four
+        // build_receipt_batch_pins_* tests all pass unsettled receipts (the
+        // happy path), and the EmptyBatch Display pins construct the variant
+        // directly, so the guard itself — that the FUNCTION returns EmptyBatch
+        // instead of panicking — has no coverage. Both ways the unsettled set
+        // can be empty must fail closed.
+
+        // No receipts at all.
+        assert!(
+            matches!(build_receipt_batch(&[]), Err(SettlementError::EmptyBatch)),
+            "an empty receipt slice has nothing to settle and must return EmptyBatch, not panic"
+        );
+
+        // Receipts present, but every one is already settled (batch_id set), so
+        // the unsettled filter empties the set.
+        let mut settled = receipt(1);
+        settled.batch_id = Some("already-batched".to_string());
+        assert!(
+            matches!(
+                build_receipt_batch(&[settled]),
+                Err(SettlementError::EmptyBatch)
+            ),
+            "a batch whose every receipt is already settled has nothing new to \
+             settle and must return EmptyBatch, not panic"
+        );
     }
 
     #[test]
@@ -1180,6 +1325,126 @@ mod tests {
             "the explicit c-duplication in the 4-leaf input must \
              surface as identical receipt_ids[2] and [3] — the \
              bookkeeping path carries the input verbatim",
+        );
+    }
+
+    #[test]
+    fn build_receipt_batch_pins_two_leaf_merkle_root_concatenates_left_then_right() {
+        // build_receipt_batch reduces a level of leaf hashes pairwise as
+        //
+        //   hasher.update(pair[0]); hasher.update(right);   (lib.rs:116-117)
+        //
+        // i.e. sha256(left || right) with the left leaf hashed first.
+        // That root is the settlement anchor the on-chain Solana program
+        // recomputes to verify a batch. The other batch tests pin only
+        // RELATIONAL properties of merkle_root: length 64, inequality
+        // across distinct inputs, and merkle_root([a,b,c]) ==
+        // merkle_root([a,b,c,c]) for the odd-leaf convention. Every one of
+        // those is invariant under a left/right transposition of the
+        // concatenation — under sha256(right || left) the lengths, the
+        // cross-input inequalities, and the odd-leaf equality all still
+        // hold — so the exact byte order of the Merkle combination is
+        // unpinned. A transposed off-chain root stays a valid 64-char hex
+        // string and passes the whole suite while diverging from every
+        // independent verifier that recomputes the anchor. Pin the
+        // two-leaf root to the exact left-then-right combination, recomputed
+        // from the same receipt_hash primitive, and pin that leaf order is
+        // load-bearing.
+        let mut a = receipt(1);
+        a.id = Uuid::from_u128(0xa);
+        let mut b = receipt(2);
+        b.id = Uuid::from_u128(0xb);
+
+        let batch =
+            build_receipt_batch(&[a.clone(), b.clone()]).expect("two-leaf batch must build");
+
+        let mut hasher = Sha256::new();
+        hasher.update(receipt_hash(&a));
+        hasher.update(receipt_hash(&b));
+        let expected_root = hex32(hasher.finalize().into());
+        assert_eq!(
+            batch.merkle_root, expected_root,
+            "two-leaf merkle_root must equal hex32(sha256(receipt_hash(a) || receipt_hash(b))) \
+             with a hashed before b; a transposed sha256(receipt_hash(b) || receipt_hash(a)) \
+             still yields a valid 64-char hex root and passes every relational batch test but \
+             diverges from the on-chain anchor recomputation",
+        );
+
+        // Leaf order is load-bearing: sha256 is not concatenation-commutative,
+        // so [a,b] and [b,a] must not collide unless a refactor sorted or
+        // otherwise order-normalized the pair before hashing — which would
+        // let two batches settling the same receipt set in different leaf
+        // positions share one anchor.
+        let swapped = build_receipt_batch(&[b, a]).expect("swapped two-leaf batch must build");
+        assert_ne!(
+            batch.merkle_root, swapped.merkle_root,
+            "merkle_root([a,b]) must not equal merkle_root([b,a]); an order-normalizing \
+             refactor would collapse distinct leaf orderings onto one settlement anchor",
+        );
+    }
+
+    #[test]
+    fn build_receipt_batch_pins_four_leaf_two_level_root_across_pair_order() {
+        // build_receipt_batch reduces leaves level by level (while
+        // level.len() > 1, lib.rs:111-121): each level pairs adjacent hashes
+        // left-to-right and pushes sha256(left || right) into the next level IN
+        // ORDER. build_receipt_batch_pins_two_leaf_merkle_root_concatenates_-
+        // left_then_right pins WITHIN-pair order (a before b) and
+        // build_receipt_batch_pins_odd_leaf_count_duplicates_last_leaf_-
+        // convention pins the duplicate-last rule, but both run a single
+        // non-trivial pair per level, so ACROSS-pair order -- which parent lands
+        // first in the next level -- is unpinned. A 4-leaf batch is the smallest
+        // balanced two-level tree that exercises it:
+        //
+        //   root = sha256( sha256(h_a || h_b) || sha256(h_c || h_d) )
+        //
+        // A refactor that built a level in reverse (next.reverse(), or walking
+        // chunks back-to-front) leaves the two-leaf root unchanged (one pair =>
+        // one parent, reversal is a no-op) and leaves the odd-leaf RELATIONAL
+        // equality intact (the 3-leaf and 4-leaf-dup roots reverse identically),
+        // so it passes every existing batch test while diverging from the
+        // on-chain anchor for any batch with two or more pairs. Pin the exact
+        // two-level root, recomputed from receipt_hash via fresh hashers.
+        let mut a = receipt(1);
+        a.id = Uuid::from_u128(0xa);
+        let mut b = receipt(2);
+        b.id = Uuid::from_u128(0xb);
+        let mut c = receipt(3);
+        c.id = Uuid::from_u128(0xc);
+        let mut d = receipt(4);
+        d.id = Uuid::from_u128(0xd);
+
+        let batch = build_receipt_batch(&[a.clone(), b.clone(), c.clone(), d.clone()])
+            .expect("four-leaf batch must build");
+
+        let pair = |left: [u8; 32], right: [u8; 32]| -> [u8; 32] {
+            let mut hasher = Sha256::new();
+            hasher.update(left);
+            hasher.update(right);
+            hasher.finalize().into()
+        };
+        let l_ab = pair(receipt_hash(&a), receipt_hash(&b));
+        let l_cd = pair(receipt_hash(&c), receipt_hash(&d));
+        let expected_root = hex32(pair(l_ab, l_cd));
+        assert_eq!(
+            batch.merkle_root, expected_root,
+            "four-leaf merkle_root must equal sha256(sha256(h_a||h_b) || \
+             sha256(h_c||h_d)) with the first pair's parent hashed before the \
+             second's; a level built in reverse keeps the two-leaf and odd-leaf \
+             tests green but diverges from the on-chain anchor for any tree with \
+             two or more pairs",
+        );
+
+        // Across-pair order is load-bearing: swapping the two pairs ([c,d,a,b])
+        // must change the root, or a pair-sort / order-normalization refactor
+        // would collapse distinct batch orderings onto one anchor.
+        let swapped =
+            build_receipt_batch(&[c, d, a, b]).expect("reordered four-leaf batch must build");
+        assert_ne!(
+            batch.merkle_root, swapped.merkle_root,
+            "merkle_root([a,b,c,d]) must not equal merkle_root([c,d,a,b]); an \
+             across-pair sort or order-normalization would collapse distinct \
+             batch orderings onto one settlement anchor",
         );
     }
 
@@ -1469,6 +1734,80 @@ mod tests {
              payload. A refactor that dropped settled_at \
              would let temporal-replay attacks against the Merkle \
              leaf set go undetected",
+        );
+    }
+
+    #[test]
+    fn receipt_hash_pins_canonical_json_field_order_and_value_encoding() {
+        // receipt_hash (lib.rs:358) is sha256(serde_json::to_vec(payload)) over
+        // a serde_json::json! object. With serde_json's default Map backing (no
+        // preserve_order feature anywhere in the workspace) keys serialize in
+        // BTreeMap ALPHABETICAL order, and the conditional memory_record_id is
+        // sorted into that order rather than appended. This hash is the Merkle
+        // leaf the on-chain Solana program recomputes, so the exact bytes --
+        // field set, field ORDER, and per-field value encoding (id as a
+        // hyphenated UUID string, payer as Bitcoin-base58, resource as the
+        // lowercase ResourceKind rename) -- are a cross-system contract.
+        //
+        // receipt_hash_pins_conditional_memory_record_id_and_per_field_-
+        // determinism pins determinism, the 32-byte width, and per-field
+        // inequality, but every one of those survives a field-ORDER flip: if any
+        // workspace dependency enabled serde_json/preserve_order the payload
+        // would silently switch to insertion order, changing every leaf hash and
+        // breaking on-chain verification while determinism and all inequalities
+        // still hold. Pin the exact canonical bytes by recomputing the hash from
+        // a hand-spelled alphabetical-order literal. payer is bs58 of the
+        // all-zero key (32 '1's, pinned by covenant-types
+        // pubkey_base58_pins_bitcoin_alphabet_leading_zero_ones_and_distinctness);
+        // credits_consumed (7) and settled_at (42) differ so the two numeric
+        // keys are distinguishable by value.
+        let mut r = receipt(7);
+        r.id = Uuid::from_u128(0xabc);
+        r.settled_at = 42;
+
+        let canonical = concat!(
+            "{",
+            "\"credits_consumed\":7,",
+            "\"id\":\"00000000-0000-0000-0000-000000000abc\",",
+            "\"payer\":\"11111111111111111111111111111111\",",
+            "\"resource\":\"memory\",",
+            "\"settled_at\":42",
+            "}"
+        );
+        let expected: [u8; 32] = Sha256::digest(canonical.as_bytes()).into();
+        assert_eq!(
+            receipt_hash(&r),
+            expected,
+            "receipt_hash must equal sha256 of the exact alphabetical-order JSON \
+             payload; a serde_json preserve_order flip (insertion order), a \
+             value-encoding change (base58 -> hex or checked payer, a non-rename \
+             resource, a non-hyphenated id), or a field add/drop would diverge \
+             here while determinism and per-field inequality still hold",
+        );
+
+        // The conditional memory_record_id sorts into alphabetical position
+        // (after id, before payer) -- it is NOT appended last. A refactor that
+        // appended it, or an insertion-order regression, moves the field and
+        // changes the leaf hash for every correlated receipt.
+        let mut with_mem = r.clone();
+        with_mem.memory_record_id = Some(Uuid::from_u128(0xdef));
+        let canonical_mem = concat!(
+            "{",
+            "\"credits_consumed\":7,",
+            "\"id\":\"00000000-0000-0000-0000-000000000abc\",",
+            "\"memory_record_id\":\"00000000-0000-0000-0000-000000000def\",",
+            "\"payer\":\"11111111111111111111111111111111\",",
+            "\"resource\":\"memory\",",
+            "\"settled_at\":42",
+            "}"
+        );
+        let expected_mem: [u8; 32] = Sha256::digest(canonical_mem.as_bytes()).into();
+        assert_eq!(
+            receipt_hash(&with_mem),
+            expected_mem,
+            "with memory_record_id = Some, the field must serialize in \
+             alphabetical position between id and payer; appending it last or an \
+             insertion-order regression would change the Merkle leaf",
         );
     }
 

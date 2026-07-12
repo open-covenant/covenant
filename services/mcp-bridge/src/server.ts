@@ -10,8 +10,6 @@ function randomHash32(): string {
   return randomBytes(32).toString('hex');
 }
 import {
-  MOCK_AGENT_DETAILS,
-  MOCK_TASKS,
   TASK_STATUS_VALUES,
   hash32FromText,
   prepareAnchorReceiptBatchInstruction,
@@ -21,7 +19,8 @@ import {
   prepareStakeInstruction,
   resolveSolanaNetwork,
   isSolanaAddress,
-} from '@covenant/sdk';
+} from '@covenant-org/sdk';
+import { MOCK_AGENT_DETAILS, MOCK_TASKS } from './fixtures.js';
 
 const network = resolveSolanaNetwork();
 
@@ -64,6 +63,7 @@ const buyCreditsSchema = z.object({
   owner: addressSchema,
   creditAccount: addressSchema,
   ownerCovntAccount: addressSchema,
+  covntMint: addressSchema,
   treasury: addressSchema,
   amountCovnt: z.string().min(1),
 });
@@ -74,6 +74,7 @@ const stakeSchema = z.object({
   agentAccount: addressSchema,
   positionAccount: addressSchema,
   ownerCovntAccount: addressSchema,
+  covntMint: addressSchema,
   stakeVault: addressSchema,
   amountCovnt: z.string().min(1),
   lockUntil: z.string().min(1),
@@ -85,6 +86,7 @@ const createTaskSchema = z.object({
   agentAccount: addressSchema,
   taskAccount: addressSchema,
   clientCovntAccount: addressSchema,
+  covntMint: addressSchema,
   escrowVault: addressSchema,
   provider: addressSchema,
   description: z.string().min(3),
@@ -182,19 +184,20 @@ export const tools = [
     },
     required: ['configAccount', 'operator', 'agentAccount', 'name'],
   }),
-  describeTool('prepare_buy_credits', 'Prepare a COVNT credit purchase instruction descriptor.', {
+  describeTool('prepare_buy_credits', 'Prepare a CVNT credit purchase instruction descriptor.', {
     type: 'object',
     properties: {
       configAccount: { type: 'string' },
       owner: { type: 'string' },
       creditAccount: { type: 'string' },
       ownerCovntAccount: { type: 'string' },
+      covntMint: { type: 'string' },
       treasury: { type: 'string' },
       amountCovnt: { type: 'string' },
     },
-    required: ['configAccount', 'owner', 'creditAccount', 'ownerCovntAccount', 'treasury', 'amountCovnt'],
+    required: ['configAccount', 'owner', 'creditAccount', 'ownerCovntAccount', 'covntMint', 'treasury', 'amountCovnt'],
   }),
-  describeTool('prepare_stake', 'Prepare a COVNT stake instruction descriptor.', {
+  describeTool('prepare_stake', 'Prepare a CVNT stake instruction descriptor.', {
     type: 'object',
     properties: {
       configAccount: { type: 'string' },
@@ -202,6 +205,7 @@ export const tools = [
       agentAccount: { type: 'string' },
       positionAccount: { type: 'string' },
       ownerCovntAccount: { type: 'string' },
+      covntMint: { type: 'string' },
       stakeVault: { type: 'string' },
       amountCovnt: { type: 'string' },
       lockUntil: { type: 'string' },
@@ -212,12 +216,13 @@ export const tools = [
       'agentAccount',
       'positionAccount',
       'ownerCovntAccount',
+      'covntMint',
       'stakeVault',
       'amountCovnt',
       'lockUntil',
     ],
   }),
-  describeTool('prepare_create_task', 'Prepare a COVNT task escrow instruction descriptor.', {
+  describeTool('prepare_create_task', 'Prepare a CVNT task escrow instruction descriptor.', {
     type: 'object',
     properties: {
       configAccount: { type: 'string' },
@@ -225,6 +230,7 @@ export const tools = [
       agentAccount: { type: 'string' },
       taskAccount: { type: 'string' },
       clientCovntAccount: { type: 'string' },
+      covntMint: { type: 'string' },
       escrowVault: { type: 'string' },
       provider: { type: 'string' },
       description: { type: 'string' },
@@ -237,6 +243,7 @@ export const tools = [
       'agentAccount',
       'taskAccount',
       'clientCovntAccount',
+      'covntMint',
       'escrowVault',
       'provider',
       'description',

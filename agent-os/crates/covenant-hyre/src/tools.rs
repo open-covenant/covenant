@@ -381,6 +381,36 @@ mod tests {
         assert_eq!(schema["additionalProperties"], Value::Bool(false));
     }
 
+    #[test]
+    fn schema_marks_required_post_body_field_required() {
+        // schema() advertises the tool's input contract to the MCP host,
+        // building the JSON Schema from BOTH the endpoint params
+        // (tools.rs:88-93) and its body fields (tools.rs:94-99).
+        // schema_marks_path_param_required_and_query_optional only exercises
+        // the params loop on a GET; the body-field loop is otherwise unpinned.
+        // hyre.ask is the high-level POST whose `query` is a required body
+        // field — a regression that dropped it from `properties` or `required`
+        // would let an MCP host accept a hyre.ask call with no query, billing a
+        // paid POST that resolve() then rejects instead of catching it up front.
+        let tools = tools_for(&HyreConfig::default(), Arc::new(MockExecutor::default()));
+        let schema = find(&tools, "hyre.ask").input_schema();
+
+        assert!(
+            schema["properties"].get("query").is_some(),
+            "a required body field must appear in the tool schema properties"
+        );
+        let required = schema["required"].as_array().expect("required is an array");
+        assert!(
+            required.iter().any(|v| v == "query"),
+            "a required POST body field must be marked required in the tool schema"
+        );
+        assert_eq!(
+            schema["additionalProperties"],
+            Value::Bool(false),
+            "the generated tool schema must reject arguments outside the published fields"
+        );
+    }
+
     #[tokio::test]
     async fn substitutes_path_param_and_carries_pricing() {
         let exec = Arc::new(MockExecutor::default());
@@ -401,6 +431,34 @@ mod tests {
         assert_eq!(req.per_call_cap, 10_000);
         assert_eq!(req.credits, 1);
         assert!(req.body.is_none());
+    }
+
+    #[tokio::test]
+    async fn configured_per_call_cap_overrides_the_endpoint_price() {
+        // build_tool uses config.per_call_cap as the per-call ceiling when it
+        // is set (>0) and only falls back to the endpoint's published price
+        // when the config cap is 0 (tools.rs:229-233, config.rs:47-51). Every
+        // other test leaves the default cap at 0, so the override branch is
+        // unexercised: a regression that ignored config.per_call_cap and always
+        // used ep.price_micro_usdc would let a tool pay up to the published
+        // price regardless of the operator's configured (lower) ceiling. Pick a
+        // cap below the curve.mint price (10_000) so the two cannot alias.
+        let config = HyreConfig {
+            per_call_cap: 5_000,
+            ..HyreConfig::default()
+        };
+        let exec = Arc::new(MockExecutor::default());
+        let tools = tools_for(&config, exec.clone());
+        find(&tools, "hyre.trenches.curve.mint")
+            .call(serde_json::json!({ "mint": "So11111111111111111111111111111111111111112" }))
+            .await
+            .unwrap();
+        let req = exec.last.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            req.per_call_cap, 5_000,
+            "a configured per_call_cap must bound the call at the operator's \
+             ceiling, not be ignored in favor of the endpoint price (10_000)"
+        );
     }
 
     #[tokio::test]
@@ -527,5 +585,41 @@ mod tests {
             .await
             .unwrap();
         assert!(res.is_error);
+    }
+
+    #[test]
+    fn arg_str_coerces_scalar_arguments_to_strings() {
+        // Tool arguments arrive as arbitrary JSON. A numeric id or a boolean
+        // flag must reach the request as its string form, not be dropped as a
+        // missing argument — otherwise a model that sends `{ "mint": 42 }`
+        // gets a spurious "missing required" failure.
+        let mut args = Map::new();
+        args.insert("count".into(), serde_json::json!(42));
+        args.insert("ratio".into(), serde_json::json!(3.5));
+        args.insert("flag".into(), serde_json::json!(false));
+        args.insert("name".into(), serde_json::json!("Mint1"));
+
+        assert_eq!(arg_str(&args, "count").as_deref(), Some("42"));
+        assert_eq!(arg_str(&args, "ratio").as_deref(), Some("3.5"));
+        assert_eq!(arg_str(&args, "flag").as_deref(), Some("false"));
+        assert_eq!(arg_str(&args, "name").as_deref(), Some("Mint1"));
+    }
+
+    #[test]
+    fn arg_str_treats_empty_structured_and_absent_as_missing() {
+        // An empty string, a non-scalar value, an explicit null, and an
+        // absent key all read as "not provided" so a blank or structured
+        // value never gets substituted into a path or query slot.
+        let mut args = Map::new();
+        args.insert("blank".into(), serde_json::json!(""));
+        args.insert("nested".into(), serde_json::json!({ "x": 1 }));
+        args.insert("list".into(), serde_json::json!([1, 2]));
+        args.insert("nullish".into(), Value::Null);
+
+        assert_eq!(arg_str(&args, "blank"), None, "empty string is absent");
+        assert_eq!(arg_str(&args, "nested"), None);
+        assert_eq!(arg_str(&args, "list"), None);
+        assert_eq!(arg_str(&args, "nullish"), None);
+        assert_eq!(arg_str(&args, "absent"), None);
     }
 }

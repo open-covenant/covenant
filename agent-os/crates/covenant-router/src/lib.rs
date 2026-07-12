@@ -737,6 +737,31 @@ optional = ["tool.summarize", "memory.write"]
     }
 
     #[test]
+    fn load_agents_from_unreadable_dir_is_an_io_error_not_a_silent_empty() {
+        // A genuinely absent dir returns Ok(empty) above — that is benign. But a
+        // path that *exists* and is not a readable directory must fail loud: the
+        // daemon loads agents from $COVENANT_HOME/agents on startup
+        // (covenantd/src/main.rs), so an agents path that is accidentally a file
+        // or otherwise unreadable has to surface as RouterError::Io, never the
+        // Ok(empty) of the absent case — collapsing a misconfigured path to "no
+        // agents" would boot the daemon mis-routed with no parse-time signal. A
+        // plain file passes Path::exists() but fails read_dir with ENOTDIR,
+        // giving a deterministic, portable trigger (no chmod flakiness). Guards a
+        // refactor that swaps the read_dir `?` for an error-swallowing
+        // `.ok()`/`flatten()`.
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_dir = dir.path().join("agents");
+        std::fs::write(&not_a_dir, "i am a file, not a directory").unwrap();
+        assert!(
+            not_a_dir.exists(),
+            "the file must pass the missing-dir exists() guard so read_dir is reached",
+        );
+        let err = load_agents_from_dir(&not_a_dir)
+            .expect_err("a present-but-unreadable agents path must not return Ok(empty)");
+        assert!(matches!(err, RouterError::Io(_)), "got {err:?}");
+    }
+
+    #[test]
     fn load_agents_walks_package_subdirs() {
         let dir = tempfile::tempdir().unwrap();
         let pkg = dir.path().join("research");
@@ -765,6 +790,33 @@ required = ["tool.web_search"]
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].id, "research");
         assert_eq!(cards[0].package_dir, pkg);
+    }
+
+    #[test]
+    fn load_agents_from_dir_surfaces_malformed_manifest_with_its_path() {
+        // load_agents_from_dir wraps a malformed package agent.toml parse as
+        // RouterError::Manifest carrying the offending path (lib.rs:262). The
+        // variant's Display/source formatting is pinned elsewhere by direct
+        // construction; this drives the production code path — a broken
+        // package must surface the error (not panic, not be silently skipped)
+        // and bind the real manifest path.
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = dir.path().join("broken");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let manifest_path = pkg.join("agent.toml");
+        // Unterminated basic string is invalid TOML under any parser.
+        std::fs::write(&manifest_path, "name = \"unterminated").unwrap();
+        match load_agents_from_dir(dir.path()) {
+            Err(RouterError::Manifest { path, source: _ }) => {
+                assert_eq!(
+                    path, manifest_path,
+                    "must bind the offending agent.toml path"
+                );
+            }
+            other => {
+                panic!("malformed agent.toml must surface as RouterError::Manifest, got {other:?}")
+            }
+        }
     }
 
     #[test]

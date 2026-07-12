@@ -1,0 +1,24 @@
+[package]
+name = "covenant-evm-signer"
+version = "0.1.0"
+description = "Signs Covenant statements as EAS off-chain attestations (EIP-712, zero gas) that Base's trust stack can consume: a dual-signed audit-root VC, and an audit-derived reputation score bound to its non-transferable Solana identity PDA. One ecrecover authenticates each. Off-chain only; mainnet broadcast is gated separately."
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "covenant-evm-signer"
+path = "src/main.rs"
+
+[dependencies]
+covenant-identity = { path = "../covenant-identity" }
+covenant-attestation = { path = "../covenant-attestation" }
+covenant-audit = { path = "../covenant-audit" }
+k256 = { workspace = true }
+sha3 = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true }

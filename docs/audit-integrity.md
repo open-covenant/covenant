@@ -33,6 +33,22 @@ covenant audit purge --before-ms 1700000000000 --json
 }
 ```
 
+## Record Schema Golden Vectors
+
+The audit record schema is a frozen external contract. Because the event hash is `sha256(serde_json::to_string(event))`, the serialized `AuditEvent` *is* the byte sequence hashed into the chain — any drift in fields, field ordering, the `kind` discriminator, or the `AgentId` envelope silently changes every downstream event hash and root. Committed golden vectors pin that contract so other implementations can verify against it.
+
+`agent-os/crates/covenant-audit/tests/fixtures/provenance-records.v1.json` records, for a deterministic sequence of the capability family of audit kinds (`capability_check`, `capability_granted`, `capability_grant_rejected`, `capability_scope_rejected`, `capability_revoked`, `capability_revoke_rejected`):
+
+- `canonical_json` — the exact `AuditEvent` wire form;
+- `event_hash_hex` — its SHA-256 event hash;
+- `chain_root_hash_hex` — the genesis-seeded chain fold over the whole sequence, as computed by production `verify_integrity`.
+
+The `provenance_record_schema_golden_vectors_are_frozen` test reconstructs the same records from typed Rust, re-serializes and re-hashes them through production code, and asserts byte-for-byte equality with the fixture. A mismatch fails the test rather than silently changing the contract. Update the fixture only as a deliberate, reviewed schema change — bump the `.v<n>` suffix for an incompatible shape — never blindly regenerate it to make a failing test pass.
+
+That fixture freezes the capability family and the genesis-seeded chain fold. `agent-os/crates/covenant-audit/tests/fixtures/audit-kinds.v1.json` completes the surface: it pins the `canonical_json` and `event_hash_hex` of one representative `AuditEvent` for **every** recognized `AuditKind` variant, so a schema change to any audit kind — not only the capability family — fails loudly instead of silently changing that event's hash. The `audit_kind_wire_schema_golden_vectors_are_frozen` test (in `tests/golden_audit_kinds.rs`) drives the same production serializer and hash.
+
+The corpus is kept exhaustive by `audit_kind_slug`, a wildcard-free `match` over `AuditKind`: adding a variant fails to compile until a slug — and therefore a golden vector — is added for it, so a new audit kind can never ship unfrozen. The companion `audit_kind_corpus_is_exhaustive` test asserts the typed records, the slug inventory, and the committed fixture all cover exactly the same set.
+
 ## Verification
 
 Operators can verify the local chain through all daemon surfaces:
@@ -76,6 +92,31 @@ The IPC request is `VerifyAuditIntegrity`. All surfaces return an `AuditIntegrit
 | `failures` | Deterministic mismatch, missing-entry, and dangling-anchor diagnostics. |
 
 The daemon restricts integrity verification to the operator identity because the report exposes global audit metadata. A non-operator peer receives an error.
+
+A corrupted chain is reported, not hidden. `verify_integrity` re-reads the event log and the sidecar on every call, so an edit, a truncated or emptied sidecar, or a sidecar that diverges from the event log flips `valid` to `false` and names the break in `failures`. The verdict is identical across surfaces because every surface calls the same `verify_integrity`. `live_cli_audit_verify_tamper.rs` exercises this end-to-end over the CLI/socket path, and `live_http_audit_verify_tamper.rs` over `GET /audit/verify`: each establishes a healthy `valid: true` baseline, empties the on-disk anchor sidecar of a running daemon, and confirms the next verify reports `valid: false` with a non-empty `failures` list and zero anchors against the unchanged event count.
+
+## Privileged Action Coverage
+
+The hash chain proves that the recorded audit log has not been tampered with. A separate question is *coverage*: does every privileged daemon action actually record something on that log? Covenant pins this with a drift-guarded inventory test (`privileged_action_audit_inventory_pins_exposure_and_tracks_unaudited_gaps` in `covenantd`) that classifies every IPC request by its success-path audit exposure. The classifier is an exhaustive match over the request type, so a new request variant fails to compile until it is classified — coverage cannot silently shrink as handlers are added.
+
+Each privileged action falls into one of three tiers:
+
+| Tier | Meaning |
+|---|---|
+| Action-audited | Emits an action-specific row on success — for example `IntentDispatched`, `CapabilityGranted`, `CapabilityRevoked`, `PeerRevoked`, `OperatorTokenRotated`, `MemoryRepairApplied`, `MemoryCompactionApplied`, `ExternalPaymentSettled`, `SecretAccessGranted`, the settlement and memory backfill rows, and the A2A repair rows. `CapabilityRevoked` records `signature_b58` (the join key back to the matching `CapabilityGranted` row) and `removed` (a real withdrawal versus an idempotent re-revoke), completing the grant→revoke lifecycle on the chain. `GetSecret` records `SecretAccessGranted` on a released secret — naming the secret and the `signature_b58` of the grant that authorized the read, the same join key `CapabilityGranted` carries — and `SecretAccessDenied` on a scope refusal or unknown name; neither row records the secret value. `CallTool` records `ToolCallCompleted` on both the success and execution-error paths: the tool name, a SHA-256 `arguments_hash_hex` of the call arguments (the same redaction barrier as the Hermes tool-input preview, so raw arguments never enter the chain), the wall-clock `duration_ms`, and an `outcome` of `ok`, `error_result`, or `failed` that separates a clean result from a tool-reported error result and from a raised `ToolError`. A call refused at the boundary because its arguments violate the tool's published `input_schema` (a missing `required` field or a field whose JSON type contradicts the schema) records `ToolCallSchemaRejected` *instead* — the tool name, the same `arguments_hash_hex` redaction barrier, and a `reason` naming the offending field and JSON types but never the value — and the tool body never runs, so a refused malformed call is on the chain without a misleading completion row. Schema enforcement is lightweight and back-compatible: only object schemas that declare required fields or typed properties are checked, so permissive or no-argument tools accept exactly what they accepted before. The Hyre and Metaplex tool paths emit their own domain rows (payment receipts, mint records) instead. |
+| Authorization-audited | The success path is recorded only by the `CapabilityCheck` row (`passed = true`) emitted when the action's capability is verified. The row also answers *who* authorized the action and *under which rule*: `authorized_by` lists, for each granted action, the identity that signed the matching grant (`granted_by_display`) and the base58 signature identifying the exact signed capability (`signature_b58`). `authorized_by` is empty on a failed check and always present on the wire, so a `passed = true` row can never silently omit its approver and rule. The authorized attempt — and its approver and rule — is on the chain, but there is no action-outcome row. Covers the operator purges (`PurgeMemory`, `PurgeAudit`, `PurgeCapabilities`, `PurgePeers`), `FlushReceipts`, `SignAttestation`, `SendA2ATask`, `PostA2AResult`, and `CompactA2A`. When a verified capability carries a `max_uses` usage budget, the `CapabilityCheck` row still shows `passed = true` — the grant matched — but a spent budget refuses the action and records a separate `CapabilityBudgetExhausted` row naming the grant's `signature_b58`, the `action`, and `max_uses`/`used` (`used = max_uses` at refusal). The check row records that the grant exists; the budget row records the refusal. This is deliberately distinct from a never-granted action, which has no matching grant and a `passed = false` check with the action in `missing_actions`. The use count is durable and the check-and-consume is atomic per signature. |
+| Unaudited | Records nothing on the success path. Tracked below. |
+
+Read-only queries are not privileged actions and are excluded. Some are capability-gated and therefore also emit a `CapabilityCheck` row, but that is authorization logging rather than an action record.
+
+### Tracked coverage gaps
+
+The following privileged actions currently record nothing on their success path. They are enumerated explicitly in the inventory test so a new gap cannot land silently:
+
+- **`Authenticate` (success).** Authentication *failures* are audited (`AuthenticationFailed`); a successful handshake is not. Every action a peer subsequently takes is individually audited, so a successful auth carries no standalone accountability requirement today.
+- **SAP bridge publishes** (`SapPublishAgent`, `SapPublishAuditRoot`, `SapPublishAttestation`). These cross into the external Synapse Agent Protocol ledger and do not yet emit a local audit row for the publish. The publish authorization model is still being defined; audit emission should land with that work.
+
+Closing a gap means adding the audit emission and removing the entry from both the inventory test and this list.
 
 ## Security Boundary
 

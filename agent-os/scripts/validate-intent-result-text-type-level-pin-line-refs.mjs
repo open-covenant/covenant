@@ -27,10 +27,10 @@ import { fileURLToPath } from "node:url";
 // the intents_resume_ok envelope, with em-dash separator (`—`),
 // "resumed intent" phrase, and a Pinned-as cite for `main.rs:5384`.
 // Line 237's intent_result bullet uses colon separator (`:`), no
-// "resumed" phrase, and cites the unsuffixed CLI's main.rs:2075
+// "resumed" phrase, and cites the unsuffixed CLI's main.rs:2078
 // `println!("{text}")` site. The regex anchors on the colon-and-
 // "the result text the daemon returned." prefix plus the unique
-// `main.rs:2075` CLI cite, then captures the Pinned-as line ref.
+// `main.rs:2078` CLI cite, then captures the Pinned-as line ref.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
@@ -47,10 +47,10 @@ const selector =
   'assert!(value["text"].is_string(), "text must be a string: {value}");';
 
 const docsRegex =
-  /- `text` \(string\): the result text the daemon returned\. The unsuffixed CLI prints this value directly at `main\.rs:2075`[^\n]*Pinned as a string by `main\.rs:(\d+)` — never an object or array\./;
+  /- `text` \(string\): the result text the daemon returned\. The unsuffixed CLI prints this value directly at `main\.rs:2078`[^\n]*Pinned as a string by `main\.rs:(\d+)` — never an object or array\./;
 const docsLabel = "intent_result.text type-level pin citation";
 const docsTemplate =
-  '- `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:2075` … Pinned as a string by `main.rs:N` — never an object or array.';
+  '- `text` (string): the result text the daemon returned. The unsuffixed CLI prints this value directly at `main.rs:2078` … Pinned as a string by `main.rs:N` — never an object or array.';
 
 const errors = [];
 const fail = (message) => errors.push(message);

@@ -1,0 +1,9 @@
+{
+  "kind": "sap_status",
+  "enabled": false,
+  "cluster": "mainnet-beta",
+  "program_id": "Cov1111111111111111111111111111111111111111",
+  "rpc_url": "https://api.mainnet-beta.solana.com",
+  "explorer_url": "https://explorer.solana.com",
+  "has_signer": false
+}

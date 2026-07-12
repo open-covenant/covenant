@@ -1,0 +1,10 @@
+{
+  "kind": "reputation",
+  "worker_pubkey": "Worker11111111111111111111111111111111111",
+  "proofs_total": 12,
+  "validations_passed": 10,
+  "validations_failed": 2,
+  "releases": 9,
+  "completion_rate_bps": 8333,
+  "computed_audit_root_hex": "0000000000000000000000000000000000000000000000000000000000000000"
+}

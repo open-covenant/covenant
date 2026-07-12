@@ -1,0 +1,11 @@
+{
+  "kind": "memory_compacted",
+  "outcome": {
+    "mode": "dry_run",
+    "would_change": false,
+    "changed": false,
+    "deleted": [],
+    "stale_marked": [],
+    "parents_detached": []
+  }
+}

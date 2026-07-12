@@ -1,0 +1,15 @@
+{
+  "kind": "send_a2_a_task",
+  "task": {
+    "id": "a2a5eede-f00d-cafe-0000-0000babebeef",
+    "sender": {
+      "display": "alice@local",
+      "pubkey": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+    },
+    "recipient": {
+      "display": "bob@local",
+      "pubkey": "8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR"
+    },
+    "intent_text": "fetch papers"
+  }
+}

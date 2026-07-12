@@ -9,7 +9,12 @@
 //! with — same registry that gates the Unix-socket `Authenticate`
 //! handshake. `/health` and `/version` are intentionally unauthenticated
 //! so supervisors and clients can check liveness and wire compatibility
-//! before presenting credentials.
+//! before presenting credentials. `POST /a2a/peer-tasks` is also exempt from
+//! the bearer gate, but for a different reason: a daemon on another host holds
+//! no local token and authenticates by an ed25519 envelope signature instead,
+//! so that route is gated by [`Server::admit_remote_a2a_task`] in its own
+//! confined router group rather than by [`require_bearer`] (multi-host slice
+//! 4b-2b).
 //!
 //! CORS: explicit origin allow-list, default `http://localhost:3000`.
 //! Override via `COVENANT_HTTP_ORIGINS` (comma-separated list of
@@ -21,7 +26,7 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
-use crate::{sse, Server};
+use crate::{cross_host::RemoteAdmission, sse, Server};
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Extension, Path, Query, Request as AxumRequest, State},
@@ -189,10 +194,25 @@ pub fn router_with_origins(state: HttpState, origins: Vec<HeaderValue>) -> Route
         ))
         .with_state(state.clone());
 
+    // Cross-host A2A inbound admission (multi-host slice 4b-2b). A remote sender
+    // holds no local bearer token — it authenticates by the envelope signature —
+    // so this route is EXEMPT from require_bearer. It lives in its own router
+    // group with NO auth layer and a tighter body cap; because axum layers apply
+    // only to the routes of the sub-router they are attached to, the exemption is
+    // structurally confined and cannot reach the protected group. The handler
+    // hands the raw envelope to the admission core, which fail-closes on every
+    // authenticity, authorization, freshness, and replay check — "no bearer"
+    // here is not "no authentication".
+    let peer_tasks = Router::new()
+        .route("/a2a/peer-tasks", post(admit_peer_task))
+        .layer(DefaultBodyLimit::max(PEER_TASK_BODY_CAP))
+        .with_state(state.clone());
+
     Router::new()
         .route("/health", get(health))
         .route("/version", get(version))
         .merge(protected)
+        .merge(peer_tasks)
         .layer(cors_layer(origins))
 }
 
@@ -849,6 +869,67 @@ async fn send_a2a_task(
     Ok(Json(
         s.server.respond(Request::SendA2ATask { task }, &peer).await,
     ))
+}
+
+/// Maximum body the bearer-EXEMPT cross-host admission route buffers before
+/// parsing. Far tighter than [`MAX_FRAME`] (8 MiB) because this is the one
+/// unauthenticated surface where deserialization precedes signature
+/// verification — `SignedA2ATask::open` parses the payload to learn the claimed
+/// sender — so the cap must bound an attacker's pre-auth allocation. The
+/// envelope's `task_json` and `signature` are `Vec<u8>` that serialize as JSON
+/// integer arrays (~4-5x the raw bytes on the wire), so 64 KiB bounds a genuine
+/// `A2ATask` to roughly 13 KiB of payload — comfortably above a real task plus
+/// its 64-byte signature while keeping the pre-verify buffer bounded. A future
+/// tighter cap must stay above that inflated wire size.
+const PEER_TASK_BODY_CAP: usize = 64 * 1024;
+
+/// `POST /a2a/peer-tasks` — admit a cross-host [`covenant_a2a::SignedA2ATask`]
+/// onto the local mailbox, or refuse it (multi-host slice 4b-2b). Bearer-EXEMPT:
+/// a remote daemon holds no local token and authenticates by the envelope
+/// signature, so authority comes from the admission core
+/// ([`Server::admit_remote_a2a_task`]), not [`require_bearer`].
+///
+/// The handler is a thin transport over the reviewed core: it derives no host,
+/// identity, or freshness signal from the request itself. The sender host is
+/// `host_component(task.sender.display)` from the *signed* payload — never the
+/// transport's `Host` header, URL authority, or TLS SNI — so no case-insensitive
+/// transport source can split or confuse host identity (the registry match stays
+/// byte-exact, as 4b-2a documented). The receiver's real wall clock
+/// ([`crate::epoch_ms`]) is supplied so the freshness window actually fires.
+///
+/// The response is deliberately coarse so the three `open()` variants and the
+/// later gates cannot be turned into a probing oracle: every
+/// [`RemoteAdmission::Rejected`] cause maps to ONE `403` body; the rejection
+/// stage lives only on the operator's audit feed. `Admitted` and `Duplicate`
+/// both return one `202` ack, so a replay is absorbed idempotently and the
+/// caller cannot tell a fresh admission from an absorbed replay.
+///
+/// Rate-limiting is deferred to the ingress/reverse-proxy layer rather than an
+/// in-process limiter: the daemon stays loopback-bound until a separately
+/// operator-gated bind change, where the only pre-auth signal is the proxy's
+/// own socket — an in-process per-source bucket would key on the proxy and be
+/// ineffective. The content oracle is closed here by the coarse response; the
+/// residual timing side-channel is tracked for the bind-change slice.
+async fn admit_peer_task(
+    State(s): State<HttpState>,
+    Json(envelope): Json<covenant_a2a::SignedA2ATask>,
+) -> AxumResponse {
+    match s
+        .server
+        .admit_remote_a2a_task(envelope, crate::epoch_ms())
+        .await
+    {
+        RemoteAdmission::Admitted { .. } | RemoteAdmission::Duplicate { .. } => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "kind": "accepted" })),
+        )
+            .into_response(),
+        RemoteAdmission::Rejected => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "kind": "rejected" })),
+        )
+            .into_response(),
+    }
 }
 
 async fn try_recv_a2a_task(
@@ -1774,6 +1855,87 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn tokio_broadcast_stream_maps_ok_lagged_and_closed_arms() {
+        // The broadcast->Stream bridge under the agent-trace SSE endpoint
+        // collapses three recv() outcomes onto the `Option<StreamedTrace>`
+        // item: Ok(trace) -> Some(trace) (deliver), Lagged -> None (skip the
+        // missed window but keep streaming), Closed -> end of stream. Every
+        // recv here resolves synchronously, so no paused clock is needed.
+        use covenant_runtime::{RuntimeTrace, StreamedTrace};
+        use covenant_types::AgentId;
+        use futures::StreamExt;
+
+        let intent_id = uuid::Uuid::from_u128(0xfeed);
+        let trace = |run: &str| StreamedTrace {
+            intent_id,
+            issuer: AgentId::new("agent@local", [3u8; 32]),
+            trace: RuntimeTrace::HermesToolInvoked {
+                run_id: run.into(),
+                tool: "terminal".into(),
+                preview: "ls".into(),
+            },
+        };
+
+        // Ok arm: a published trace surfaces as Some(Some(trace)) carrying the
+        // exact payload. Dropping it (Some(None) on the Ok arm) would push
+        // empty SSE frames and never deliver a real trace.
+        let (tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(8);
+        let mut stream = Box::pin(tokio_broadcast_stream(rx));
+        tx.send(trace("ok-1")).expect("send into an open channel");
+        let delivered = stream
+            .next()
+            .await
+            .expect("the stream must yield while the channel is open")
+            .expect("an Ok recv must forward the trace, not an empty None frame");
+        assert!(
+            matches!(&delivered.trace, RuntimeTrace::HermesToolInvoked { run_id, .. } if run_id == "ok-1"),
+            "the Ok arm must forward the exact published trace, not a different or dropped payload",
+        );
+
+        // Lagged arm: a capacity-1 buffer with two sends before any recv
+        // evicts the first message, so the receiver lags by one window. The
+        // stream must yield Some(None) (skip it) and KEEP GOING — swapping the
+        // Lagged arm to terminate would silently disconnect any SSE client
+        // that briefly fell behind the broadcast buffer.
+        let (tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(1);
+        let mut stream = Box::pin(tokio_broadcast_stream(rx));
+        tx.send(trace("evicted")).expect("first send");
+        tx.send(trace("survivor"))
+            .expect("second send evicts the first");
+        let lagged = stream
+            .next()
+            .await
+            .expect("a lagged receiver must still yield an item, not terminate the stream");
+        assert!(
+            lagged.is_none(),
+            "the Lagged arm must yield Some(None) so the handler drops the missed \
+             window; mapping it to None would terminate the SSE stream for a client \
+             that only briefly fell behind",
+        );
+        let resumed = stream
+            .next()
+            .await
+            .expect("the stream must continue after a lag, not stop")
+            .expect("the post-lag recv delivers the surviving buffered trace");
+        assert!(
+            matches!(&resumed.trace, RuntimeTrace::HermesToolInvoked { run_id, .. } if run_id == "survivor"),
+            "after skipping the lagged window the stream must resume delivering live traces",
+        );
+
+        // Closed arm: with every sender dropped the channel is Closed and the
+        // stream terminates (next() -> None). Mapping Closed to Some((None, rx))
+        // would spin the unfold forever on a dead receiver.
+        let (tx, rx) = tokio::sync::broadcast::channel::<StreamedTrace>(8);
+        let mut stream = Box::pin(tokio_broadcast_stream(rx));
+        drop(tx);
+        assert!(
+            stream.next().await.is_none(),
+            "a Closed channel must terminate the stream; looping on Closed would \
+             busy-spin the SSE task on a permanently-dead receiver",
+        );
+    }
+
     #[test]
     fn http_parse_status_pins_accepted_spellings_and_permissive_fallback() {
         use covenant_peer_auth::PeerStatusFilter;
@@ -1886,5 +2048,100 @@ mod tests {
         let v = cors_origins_from_value(Some("http://localhost:3000,bad\norigin"));
         assert_eq!(v.len(), 1, "the invalid entry is dropped");
         assert_eq!(v[0].to_str().unwrap(), "http://localhost:3000");
+    }
+
+    static SAP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn sap_stats_path_pins_explicit_precedence_trim_and_blank_fallthrough() {
+        let _guard = SAP_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var("COVENANT_SAP_STATS_PATH").ok();
+
+        // An explicit override wins outright and is trimmed: the SAP worker
+        // and the /sap/stats handler must resolve the identical counter file
+        // or the endpoint reports a phantom zero against a live counter.
+        std::env::set_var(
+            "COVENANT_SAP_STATS_PATH",
+            "  /var/lib/covenant/explicit-stats.json  ",
+        );
+        assert_eq!(
+            sap_stats_path(),
+            std::path::PathBuf::from("/var/lib/covenant/explicit-stats.json"),
+        );
+
+        // A blank override is treated as unset, never as the literal path,
+        // and the fixed counter filename is always appended. Asserting the
+        // filename rather than the home-derived prefix keeps this test
+        // independent of concurrent COVENANT_HOME mutation in sibling tests.
+        std::env::set_var("COVENANT_SAP_STATS_PATH", "   ");
+        let resolved = sap_stats_path();
+        assert_ne!(resolved, std::path::PathBuf::from("   "));
+        assert_eq!(
+            resolved.file_name().and_then(|s| s.to_str()),
+            Some("sap-rpc-stats.json"),
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("COVENANT_SAP_STATS_PATH", v),
+            None => std::env::remove_var("COVENANT_SAP_STATS_PATH"),
+        }
+    }
+
+    #[test]
+    fn read_sap_stats_defaults_on_missing_and_malformed_else_parses_camelcase() {
+        use std::io::Write;
+
+        let _guard = SAP_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var("COVENANT_SAP_STATS_PATH").ok();
+
+        // Missing file is the normal pre-first-call state: zeros, not an error.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("COVENANT_SAP_STATS_PATH", dir.path().join("absent.json"));
+        let absent = read_sap_stats();
+        assert_eq!(
+            (
+                absent.calls,
+                absent.successes,
+                absent.failures,
+                absent.first_seen_unix,
+                absent.last_call_unix,
+            ),
+            (0, 0, 0, 0, 0),
+        );
+
+        // Valid camelCase JSON parses field-for-field.
+        let mut good = tempfile::NamedTempFile::new().expect("tempfile");
+        good.write_all(
+            br#"{"calls":7,"successes":5,"failures":2,"firstSeenUnix":11,"lastCallUnix":13}"#,
+        )
+        .expect("write good stats");
+        std::env::set_var("COVENANT_SAP_STATS_PATH", good.path());
+        let parsed = read_sap_stats();
+        assert_eq!(
+            (
+                parsed.calls,
+                parsed.successes,
+                parsed.failures,
+                parsed.first_seen_unix,
+                parsed.last_call_unix,
+            ),
+            (7, 5, 2, 11, 13),
+        );
+
+        // A corrupt body must fall back to defaults via unwrap_or_default(),
+        // never panic the /sap/stats handler with a mid-write counter file.
+        let mut bad = tempfile::NamedTempFile::new().expect("tempfile");
+        bad.write_all(b"this is not json").expect("write bad stats");
+        std::env::set_var("COVENANT_SAP_STATS_PATH", bad.path());
+        let corrupt = read_sap_stats();
+        assert_eq!(
+            (corrupt.calls, corrupt.successes, corrupt.failures),
+            (0, 0, 0)
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("COVENANT_SAP_STATS_PATH", v),
+            None => std::env::remove_var("COVENANT_SAP_STATS_PATH"),
+        }
     }
 }

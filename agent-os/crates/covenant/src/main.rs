@@ -2616,11 +2616,40 @@ struct SubprocessSigner {
     rpc_url: String,
 }
 
-#[async_trait::async_trait]
-impl covenant_x402::Signer for SubprocessSigner {
-    async fn build_payment(
+/// Maximum bytes the CLI buffers from the x402 signer sidecar's stdout or
+/// stderr. The sidecar relays Solana RPC output, so an unbounded read lets a
+/// runaway or hostile-RPC-fed signer exhaust the CLI process's memory;
+/// `wait_with_output()` had no size cap and no deadline. The header is a single
+/// line, so 16 MiB sits far above any real payload while still capping a flood —
+/// the same bound the daemon's signer dispatches use.
+const SIGNER_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Wall-clock budget applied to the signer read phase and, again, to the reap,
+/// bounding a sidecar that stalls with a pipe held open.
+const SIGNER_OUTPUT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Reads up to `max` bytes from a signer stream, reporting whether it had more
+/// to give. `take` stops the read at the cap instead of buffering an unbounded
+/// body; one extra byte distinguishes an exact-fit payload from a flood. The
+/// returned buffer is clamped to `max`.
+async fn read_signer_stream_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    reader.take(max as u64 + 1).read_to_end(&mut buf).await?;
+    let overflowed = buf.len() > max;
+    buf.truncate(max);
+    Ok((buf, overflowed))
+}
+
+impl SubprocessSigner {
+    async fn build_payment_with_limits(
         &self,
         requirements: &covenant_x402::PaymentRequirements,
+        max_output_bytes: usize,
+        deadline: std::time::Duration,
     ) -> covenant_x402::Result<String> {
         use tokio::io::AsyncWriteExt;
         let body = serde_json::to_vec(requirements)
@@ -2634,6 +2663,9 @@ impl covenant_x402::Signer for SubprocessSigner {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            // An over-cap flood or an elapsed deadline returns early, dropping
+            // the Child; kill_on_drop reaps the sidecar instead of leaking it.
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| {
                 covenant_x402::X402Error::Sign(format!(
@@ -2647,18 +2679,80 @@ impl covenant_x402::Signer for SubprocessSigner {
                 .await
                 .map_err(|e| covenant_x402::X402Error::Sign(format!("write sidecar stdin: {e}")))?;
         }
-        let out = child
-            .wait_with_output()
-            .await
-            .map_err(|e| covenant_x402::X402Error::Sign(format!("wait sidecar: {e}")))?;
-        if !out.status.success() {
+
+        // wait_with_output() buffered stdout and stderr unbounded with no
+        // deadline; cap each read and bound the wall clock so a flooding or
+        // stalled sidecar cannot OOM or hang the CLI. Read concurrently so a
+        // sidecar that fills its stderr pipe before closing stdout cannot
+        // starve the stdout read.
+        let mut stdout = child.stdout.take().expect("stdout piped");
+        let mut stderr = child.stderr.take().expect("stderr piped");
+        let read_both = async {
+            tokio::join!(
+                read_signer_stream_capped(&mut stdout, max_output_bytes),
+                read_signer_stream_capped(&mut stderr, max_output_bytes),
+            )
+        };
+        let (out_res, err_res) = match tokio::time::timeout(deadline, read_both).await {
+            Ok(pair) => pair,
+            Err(_) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return Err(covenant_x402::X402Error::Sign(format!(
+                    "signer did not finish within {}s",
+                    deadline.as_secs()
+                )));
+            }
+        };
+        let (stdout_bytes, stdout_overflowed) = out_res
+            .map_err(|e| covenant_x402::X402Error::Sign(format!("read sidecar stdout: {e}")))?;
+        let (stderr_bytes, _stderr_overflowed) = err_res
+            .map_err(|e| covenant_x402::X402Error::Sign(format!("read sidecar stderr: {e}")))?;
+
+        // On overflow the sidecar may keep writing into a now-unread pipe and
+        // will not exit on its own, so kill it before the bounded wait.
+        if stdout_overflowed {
+            let _ = child.start_kill();
+        }
+        let status = match tokio::time::timeout(deadline, child.wait()).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(e)) => return Err(covenant_x402::X402Error::Sign(format!("wait sidecar: {e}"))),
+            Err(_) => {
+                let _ = child.start_kill();
+                return Err(covenant_x402::X402Error::Sign(format!(
+                    "signer did not finish within {}s",
+                    deadline.as_secs()
+                )));
+            }
+        };
+        if stdout_overflowed {
             return Err(covenant_x402::X402Error::Sign(format!(
-                "sidecar exit {}: {}",
-                out.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&out.stderr)
+                "signer stdout exceeded the {max_output_bytes}-byte cap"
             )));
         }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        if !status.success() {
+            return Err(covenant_x402::X402Error::Sign(format!(
+                "sidecar exit {}: {}",
+                status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&stderr_bytes)
+            )));
+        }
+        Ok(String::from_utf8_lossy(&stdout_bytes).trim().to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl covenant_x402::Signer for SubprocessSigner {
+    async fn build_payment(
+        &self,
+        requirements: &covenant_x402::PaymentRequirements,
+    ) -> covenant_x402::Result<String> {
+        self.build_payment_with_limits(
+            requirements,
+            SIGNER_MAX_OUTPUT_BYTES,
+            SIGNER_OUTPUT_DEADLINE,
+        )
+        .await
     }
 }
 
@@ -2720,7 +2814,7 @@ async fn run_zauth_list(args: &[String]) -> Result<()> {
         }
     }
 
-    let client = covenant_zauth::DirectoryClient::new(reqwest::Client::new());
+    let client = covenant_zauth::DirectoryClient::new(covenant_zauth::directory::http_client());
     let page = client
         .list(covenant_zauth::ListQuery {
             verified,
@@ -2788,7 +2882,7 @@ async fn run_zauth_search(args: &[String]) -> Result<()> {
     }
     let query = query.ok_or_else(|| anyhow::anyhow!("covenant zauth search: missing <query>"))?;
 
-    let client = covenant_zauth::DirectoryClient::new(reqwest::Client::new());
+    let client = covenant_zauth::DirectoryClient::new(covenant_zauth::directory::http_client());
     let page = client
         .list(covenant_zauth::ListQuery {
             verified: Some(true),
@@ -2929,7 +3023,7 @@ async fn run_zauth_scan(args: &[String]) -> Result<()> {
         per_call_cap,
     };
 
-    let client = covenant_zauth::RepoScanClient::new(reqwest::Client::new());
+    let client = covenant_zauth::RepoScanClient::new(covenant_zauth::reposcan::http_client());
     let result = client.scan(&req, &signer).await.context("zauth reposcan")?;
 
     if as_json {
@@ -3046,10 +3140,10 @@ async fn main() -> Result<()> {
                     if !manifest_path.exists() {
                         continue;
                     }
-                    let raw = std::fs::read_to_string(&manifest_path)
-                        .with_context(|| format!("read {}", manifest_path.display()))?;
-                    let manifest = covenant_manifest::Manifest::parse(&raw)
-                        .with_context(|| format!("parse manifest {}", manifest_path.display()))?;
+                    // from_path caps the read at MAX_MANIFEST_BYTES so a hostile
+                    // or corrupt agent package cannot OOM the CLI on this scan.
+                    let manifest = covenant_manifest::Manifest::from_path(&manifest_path)
+                        .with_context(|| format!("load manifest {}", manifest_path.display()))?;
                     for action in manifest.capabilities.required.iter() {
                         required.insert(action.clone());
                     }
@@ -5311,15 +5405,14 @@ async fn main() -> Result<()> {
                             has_signer,
                         } => {
                             if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "sap_status",
-                                    "enabled": enabled,
-                                    "cluster": cluster,
-                                    "program_id": program_id,
-                                    "rpc_url": rpc_url,
-                                    "explorer_url": explorer_url,
-                                    "has_signer": has_signer,
-                                });
+                                let value = sap_status_json(
+                                    enabled,
+                                    &cluster,
+                                    &program_id,
+                                    &rpc_url,
+                                    &explorer_url,
+                                    has_signer,
+                                );
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("enabled: {enabled}");
@@ -5367,11 +5460,7 @@ async fn main() -> Result<()> {
                             signature,
                         } => {
                             if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "sap_published_agent",
-                                    "agent_pda": agent_pda,
-                                    "signature": signature,
-                                });
+                                let value = sap_published_agent_json(&agent_pda, &signature);
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("agent_pda: {agent_pda}");
@@ -5442,11 +5531,7 @@ async fn main() -> Result<()> {
                             signature,
                         } => {
                             if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "sap_published_audit_root",
-                                    "ledger_pda": ledger_pda,
-                                    "signature": signature,
-                                });
+                                let value = sap_published_audit_root_json(&ledger_pda, &signature);
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("ledger_pda: {ledger_pda}");
@@ -5526,13 +5611,12 @@ async fn main() -> Result<()> {
                             signature,
                         } => {
                             if as_json {
-                                let value = serde_json::json!({
-                                    "kind": "sap_published_attestation",
-                                    "attestation_pda": attestation_pda,
-                                    "attester": attester,
-                                    "agent_pda": agent_pda,
-                                    "signature": signature,
-                                });
+                                let value = sap_published_attestation_json(
+                                    &attestation_pda,
+                                    &attester,
+                                    &agent_pda,
+                                    &signature,
+                                );
                                 println!("{}", serde_json::to_string(&value)?);
                             } else {
                                 println!("attestation_pda: {attestation_pda}");
@@ -9314,6 +9398,30 @@ mod tests {
         }
 
         #[test]
+        fn invalid_key_material_returns_invalid_variant() {
+            // 64 bytes whose pubkey half does not match the seed half are
+            // the silent-wrong-identity failure mode: the file parses, it is
+            // the right length, but Keypair::from_bytes rejects it because
+            // the recorded pubkey is not the one derived from the seed. The
+            // loader must surface InvalidKeyMaterial so an operator does not
+            // boot under a corrupt or tampered identity. A guaranteed
+            // mismatch is built by taking one keypair's bytes and
+            // overwriting its pubkey half with a second keypair's.
+            let dir = tempdir().expect("tempdir");
+            let mut bytes = Keypair::new().to_bytes();
+            let other = Keypair::new().to_bytes();
+            bytes[32..].copy_from_slice(&other[32..]);
+            let json = serde_json::to_vec(&bytes.to_vec()).expect("serialize mismatched bytes");
+            let path = write_bytes(dir.path(), "id.json", &json);
+            let err =
+                load_operator_keypair(Some(path)).expect_err("must reject mismatched keypair");
+            match err {
+                KeypairLoadError::InvalidKeyMaterial { .. } => {}
+                other => panic!("expected InvalidKeyMaterial, got {other:?}"),
+            }
+        }
+
+        #[test]
         fn classify_read_error_distinguishes_missing_from_permission_denied() {
             // The two error classes must be distinct so an operator can
             // tell "the file is absent" from "the daemon process lacks
@@ -10396,6 +10504,22 @@ mod tests {
                 }
                 other => panic!("expected WrongLength, got {other:?}"),
             }
+        }
+
+        #[test]
+        fn rejects_empty_hash() {
+            // An empty value (an unset env var in an operator script)
+            // must hit the Empty early-return, not fall through to
+            // WrongLength{actual:0}; the dedicated message tells the
+            // operator the value was empty rather than misdiagnosing a
+            // truncation.
+            let err = parse_hash32_arg("metadata-hash", "").expect_err("must error");
+            assert!(matches!(
+                err,
+                Hash32ArgError::Empty {
+                    flag: "metadata-hash"
+                }
+            ));
         }
 
         #[test]
@@ -11526,4 +11650,392 @@ mod tests {
             );
         }
     }
+
+    fn signer_requirements() -> covenant_x402::PaymentRequirements {
+        covenant_x402::PaymentRequirements {
+            network: "solana:mainnet".into(),
+            asset: "usdc-sol".into(),
+            amount: "80000".into(),
+            amount_usdc: 0.08,
+            pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA".into(),
+            scheme: "exact".into(),
+            extra: None,
+        }
+    }
+
+    fn fake_signer_bin(dir: &tempfile::TempDir, body: &str) -> SubprocessSigner {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.path().join("fake-x402-signer.sh");
+        // `cat >/dev/null` drains the requirements on stdin first so the CLI's
+        // write does not race a broken pipe before the body runs.
+        std::fs::write(&script, format!("#!/bin/sh\ncat >/dev/null\n{body}\n"))
+            .expect("write script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        SubprocessSigner {
+            bin_path: script.to_string_lossy().into_owned(),
+            keypair_path: dir.path().join("keypair.json"),
+            rpc_url: "http://127.0.0.1:1".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cli_signer_rejects_oversized_signer_stdout() {
+        // The x402 signer sidecar relays Solana RPC output; a stdout flood past
+        // the cap must surface a Sign error naming the cap instead of buffering
+        // the whole stream and OOMing the CLI. A 64-byte cap against 200 bytes
+        // of output forces the overflow branch.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let signer = fake_signer_bin(&dir, "head -c 200 /dev/zero");
+        let err = signer
+            .build_payment_with_limits(
+                &signer_requirements(),
+                64,
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            .expect_err("over cap");
+        assert!(
+            matches!(&err, covenant_x402::X402Error::Sign(m) if m.contains("exceeded") && m.contains("cap")),
+            "an over-cap signer stdout must surface as a cap-breach Sign error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cli_signer_returns_under_cap_header() {
+        // A normal header under the cap must still return, proving the bounded
+        // read did not regress the happy path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let signer = fake_signer_bin(&dir, "printf 'mock-x-payment-header'");
+        let header = signer
+            .build_payment_with_limits(
+                &signer_requirements(),
+                4096,
+                std::time::Duration::from_secs(30),
+            )
+            .await
+            .expect("under-cap header returns");
+        assert_eq!(header, "mock-x-payment-header");
+    }
+
+    #[tokio::test]
+    async fn read_signer_stream_capped_treats_an_exact_max_fill_as_an_exact_fit_not_overflow() {
+        // read_signer_stream_capped reads through take(max + 1) and sets
+        // overflowed = buf.len() > max (main.rs:2544), so a signer stream of
+        // exactly max bytes is an exact fit (overflowed false, buffer returned
+        // whole) and only max + 1 is a truncated flood (overflowed true, buffer
+        // clamped to max) — the discriminator the extra read byte exists to
+        // enable. The CLI signer cap tests bracket this from far away through
+        // build_payment_with_limits (cli_signer_returns_under_cap_header far
+        // under, the over-cap stdout test far over), so neither lands on
+        // buf.len() == max, where a `> max` -> `>= max` slip flips an exact-max
+        // signer stdout to a spurious overflow that fails the payment build
+        // closed with a cap-breach Sign error. Pin the inclusive endpoint
+        // directly.
+        let max = 64;
+
+        let exact = vec![b'x'; max];
+        let mut reader = exact.as_slice();
+        let (buf, overflowed) = read_signer_stream_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            !overflowed,
+            "a stream of exactly max bytes is an exact fit, not a flood"
+        );
+        assert_eq!(
+            buf, exact,
+            "an exact-fit body must be returned whole, not truncated"
+        );
+
+        let flood = vec![b'x'; max + 1];
+        let mut reader = flood.as_slice();
+        let (buf, overflowed) = read_signer_stream_capped(&mut reader, max)
+            .await
+            .expect("reading an in-memory slice cannot fail");
+        assert!(
+            overflowed,
+            "a stream of max + 1 bytes is a truncated flood and must report overflow"
+        );
+        assert_eq!(
+            buf.len(),
+            max,
+            "an over-cap read must clamp the returned buffer to max"
+        );
+    }
+
+    #[test]
+    fn sap_status_json_renders_stable_shape() {
+        let value = sap_status_json(
+            true,
+            "devnet",
+            "Prog111",
+            "https://rpc.example",
+            "https://exp.example",
+            true,
+        );
+        assert_eq!(value["kind"], "sap_status");
+        assert_eq!(value["enabled"], true);
+        assert_eq!(value["cluster"], "devnet");
+        assert_eq!(value["program_id"], "Prog111");
+        assert_eq!(value["rpc_url"], "https://rpc.example");
+        assert_eq!(value["explorer_url"], "https://exp.example");
+        assert_eq!(value["has_signer"], true);
+    }
+
+    #[test]
+    fn sap_status_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "cluster",
+            "enabled",
+            "explorer_url",
+            "has_signer",
+            "kind",
+            "program_id",
+            "rpc_url",
+        ];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("sap_status_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "sap_status_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("sap_status"));
+            assert!(
+                value["enabled"].is_boolean(),
+                "enabled must be a JSON boolean, not 0/1 or string: {value}",
+            );
+            assert!(
+                value["cluster"].is_string(),
+                "cluster must be a string: {value}",
+            );
+            assert!(
+                value["program_id"].is_string(),
+                "program_id must be a string: {value}",
+            );
+            assert!(
+                value["rpc_url"].is_string(),
+                "rpc_url must be a string: {value}",
+            );
+            assert!(
+                value["explorer_url"].is_string(),
+                "explorer_url must be a string: {value}",
+            );
+            assert!(
+                value["has_signer"].is_boolean(),
+                "has_signer must be a JSON boolean, not 0/1 or string: {value}",
+            );
+        }
+
+        assert_shape(&sap_status_json(
+            true,
+            "devnet",
+            "Prog111",
+            "https://rpc.example",
+            "https://exp.example",
+            true,
+        ));
+        assert_shape(&sap_status_json(false, "", "", "", "", false));
+    }
+
+    #[test]
+    fn sap_published_agent_json_renders_stable_shape() {
+        let value = sap_published_agent_json("AgentPda11", "Sig11");
+        assert_eq!(value["kind"], "sap_published_agent");
+        assert_eq!(value["agent_pda"], "AgentPda11");
+        assert_eq!(value["signature"], "Sig11");
+    }
+
+    #[test]
+    fn sap_published_agent_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["agent_pda", "kind", "signature"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("sap_published_agent_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "sap_published_agent_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("sap_published_agent"));
+            assert!(
+                value["agent_pda"].is_string(),
+                "agent_pda must be a string: {value}",
+            );
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}",
+            );
+        }
+
+        assert_shape(&sap_published_agent_json("AgentPda11", "Sig11"));
+        assert_shape(&sap_published_agent_json("", ""));
+    }
+
+    #[test]
+    fn sap_published_audit_root_json_renders_stable_shape() {
+        let value = sap_published_audit_root_json("LedgerPda22", "Sig22");
+        assert_eq!(value["kind"], "sap_published_audit_root");
+        assert_eq!(value["ledger_pda"], "LedgerPda22");
+        assert_eq!(value["signature"], "Sig22");
+    }
+
+    #[test]
+    fn sap_published_audit_root_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &["kind", "ledger_pda", "signature"];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("sap_published_audit_root_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "sap_published_audit_root_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("sap_published_audit_root"));
+            assert!(
+                value["ledger_pda"].is_string(),
+                "ledger_pda must be a string: {value}",
+            );
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}",
+            );
+        }
+
+        assert_shape(&sap_published_audit_root_json("LedgerPda22", "Sig22"));
+        assert_shape(&sap_published_audit_root_json("", ""));
+    }
+
+    #[test]
+    fn sap_published_attestation_json_renders_stable_shape() {
+        let value = sap_published_attestation_json("AttPda33", "Attester33", "AgentPda11", "Sig33");
+        assert_eq!(value["kind"], "sap_published_attestation");
+        assert_eq!(value["attestation_pda"], "AttPda33");
+        assert_eq!(value["attester"], "Attester33");
+        assert_eq!(value["agent_pda"], "AgentPda11");
+        assert_eq!(value["signature"], "Sig33");
+    }
+
+    #[test]
+    fn sap_published_attestation_json_pins_top_level_schema() {
+        const EXPECTED_KEYS: &[&str] = &[
+            "agent_pda",
+            "attestation_pda",
+            "attester",
+            "kind",
+            "signature",
+        ];
+
+        fn assert_shape(value: &serde_json::Value) {
+            let object = value
+                .as_object()
+                .expect("sap_published_attestation_json must return an object");
+            let mut keys: Vec<String> = object.keys().cloned().collect();
+            keys.sort();
+            let expected: Vec<String> = EXPECTED_KEYS.iter().map(|k| (*k).to_string()).collect();
+            assert_eq!(
+                keys, expected,
+                "sap_published_attestation_json top-level keys must match the documented schema exactly; an extra or missing key is a forcing function to update docs/ipc-and-http-gateway.md",
+            );
+
+            assert!(value["kind"].is_string(), "kind must be a string: {value}");
+            assert_eq!(value["kind"].as_str(), Some("sap_published_attestation"));
+            assert!(
+                value["attestation_pda"].is_string(),
+                "attestation_pda must be a string: {value}",
+            );
+            assert!(
+                value["attester"].is_string(),
+                "attester must be a string: {value}",
+            );
+            assert!(
+                value["agent_pda"].is_string(),
+                "agent_pda must be a string: {value}",
+            );
+            assert!(
+                value["signature"].is_string(),
+                "signature must be a string: {value}",
+            );
+        }
+
+        assert_shape(&sap_published_attestation_json(
+            "AttPda33",
+            "Attester33",
+            "AgentPda11",
+            "Sig33",
+        ));
+        assert_shape(&sap_published_attestation_json("", "", "", ""));
+    }
+}
+
+// SAP `--json` envelope emitters. Kept below the test module so introducing
+// them does not renumber the name-anchored `main.rs:NNN` citations in
+// docs/ipc-and-http-gateway.md that the validate-*-line-refs.mjs guards pin.
+fn sap_status_json(
+    enabled: bool,
+    cluster: &str,
+    program_id: &str,
+    rpc_url: &str,
+    explorer_url: &str,
+    has_signer: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "sap_status",
+        "enabled": enabled,
+        "cluster": cluster,
+        "program_id": program_id,
+        "rpc_url": rpc_url,
+        "explorer_url": explorer_url,
+        "has_signer": has_signer,
+    })
+}
+
+fn sap_published_agent_json(agent_pda: &str, signature: &str) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "sap_published_agent",
+        "agent_pda": agent_pda,
+        "signature": signature,
+    })
+}
+
+fn sap_published_audit_root_json(ledger_pda: &str, signature: &str) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "sap_published_audit_root",
+        "ledger_pda": ledger_pda,
+        "signature": signature,
+    })
+}
+
+fn sap_published_attestation_json(
+    attestation_pda: &str,
+    attester: &str,
+    agent_pda: &str,
+    signature: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "sap_published_attestation",
+        "attestation_pda": attestation_pda,
+        "attester": attester,
+        "agent_pda": agent_pda,
+        "signature": signature,
+    })
 }

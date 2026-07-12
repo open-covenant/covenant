@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+pub mod reputation;
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -112,6 +114,40 @@ pub struct AuditInclusionCheck {
     pub reason: Option<String>,
 }
 
+/// Attribution for one capability that authorized an action during a
+/// [`AuditKind::CapabilityCheck`]. Answers "who approved this and under
+/// which rule": `granted_by_display` is the identity that signed the
+/// grant; `signature_b58` is the base58 signature identifying the
+/// signed capability that matched the action — the rule. Matching is
+/// action-level, so when a subject holds several valid same-action
+/// caps this names the first match; scope is enforced by a later
+/// check. `action` is the matched action form so each entry is
+/// self-describing — `authorized_by` carries one entry per *granted*
+/// required action and is not positionally aligned with
+/// `required_actions`. Mirrors [`AuditKind::CapabilityGranted`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityAuthorization {
+    pub action: String,
+    pub granted_by_display: String,
+    pub signature_b58: String,
+}
+
+/// How a direct tool call resolved, recorded on [`AuditKind::ToolCallCompleted`].
+/// Separates the tool raising an error (`Failed`) from the tool running and
+/// returning an error *result* (`ErrorResult`): operationally different signals
+/// — an infrastructure fault versus a tool-reported failure — that a single
+/// `error: bool` would collapse.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallOutcome {
+    /// The tool returned a result with `is_error = false`.
+    Ok,
+    /// The tool ran but returned a result with `is_error = true`.
+    ErrorResult,
+    /// The tool raised a `ToolError` (not found, invalid arguments, or failure).
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuditKind {
@@ -176,6 +212,17 @@ pub enum AuditKind {
         required_actions: Vec<String>,
         missing_actions: Vec<String>,
         passed: bool,
+        /// Per granted required action, the capability that authorized
+        /// it: who granted it and the signature identifying the signed
+        /// rule. One entry per *granted* required action, so it is empty
+        /// only when no required action was granted — on a single-action
+        /// check that coincides with `passed = false`, but a multi-action
+        /// check with a partial grant leaves a `passed = false` row still
+        /// naming the actions it did authorize. Always present on the
+        /// wire — no `#[serde(default)]` — so a `passed = true` row can
+        /// never silently omit who authorized the allowed action under
+        /// which rule.
+        authorized_by: Vec<CapabilityAuthorization>,
     },
     CapabilityGranted {
         subject_display: String,
@@ -191,6 +238,27 @@ pub enum AuditKind {
     CapabilityScopeRejected {
         agent_id: String,
         action: String,
+        reason: String,
+    },
+    /// Logged when the daemon's secret broker releases a named secret to a
+    /// peer that cleared the `secret.access` capability and scope gate. Records
+    /// the requesting agent, the secret *name*, and `signature_b58` — the
+    /// base58 signature of the exact capability whose scope admitted the read,
+    /// the same join key `CapabilityGranted` carries — so a release names the
+    /// grant that authorized it. Never the secret value, which is returned to
+    /// the caller but never audited or logged.
+    SecretAccessGranted {
+        agent_id: String,
+        secret_name: String,
+        signature_b58: String,
+    },
+    /// Logged when the secret broker refuses a named secret — the peer lacked
+    /// the `secret.access` capability, held a scope that does not admit the
+    /// name, presented a malformed scope, or asked for a secret the broker
+    /// does not hold. `reason` is the same short message the caller saw.
+    SecretAccessDenied {
+        agent_id: String,
+        secret_name: String,
         reason: String,
     },
     IntentIgnored {
@@ -265,6 +333,46 @@ pub enum AuditKind {
         scan_limit: u64,
         error: Option<String>,
     },
+    /// Logged by the receiving daemon for every cross-host A2A admission
+    /// decision (multi-host slice 4b-2): a `SignedA2ATask` arriving from a
+    /// remote host is opened, authorized against the known-hosts registry,
+    /// checked for recipient-self and freshness, deduplicated, and run
+    /// through the recipient recv-gate before it reaches the local mailbox.
+    /// This row is daemon-authored (`issuer = self.identity`) because the
+    /// remote sender holds no local peer token — its identity is the proven
+    /// `sender_pubkey_b58`, not the audit issuer. `outcome` is `"admitted"`,
+    /// `"duplicate"`, or `"rejected"`; `reason` carries the internal decision
+    /// stage (`"signature_invalid"`, `"unknown_principal"`,
+    /// `"recipient_mismatch"`, `"stale"`, `"future_skew"`,
+    /// `"recv_not_granted"`, …) for the operator's `/audit` feed only — the
+    /// stage is never echoed to the remote caller, so the audit row is the
+    /// sole place the failure stage is observable.
+    CrossHostA2AAdmission {
+        sender_pubkey_b58: String,
+        recipient_display: String,
+        outcome: String,
+        reason: String,
+    },
+    /// Logged by the *sending* daemon for every cross-host A2A delivery attempt
+    /// (multi-host slice 4b-3): this daemon seals a local task under its own
+    /// identity and POSTs it to a known-host peer's inbound route. The mirror of
+    /// [`CrossHostA2AAdmission`] from the sender's side — daemon-authored
+    /// (`issuer = self.identity`, the cross-host sender), with the remote it
+    /// addressed in `recipient_pubkey_b58`/`recipient_display`. `outcome` is
+    /// `"delivered"` (the remote acknowledged admission), `"refused"` (rejected
+    /// before the wire by the identity binding, or refused by the remote), or
+    /// `"unreachable"` (the remote timed out or the connection failed); `reason`
+    /// carries the specific stage (`"identity_mismatch"`, `"sender_not_self"`,
+    /// `"remote_refused"`, `"remote_error"`, `"timeout"`, `"transport"`). This
+    /// row is best-effort: a delivered task is already durable on the receiver,
+    /// so a lost sender-side row must not invert a real delivery into a failure —
+    /// the receiver's fail-closed admission row is the accountability anchor.
+    CrossHostA2ADelivery {
+        recipient_pubkey_b58: String,
+        recipient_display: String,
+        outcome: String,
+        reason: String,
+    },
     /// Logged when an operator completes a memory repair request. The
     /// full before/after record shape is returned to the caller through
     /// the repair response; the audit row keeps the durable who/what/why
@@ -286,6 +394,25 @@ pub enum AuditKind {
         deleted: Vec<Uuid>,
         stale_marked: Vec<Uuid>,
         parents_detached: Vec<Uuid>,
+    },
+    /// Logged when `RevokeCapability` succeeds against a capability the
+    /// authenticated peer owns — the subject withdrawing its own grant.
+    /// Completes the grant→revoke lifecycle on the chain: without it the
+    /// log shows a [`AuditKind::CapabilityGranted`] row with no record the
+    /// grant was ever withdrawn, overstating live authority.
+    /// `signature_b58` is the base58 signature of the revoked capability,
+    /// the join key back to its `CapabilityGranted` row; `action` makes the
+    /// row self-describing. `removed` separates a real authority change
+    /// (`true` — the capability was active and is now revoked) from an
+    /// idempotent re-revoke (`false` — already revoked). Issued by the
+    /// subject, mirroring [`AuditKind::CapabilityGranted`]; the cross-peer
+    /// rejection path is the daemon-issued
+    /// [`AuditKind::CapabilityRevokeRejected`] below.
+    CapabilityRevoked {
+        subject_display: String,
+        action: String,
+        signature_b58: String,
+        removed: bool,
     },
     /// Logged when `RevokeCapability` is rejected because the
     /// authenticated peer is not the subject of the capability they
@@ -657,6 +784,49 @@ pub enum AuditKind {
         row_count: u64,
         savepoint_name: Option<String>,
         dry_run: bool,
+    },
+    /// A direct tool call (`CallTool` / `/tools/call`) finished. Recorded on
+    /// both the success and execution-error paths so the *executed* action is
+    /// auditable, not only the capability and scope *denial* paths. `tool` is
+    /// the tool name; `arguments_hash_hex` is [`hash_hex`] of the call's JSON
+    /// arguments — the same redaction barrier as `preview_hash_hex`, so raw
+    /// tool input never enters the chain; `duration_ms` is wall-clock execution
+    /// time; `outcome` separates a clean result, a returned error result, and a
+    /// raised error. The Hyre and Metaplex tool paths emit their own domain
+    /// audit (payment receipts, mint records) and are not double-recorded here.
+    ToolCallCompleted {
+        tool: String,
+        arguments_hash_hex: String,
+        duration_ms: u64,
+        outcome: ToolCallOutcome,
+    },
+    /// A direct tool call (`CallTool` / `/tools/call`) was refused at the
+    /// boundary because its arguments violated the tool's published
+    /// `input_schema` — a missing `required` field or a field whose JSON type
+    /// contradicts the schema. Recorded *instead of*
+    /// [`AuditKind::ToolCallCompleted`]: the tool body never ran, so the refused
+    /// malformed call is still on the chain. `tool` is the tool name;
+    /// `arguments_hash_hex` is [`hash_hex`] of the rejected JSON arguments — the
+    /// same redaction barrier the completion row uses, so malformed input never
+    /// enters the chain; `reason` is the structural validation failure, which
+    /// names the offending field and JSON types but never echoes the value.
+    ToolCallSchemaRejected {
+        tool: String,
+        arguments_hash_hex: String,
+        reason: String,
+    },
+    /// A capability matched the required action and verified, but its signed
+    /// `max_uses` usage budget was already fully spent, so the action was
+    /// refused. Distinct from a [`AuditKind::CapabilityCheck`] with the action
+    /// in `missing_actions`: there the peer held no grant, here the peer held a
+    /// valid grant whose budget is exhausted. `signature_b58` is the same join
+    /// key [`AuditKind::CapabilityGranted`] carries, so the spent grant is
+    /// identifiable; `used` equals `max_uses` at the point of refusal.
+    CapabilityBudgetExhausted {
+        signature_b58: String,
+        action: String,
+        max_uses: u64,
+        used: u64,
     },
 }
 
@@ -1240,6 +1410,207 @@ pub fn hash_hex(bytes: &[u8]) -> String {
     sha256_hex(bytes)
 }
 
+/// One privileged action distilled from an [`AuditEvent`] for the
+/// operator provenance view: who acted, under which signed rule, who
+/// approved it, and how it resolved. Projected from the capability
+/// family of [`AuditKind`] variants — the rows that carry an
+/// authorizing rule — so an operator can answer "what privileged
+/// actions happened, by whom, under what rule" without re-deriving the
+/// mapping from raw audit JSON. Crosses the wire inside the provenance
+/// query response, so the field set is part of the IPC contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrivilegedAction {
+    pub event_id: Uuid,
+    pub timestamp_ms: u64,
+    /// Audit kind discriminator slug, e.g. `capability_check`.
+    pub kind: String,
+    /// Subject the action is attributed to — the capability holder,
+    /// grantee, or revoker. Empty when the source row names only a rule
+    /// signature and no subject display (a daemon-issued revoke
+    /// rejection).
+    pub actor: String,
+    /// The capability action string, e.g. `memory.write`. Empty when the
+    /// source row is keyed by rule signature alone.
+    pub action: String,
+    /// Display of the identity that signed the authorizing capability.
+    /// `Some` only when an authorizing grant was matched.
+    pub approver: Option<String>,
+    /// Base58 signature identifying the signed capability — the rule.
+    /// `Some` on rows that name an authorizing or affected capability.
+    pub rule: Option<String>,
+    /// How the action resolved: `authorized`, `denied`, `granted`,
+    /// `grant_rejected`, `revoked`, `revoke_noop`, `scope_rejected`, or
+    /// `revoke_rejected`.
+    pub outcome: String,
+}
+
+/// Project one audit event into its privileged-action rows. A
+/// [`AuditKind::CapabilityCheck`] fans out to one `authorized` row per
+/// granted required action (each naming its approver and rule) plus one
+/// `denied` row per missing action; the single-row grant, revoke, and
+/// rejection kinds produce exactly one row. Every other kind — intent
+/// dispatch, Hermes tool calls, budget enforcement, peer/operator
+/// administration — has no authorizing rule and projects to an empty
+/// vec, so the provenance view stays scoped to capability provenance.
+pub fn project_privileged_actions(event: &AuditEvent) -> Vec<PrivilegedAction> {
+    let row = |actor: String,
+               action: String,
+               approver: Option<String>,
+               rule: Option<String>,
+               outcome: &str,
+               kind: &str| PrivilegedAction {
+        event_id: event.id,
+        timestamp_ms: event.timestamp_ms,
+        kind: kind.to_string(),
+        actor,
+        action,
+        approver,
+        rule,
+        outcome: outcome.to_string(),
+    };
+    match &event.kind {
+        AuditKind::CapabilityCheck {
+            agent_id,
+            missing_actions,
+            authorized_by,
+            ..
+        } => {
+            let mut rows = Vec::with_capacity(authorized_by.len() + missing_actions.len());
+            for auth in authorized_by {
+                rows.push(row(
+                    agent_id.clone(),
+                    auth.action.clone(),
+                    Some(auth.granted_by_display.clone()),
+                    Some(auth.signature_b58.clone()),
+                    "authorized",
+                    "capability_check",
+                ));
+            }
+            for missing in missing_actions {
+                rows.push(row(
+                    agent_id.clone(),
+                    missing.clone(),
+                    None,
+                    None,
+                    "denied",
+                    "capability_check",
+                ));
+            }
+            rows
+        }
+        AuditKind::CapabilityGranted {
+            subject_display,
+            action,
+            granted_by_display,
+            signature_b58,
+        } => vec![row(
+            subject_display.clone(),
+            action.clone(),
+            Some(granted_by_display.clone()),
+            Some(signature_b58.clone()),
+            "granted",
+            "capability_granted",
+        )],
+        AuditKind::CapabilityGrantRejected {
+            subject_display,
+            action,
+            ..
+        } => vec![row(
+            subject_display.clone(),
+            action.clone(),
+            None,
+            None,
+            "grant_rejected",
+            "capability_grant_rejected",
+        )],
+        AuditKind::CapabilityRevoked {
+            subject_display,
+            action,
+            signature_b58,
+            removed,
+        } => vec![row(
+            subject_display.clone(),
+            action.clone(),
+            None,
+            Some(signature_b58.clone()),
+            if *removed { "revoked" } else { "revoke_noop" },
+            "capability_revoked",
+        )],
+        AuditKind::CapabilityScopeRejected {
+            agent_id, action, ..
+        } => vec![row(
+            agent_id.clone(),
+            action.clone(),
+            None,
+            None,
+            "scope_rejected",
+            "capability_scope_rejected",
+        )],
+        AuditKind::CapabilityRevokeRejected { signature_b58, .. } => vec![row(
+            String::new(),
+            String::new(),
+            None,
+            Some(signature_b58.clone()),
+            "revoke_rejected",
+            "capability_revoke_rejected",
+        )],
+        _ => Vec::new(),
+    }
+}
+
+/// Filter over projected [`PrivilegedAction`] rows for the provenance
+/// query. Every set field must match for a row to pass; `None` fields
+/// match everything. `actor`, `approver`, and `outcome` are exact;
+/// `rule` matches a base58 signature prefix so an operator can paste a
+/// short fragment from an audit row (mirroring `peers list --prefix`).
+/// The time window is inclusive on both ends.
+#[derive(Debug, Clone, Default)]
+pub struct ProvenanceFilter {
+    pub since_ms: Option<u64>,
+    pub until_ms: Option<u64>,
+    pub actor: Option<String>,
+    pub approver: Option<String>,
+    pub rule: Option<String>,
+    pub outcome: Option<String>,
+}
+
+impl ProvenanceFilter {
+    pub fn matches(&self, action: &PrivilegedAction) -> bool {
+        if let Some(since) = self.since_ms {
+            if action.timestamp_ms < since {
+                return false;
+            }
+        }
+        if let Some(until) = self.until_ms {
+            if action.timestamp_ms > until {
+                return false;
+            }
+        }
+        if let Some(actor) = &self.actor {
+            if action.actor != *actor {
+                return false;
+            }
+        }
+        if let Some(approver) = &self.approver {
+            if action.approver.as_deref() != Some(approver.as_str()) {
+                return false;
+            }
+        }
+        if let Some(outcome) = &self.outcome {
+            if action.outcome != *outcome {
+                return false;
+            }
+        }
+        if let Some(rule) = &self.rule {
+            match &action.rule {
+                Some(signature) if signature.starts_with(rule.as_str()) => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1546,6 +1917,173 @@ mod tests {
         assert_eq!(report.root_hash_hex.len(), 64);
         let chain_raw = std::fs::read_to_string(path.with_extension("chain.jsonl")).unwrap();
         assert_eq!(chain_raw.lines().filter(|l| !l.is_empty()).count(), 2);
+    }
+
+    #[tokio::test]
+    async fn jsonl_integrity_report_pins_root_hash_as_genesis_seeded_chain_fold() {
+        // verify_integrity returns root_hash_hex (lib.rs:837) as the final
+        // accumulator of the audit hash chain: it seeds previous_hash_hex from
+        // ZERO_CHAIN_HASH (lib.rs:792), then folds each event line forward as
+        // previous = chain_hash(previous, sha256_hex(line)) (lib.rs:793-825).
+        // That root is the audit-root subject release signing binds
+        // (lib.rs:1824), so its exact byte construction is load-bearing for any
+        // independent verifier of the anchor.
+        //
+        // jsonl_integrity_report_accepts_untampered_chain pins root_hash_hex
+        // only by length (== 64) plus report.valid, and valid is RELATIONAL: it
+        // holds whenever the write-path build_chain_entries (lib.rs:543) agrees
+        // with the verify-path inline fold, so a mutation applied consistently
+        // to BOTH paths survives it. chain_hash_pins_separator_and_sha256_-
+        // composition pins the single LINK, but nothing recomputes the
+        // multi-entry ACCUMULATION end-to-end. This test folds the on-disk event
+        // lines independently from the ZERO_CHAIN_HASH genesis using the
+        // already-exact-pinned chain_hash/sha256_hex primitives and asserts the
+        // report root equals it. Mutation-check: seeding the fold from "" in
+        // both verify_integrity and build_chain_entries fails the eq; dropping
+        // the previous = chain_hash forward-threading in both paths collapses
+        // root to ZERO_CHAIN_HASH (fails both the eq and the ne); returning the
+        // last event_hash_hex instead of the chain accumulator fails the eq.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        log.record(dummy(intent_kind("error"))).await.unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(report.valid, "{report:?}");
+
+        // Independent fold of the exact lines verify_integrity reads
+        // (read_event_lines filters empty lines identically, lib.rs:568-574).
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut expected = ZERO_CHAIN_HASH.to_string();
+        for line in raw.lines().filter(|l| !l.is_empty()) {
+            expected = chain_hash(&expected, &sha256_hex(line.as_bytes()));
+        }
+        assert_eq!(
+            report.root_hash_hex, expected,
+            "root_hash_hex must equal the chain fold over the on-disk event \
+             lines seeded from ZERO_CHAIN_HASH; a changed genesis seed, dropped \
+             forward-threading, or a per-event-digest root would diverge here \
+             while keeping report.valid true and the length 64",
+        );
+        assert_ne!(
+            report.root_hash_hex, ZERO_CHAIN_HASH,
+            "a two-event fold must advance past the genesis seed; a root equal \
+             to ZERO_CHAIN_HASH means the chain stopped threading and no event \
+             content reaches the anchor",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_integrity_report_detects_dangling_chain_anchor() {
+        // verify_integrity flags a hash-chain sidecar that outruns the
+        // event log: `if anchors.len() > event_lines.len()` (lib.rs:827)
+        // reports the surplus as "<n> dangling chain anchor(s)" — the
+        // specific diagnostic for an event log that lost trailing lines
+        // (truncated or rolled back) while the append-only chain sidecar
+        // kept its anchors. The earlier `!=` parity check (lib.rs:785)
+        // also marks any count mismatch invalid, so line 827 is the
+        // dangling-count diagnostic on top of that verdict, not the sole
+        // gate. Every other integrity test runs equal event/anchor counts
+        // or mutates an event line in place; none drives anchors.len() >
+        // event_lines.len(), so the line-827 arm is exercised by no test
+        // (grep "dangling" matches only the format string). A `>` -> `>=`
+        // flip is the severe regression: it pushes a "0 dangling chain
+        // anchor(s)" failure on every healthy equal-count log (valid ->
+        // false for untampered chains) — unique to line 827, since the
+        // line-785 `!=` is correctly silent at equal counts. Inverting or
+        // dropping line 827 loses the dangling diagnostic (line 785 still
+        // flags invalidity, with a less specific message). Pin both arms:
+        // the equal-count log stays valid and the surplus surfaces the
+        // dangling diagnostic.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+        log.record(dummy(intent_kind("error"))).await.unwrap();
+
+        // Equal counts are healthy — re-pins the `>` keep-arm: a `>=` flip
+        // would surface a "0 dangling" failure here.
+        let healthy = log.verify_integrity().await.unwrap();
+        assert!(
+            healthy.valid,
+            "an event log fully backed by anchors (equal counts) must verify: {healthy:?}",
+        );
+
+        // Truncate the event log to its first line, leaving two chain
+        // anchors over one event — the sidecar now outruns the events.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let first_line = raw.lines().next().unwrap();
+        std::fs::write(&path, format!("{first_line}\n")).unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(
+            !report.valid,
+            "a chain anchor with no backing event must mark the report invalid: {report:?}",
+        );
+        assert_eq!(report.events, 1, "the truncated event log holds one event");
+        assert_eq!(
+            report.anchors, 2,
+            "the chain sidecar still holds two anchors"
+        );
+        assert!(
+            report.failures.iter().any(|f| f.contains("dangling")),
+            "the surplus anchor must surface as a dangling-anchor failure: {report:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_integrity_report_detects_missing_anchor_for_unanchored_event() {
+        // verify_integrity flags a well-formed event line that has no backing
+        // chain anchor: the `Ok(event)` branch's `None => "chain entry {index}
+        // missing"` arm (lib.rs:977), reached only when the event log outruns
+        // the append-only hash-chain sidecar (event_lines.len() >
+        // anchors.len()). That skew is the signature of a forged event appended
+        // without extending the chain, and the diagnostic must name the
+        // specific unanchored index. The sibling dangling-anchor test drives
+        // the OPPOSITE skew (anchors > events), landing in the line-995 block
+        // and the `Some` arms; the tampered/malformed tests run equal counts
+        // (the `Some(_)` mismatch / parse-error arms). None reaches this `None`.
+        //
+        // Mutation: narrowing line 977 to `None => {}` drops only this
+        // per-index diagnostic. The `anchors.len() != event_lines.len()` parity
+        // check at lib.rs:953 already flips `valid`, so asserting only
+        // `!report.valid` would NOT catch the regression — the load-bearing
+        // assertion is the specific "chain entry 1 missing" string.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = JsonlAuditLog::open(path.clone()).await.unwrap();
+        log.record(dummy(intent_kind("ok"))).await.unwrap();
+
+        // Append a second copy of the valid event line so the event log holds
+        // two well-formed events while the chain sidecar keeps its one anchor:
+        // index 1 is a forged event with no anchor.
+        let line = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        std::fs::write(&path, format!("{line}\n{line}\n")).unwrap();
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(
+            !report.valid,
+            "an event with no backing chain anchor must mark the report invalid: {report:?}",
+        );
+        assert_eq!(report.events, 2, "the event log now holds two event lines");
+        assert_eq!(
+            report.anchors, 1,
+            "the chain sidecar still holds one anchor"
+        );
+        assert!(
+            report
+                .failures
+                .iter()
+                .any(|f| f.contains("chain entry 1 missing")),
+            "the unanchored event must surface its specific index as a \
+             missing-anchor failure, not just an invalid verdict: {report:?}",
+        );
     }
 
     #[tokio::test]
@@ -2287,6 +2825,11 @@ mod tests {
                 required_actions: vec!["memory.read".into()],
                 missing_actions: vec![],
                 passed: true,
+                authorized_by: vec![CapabilityAuthorization {
+                    action: "memory.read".into(),
+                    granted_by_display: "operator@local".into(),
+                    signature_b58: "sig".into(),
+                }],
             },
         };
 
@@ -2337,25 +2880,33 @@ mod tests {
     }
 
     #[test]
-    fn audit_kind_capability_check_serde_pins_four_field_variant() {
+    fn audit_kind_capability_check_serde_pins_five_field_variant() {
         // AuditKind::CapabilityCheck is the load-bearing audit row
         // emitted on every dispatch-time capability check through
-        // covenantd::Server. Four required fields: agent_id (String),
+        // covenantd::Server. Five required fields: agent_id (String),
         // required_actions (Vec<String>), missing_actions (Vec<String>),
-        // passed (bool). audit_event_serde_pins_four_required_fields
-        // uses CapabilityCheck only as the envelope's payload carrier
-        // and does not pin the variant fields directly — a refactor
-        // that flipped missing_actions to #[serde(default)] would let
-        // a row with passed=false silently decode with an empty list
-        // and erase the triage signal naming which capability was
-        // short, and a bool→Option<bool> flip on passed would collapse
-        // the pass/fail discriminator into policy-dependent None
-        // handling.
+        // passed (bool), authorized_by (Vec<CapabilityAuthorization>).
+        // audit_event_serde_pins_four_required_fields uses CapabilityCheck
+        // only as the envelope's payload carrier and does not pin the
+        // variant fields directly — a refactor that flipped missing_actions
+        // to #[serde(default)] would let a row with passed=false silently
+        // decode with an empty list and erase the triage signal naming
+        // which capability was short, a bool→Option<bool> flip on passed
+        // would collapse the pass/fail discriminator into policy-dependent
+        // None handling, and a #[serde(default)] on authorized_by would let
+        // a passed=true row decode with no approver/rule attribution and
+        // erase who authorized the allowed action under which rule. This
+        // failing-check fixture carries an empty authorized_by because a
+        // check that authorized nothing must record nothing as the
+        // authorizer; the populated path round-trips through serde in
+        // audit_event_serde_pins_four_required_fields, whose CapabilityCheck
+        // fixture carries a non-empty authorized_by.
         let kind = AuditKind::CapabilityCheck {
             agent_id: "agent@local".into(),
             required_actions: vec!["memory.read".into()],
             missing_actions: vec!["memory.write".into()],
             passed: false,
+            authorized_by: vec![],
         };
 
         let wire = serde_json::to_value(&kind).unwrap();
@@ -2368,12 +2919,18 @@ mod tests {
             keys,
             vec![
                 "agent_id",
+                "authorized_by",
                 "missing_actions",
                 "passed",
                 "required_actions",
                 "type",
             ],
-            "AuditKind::CapabilityCheck wire form must be exactly five keys: the four variant fields plus the 'type' discriminator",
+            "AuditKind::CapabilityCheck wire form must be exactly six keys: the five variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("authorized_by"),
+            Some(&serde_json::json!([])),
+            "authorized_by must serialize as an empty JSON array on a failed check — it has no #[serde(skip_serializing_if)] so the key stays present whether or not anything was authorized, keeping the wire shape stable across pass and fail rows",
         );
         assert_eq!(
             obj.get("type"),
@@ -2387,12 +2944,64 @@ mod tests {
             "AuditKind::CapabilityCheck must round-trip through serde_json verbatim — the PartialEq derive is the contract dispatch-time capability-enforcement triage joins on",
         );
 
-        for required in ["agent_id", "required_actions", "missing_actions", "passed"] {
+        for required in [
+            "agent_id",
+            "required_actions",
+            "missing_actions",
+            "passed",
+            "authorized_by",
+        ] {
             let mut missing = obj.clone();
             missing.remove(required);
             assert!(
                 serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
-                "AuditKind::CapabilityCheck wire form must reject a payload missing {required:?}; a stray #[serde(default)] on missing_actions would silently let a passed=false row decode with an empty list and erase which capability was short, and a bool→Option<bool> flip on passed would collapse the pass/fail discriminator into policy-dependent None handling",
+                "AuditKind::CapabilityCheck wire form must reject a payload missing {required:?}; a stray #[serde(default)] on missing_actions would silently let a passed=false row decode with an empty list and erase which capability was short, a bool→Option<bool> flip on passed would collapse the pass/fail discriminator into policy-dependent None handling, and a default on authorized_by would let a passed=true row decode with no approver/rule attribution",
+            );
+        }
+    }
+
+    #[test]
+    fn audit_kind_capability_authorization_serde_pins_three_field_struct() {
+        // CapabilityAuthorization is the per-grant attribution carried in
+        // AuditKind::CapabilityCheck.authorized_by. Three required fields:
+        // action (String — the matched action form), granted_by_display
+        // (String — who signed the grant), signature_b58 (String — the
+        // base58 signature identifying the exact signed rule). None carry
+        // #[serde(default)], so a row can never decode with a missing
+        // attribution field silently defaulted to empty; the signature is
+        // the join key back to the SignedCapability that authorized the
+        // action.
+        let auth = CapabilityAuthorization {
+            action: "memory.read".into(),
+            granted_by_display: "operator@local".into(),
+            signature_b58: "3Qx9".into(),
+        };
+
+        let wire = serde_json::to_value(&auth).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("CapabilityAuthorization serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["action", "granted_by_display", "signature_b58"],
+            "CapabilityAuthorization wire form must be exactly three keys",
+        );
+
+        let back: CapabilityAuthorization = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, auth,
+            "CapabilityAuthorization must round-trip verbatim"
+        );
+
+        for required in ["action", "granted_by_display", "signature_b58"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<CapabilityAuthorization>(serde_json::Value::Object(missing))
+                    .is_err(),
+                "CapabilityAuthorization wire form must reject a payload missing {required:?}; a #[serde(default)] regression would let an approval row decode with a blank approver or rule and erase the accountability the field exists to carry",
             );
         }
     }
@@ -2881,6 +3490,75 @@ mod tests {
         assert!(
             serde_json::from_value::<AuditKind>(titlecase).is_err(),
             "titlecase 'CapabilityGranted' must reject — the rename_all = snake_case contract is what keeps every prior grant audit row decoding stably across rebuilds",
+        );
+    }
+
+    #[test]
+    fn audit_kind_capability_revoked_serde_pins_four_field_variant() {
+        // AuditKind::CapabilityRevoked completes the grant→revoke lifecycle
+        // on the chain: it ties the revoked capability's signature_b58 back
+        // to its CapabilityGranted row and records whether the revoke was a
+        // real authority change (removed = true) or an idempotent no-op
+        // (removed = false). The four fields (subject_display, action,
+        // signature_b58, removed) are load-bearing — a #[serde(default)] on
+        // signature_b58 would detach the revoke from its grant, and a
+        // default on removed would let a no-op decode as a real withdrawal
+        // (or vice versa), erasing the distinction operator triage joins on.
+        let kind = AuditKind::CapabilityRevoked {
+            subject_display: "research@local".into(),
+            action: "memory.write".into(),
+            signature_b58: "deadbeef".into(),
+            removed: true,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "action",
+                "removed",
+                "signature_b58",
+                "subject_display",
+                "type",
+            ],
+            "AuditKind::CapabilityRevoked wire form must be exactly five keys: the four variant fields plus the 'type' discriminator",
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("capability_revoked")),
+            "AuditKind discriminator slug must be snake_case 'capability_revoked'; a titlecase 'CapabilityRevoked' regression breaks every prior revoke audit row",
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            back, kind,
+            "AuditKind::CapabilityRevoked must round-trip through serde_json verbatim — the PartialEq derive is the contract the grant→revoke correlation chain leans on",
+        );
+
+        for required in ["subject_display", "action", "signature_b58", "removed"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::CapabilityRevoked wire form must reject a payload missing {required:?}; a stray #[serde(default)] on signature_b58 would detach the revoke from its CapabilityGranted row, and a default on removed would collapse the real-withdrawal vs idempotent-no-op distinction",
+            );
+        }
+
+        let titlecase = serde_json::json!({
+            "type": "CapabilityRevoked",
+            "subject_display": "research@local",
+            "action": "memory.write",
+            "signature_b58": "deadbeef",
+            "removed": true,
+        });
+        assert!(
+            serde_json::from_value::<AuditKind>(titlecase).is_err(),
+            "titlecase 'CapabilityRevoked' must reject — the rename_all = snake_case contract is what keeps every prior revoke audit row decoding stably across rebuilds",
         );
     }
 
@@ -4615,6 +5293,469 @@ mod tests {
         assert!(
             source.downcast_ref::<serde_json::Error>().is_some(),
             "AuditError::Serde source() must downcast_ref to serde_json::Error so daemon-side audit-chain integrity diagnostics can call serde_json::Error::line/column/classify for malformed-event-row identification; a refactor that wrapped the inner in a project-local newtype (e.g., AuditSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies audit-event row parse faults (concrete-source-type downcast regression class)"
+        );
+    }
+
+    fn event_at(timestamp_ms: u64, kind: AuditKind) -> AuditEvent {
+        AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms,
+            issuer: AgentId::new("user@local", [0u8; 32]),
+            kind,
+        }
+    }
+
+    #[test]
+    fn capability_check_fans_out_granted_and_missing_actions() {
+        let event = dummy(AuditKind::CapabilityCheck {
+            agent_id: "research".into(),
+            required_actions: vec![
+                "memory.write".into(),
+                "memory.read".into(),
+                "a2a.send".into(),
+            ],
+            missing_actions: vec!["a2a.send".into()],
+            passed: false,
+            authorized_by: vec![
+                CapabilityAuthorization {
+                    action: "memory.write".into(),
+                    granted_by_display: "operator@local".into(),
+                    signature_b58: "SigWrite".into(),
+                },
+                CapabilityAuthorization {
+                    action: "memory.read".into(),
+                    granted_by_display: "operator@local".into(),
+                    signature_b58: "SigRead".into(),
+                },
+            ],
+        });
+        let rows = project_privileged_actions(&event);
+        assert_eq!(rows.len(), 3, "two granted actions plus one missing action");
+
+        let write = &rows[0];
+        assert_eq!(write.actor, "research");
+        assert_eq!(write.action, "memory.write");
+        assert_eq!(write.approver.as_deref(), Some("operator@local"));
+        assert_eq!(write.rule.as_deref(), Some("SigWrite"));
+        assert_eq!(write.outcome, "authorized");
+        assert_eq!(write.kind, "capability_check");
+        assert_eq!(write.event_id, event.id);
+
+        let denied = &rows[2];
+        assert_eq!(denied.action, "a2a.send");
+        assert_eq!(denied.outcome, "denied");
+        assert!(
+            denied.approver.is_none() && denied.rule.is_none(),
+            "a denied action names no approver or authorizing rule",
+        );
+    }
+
+    #[test]
+    fn capability_grant_revoke_and_rejections_project_one_row_each() {
+        let granted = project_privileged_actions(&dummy(AuditKind::CapabilityGranted {
+            subject_display: "research@agent".into(),
+            action: "memory.write".into(),
+            granted_by_display: "operator@local".into(),
+            signature_b58: "GrantSig".into(),
+        }));
+        assert_eq!(granted.len(), 1);
+        assert_eq!(granted[0].outcome, "granted");
+        assert_eq!(granted[0].approver.as_deref(), Some("operator@local"));
+        assert_eq!(granted[0].rule.as_deref(), Some("GrantSig"));
+
+        let revoked = project_privileged_actions(&dummy(AuditKind::CapabilityRevoked {
+            subject_display: "research@agent".into(),
+            action: "memory.write".into(),
+            signature_b58: "GrantSig".into(),
+            removed: true,
+        }));
+        assert_eq!(revoked[0].outcome, "revoked");
+        assert_eq!(revoked[0].rule.as_deref(), Some("GrantSig"));
+        assert!(
+            revoked[0].approver.is_none(),
+            "self-revoke names no approver"
+        );
+
+        let noop = project_privileged_actions(&dummy(AuditKind::CapabilityRevoked {
+            subject_display: "research@agent".into(),
+            action: "memory.write".into(),
+            signature_b58: "GrantSig".into(),
+            removed: false,
+        }));
+        assert_eq!(
+            noop[0].outcome, "revoke_noop",
+            "an idempotent re-revoke is distinguished from a real authority change",
+        );
+
+        let grant_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityGrantRejected {
+                subject_display: "research@agent".into(),
+                action: "memory.write".into(),
+                reason: "expired".into(),
+            }));
+        assert_eq!(grant_rejected[0].outcome, "grant_rejected");
+        assert!(grant_rejected[0].rule.is_none());
+
+        let scope_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityScopeRejected {
+                agent_id: "audit:purge".into(),
+                action: "audit.purge".into(),
+                reason: "before_ms exceeds scope".into(),
+            }));
+        assert_eq!(scope_rejected[0].actor, "audit:purge");
+        assert_eq!(scope_rejected[0].outcome, "scope_rejected");
+
+        let revoke_rejected =
+            project_privileged_actions(&dummy(AuditKind::CapabilityRevokeRejected {
+                signature_b58: "OtherSig".into(),
+                reason: "not subject".into(),
+            }));
+        assert_eq!(revoke_rejected[0].outcome, "revoke_rejected");
+        assert_eq!(revoke_rejected[0].rule.as_deref(), Some("OtherSig"));
+        assert!(
+            revoke_rejected[0].actor.is_empty(),
+            "a cross-peer revoke rejection is keyed by signature, not a subject display",
+        );
+    }
+
+    #[test]
+    fn non_capability_kinds_project_no_privileged_actions() {
+        let rows = project_privileged_actions(&dummy(AuditKind::AuthenticationFailed {
+            transport: "ipc".into(),
+            reason: "bad token".into(),
+        }));
+        assert!(rows.is_empty(), "auth failures carry no authorizing rule");
+    }
+
+    #[test]
+    fn filter_matches_on_each_dimension_and_window() {
+        let action = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 1_000,
+            kind: "capability_granted".into(),
+            actor: "research@agent".into(),
+            action: "memory.write".into(),
+            approver: Some("operator@local".into()),
+            rule: Some("GrantSignatureABC".into()),
+            outcome: "granted".into(),
+        };
+
+        assert!(
+            ProvenanceFilter::default().matches(&action),
+            "empty filter matches everything"
+        );
+
+        let by_actor = ProvenanceFilter {
+            actor: Some("research@agent".into()),
+            ..Default::default()
+        };
+        assert!(by_actor.matches(&action));
+        let wrong_actor = ProvenanceFilter {
+            actor: Some("other@agent".into()),
+            ..Default::default()
+        };
+        assert!(!wrong_actor.matches(&action));
+
+        let by_approver = ProvenanceFilter {
+            approver: Some("operator@local".into()),
+            ..Default::default()
+        };
+        assert!(by_approver.matches(&action));
+
+        let by_outcome = ProvenanceFilter {
+            outcome: Some("denied".into()),
+            ..Default::default()
+        };
+        assert!(!by_outcome.matches(&action));
+
+        let by_rule_prefix = ProvenanceFilter {
+            rule: Some("GrantSig".into()),
+            ..Default::default()
+        };
+        assert!(
+            by_rule_prefix.matches(&action),
+            "rule matches on a signature prefix"
+        );
+        let wrong_rule = ProvenanceFilter {
+            rule: Some("DifferentSig".into()),
+            ..Default::default()
+        };
+        assert!(!wrong_rule.matches(&action));
+
+        let in_window = ProvenanceFilter {
+            since_ms: Some(1_000),
+            until_ms: Some(1_000),
+            ..Default::default()
+        };
+        assert!(
+            in_window.matches(&action),
+            "window bounds are inclusive on both ends"
+        );
+        let after_window = ProvenanceFilter {
+            since_ms: Some(1_001),
+            ..Default::default()
+        };
+        assert!(!after_window.matches(&action));
+    }
+
+    #[test]
+    fn filter_until_window_upper_bound_excludes_rows_after_the_window() {
+        let action = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 1_000,
+            kind: "capability_granted".into(),
+            actor: "research@agent".into(),
+            action: "memory.write".into(),
+            approver: Some("operator@local".into()),
+            rule: Some("GrantSignatureABC".into()),
+            outcome: "granted".into(),
+        };
+
+        let before_until = ProvenanceFilter {
+            until_ms: Some(999),
+            ..Default::default()
+        };
+        assert!(
+            !before_until.matches(&action),
+            "a row past the until bound is excluded"
+        );
+
+        let at_until = ProvenanceFilter {
+            until_ms: Some(1_000),
+            ..Default::default()
+        };
+        assert!(
+            at_until.matches(&action),
+            "the upper window bound is inclusive"
+        );
+    }
+
+    #[test]
+    fn filter_approver_skips_rows_without_an_approver() {
+        let denied = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 0,
+            kind: "capability_check".into(),
+            actor: "research".into(),
+            action: "a2a.send".into(),
+            approver: None,
+            rule: None,
+            outcome: "denied".into(),
+        };
+        let by_approver = ProvenanceFilter {
+            approver: Some("operator@local".into()),
+            ..Default::default()
+        };
+        assert!(
+            !by_approver.matches(&denied),
+            "filtering by approver must exclude rows that record no approver",
+        );
+    }
+
+    #[test]
+    fn filter_rule_prefix_excludes_rows_without_a_rule() {
+        // The catch-all rule arm rejects two inputs: a non-matching
+        // Some signature (covered by wrong_rule) and a None rule — a row
+        // recording no authorizing signature, like a denial. A
+        // rule-prefix filter must exclude the ruleless row, not fold it
+        // into a signature-scoped provenance query.
+        let denied = PrivilegedAction {
+            event_id: Uuid::new_v4(),
+            timestamp_ms: 0,
+            kind: "capability_check".into(),
+            actor: "research".into(),
+            action: "a2a.send".into(),
+            approver: None,
+            rule: None,
+            outcome: "denied".into(),
+        };
+        let by_rule = ProvenanceFilter {
+            rule: Some("GrantSig".into()),
+            ..Default::default()
+        };
+        assert!(
+            !by_rule.matches(&denied),
+            "filtering by a rule prefix must exclude rows that record no rule",
+        );
+    }
+
+    #[test]
+    fn event_at_helper_threads_timestamp_into_projection() {
+        let rows = project_privileged_actions(&event_at(
+            42,
+            AuditKind::CapabilityGranted {
+                subject_display: "a@agent".into(),
+                action: "memory.read".into(),
+                granted_by_display: "operator@local".into(),
+                signature_b58: "S".into(),
+            },
+        ));
+        assert_eq!(rows[0].timestamp_ms, 42);
+    }
+
+    fn golden_provenance_records() -> Vec<(&'static str, AuditEvent)> {
+        let issuer = AgentId::new("operator@covenant", [7u8; 32]);
+        let ev = |n: u128, ts: u64, kind: AuditKind| AuditEvent {
+            id: Uuid::from_u128(n),
+            timestamp_ms: ts,
+            issuer: issuer.clone(),
+            kind,
+        };
+        vec![
+            (
+                "capability_check_partial_grant",
+                ev(
+                    1,
+                    1_700_000_000_000,
+                    AuditKind::CapabilityCheck {
+                        agent_id: "research@agent".into(),
+                        required_actions: vec!["memory.write".into(), "a2a.send".into()],
+                        missing_actions: vec!["a2a.send".into()],
+                        passed: false,
+                        authorized_by: vec![CapabilityAuthorization {
+                            action: "memory.write".into(),
+                            granted_by_display: "operator@covenant".into(),
+                            signature_b58: "GrantSigWrite".into(),
+                        }],
+                    },
+                ),
+            ),
+            (
+                "capability_granted",
+                ev(
+                    2,
+                    1_700_000_000_001,
+                    AuditKind::CapabilityGranted {
+                        subject_display: "research@agent".into(),
+                        action: "memory.write".into(),
+                        granted_by_display: "operator@covenant".into(),
+                        signature_b58: "GrantSigWrite".into(),
+                    },
+                ),
+            ),
+            (
+                "capability_grant_rejected",
+                ev(
+                    3,
+                    1_700_000_000_002,
+                    AuditKind::CapabilityGrantRejected {
+                        subject_display: "research@agent".into(),
+                        action: "memory.write".into(),
+                        reason: "capability expired".into(),
+                    },
+                ),
+            ),
+            (
+                "capability_scope_rejected",
+                ev(
+                    4,
+                    1_700_000_000_003,
+                    AuditKind::CapabilityScopeRejected {
+                        agent_id: "research@agent".into(),
+                        action: "audit.purge".into(),
+                        reason: "before_ms exceeds granted scope".into(),
+                    },
+                ),
+            ),
+            (
+                "capability_revoked",
+                ev(
+                    5,
+                    1_700_000_000_004,
+                    AuditKind::CapabilityRevoked {
+                        subject_display: "research@agent".into(),
+                        action: "memory.write".into(),
+                        signature_b58: "GrantSigWrite".into(),
+                        removed: true,
+                    },
+                ),
+            ),
+            (
+                "capability_revoke_rejected",
+                ev(
+                    6,
+                    1_700_000_000_005,
+                    AuditKind::CapabilityRevokeRejected {
+                        signature_b58: "OtherSig".into(),
+                        reason: "not the capability subject".into(),
+                    },
+                ),
+            ),
+        ]
+    }
+
+    fn provenance_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("provenance-records.v1.json")
+    }
+
+    /// Freezes the provenance/audit record schema as an external
+    /// conformance contract. The committed fixture pins, for a
+    /// deterministic sequence of capability-family records: the exact
+    /// serde_json wire form of each `AuditEvent` (the bytes hashed into
+    /// the chain), its `sha256` event hash, and the genesis-seeded chain
+    /// root over the whole sequence as computed by production
+    /// `verify_integrity`. A drift in fields, field ordering, the
+    /// discriminator, the `AgentId` envelope, or the hashing breaks one
+    /// of these assertions instead of silently changing the contract.
+    #[tokio::test]
+    async fn provenance_record_schema_golden_vectors_are_frozen() {
+        const DRIFT: &str = "provenance record schema/hash drift: \
+            tests/fixtures/provenance-records.v1.json is a frozen external conformance contract. \
+            A mismatch means the AuditEvent wire shape, field ordering, discriminator, or hashing \
+            changed and every downstream verifier would break. Update the fixture only as a \
+            deliberate, reviewed schema change (bump the .v<n> suffix for an incompatible shape) — \
+            never blindly regenerate to silence this test.";
+
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(provenance_fixture_path()).unwrap())
+                .expect("golden fixture is valid JSON");
+        let golden = fixture["records"]
+            .as_array()
+            .expect("fixture.records is an array");
+
+        let records = golden_provenance_records();
+        assert_eq!(
+            records.len(),
+            golden.len(),
+            "{DRIFT} (record count: code has {}, fixture has {})",
+            records.len(),
+            golden.len(),
+        );
+
+        let log = InMemoryAuditLog::new();
+        for ((name, event), expected) in records.iter().zip(golden) {
+            assert_eq!(
+                Some(*name),
+                expected["name"].as_str(),
+                "{DRIFT} (record order/name mismatch near {name})",
+            );
+            let canonical = serde_json::to_string(event).unwrap();
+            assert_eq!(
+                canonical,
+                expected["canonical_json"].as_str().unwrap(),
+                "{DRIFT} (canonical wire form for {name})",
+            );
+            assert_eq!(
+                sha256_hex(canonical.as_bytes()),
+                expected["event_hash_hex"].as_str().unwrap(),
+                "{DRIFT} (event hash for {name})",
+            );
+            log.record(event.clone()).await.unwrap();
+        }
+
+        let report = log.verify_integrity().await.unwrap();
+        assert!(
+            report.valid,
+            "golden records must form a valid chain: {:?}",
+            report.failures,
+        );
+        assert_eq!(
+            report.root_hash_hex,
+            fixture["chain_root_hash_hex"].as_str().unwrap(),
+            "{DRIFT} (genesis-seeded chain root over the full sequence)",
         );
     }
 }

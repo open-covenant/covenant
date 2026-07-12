@@ -1,0 +1,6 @@
+{
+  "kind": "recent_memory",
+  "tier": "working",
+  "limit": 25,
+  "prefer_stream": true
+}

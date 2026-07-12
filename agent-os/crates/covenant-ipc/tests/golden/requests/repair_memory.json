@@ -1,0 +1,11 @@
+{
+  "kind": "repair_memory",
+  "request": {
+    "mode": "dry_run",
+    "command": {
+      "action": "delete_record",
+      "id": "11112222-3333-4444-5555-666677778888"
+    },
+    "reason": "verifier flagged a dangling parent"
+  }
+}

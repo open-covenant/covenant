@@ -1,0 +1,24 @@
+{
+  "kind": "capability_usage",
+  "grants": [
+    {
+      "signature_b58": "3xS9Yk1f8wL2bN7pQz4mRtUvJh6cKaDe5gXyWnVoBqAr",
+      "action": "tool.call.echo",
+      "scope": {
+        "max_uses": 5,
+        "tool": "echo",
+        "version": 1
+      },
+      "subject_display": "agent@host",
+      "subject_pubkey_b58": "5Gw3z9KpXqL8mNvR2tY7hJ4cF6bA1sDeZxWnVoBqUtM",
+      "expires_at": 1700000000000,
+      "revoked": false,
+      "effective": "live",
+      "budget": {
+        "max_uses": 5,
+        "used": 2,
+        "remaining": 3
+      }
+    }
+  ]
+}

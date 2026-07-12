@@ -1,0 +1,23 @@
+{
+  "kind": "provenance_actions",
+  "integrity": {
+    "events": 3,
+    "anchors": 3,
+    "valid": true,
+    "root_hash_hex": "abababababababababababababababababababababababababababababababab",
+    "failures": []
+  },
+  "actions": [
+    {
+      "event_id": "00000000-0000-0000-0000-000000000000",
+      "timestamp_ms": 1000,
+      "kind": "capability_granted",
+      "actor": "research@agent",
+      "action": "memory.write",
+      "approver": "operator@local",
+      "rule": "GrantSig",
+      "outcome": "granted"
+    }
+  ],
+  "scanned": 7
+}

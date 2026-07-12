@@ -1,0 +1,10 @@
+{
+  "kind": "audit_integrity",
+  "report": {
+    "events": 0,
+    "anchors": 0,
+    "valid": true,
+    "root_hash_hex": "",
+    "failures": []
+  }
+}

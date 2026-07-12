@@ -67,8 +67,7 @@ async fn run() -> Result<String, Box<dyn std::error::Error>> {
 
     let mut input = String::new();
     tokio::io::stdin().read_to_string(&mut input).await?;
-    let requirement: PaymentRequirements = serde_json::from_str(input.trim())
-        .map_err(|e| format!("decode PaymentRequirements from stdin: {e}"))?;
+    let requirement = decode_requirement(&input)?;
 
     let sponsored = requirement
         .extra
@@ -82,5 +81,33 @@ async fn run() -> Result<String, Box<dyn std::error::Error>> {
     } else {
         let signer = SolanaSigner::from_keypair_file(&keypair_path, rpc_url)?;
         Ok(signer.build_payment(&requirement).await?)
+    }
+}
+
+/// Decode the stdin [`PaymentRequirements`], trimming surrounding whitespace
+/// and tagging a parse failure with where it came from so a malformed paid-
+/// call payload surfaces a clear error instead of a raw serde message or a
+/// panic. Extracted from `run` so the sidecar's only input-validation
+/// surface is reachable from a unit test (run owns the stdin + env reads).
+fn decode_requirement(input: &str) -> Result<PaymentRequirements, Box<dyn std::error::Error>> {
+    let req = serde_json::from_str(input.trim())
+        .map_err(|e| format!("decode PaymentRequirements from stdin: {e}"))?;
+    Ok(req)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_requirement_surfaces_malformed_input_with_marker() {
+        // The sidecar's only input-validation surface: malformed stdin JSON
+        // must surface a context-tagged error (not a panic or a raw serde
+        // error) so a bad paid-call payload fails the sidecar cleanly.
+        let err = decode_requirement("{ not json").unwrap_err().to_string();
+        assert!(
+            err.contains("decode PaymentRequirements from stdin"),
+            "expected context-tagged decode marker, got: {err}"
+        );
     }
 }

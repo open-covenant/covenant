@@ -15,6 +15,7 @@ Implemented:
 - The public live-test inventory includes an ignored Linux gVisor dispatch test gated on `runsc` and an explicit rootfs.
 - A repeatable Linux runner guide documents the host, `runsc`, rootfs, and CI adoption requirements for that live path.
 - Sandbox stderr redacts configured host-local paths before surfacing failure text.
+- The trusted-local subprocess runner starts agents from a cleared environment and passes only `PATH`, `HOME`, and Covenant's own `COVENANT_*` configuration instead of inheriting the daemon's full environment. Operator secrets exported into the daemon's environment are not handed to agents; the capability-gated, audited broker (`GetSecret`) is the sanctioned channel for an agent that needs one.
 
 Not implemented:
 
@@ -29,13 +30,14 @@ The trusted-local runner is useful for first-party automation and local developm
 Trusted-local protects:
 
 - Covenant-mediated state mutations through daemon-side capability checks.
-- Runtime budget enforcement via projection-tick preempt on projected overshoot, with a wall-clock kill at `cpu_ms_per_task` as the final backstop.
+- Runtime budget enforcement via a projection tick that hard-preempts an agent on budget exhaustion by default, and optionally on linear projected overshoot, with a wall-clock kill at `cpu_ms_per_task` as the final backstop.
 - Agent protocol attribution because the daemon chooses which manifest produced a result.
+- Ambient operator secrets in the daemon's environment: the runner clears the child environment and passes only `PATH`, `HOME`, and `COVENANT_*` configuration, so an exported `ANTHROPIC_API_KEY` or `HERMES_API_KEY` is withheld and the broker (`GetSecret`) is the sanctioned channel for an agent that needs one. This is least-privilege, not a sandbox.
 
 Trusted-local does not protect:
 
 - Host filesystem reads available to the operator user.
-- Host environment variables inherited by a child process.
+- Same-user environment introspection: the runner withholds the daemon's environment from agents, but a hostile agent running as the operator's user can still read another process's environment through `/proc`. The scrub removes the ambient hand-off, not same-user introspection.
 - Network access beyond whatever the host OS allows.
 - Memory, CPU, syscall, or device abuse within the runtime budget window.
 - Malicious code executed as the same user outside the daemon protocol.
@@ -123,21 +125,22 @@ Policies other than the initial enforced subset must not be described as availab
 
 ## Budget-Driven Preempt
 
-The runtime hard-preempts a subprocess that is projected to exceed its remaining credit budget *before* it completes naturally. This is a stronger guarantee than the wall-clock kill on `cpu_ms_per_task` elapsed, which still fires as the final backstop. The end-to-end path is covered by the opt-in `live_runtime_preempt` test (`agent-os/crates/covenantd/tests/live_runtime_preempt.rs`), which spawns a fixture binary against a real daemon, pins `budget=1` and `cpu_ms_per_task=10000`, dispatches a single intent, and polls the audit feed for the `BudgetPreempted` row before the binary's wall-clock budget would have fired.
+The runtime hard-preempts a subprocess whose owning agent has exhausted its remaining credit budget, killing the in-flight process *before* it completes naturally. This is a stronger guarantee than the wall-clock kill on `cpu_ms_per_task` elapsed, which still fires as the final backstop. Operators can additionally opt into preempting a not-yet-exhausted agent whose linear debit-rate extrapolation projects an overshoot before completion (see the projection policy below). The end-to-end path is covered by the opt-in `live_runtime_preempt` test (`agent-os/crates/covenantd/tests/live_runtime_preempt.rs`), which spawns a fixture binary against a real daemon, pins `budget=1` and `cpu_ms_per_task=10000`, dispatches a single intent, and polls the audit feed for the `BudgetPreempted` row before the binary's wall-clock budget would have fired.
 
 Shipped end-to-end:
 
 - `covenant-runtime::SubprocessRunner` and `GvisorRunner` spawn the agent (or the runsc host process, for gVisor) in a new POSIX process group via `process_group(0)` on Unix so a subsequent `kill(-pid, SIG)` targets every grandchild the agent forked. The configuration is a no-op on non-Unix; the platform gap remains.
-- `covenant-runtime::SubprocessTracker` and `TrackedSubprocess` are the in-memory primitives the daemon uses to look up a running subprocess's pid by intent id. The daemon constructs the tracker once at startup and passes it into both runners; on every successful spawn the runner registers an entry keyed by `intent.id` and the entry is unregistered when the dispatch returns (success, error, or timeout-driven kill).
+- `covenant-runtime::SubprocessTracker` and `TrackedSubprocess` are the primitives the daemon uses to look up a running subprocess's pid by intent id. The daemon constructs the tracker once at startup via `SubprocessTracker::with_persistence($COVENANT_HOME/runtime/subprocess-tracker.jsonl)` and passes it into both runners; on every successful spawn the runner registers an entry keyed by `intent.id` and the entry is unregistered when the dispatch returns (success, error, or timeout-driven kill). Each register/unregister mirrors the live set to the JSONL snapshot (tempfile + atomic rename, best-effort: a persist failure is logged and never blocks the spawn), so a restart can re-adopt still-running subprocesses — see the restart-recovery item below.
 - `covenant-runtime::preempt_subprocess_pg(pid, grace)` is the pure async dispatcher that sends `SIGTERM` to a process group, polls every 50ms up to `grace` for the group to drain via `kill(-pid, 0)==ESRCH`, then sends `SIGKILL` if any member is still alive. It returns a `PreemptOutcome` the daemon-side audit emitter maps to `BudgetPreempted` or `BudgetPreemptFailed` rows.
 - `covenant-budget::project_overshoot(...)` is the pure projection function the daemon-side tick calls to decide whether an in-flight subprocess is on track to exceed its remaining budget. `BudgetProjectionPolicy::NoExtrapolation` preserves the post-completion-only behavior; `LinearExtrapolation` short-circuits below either an observation-window or sample-count threshold to avoid spurious early triggers.
-- `Server::run_projection_tick_iteration` walks the tracker on each call, applies `project_overshoot` per entry, and dispatches `Server::preempt_intent` for each exhausted intent. `spawn_projection_tick_driver` wraps this in a `tokio::time::interval` (default period: 250ms, configurable via `COVENANT_BUDGET_PROJECTION_TICK_MS`) and is spawned by the daemon's `main` at startup.
+- `Server::run_projection_tick_iteration` walks the tracker on each call and, per entry, applies the configured `BudgetProjectionPolicy`: the empty-bucket guarantee (`would_exceed(agent, 1)`) is checked first and is policy-independent, then under `LinearExtrapolation` a not-yet-exhausted agent is projected from its `debit_rate_since` window against `tokens_remaining` via `project_overshoot`. Flagged entries are dispatched to `Server::preempt_intent`. `spawn_projection_tick_driver` wraps this in a `tokio::time::interval` (default period: 250ms, configurable via `COVENANT_BUDGET_PROJECTION_TICK_MS`) and is spawned by the daemon's `main` at startup. The policy is selected at startup via `COVENANT_BUDGET_PROJECTION_POLICY` (`none`/`no_extrapolation`, the default, or `linear`/`linear_extrapolation`); under the linear policy `COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS` (default `1000`) and `COVENANT_BUDGET_PROJECTION_MIN_SAMPLES` (default `3`) gate the extrapolation so a sub-second initial spike or a single fee-paying call cannot project a runaway. An unrecognized policy or a non-integer threshold fails daemon startup rather than silently downgrading enforcement.
 - `Server::preempt_intent` reads the tracker entry for an intent_id, calls `preempt_subprocess_pg` with the grace window, and emits the resulting `BudgetPreempted` or `BudgetPreemptFailed` row. The grace window is read from `COVENANT_BUDGET_PREEMPT_GRACE_MS` (default: `2000` ms). A 0-ms grace immediately escalates to `SIGKILL` and produces audit noise; operators should leave room for `SIGTERM` to land.
 - `covenant-audit::AuditKind::BudgetPreempted` and `BudgetPreemptFailed` are wired into `audit_kind_requires_persistence` so the daemon refuses to drop them on audit-write failure.
+- `SubprocessTracker::recover()` re-adopts subprocesses persisted by a prior daemon instance so a crash between the projection decision and the signal dispatch no longer orphans them past the preempt window. The daemon's `main` calls it synchronously right after constructing the tracker and **before** `spawn_projection_tick_driver`, so the tick never observes a half-populated tracker. Recovery is signal-safe: it never kills during the scan; it validates each persisted pid's process identity (`pgid` + `/proc` start time, read from `/proc/<pid>/stat`) against the value captured at register time and **re-tracks only an exact match**. A vanished pid (ESRCH) is dropped as benign; a pid whose live identity differs (the pid-reuse case) is refused and never signalled; an unverifiable pid is refused conservatively. Re-tracked survivors are reaped on the next projection tick only if their budget is exhausted, reusing the already-audited preempt path. A missing or corrupt snapshot recovers as empty (one unparseable row cannot strand the rest).
 
 Remaining gap:
 
-- Daemon-restart recovery. The tracker is in-memory only; a crash between the projection decision and the signal dispatch leaves an orphan subprocess outliving the preempt window. Recovery via a pidfile or `/proc` scan on daemon startup is a separate followup. The steady-state hard guarantee holds; recovery from an interrupted preempt does not yet.
+- Off-Linux restart recovery. Ownership validation depends on `/proc`, so on macOS/Windows the recovery scan compiles and runs but can prove no pid's identity and therefore re-tracks nothing — an interrupted preempt can still orphan a subprocess there. This mirrors the existing non-Unix preempt platform gap; production daemons run on Linux, where recovery is active.
 
 ## Security Review Checklist
 

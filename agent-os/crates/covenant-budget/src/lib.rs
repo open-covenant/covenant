@@ -129,7 +129,11 @@ pub enum BudgetProjectionPolicy {
 /// track to exceed its `remaining` budget under the chosen
 /// [`BudgetProjectionPolicy`]. The daemon-side projection tick
 /// (deferred to sub-slice B2) walks the `SubprocessTracker` entries
-/// and pushes overshooting `intent_id`s into the preempt-queue.
+/// and pushes overshooting `intent_id`s into the preempt-queue. The
+/// first three inputs — `current_debit`, `observation_window_ms`,
+/// `observed_debit_samples` — are produced per-agent by
+/// [`BudgetLedger::debit_rate_since`]; `remaining` comes from
+/// [`BudgetLedger::tokens_remaining`].
 ///
 /// The function is intentionally pure and `u64`-typed so the projection
 /// contract is testable in isolation and never silently shifts when the
@@ -187,6 +191,29 @@ pub struct BudgetDebit {
     /// the pair, so the budget log and the receipt log can be joined.
     pub paired_receipt: Uuid,
     pub at_ms: u64,
+}
+
+/// Per-agent debit-rate observation over the `[since_ms, now_ms]` window,
+/// returned by [`BudgetLedger::debit_rate_since`]. Packages the three
+/// observation inputs of [`project_overshoot`] — `current_debit`,
+/// `observation_window_ms`, and `observed_debit_samples` — so the
+/// daemon-side projection tick can extrapolate an in-flight subprocess's
+/// spend instead of waiting for the bucket to bottom out. The fourth
+/// `project_overshoot` input, `remaining`, comes from
+/// [`BudgetLedger::tokens_remaining`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DebitRateSignal {
+    /// Sum of [`BudgetDebit::credits`] for the agent's debits in the
+    /// window, saturating at `u64::MAX`.
+    pub current_debit: u64,
+    /// `now_ms.saturating_sub(since_ms)` — how long this window has been
+    /// observed. [`project_overshoot`] consults it only as the
+    /// `>= min_observation_window_ms` gate, so a freshly started intent
+    /// (small window) stays on conservative post-completion accounting.
+    pub observation_window_ms: u64,
+    /// Count of the agent's debits in the window, saturating at
+    /// `u32::MAX`, gating [`project_overshoot`]'s `min_debit_samples`.
+    pub observed_debit_samples: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -276,6 +303,23 @@ pub trait BudgetLedger: Send + Sync {
     /// Verifier-facing.
     async fn recent_debits_all(&self, limit: usize) -> Result<Vec<BudgetDebit>, BudgetError>;
 
+    /// Per-agent debit-rate signal over `[since_ms, now_ms]`: the
+    /// cumulative debit, observation window, and sample count the agent
+    /// has produced in that window, packaged for [`project_overshoot`].
+    /// Like [`recent_debits`] this is a pure read of the debit log and
+    /// does NOT require a provisioned bucket, so it never returns
+    /// [`BudgetError::NoCapacity`]. The projection tick passes the owning
+    /// intent's start as `since_ms`, scoping the window to the in-flight
+    /// work; debits match on the agent's pubkey and `at_ms >= since_ms`.
+    ///
+    /// [`recent_debits`]: BudgetLedger::recent_debits
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError>;
+
     /// Drop debit events with `at_ms < before_ms`. See module docs for
     /// the snapshot-based non-destructive compaction model.
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError>;
@@ -335,6 +379,31 @@ fn refill_eta_ms(bucket: &Bucket, credits: u64, now: u64) -> u64 {
     let needed = (credits - bucket.tokens_remaining) as u128;
     let ms = (needed * MS_PER_HOUR).div_ceil(bucket.capacity as u128);
     now.saturating_add(ms.min(u64::MAX as u128) as u64)
+}
+
+/// Fold a debit log into a [`DebitRateSignal`] for one agent over the
+/// `[since_ms, now_ms]` window. Shared verbatim by both ledger backends
+/// so the rate contract can't drift between in-memory and JSONL.
+fn debit_rate_signal(
+    debits: &[BudgetDebit],
+    agent: &AgentId,
+    since_ms: u64,
+    now_ms: u64,
+) -> DebitRateSignal {
+    let mut current_debit: u64 = 0;
+    let mut observed_debit_samples: u32 = 0;
+    for debit in debits
+        .iter()
+        .filter(|d| d.agent.pubkey == agent.pubkey && d.at_ms >= since_ms)
+    {
+        current_debit = current_debit.saturating_add(debit.credits);
+        observed_debit_samples = observed_debit_samples.saturating_add(1);
+    }
+    DebitRateSignal {
+        current_debit,
+        observation_window_ms: now_ms.saturating_sub(since_ms),
+        observed_debit_samples,
+    }
 }
 
 /// In-process ledger suitable for tests.
@@ -462,6 +531,16 @@ impl BudgetLedger for InMemoryLedger {
         let debits = self.debits.lock().await;
         let start = debits.len().saturating_sub(limit);
         Ok(debits[start..].to_vec())
+    }
+
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError> {
+        let debits = self.debits.lock().await;
+        Ok(debit_rate_signal(&debits, agent, since_ms, now_ms))
     }
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
@@ -940,6 +1019,16 @@ impl BudgetLedger for JsonlLedger {
         let debits = self.debits.lock().await;
         let start = debits.len().saturating_sub(limit);
         Ok(debits[start..].to_vec())
+    }
+
+    async fn debit_rate_since(
+        &self,
+        agent: &AgentId,
+        since_ms: u64,
+        now_ms: u64,
+    ) -> Result<DebitRateSignal, BudgetError> {
+        let debits = self.debits.lock().await;
+        Ok(debit_rate_signal(&debits, agent, since_ms, now_ms))
     }
 
     async fn compact_older_than(&self, before_ms: u64) -> Result<u64, BudgetError> {
@@ -2216,6 +2305,42 @@ mod tests {
     }
 
     #[test]
+    fn refill_clamps_overflowing_grant_to_capacity_before_cast() {
+        // The per-step grant is computed in u128 (add_u128 = elapsed *
+        // capacity / MS_PER_HOUR) then narrowed to u64 at lib.rs:348 via
+        // `add_u128.min(bucket.capacity as u128) as u64`. The .min() must
+        // run BEFORE the cast: a capacity near u64::MAX idle past an hour
+        // drives add_u128 over u64::MAX, where an unclamped `as u64` wraps
+        // and silently zeroes the grant. The downstream tokens.min(capacity)
+        // at lib.rs:352 cannot recover a grant already lost to the wrap.
+        //
+        // capacity 2^63, elapsed two hours -> add_u128 = 7_200_000 * 2^63 /
+        // 3_600_000 = 2^64 exactly, which casts to 0. With the clamp add is
+        // min(2^64, 2^63) = 2^63, filling the bucket and resetting the clock.
+        let mut b = Bucket {
+            display: "x@y".into(),
+            capacity: 1u64 << 63,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+        refill(&mut b, 7_200_000);
+        assert_eq!(
+            b.tokens_remaining,
+            1u64 << 63,
+            "add_u128 == 2^64 must clamp to capacity before the u128->u64 \
+             cast; dropping the lib.rs:348 .min (or flipping it to .max) \
+             lets `as u64` wrap to 0, leaving a high-capacity bucket empty \
+             after an hour-plus idle so every spend is denied"
+        );
+        assert_eq!(
+            b.last_refill_ms, 7_200_000,
+            "a full bucket resets last_refill_ms to now; if the grant \
+             wrapped to 0 the bucket never reaches capacity and the clock \
+             stalls at last_refill_ms, compounding the under-refill"
+        );
+    }
+
+    #[test]
     fn refill_eta_zero_when_already_have_enough() {
         let b = Bucket {
             display: "x@y".into(),
@@ -2329,6 +2454,59 @@ mod tests {
              rate so a refactor that special-cased a single capacity \
              value (without honoring the general div_ceil semantic) \
              cannot land silently"
+        );
+    }
+
+    #[test]
+    fn refill_eta_ms_clamps_overflowing_shortfall_to_u64_max() {
+        // refill_eta_ms (line 365) computes the ETA in u128 via
+        //   ms = (needed * MS_PER_HOUR).div_ceil(capacity)
+        // then folds it into the u64 return with
+        //   now.saturating_add(ms.min(u64::MAX as u128) as u64)   (line 374)
+        // The `.min(u64::MAX as u128)` clamp is the only thing between a
+        // u128 ms that exceeds u64::MAX and a silently wrapping `as u64`
+        // cast. At capacity=1 the boundary sits at
+        //   needed = u64::MAX / MS_PER_HOUR = 5_124_095_576_030 (floor).
+        // The four sibling refill_eta_ms tests (already-enough, zero
+        // capacity, exact-rate linear, div_ceil rounding) all use tiny
+        // shortfalls that never approach it, and ms_per_hour's size_of
+        // pin only asserts the constant stays u128-wide — none exercise
+        // the clamp, so dropping it survives them all.
+        let b = Bucket {
+            display: "x@y".into(),
+            capacity: 1,
+            tokens_remaining: 0,
+            last_refill_ms: 0,
+        };
+
+        // needed=5_124_095_576_030 -> ms=18_446_744_073_708_000_000,
+        // one tick below the boundary and still <= u64::MAX, so the
+        // clamp is a no-op and the exact (huge but representable) ETA
+        // must survive. Pins the clamp as inactive below the boundary,
+        // separating it from a ceiling lowered to any smaller constant.
+        assert_eq!(
+            refill_eta_ms(&b, 5_124_095_576_030, 0),
+            18_446_744_073_708_000_000,
+            "needed=5_124_095_576_030 at capacity=1 yields \
+             ms=18_446_744_073_708_000_000 (<= u64::MAX); the u64::MAX \
+             clamp must leave it untouched and return the exact ETA \
+             rather than prematurely saturating"
+        );
+
+        // needed=5_124_095_576_031 -> ms=18_446_744_073_711_600_000,
+        // one tick past the boundary and just over u64::MAX. The clamp
+        // must saturate the ETA to u64::MAX; without `.min(u64::MAX as
+        // u128)` the `as u64` cast wraps to 2_048_384, reporting a
+        // near-empty huge-capacity bucket as ~2ms from refilled.
+        assert_eq!(
+            refill_eta_ms(&b, 5_124_095_576_031, 0),
+            u64::MAX,
+            "needed=5_124_095_576_031 at capacity=1 yields \
+             ms=18_446_744_073_711_600_000 (> u64::MAX); the clamp must \
+             saturate the ETA to u64::MAX — dropping `.min(u64::MAX as \
+             u128)` wraps the u128->u64 cast to 2_048_384 and reports a \
+             dry bucket as nearly refilled, and a `.min`->`.max` swap \
+             selects the same wrapped value"
         );
     }
 
@@ -2830,6 +3008,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_try_debit_and_would_exceed_allow_spending_exactly_the_remaining_balance() {
+        // Both spend gates use a STRICT `tokens_remaining < credits`
+        // comparison: try_debit (lib.rs:403) returns Exhausted only when
+        // the balance is strictly short, and would_exceed (:427) reports
+        // `tokens_remaining < credits`. The `<` is exclusive, so credits
+        // EXACTLY equal to the remaining balance is allowed — an agent may
+        // spend down to exactly zero in one debit, and would_exceed
+        // reports false at that point. Every other test probes strictly
+        // below (debit 3 of 10, would_exceed 5 of 10 → allowed) or
+        // strictly above (debit 6 of 5, would_exceed 11 of 10 → rejected);
+        // the credits == tokens_remaining equality is pinned by no test. A
+        // `<` -> `<=` flip would reject a full-balance spend as Exhausted
+        // and make would_exceed claim it would exceed, silently breaking
+        // the budget hard guarantee with the suite still green. Pin the
+        // equality keep-arm on both gates and bracket from above.
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        l.set_capacity(&a, 10).await.unwrap();
+
+        assert!(
+            !l.would_exceed(&a, 10).await.unwrap(),
+            "spending exactly the remaining balance (10 of 10) must not exceed — \
+             tokens_remaining < credits is strict; a `<` -> `<=` flip breaks this",
+        );
+        assert!(
+            l.would_exceed(&a, 11).await.unwrap(),
+            "spending one more than the balance (11 of 10) must exceed — \
+             brackets the boundary from above",
+        );
+
+        // Reject side first so it cannot consume before the accept side.
+        match l.try_debit(&a, 11, Uuid::new_v4()).await.unwrap_err() {
+            BudgetError::Exhausted {
+                tokens_remaining, ..
+            } => assert_eq!(
+                tokens_remaining, 10,
+                "a rejected over-spend must not consume"
+            ),
+            other => panic!("expected Exhausted for 11 of 10, got {other:?}"),
+        }
+
+        l.try_debit(&a, 10, Uuid::new_v4()).await.expect(
+            "debiting exactly the remaining balance (10 of 10) must succeed — \
+             a `<` -> `<=` flip would reject it as Exhausted",
+        );
+        assert_eq!(
+            l.tokens_remaining(&a).await.unwrap(),
+            0,
+            "a full-balance debit must drain the bucket to exactly zero",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_try_debit_and_would_exceed_allow_spending_exactly_the_remaining_balance() {
+        // JsonlLedger mirrors the in-memory spend gates with the same
+        // strict `tokens_remaining < credits` comparison: try_debit
+        // (lib.rs:866) and would_exceed (:905). Pin the same exact-balance
+        // equality keep-arm on the persistent backend so a `<` -> `<=`
+        // flip that slipped past the in-memory pin is still caught here.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget").join("ledger.jsonl");
+        let l = JsonlLedger::open(path).await.unwrap();
+        let a = agent("a@local");
+        l.set_capacity(&a, 10).await.unwrap();
+
+        assert!(
+            !l.would_exceed(&a, 10).await.unwrap(),
+            "spending exactly the remaining balance must not exceed on the persistent ledger",
+        );
+        assert!(
+            l.would_exceed(&a, 11).await.unwrap(),
+            "spending one more than the balance must exceed — brackets the boundary from above",
+        );
+
+        match l.try_debit(&a, 11, Uuid::new_v4()).await.unwrap_err() {
+            BudgetError::Exhausted {
+                tokens_remaining, ..
+            } => assert_eq!(
+                tokens_remaining, 10,
+                "a rejected over-spend must not consume"
+            ),
+            other => panic!("expected Exhausted for 11 of 10, got {other:?}"),
+        }
+
+        l.try_debit(&a, 10, Uuid::new_v4())
+            .await
+            .expect("debiting exactly the remaining balance must succeed on the persistent ledger");
+        assert_eq!(
+            l.tokens_remaining(&a).await.unwrap(),
+            0,
+            "a full-balance debit must drain the persistent bucket to exactly zero",
+        );
+    }
+
+    #[tokio::test]
     async fn in_memory_recent_debits_filters_by_agent() {
         let l = InMemoryLedger::new();
         let a = agent("a@local");
@@ -2845,6 +3118,68 @@ mod tests {
         let b_debits = l.recent_debits(&b, 10).await.unwrap();
         assert_eq!(b_debits.len(), 1);
         assert_eq!(b_debits[0].credits, 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_recent_debits_filters_by_agent_before_binding_limit() {
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        let b = agent("b@local");
+        l.set_capacity(&a, 100).await.unwrap();
+        l.set_capacity(&b, 100).await.unwrap();
+        let r1 = Uuid::new_v4();
+        let r3 = Uuid::new_v4();
+        let r4 = Uuid::new_v4();
+        // Interleave b's debit between a's matches so a take-before-filter
+        // reorder would spend the cap on the wrong agent.
+        l.try_debit(&a, 1, r1).await.unwrap();
+        l.try_debit(&b, 2, Uuid::new_v4()).await.unwrap();
+        l.try_debit(&a, 3, r3).await.unwrap();
+        l.try_debit(&a, 4, r4).await.unwrap();
+
+        // Three debits match agent a; a binding limit of 2 must keep the
+        // first two MATCHING debits (filter then take), not the first two
+        // rows overall. A take-then-filter reorder takes [a, b] and keeps a
+        // single a debit.
+        let a_debits = l.recent_debits(&a, 2).await.unwrap();
+        assert_eq!(
+            a_debits
+                .iter()
+                .map(|d| d.paired_receipt)
+                .collect::<Vec<_>>(),
+            vec![r1, r3],
+            "binding limit must cap the agent-filtered debits, not the unfiltered row stream"
+        );
+        assert!(a_debits.iter().all(|d| d.agent.pubkey == a.pubkey));
+    }
+
+    #[tokio::test]
+    async fn jsonl_recent_debits_filters_by_agent_before_binding_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget").join("ledger.jsonl");
+        let l = JsonlLedger::open(path).await.unwrap();
+        let a = agent("a@local");
+        let b = agent("b@local");
+        l.set_capacity(&a, 100).await.unwrap();
+        l.set_capacity(&b, 100).await.unwrap();
+        let r1 = Uuid::new_v4();
+        let r3 = Uuid::new_v4();
+        let r4 = Uuid::new_v4();
+        l.try_debit(&a, 1, r1).await.unwrap();
+        l.try_debit(&b, 2, Uuid::new_v4()).await.unwrap();
+        l.try_debit(&a, 3, r3).await.unwrap();
+        l.try_debit(&a, 4, r4).await.unwrap();
+
+        let a_debits = l.recent_debits(&a, 2).await.unwrap();
+        assert_eq!(
+            a_debits
+                .iter()
+                .map(|d| d.paired_receipt)
+                .collect::<Vec<_>>(),
+            vec![r1, r3],
+            "binding limit must cap the agent-filtered debits, not the unfiltered row stream"
+        );
+        assert!(a_debits.iter().all(|d| d.agent.pubkey == a.pubkey));
     }
 
     #[tokio::test]
@@ -2916,6 +3251,218 @@ mod tests {
         let surviving = l.recent_debits(&a, 10).await.unwrap();
         assert_eq!(surviving.len(), 1);
         assert_eq!(surviving[0].credits, 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_compact_keeps_debit_stamped_exactly_at_cutoff() {
+        // compact_older_than drops debits strictly older than the cutoff:
+        // retain(|d| d.at_ms >= before_ms) (lib.rs:463); the module doc
+        // (lib.rs:279) pins the contract as "drop events with at_ms <
+        // before_ms". So a debit stamped EXACTLY at before_ms is on the
+        // keep side. in_memory_compact_drops_old_debits_only only probes
+        // at_ms=50 vs cutoff 100 (strictly older); the at_ms == before_ms
+        // equality is pinned by no test. Seed two debits straddling the
+        // cutoff — one exactly at it, one a tick below — and compact at
+        // the cutoff: the below-cutoff debit drops, the at-cutoff debit
+        // survives. A `>=` -> `>` flip would also drop the at-cutoff debit
+        // (losing a spend-audit record the retention contract keeps),
+        // failing the survivor assertion with the suite otherwise green.
+        const CUTOFF: u64 = 100;
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        l.set_capacity(&a, 10).await.unwrap();
+        l.try_debit(&a, 1, Uuid::new_v4()).await.unwrap(); // keep: stamped at CUTOFF
+        l.try_debit(&a, 2, Uuid::new_v4()).await.unwrap(); // drop: stamped at CUTOFF - 1
+        {
+            let mut debits = l.debits.lock().await;
+            debits[0].at_ms = CUTOFF;
+            debits[1].at_ms = CUTOFF - 1;
+        }
+
+        assert_eq!(
+            l.compact_older_than(CUTOFF).await.unwrap(),
+            1,
+            "only the below-cutoff debit drops; the debit stamped exactly at the cutoff \
+             survives (at_ms >= before_ms is inclusive) — a `>=` -> `>` flip drops both",
+        );
+        let surviving = l.recent_debits(&a, 10).await.unwrap();
+        assert_eq!(
+            surviving.len(),
+            1,
+            "exactly the at-cutoff debit must survive"
+        );
+        assert_eq!(
+            surviving[0].credits, 1,
+            "the survivor must be the at-cutoff debit (credits 1), not the below-cutoff one",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_keeps_debit_stamped_exactly_at_cutoff() {
+        // JsonlLedger::compact_older_than mirrors the keep-arm: the Debit
+        // drop arm (d.at_ms < before_ms, lib.rs:981) drives the dropped
+        // count and the in-memory retain (:1076) drops the matching rows.
+        // Pin the exact-cutoff keep boundary on the persistent backend
+        // with two debits straddling the cutoff so both the dropped count
+        // and the surviving in-memory row are checked — a `<` -> `<=`
+        // (drop arm) or `>=` -> `>` (retain) flip is caught here too.
+        const CUTOFF: u64 = 100;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("a@local");
+        let l = JsonlLedger::open(path.clone()).await.unwrap();
+        l.set_capacity(&a, 10).await.unwrap();
+        l.try_debit(&a, 1, Uuid::new_v4()).await.unwrap(); // keep: stamped at CUTOFF
+        l.try_debit(&a, 2, Uuid::new_v4()).await.unwrap(); // drop: stamped at CUTOFF - 1
+
+        // Stamp each on-disk debit's at_ms by its credits, then reopen so
+        // the in-memory state matches the rewritten log.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<String> = raw.lines().map(String::from).collect();
+        for line in lines.iter_mut() {
+            if line.contains("\"debit\"") {
+                if let BudgetEvent::Debit(mut d) = serde_json::from_str(line).unwrap() {
+                    d.at_ms = if d.credits == 1 { CUTOFF } else { CUTOFF - 1 };
+                    *line = serde_json::to_string(&BudgetEvent::Debit(d)).unwrap();
+                }
+            }
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let l2 = JsonlLedger::open(path.clone()).await.unwrap();
+
+        assert_eq!(
+            l2.compact_older_than(CUTOFF).await.unwrap(),
+            1,
+            "only the below-cutoff debit drops; the debit stamped exactly at the cutoff \
+             survives on the persistent ledger (at_ms >= before_ms is inclusive)",
+        );
+        let surviving = l2.recent_debits(&a, 10).await.unwrap();
+        assert_eq!(
+            surviving.len(),
+            1,
+            "exactly the at-cutoff debit must survive"
+        );
+        assert_eq!(
+            surviving[0].credits, 1,
+            "the survivor must be the at-cutoff debit (credits 1)",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_compact_clamps_persisted_balance_when_dropped_debits_exceed_capacity() {
+        // compact_older_than folds dropped pre-cutoff debits into a synthetic
+        // bucket via saturating_sub (lib.rs:1073) and persists the result as a
+        // Snapshot that becomes the authoritative balance across every reopen.
+        // When the dropped debits sum beyond the bucket (reachable via a
+        // capacity lowered after debits, or a legacy log) a plain `-` underflows:
+        // a debug panic mid-compaction, or a release wrap that writes a
+        // near-u64::MAX balance to disk and permanently defeats the cap. The
+        // post==pre compaction tests keep debits within capacity, so this
+        // boundary is otherwise never reached.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("over@local");
+
+        // Stamp at a recent time so the reopen's lazy refill is a no-op (5
+        // credits/hour needs ~12 min to refill a single token); the assertion
+        // then reads the persisted clamp rather than a refilled balance.
+        let now = epoch_ms();
+        let cutoff = now + 1;
+
+        // try_debit would refuse the second debit (3 + 3 > 5), so the
+        // over-capacity pre-cutoff log is authored directly.
+        let mk_debit = |credits: u64| {
+            BudgetEvent::Debit(BudgetDebit {
+                agent: a.clone(),
+                credits,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: now,
+            })
+        };
+        let log = [
+            BudgetEvent::CapacitySet {
+                agent: a.clone(),
+                credits_per_hour: 5,
+                at_ms: now,
+            },
+            mk_debit(3),
+            mk_debit(3),
+        ];
+        let body = log
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let l = JsonlLedger::open(path.clone()).await.unwrap();
+        assert_eq!(
+            l.compact_older_than(cutoff).await.unwrap(),
+            2,
+            "both pre-cutoff debits are folded into the snapshot and dropped",
+        );
+
+        // Reopen so the assertion reads the persisted post-compaction Snapshot.
+        let l2 = JsonlLedger::open(path).await.unwrap();
+        assert_eq!(
+            l2.tokens_remaining(&a).await.unwrap(),
+            0,
+            "6 credits of debits against a 5-credit bucket must clamp the \
+             persisted balance to 0, not wrap toward u64::MAX",
+        );
+    }
+
+    #[tokio::test]
+    async fn jsonl_open_replay_clamps_balance_when_persisted_debits_exceed_capacity() {
+        // JsonlLedger::open replays each persisted Debit into the in-memory
+        // bucket with saturating_sub (lib.rs:837). A crafted or legacy ledger
+        // can carry pre-recorded debits summing beyond capacity (try_debit
+        // refuses them live, but a hand-written or capacity-lowered log can
+        // hold them). A plain `-` underflows here: a debug panic during open,
+        // or a release wrap that loads a near-u64::MAX balance and silently
+        // defeats the cap for that agent on every startup. The sibling
+        // compaction test only asserts the post-compaction balance, so the
+        // open-replay clamp's observable result is otherwise never asserted.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let a = agent("legacy@local");
+
+        // Stamp at a recent time so the per-debit replay refill and the
+        // read-time refill are sub-token no-ops (5 credits/hour is ~1 token
+        // per 12 min); the assertion then reads the replayed clamp rather than
+        // a balance refilled from a 1970 last_refill.
+        let now = epoch_ms();
+        let mk_debit = |credits: u64| {
+            BudgetEvent::Debit(BudgetDebit {
+                agent: a.clone(),
+                credits,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: now,
+            })
+        };
+        let log = [
+            BudgetEvent::CapacitySet {
+                agent: a.clone(),
+                credits_per_hour: 5,
+                at_ms: now,
+            },
+            mk_debit(3),
+            mk_debit(3),
+        ];
+        let body = log
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+
+        let l = JsonlLedger::open(path).await.unwrap();
+        assert_eq!(
+            l.tokens_remaining(&a).await.unwrap(),
+            0,
+            "6 credits of persisted debits against a 5-credit bucket must clamp \
+             the replayed balance to 0, not wrap toward u64::MAX",
+        );
     }
 
     #[tokio::test]
@@ -3484,6 +4031,61 @@ mod tests {
     }
 
     #[test]
+    fn project_overshoot_linear_extrapolation_pins_threshold_equality_boundary_proceeds() {
+        // The short-circuit gate (lib.rs:150-153) is a strict less-than on
+        // BOTH legs:
+        //
+        //     if observation_window_ms < min_observation_window_ms
+        //         || observed_debit_samples < min_debit_samples
+        //     { return false; }
+        //
+        // so a debit observed at EXACTLY the minimum window or sample count
+        // must fall through to the projection, not short-circuit.
+        // project_overshoot_linear_extrapolation_short_circuits_below_observation_thresholds
+        // probes strictly-below (window=100, samples=1) and every
+        // proceed-path test uses strictly-above (window=1000, samples=5);
+        // none sits at the exact boundary. A refactor that flipped either
+        // leg to `<=` (a natural "include the minimum" off-by-one) would
+        // short-circuit at the precise instant enough evidence has just
+        // accumulated — the hard-preempt projection would silently never
+        // fire at window == min or samples == min — and every existing test
+        // would still pass (100 <= 500 still short-circuits; 1000 <= 500
+        // still proceeds).
+        let policy = BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 500,
+            min_debit_samples: 3,
+        };
+
+        // Window leg at the exact minimum, samples comfortably above:
+        // isolates the observation-window boundary. projected = 60 + 60 =
+        // 120 > 100, so the gate MUST fall through to a `true` flag; a `<=`
+        // on the window leg short-circuits this to `false`.
+        assert!(
+            project_overshoot(60, 500, 5, 100, policy),
+            "observation_window_ms == min must proceed past the gate (strict \
+             <), not short-circuit; a <= on the window leg would silently \
+             stop the projection from firing at the exact minimum window"
+        );
+
+        // Samples leg at the exact minimum, window comfortably above:
+        // isolates the debit-sample boundary.
+        assert!(
+            project_overshoot(60, 1000, 3, 100, policy),
+            "observed_debit_samples == min must proceed past the gate (strict \
+             <), not short-circuit; a <= on the samples leg would silently \
+             stop the projection from firing at the exact minimum sample count"
+        );
+
+        // Both legs at the exact minimum simultaneously — the dual boundary
+        // the existing strictly-above / strictly-below cases never touch.
+        assert!(
+            project_overshoot(60, 500, 3, 100, policy),
+            "window == min AND samples == min must proceed past the gate; a \
+             <= on either leg short-circuits this to false"
+        );
+    }
+
+    #[test]
     fn project_overshoot_linear_extrapolation_flags_when_observed_already_exceeds_remaining() {
         // The conservative model: if current_debit already exceeds
         // remaining, no extrapolation needed — the overshoot is
@@ -3529,6 +4131,200 @@ mod tests {
         // Saturating add prevents a panic on u64::MAX inputs; the
         // saturated value > any finite remaining → flag.
         assert!(project_overshoot(u64::MAX, 1000, 5, 100, policy));
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_sums_filters_and_windows() {
+        // debit_rate_since produces project_overshoot's three
+        // observation inputs: current_debit (sum), observed_debit_samples
+        // (count), observation_window_ms (now - since). The signal must
+        // (a) include only debits with at_ms >= since_ms — inclusive of
+        // the window start — (b) scope to the queried agent's pubkey, and
+        // (c) report the window as now_ms.saturating_sub(since_ms). Seed a
+        // log straddling the cutoff and owned by two agents so a `>=`->`>`
+        // flip on the cutoff or a dropped pubkey filter is caught.
+        const SINCE: u64 = 100;
+        const NOW: u64 = 200;
+        let l = InMemoryLedger::new();
+        let a = agent("alice@local");
+        let b = agent("bob@local");
+        {
+            let mut debits = l.debits.lock().await;
+            // counted: stamped exactly at the window start (>= is inclusive)
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE,
+            });
+            // counted: inside the window
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 7,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+            // excluded: one tick below the window start
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 9,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE - 1,
+            });
+            // excluded: in-window time but a different agent
+            debits.push(BudgetDebit {
+                agent: b.clone(),
+                credits: 1000,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+        }
+
+        let sig = l.debit_rate_since(&a, SINCE, NOW).await.unwrap();
+        assert_eq!(
+            sig.current_debit, 12,
+            "sum only a's in-window debits (5 at the cutoff + 7 after); the 9 below the \
+             cutoff and bob's 1000 are excluded — a `>=`->`>` flip drops the 5, a lost \
+             pubkey filter adds the 1000",
+        );
+        assert_eq!(
+            sig.observed_debit_samples, 2,
+            "exactly two of a's debits fall in [SINCE, NOW]",
+        );
+        assert_eq!(
+            sig.observation_window_ms,
+            NOW - SINCE,
+            "window is now - since",
+        );
+
+        // The other agent's signal sees only its own debit — proves the
+        // pubkey filter both ways.
+        let sig_b = l.debit_rate_since(&b, SINCE, NOW).await.unwrap();
+        assert_eq!(sig_b.current_debit, 1000);
+        assert_eq!(sig_b.observed_debit_samples, 1);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_saturates_current_debit() {
+        // A pathological debit log must saturate, not wrap or panic: the
+        // sum uses saturating_add. Two debits whose credits exceed u64
+        // together pin the cap.
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: u64::MAX,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 10,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 20,
+            });
+        }
+        let sig = l.debit_rate_since(&a, 0, 100).await.unwrap();
+        assert_eq!(
+            sig.current_debit,
+            u64::MAX,
+            "saturating_add caps at u64::MAX instead of wrapping or panicking",
+        );
+        assert_eq!(sig.observed_debit_samples, 2);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_window_zero_on_clock_skew() {
+        // now_ms < since_ms (NTP skew or a stale `now` from the caller)
+        // must not underflow; the window saturates to 0 while in-window
+        // debits are still summed.
+        let l = InMemoryLedger::new();
+        let a = agent("a@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 4,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 600,
+            });
+        }
+        let sig = l.debit_rate_since(&a, 500, 400).await.unwrap();
+        assert_eq!(
+            sig.observation_window_ms, 0,
+            "now (400) < since (500) saturates the window to 0",
+        );
+        assert_eq!(
+            sig.current_debit, 4,
+            "the at_ms=600 debit is still >= since=500 and is summed",
+        );
+        assert_eq!(sig.observed_debit_samples, 1);
+    }
+
+    #[tokio::test]
+    async fn in_memory_debit_rate_since_empty_log_needs_no_bucket() {
+        // Like recent_debits, debit_rate_since is a pure debit-log read:
+        // an agent with no provisioned bucket and no debits yields a
+        // zero-debit signal rather than BudgetError::NoCapacity.
+        let l = InMemoryLedger::new();
+        let a = agent("never-provisioned@local");
+        let sig = l.debit_rate_since(&a, 0, 100).await.unwrap();
+        assert_eq!(sig.current_debit, 0);
+        assert_eq!(sig.observed_debit_samples, 0);
+        assert_eq!(sig.observation_window_ms, 100);
+    }
+
+    #[tokio::test]
+    async fn jsonl_debit_rate_since_matches_contract_on_production_backend() {
+        // The production ledger must carry the same signal contract; a
+        // single-backend impl would leave the daemon's real ledger
+        // untested. debit_rate_since reads the in-memory debit log
+        // (populated by try_debit and by replay on open), so seed it and
+        // assert the same sum / pubkey-filter / boundary / window
+        // behavior as the in-memory backend.
+        const SINCE: u64 = 100;
+        const NOW: u64 = 200;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let l = JsonlLedger::open(path).await.unwrap();
+        let a = agent("alice@local");
+        let b = agent("bob@local");
+        {
+            let mut debits = l.debits.lock().await;
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 5,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 7,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+            debits.push(BudgetDebit {
+                agent: a.clone(),
+                credits: 9,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: SINCE - 1,
+            });
+            debits.push(BudgetDebit {
+                agent: b.clone(),
+                credits: 1000,
+                paired_receipt: Uuid::new_v4(),
+                at_ms: 150,
+            });
+        }
+        let sig = l.debit_rate_since(&a, SINCE, NOW).await.unwrap();
+        assert_eq!(sig.current_debit, 12);
+        assert_eq!(sig.observed_debit_samples, 2);
+        assert_eq!(sig.observation_window_ms, NOW - SINCE);
+        let sig_b = l.debit_rate_since(&b, SINCE, NOW).await.unwrap();
+        assert_eq!(sig_b.current_debit, 1000);
+        assert_eq!(sig_b.observed_debit_samples, 1);
     }
 }
 

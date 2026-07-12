@@ -1,0 +1,24 @@
+[package]
+name = "covenant-ens-gateway"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "CCIP-Read (EIP-3668) gateway resolving *.agents.opencovenant.eth to Solana identities. Signs addr(node,501) responses the OffchainResolver verifies against an allowlist."
+
+[[bin]]
+name = "covenant-ens-gateway"
+path = "src/main.rs"
+
+[dependencies]
+covenant-evm-signer = { path = "../covenant-evm-signer" }
+covenant-identity = { path = "../covenant-identity" }
+axum = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+hex = "0.4"
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,0 +1,7 @@
+{
+  "kind": "sap_publish_audit_root",
+  "root_hash_hex": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+  "release_target": "mainnet",
+  "release_subject": "agent-v1",
+  "release_scope": "public"
+}

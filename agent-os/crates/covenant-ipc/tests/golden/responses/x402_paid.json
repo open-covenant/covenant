@@ -1,0 +1,6 @@
+{
+  "kind": "x402_paid",
+  "receipt_id": "00000000-0000-0000-feed-facedeadbeef",
+  "status": 200,
+  "body": "{\"ok\":true}"
+}

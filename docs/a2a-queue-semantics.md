@@ -49,6 +49,10 @@ The CLI parses `--state` case-sensitively against the wire enum (`queued`, `in_f
 
 The `--json` form emits one `a2a_status` object containing `limit`, `min_lease_age_ms`, `deadline_within_ms`, `state_filter`, `tasks`, and `results`. The stale-lease filter applies only to `in_flight` task entries. Queued tasks and pending results remain visible so the operator does not mistake filtered output for a healthy empty queue. The filter never requeues, expires, cancels, or force-errors work.
 
+Filters survive restart. The daemon replays each lease's original `leased_at_ms` and each task's `deadline_ms` from the durable mailbox log, so the status filters keep discriminating against the reloaded queue. After a restart `--min-lease-age-ms` still measures a lease's age from when it was first leased — not from when the daemon came back up — so a lease that was already stale stays stale instead of appearing freshly leased, and a far-future threshold continues to exclude it. Likewise `--deadline-within-ms` keeps only the replayed tasks whose `deadline_ms` is within the window and still drops tasks that carry no `deadline_ms`.
+
+The filters are identical across surfaces because every surface forwards the same `min_lease_age_ms`, `deadline_within_ms`, and `state_filter` arguments to one `A2AQueue` request. Each `GET /a2a/queue` filter param is live-covered over the gateway. `live_http_a2a_queue_min_lease_age.rs` leases one task and leaves a second queued, then confirms a small `min_lease_age_ms` threshold keeps the aged lease while a far-future threshold drops it, and that the queued task — exempt from the lease-age filter because it is not `in_flight` — stays visible under both. `live_http_a2a_queue_deadline_within.rs` queues one urgent, one far-deadline, and one no-deadline task, then confirms `deadline_within_ms` keeps only the urgent task id and drops both the far-deadline and the no-deadline tasks.
+
 ## Result Contract
 
 Posting a result for a known task clears the task's in-flight lease and queues the result for the original sender. Result reads remain sender-scoped through the mailbox sender map, compared by pubkey rather than display string.
@@ -95,7 +99,7 @@ Repair requests require:
 
 `force_error` clears the in-flight lease and posts an error result for the original sender to drain. It is the explicit way to stop waiting on a stale lease without pretending the task succeeded.
 
-Both repair actions replay from the JSONL mailbox log after daemon restart.
+Both repair actions replay from the JSONL mailbox log after daemon restart, including a requeued task's accumulated `attempt` counter, so the retry budget an operator sees through `covenant a2a status` is not silently reset by a restart.
 
 CLI usage:
 

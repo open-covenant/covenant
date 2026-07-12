@@ -126,12 +126,13 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 | Group | Crates |
 |---|---|
 | Core protocol | `covenant-types`, `covenant-ipc`, `covenant-manifest` |
-| Control plane | `covenantd`, `covenant`, `covenant-router`, `covenant-runtime` |
-| Trust and policy | `covenant-identity`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget` |
+| Control plane | `covenantd`, `covenant`, `covenant-sdk`, `covenant-router`, `covenant-runtime` |
+| Trust and policy | `covenant-identity`, `covenant-attestation`, `covenant-evm-signer`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget` |
 | State and tools | `covenant-memory`, `covenant-tools`, `covenant-llm`, `covenant-mcp`, `covenant-a2a` |
 | Compositor | `covenant-tui` |
-| Payments | `covenant-x402`, `covenant-hyre` |
-| Settlement | `covenant-settlement`, `covenant-stake-keeper`, `covenant-sap-bridge`, `programs/settlement`, `programs/stake` |
+| Payments | `covenant-x402`, `covenant-hyre`, `covenant-zauth` |
+| Settlement | `covenant-settlement`, `covenant-stake-keeper`, `covenant-sap-bridge`, `covenant-metaplex`, `programs/settlement`, `programs/stake` |
+| Multichain (Base/EVM) | `covenant-x402-signer-evm`, `covenant-evm-firewall`, `covenant-spend-permission`, `covenant-ens-gateway` |
 
 ## Operating Model
 

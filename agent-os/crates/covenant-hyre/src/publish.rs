@@ -8,6 +8,8 @@
 //! gated by its own capability. With the bridge off, [`publishable`]
 //! returns nothing and the rest of the profile is unaffected.
 
+use tracing::warn;
+
 use crate::catalog::HyreCatalog;
 use crate::config::HyreConfig;
 
@@ -40,16 +42,26 @@ pub fn publishable(
         .endpoints()
         .iter()
         .filter(|ep| is_published(&ep.tool_name()))
-        .map(|ep| PublishableTool {
-            tool_name: ep.tool_name(),
-            slug: ep.slug(),
-            description: if ep.summary.is_empty() {
-                ep.description.clone()
-            } else {
-                ep.summary.clone()
-            },
-            base_price_micro_usdc: ep.price_micro_usdc,
-            resale_price_micro_usdc: config.marked_up(ep.price_micro_usdc),
+        .filter_map(|ep| {
+            let Some(resale_price_micro_usdc) = config.marked_up(ep.price_micro_usdc) else {
+                warn!(
+                    tool = %ep.tool_name(),
+                    price = ep.price_micro_usdc,
+                    "resale markup overflows u128; tool not published for resale"
+                );
+                return None;
+            };
+            Some(PublishableTool {
+                tool_name: ep.tool_name(),
+                slug: ep.slug(),
+                description: if ep.summary.is_empty() {
+                    ep.description.clone()
+                } else {
+                    ep.summary.clone()
+                },
+                base_price_micro_usdc: ep.price_micro_usdc,
+                resale_price_micro_usdc,
+            })
         })
         .collect()
 }
@@ -80,5 +92,43 @@ mod tests {
         assert_eq!(t.slug, "defi/tvl");
         assert_eq!(t.base_price_micro_usdc, 10_000);
         assert_eq!(t.resale_price_micro_usdc, 15_000);
+    }
+
+    #[test]
+    fn overflowing_resale_price_drops_the_tool() {
+        // A manifest-derived price can be as large as u128::MAX (usd_to_micro
+        // only bounds the *scaling*), so applying a nonzero markup can overflow.
+        // The tool must drop out of the resale set, not panic publishable().
+        let manifest = serde_json::json!({
+            "openapi": "3.1.0",
+            "paths": {
+                "/defi/tvl": {
+                    "get": { "x-payment-info": { "price": { "amount": "100000000000000000000000000000000" } } }
+                }
+            }
+        })
+        .to_string();
+        let catalog = HyreCatalog::from_manifest(&manifest, &HyreConfig::default()).unwrap();
+
+        // At cost the huge-but-valid price still fits, so the tool publishes.
+        let at_cost = publishable(&catalog, &HyreConfig::default(), true, |n| {
+            n == "hyre.defi.tvl"
+        });
+        assert_eq!(
+            at_cost.len(),
+            1,
+            "at-cost resale of a huge but valid price still publishes"
+        );
+
+        // With a markup the resale price overflows u128 and the tool drops.
+        let marked = HyreConfig {
+            markup_bps: 5_000,
+            ..HyreConfig::default()
+        };
+        let out = publishable(&catalog, &marked, true, |n| n == "hyre.defi.tvl");
+        assert!(
+            out.is_empty(),
+            "an overflowing resale markup drops the tool instead of panicking",
+        );
     }
 }

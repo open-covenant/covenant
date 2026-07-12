@@ -1,0 +1,10 @@
+{
+  "kind": "query_provenance",
+  "since_ms": 1,
+  "until_ms": 2,
+  "actor": "research@agent",
+  "approver": "operator@local",
+  "rule": "Sig",
+  "outcome": "granted",
+  "limit": 5
+}

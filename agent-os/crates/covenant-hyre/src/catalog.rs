@@ -10,7 +10,7 @@ use covenant_x402::{Catalog, PaymentRequirements, RegistryEntry};
 
 use crate::config::HyreConfig;
 use crate::manifest::{self, Endpoint};
-use crate::Result;
+use crate::{HyreError, Result};
 
 /// Server title every Hyre entry carries in the gateway catalog, used
 /// to disambiguate a slug shared with another provider.
@@ -46,13 +46,20 @@ impl HyreCatalog {
     /// Fetch the live manifest and rebuild. The daemon polls this on a
     /// refresh interval so a Hyre catalog change needs no rebuild.
     pub async fn refresh(http: &reqwest::Client, config: &HyreConfig) -> Result<Self> {
-        let body = http
+        Self::refresh_with_limits(http, config, crate::http::MAX_RESPONSE_BYTES).await
+    }
+
+    async fn refresh_with_limits(
+        http: &reqwest::Client,
+        config: &HyreConfig,
+        max_bytes: usize,
+    ) -> Result<Self> {
+        let resp = http
             .get(config.manifest_url())
             .send()
             .await?
-            .error_for_status()?
-            .text()
-            .await?;
+            .error_for_status()?;
+        let body = crate::http::read_capped(resp, max_bytes, HyreError::Manifest).await?;
         Self::from_manifest(&body, config)
     }
 
@@ -210,6 +217,69 @@ mod tests {
         assert!(
             matches!(result, Err(crate::HyreError::Http(_))),
             "expected HyreError::Http on a non-2xx manifest host",
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_oversized_manifest_body() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/openapi.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let config = HyreConfig {
+            base_url: server.uri(),
+            ..HyreConfig::default()
+        };
+        let result = HyreCatalog::refresh_with_limits(&reqwest::Client::new(), &config, 64).await;
+        assert!(
+            matches!(result, Err(crate::HyreError::Manifest(_))),
+            "expected HyreError::Manifest on an oversized manifest body",
+        );
+    }
+
+    #[test]
+    fn to_x402_catalog_uses_summary_then_falls_back_to_description() {
+        // The discovery `description` operators read for the pre-flight cap
+        // check is the endpoint summary when present, else the full
+        // description. The vendored fixture only exercises the summary-
+        // present arm; construct both so an inverted branch or a dropped
+        // is_empty() guard (which would publish a blank description) fails
+        // here.
+        let endpoint = |path: &str, summary: &str| Endpoint {
+            path: path.into(),
+            method: "POST".into(),
+            operation_id: path.trim_start_matches('/').into(),
+            summary: summary.into(),
+            description: "the full description".into(),
+            price_micro_usdc: 80_000,
+            params: vec![],
+            body: vec![],
+        };
+        let cat = HyreCatalog {
+            endpoints: vec![
+                endpoint("/with-summary", "a concise summary"),
+                endpoint("/no-summary", ""),
+            ],
+            network: "solana:mainnet".into(),
+            asset: "usdc-sol".into(),
+            base_url: "https://api.hyre.example".into(),
+        };
+
+        let x402 = cat.to_x402_catalog();
+        assert_eq!(
+            x402.by_slug("with-summary").expect("priced").description,
+            "a concise summary",
+            "a present summary is the discovery description"
+        );
+        assert_eq!(
+            x402.by_slug("no-summary").expect("priced").description,
+            "the full description",
+            "an empty summary falls back to the full description"
         );
     }
 }

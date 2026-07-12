@@ -129,7 +129,7 @@ impl HermesRunner {
             .await
             .map_err(remote_err)?;
         let status = resp.status();
-        let text = resp.text().await.map_err(remote_err)?;
+        let text = read_capped(resp, MAX_RESPONSE_BYTES).await?;
         if !status.is_success() {
             return Err(RunnerError::Remote {
                 status: status.as_u16(),
@@ -152,7 +152,7 @@ impl HermesRunner {
             .await
             .map_err(remote_err)?;
         let status = resp.status();
-        let text = resp.text().await.map_err(remote_err)?;
+        let text = read_capped(resp, MAX_RESPONSE_BYTES).await?;
         if !status.is_success() {
             return Err(RunnerError::Remote {
                 status: status.as_u16(),
@@ -177,7 +177,8 @@ impl HermesRunner {
         if !resp.status().is_success() {
             return None;
         }
-        let value: Value = resp.json().await.ok()?;
+        let text = read_capped(resp, MAX_RESPONSE_BYTES).await.ok()?;
+        let value: Value = serde_json::from_str(&text).ok()?;
         let features = value.get("features")?.as_object()?;
         Some(HermesCapabilities {
             run_submission: feature_flag(features, "run_submission"),
@@ -301,7 +302,14 @@ impl HermesRunner {
                 return Vec::new();
             }
         };
-        match resp.json::<HermesFilesResponse>().await {
+        let text = match read_capped(resp, MAX_RESPONSE_BYTES).await {
+            Ok(text) => text,
+            Err(e) => {
+                warn!(%run_id, error = %e, "hermes files read failed");
+                return Vec::new();
+            }
+        };
+        match serde_json::from_str::<HermesFilesResponse>(&text) {
             Ok(b) => b.files,
             Err(e) => {
                 warn!(%run_id, error = %e, "hermes files parse failed");
@@ -415,39 +423,83 @@ impl HermesRunner {
                     }
                 };
                 buffer.extend_from_slice(&bytes);
-                while let Some(idx) = find_boundary(&buffer) {
-                    let frame = buffer[..idx].to_vec();
-                    // Drop the boundary itself (`\n\n` or `\r\n\r\n`).
-                    let advance = if buffer[idx..].starts_with(b"\r\n\r\n") {
-                        idx + 4
-                    } else {
-                        idx + 2
-                    };
-                    buffer.drain(..advance);
-                    if let Some(trace) = parse_sse_frame(&frame) {
-                        // Stream the trace to the daemon live (best-effort) so
-                        // the audit step-trail fills in as the run works.
-                        if let Some(tx) = &event_tx {
-                            let _ = tx.send(crate::StreamedTrace {
-                                intent_id,
-                                issuer: issuer.clone(),
-                                trace: trace.clone(),
-                            });
-                        }
-                        match sink.lock() {
-                            Ok(mut v) => v.push(trace),
-                            Err(poisoned) => {
-                                // Already poisoned — push anyway. The
-                                // main thread will surface the lock
-                                // state via its own match arm above.
-                                poisoned.into_inner().push(trace);
-                            }
+                let traces = match drain_sse_frames(&mut buffer, MAX_SSE_BUFFER_BYTES) {
+                    Ok(traces) => traces,
+                    Err(pending) => {
+                        // The gateway streamed past the per-frame ceiling with
+                        // no boundary; `buffer` would grow without bound.
+                        // Abandon the best-effort trace stream — the poll loop
+                        // still delivers the run's final outcome — rather than
+                        // let a hostile or buggy gateway OOM the worker.
+                        warn!(
+                            %run_id,
+                            pending,
+                            cap = MAX_SSE_BUFFER_BYTES,
+                            "hermes event stream frame exceeds cap; aborting stream"
+                        );
+                        return;
+                    }
+                };
+                for trace in traces {
+                    // Stream the trace to the daemon live (best-effort) so
+                    // the audit step-trail fills in as the run works.
+                    if let Some(tx) = &event_tx {
+                        let _ = tx.send(crate::StreamedTrace {
+                            intent_id,
+                            issuer: issuer.clone(),
+                            trace: trace.clone(),
+                        });
+                    }
+                    match sink.lock() {
+                        Ok(mut v) => v.push(trace),
+                        Err(poisoned) => {
+                            // Already poisoned — push anyway. The
+                            // main thread will surface the lock
+                            // state via its own match arm above.
+                            poisoned.into_inner().push(trace);
                         }
                     }
                 }
             }
         })
     }
+}
+
+/// Maximum un-delimited SSE bytes the event-stream reader will buffer before
+/// treating the stream as hostile. The Hermes gateway is remote and only
+/// operator-configured, so the live trace stream earns the same memory-axis
+/// ceiling as every [`read_capped`] gateway read: a gateway that never emits a
+/// frame boundary — or one absurdly large frame — must not grow the
+/// accumulation buffer without bound and OOM the worker. The cap is applied to
+/// the remainder after complete frames are drained, so a steady stream of small
+/// frames holds at most one in-progress frame regardless of run length.
+const MAX_SSE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
+
+/// Drain every complete SSE frame from `buffer`, returning the parsed traces in
+/// arrival order. Each complete frame is removed (its trailing boundary
+/// included), so `buffer` is left holding only the trailing partial frame.
+/// Returns `Err(buffer.len())` when that un-delimited remainder still exceeds
+/// `max` — a gateway streaming without a frame boundary, which would otherwise
+/// grow `buffer` without bound.
+fn drain_sse_frames(buffer: &mut Vec<u8>, max: usize) -> Result<Vec<RuntimeTrace>, usize> {
+    let mut traces = Vec::new();
+    while let Some(idx) = find_boundary(buffer) {
+        let frame = buffer[..idx].to_vec();
+        // Drop the boundary itself (`\n\n` or `\r\n\r\n`).
+        let advance = if buffer[idx..].starts_with(b"\r\n\r\n") {
+            idx + 4
+        } else {
+            idx + 2
+        };
+        buffer.drain(..advance);
+        if let Some(trace) = parse_sse_frame(&frame) {
+            traces.push(trace);
+        }
+    }
+    if buffer.len() > max {
+        return Err(buffer.len());
+    }
+    Ok(traces)
 }
 
 fn find_boundary(buf: &[u8]) -> Option<usize> {
@@ -590,11 +642,52 @@ fn remote_err(e: reqwest::Error) -> RunnerError {
     }
 }
 
+/// Maximum gateway response body the runner will buffer into memory. The
+/// Hermes gateway is remote and operator-configured, so a compromised, buggy,
+/// or MITM'd one must not be able to exhaust a daemon worker with an unbounded
+/// body — the memory-axis ceiling mirroring [`REQUEST_TIMEOUT`] on the time
+/// axis.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read a gateway response body into a string, refusing anything past `max`.
+/// The `Content-Length` check rejects an oversized declared body before it is
+/// streamed; the running accumulation check is the real guard, since the
+/// header is optional and gateway-controlled. Bodies are JSON, so the bounded
+/// bytes are decoded lossily. An over-cap body is a gateway fault, surfaced as
+/// the same [`RunnerError::Remote`] shape [`remote_err`] uses for transport
+/// faults rather than a new variant.
+async fn read_capped(mut resp: reqwest::Response, max: usize) -> Result<String, RunnerError> {
+    let too_large = |bytes: u64| RunnerError::Remote {
+        status: 0,
+        message: format!("gateway response body of {bytes} bytes exceeds the {max}-byte cap"),
+    };
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(too_large(len));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(remote_err)? {
+        if buf.len() + chunk.len() > max {
+            return Err(too_large((buf.len() + chunk.len()) as u64));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        // `read_capped` feeds this from `String::from_utf8_lossy`, so `s` is
+        // valid UTF-8 but byte `max` can land inside a multi-byte char. Slicing
+        // there would panic, so back up to the largest boundary at or below it.
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
     }
 }
 
@@ -1010,6 +1103,107 @@ mod tests {
     }
 
     #[test]
+    fn drain_sse_frames_drains_complete_frames_in_order_and_empties_buffer() {
+        let f1 = "data: {\"event\":\"tool.started\",\"run_id\":\"r1\",\"tool\":\"terminal\",\"preview\":\"ls\"}";
+        let f2 = "data: {\"event\":\"tool.started\",\"run_id\":\"r2\",\"tool\":\"http\",\"preview\":\"GET\"}";
+        let mut buffer = format!("{f1}\n\n{f2}\n\n").into_bytes();
+        let traces = drain_sse_frames(&mut buffer, MAX_SSE_BUFFER_BYTES)
+            .expect("two complete frames under the cap must drain");
+        let ids: Vec<&str> = traces
+            .iter()
+            .map(|t| match t {
+                RuntimeTrace::HermesToolInvoked { run_id, .. } => run_id.as_str(),
+                other => panic!("expected HermesToolInvoked, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["r1", "r2"], "frames must surface in arrival order");
+        assert!(
+            buffer.is_empty(),
+            "every complete frame plus its boundary must be drained",
+        );
+    }
+
+    #[test]
+    fn drain_sse_frames_retains_partial_frame_under_cap() {
+        // A frame split across chunks arrives without its terminating
+        // boundary first. drain_sse_frames must return no traces and leave the
+        // partial bytes in `buffer` so the next chunk completes the frame —
+        // not drop them and not trip the cap.
+        let partial = b"data: {\"event\":\"tool.started\",\"run_id\":\"r1\"".to_vec();
+        let mut buffer = partial.clone();
+        let traces = drain_sse_frames(&mut buffer, MAX_SSE_BUFFER_BYTES)
+            .expect("a partial frame under the cap is not an error");
+        assert!(
+            traces.is_empty(),
+            "an unterminated frame yields no trace yet"
+        );
+        assert_eq!(buffer, partial, "the partial frame must be retained intact");
+    }
+
+    #[test]
+    fn drain_sse_frames_rejects_undelimited_buffer_past_cap() {
+        // The OOM guard: a gateway streaming bytes that never form a frame
+        // boundary makes find_boundary return None forever, so the inner drain
+        // never runs and the buffer would grow without bound. Once the
+        // un-delimited remainder passes the cap, drain_sse_frames returns
+        // Err(len) so the reader can abandon the stream instead of OOMing.
+        // Uses a tiny cap (mirroring the read_capped(big, 64) seam) so the
+        // guard is exercised without a 16 MiB fixture.
+        let mut buffer = vec![b'x'; 65];
+        let err = drain_sse_frames(&mut buffer, 64)
+            .expect_err("an un-delimited buffer past the cap must be rejected");
+        assert_eq!(err, 65, "the rejection reports the offending buffer length");
+    }
+
+    #[test]
+    fn drain_sse_frames_drains_many_small_frames_exceeding_cap() {
+        // The cap is on the un-delimited remainder AFTER draining, not on the
+        // cumulative bytes seen. A long healthy run streams many small frames
+        // whose total dwarfs the cap; each is drained as its boundary arrives,
+        // so the remainder stays tiny and the run is never killed. A cap on
+        // cumulative bytes would wrongly abort here.
+        let frame =
+            "data: {\"event\":\"tool.started\",\"run_id\":\"r\",\"tool\":\"t\",\"preview\":\"p\"}";
+        let mut buffer = format!("{frame}\n\n").repeat(50).into_bytes();
+        assert!(
+            buffer.len() > 64,
+            "fixture-sanity: total bytes exceed the cap"
+        );
+        let traces = drain_sse_frames(&mut buffer, 64)
+            .expect("complete frames drain regardless of cumulative size");
+        assert_eq!(traces.len(), 50, "every complete frame must be parsed");
+        assert!(buffer.is_empty(), "no remainder is left after draining");
+    }
+
+    #[test]
+    fn drain_sse_frames_retains_a_residual_buffer_sized_exactly_at_the_cap() {
+        // The OOM guard is `if buffer.len() > max` (hermes.rs:499): residuals
+        // OVER the cap are rejected, so an un-delimited residual sized exactly
+        // at the cap must be RETAINED — it sits on the limit but not over it,
+        // and the next chunk may still complete the frame boundary; only max+1
+        // trips the guard. The over-cap test probes 65 bytes against a 64-byte
+        // cap and the retention test probes ~40 bytes against a 16 MiB cap, so
+        // a `>` -> `>=` slip still rejects 65 and still accepts 40 while
+        // silently rejecting a residual sitting precisely on the cap. Pin the
+        // inclusive endpoint: a buffer of exactly `max` un-delimited bytes (no
+        // `\n\n`/`\r\n\r\n`, so find_boundary returns None and the drain loop
+        // never runs) is retained, not rejected.
+        let mut buffer = vec![b'x'; 64];
+        let traces = drain_sse_frames(&mut buffer, 64).expect(
+            "a residual buffer sized exactly at the cap must be retained, not rejected as over-cap",
+        );
+        assert!(
+            traces.is_empty(),
+            "an un-delimited residual yields no trace yet"
+        );
+        assert_eq!(
+            buffer.len(),
+            64,
+            "the at-cap residual must be retained intact so the next chunk can complete its frame",
+        );
+    }
+
+    #[test]
     fn hermes_runner_new_pins_greedy_trim_of_trailing_slashes_on_base_url() {
         // covenant_runtime::hermes::HermesRunner::new
         // normalizes base_url with:
@@ -1320,6 +1514,33 @@ mod tests {
              test could conceivably accept it under a future trait \
              swap",
         );
+    }
+
+    #[test]
+    fn truncate_backs_up_to_a_char_boundary_on_multibyte_overflow() {
+        // read_capped feeds truncate() a String::from_utf8_lossy of the raw
+        // gateway body: valid UTF-8, but the byte at `max` can fall inside a
+        // multi-byte char. A hostile or MITM'd gateway can return a >max-byte
+        // error body with a char straddling byte `max`; the old `&s[..max]`
+        // slice panicked the runner task there. truncate must back up to the
+        // largest char boundary at or below `max` instead.
+
+        // '€' (U+20AC) is three bytes; four of them put boundaries at 0,3,6,9,12.
+        // max=5 lands inside the second '€', so the slice backs up to byte 3.
+        assert_eq!(truncate("€€€€", 5), "€…");
+
+        // '💥' (U+1F4A5) is four bytes; "ab💥cd" has boundaries at 0,1,2,6,7,8.
+        // max=4 lands inside '💥', so the slice backs up to byte 2.
+        assert_eq!(truncate("ab💥cd", 4), "ab…");
+
+        // The output stays within the byte cap (kept prefix plus the ellipsis
+        // marker), which is the bound the truncation exists to enforce against
+        // an adversarial body.
+        assert!(truncate("€€€€", 5).len() <= 5 + "…".len());
+
+        // ASCII overflow is unchanged: every byte is a boundary, so the walk is
+        // a no-op and the slice lands exactly at max (matches the legacy path).
+        assert_eq!(truncate("abcdef", 5), "abcde…");
     }
 
     #[test]
@@ -1775,6 +1996,48 @@ network = "off"
     }
 
     #[tokio::test]
+    async fn poll_tolerates_exactly_max_consecutive_failures_then_completes() {
+        // poll_until_terminal gives up only when a failure streak *exceeds*
+        // the cap: `if consecutive_failures > MAX_CONSECUTIVE_POLL_FAILURES`
+        // (hermes.rs:341). The contract is that a long run rides out exactly
+        // MAX_CONSECUTIVE_POLL_FAILURES consecutive transient poll blips and
+        // aborts only on the next one. The two existing resilience tests
+        // bracket this boundary without landing on it:
+        // poll_tolerates_transient_failures uses fail_times=2 (`2 > 5` stays
+        // false either way) and poll_gives_up_after_max_consecutive_failures
+        // serves 503 forever (a `>` -> `>=` flip just gives up one poll
+        // sooner, still Remote 503). So a `>` -> `>=` off-by-one — abort *at*
+        // the cap instead of past it — passes every test today while killing a
+        // run one recoverable blip too early. Serve exactly the cap's worth of
+        // failures, then a completion: the run must survive the full streak
+        // and finish. A `>=` flip aborts on the MAX-th failure and surfaces
+        // RunnerError::Remote 503 instead, failing the completion assertion.
+        let server = MockServer::start().await;
+        mount_submit(&server, "r1").await;
+        Mock::given(method("GET"))
+            .and(path("/runs/r1"))
+            .respond_with(FlakyThenComplete {
+                fail_times: MAX_CONSECUTIVE_POLL_FAILURES as usize,
+                calls: AtomicUsize::new(0),
+                output: "survived the streak".into(),
+            })
+            .mount(&server)
+            .await;
+
+        let result = runner(&server)
+            .run(&hermes_card(30_000), &intent())
+            .await
+            .expect(
+            "a run must tolerate exactly MAX_CONSECUTIVE_POLL_FAILURES blips, not abort at the cap",
+        );
+        assert_eq!(
+            result.text, "survived the streak",
+            "the run must complete after riding out the full MAX_CONSECUTIVE_POLL_FAILURES streak; \
+             aborting at the cap (a > -> >= flip) surfaces RunnerError::Remote instead",
+        );
+    }
+
+    #[tokio::test]
     async fn poll_gives_up_after_max_consecutive_failures() {
         let server = MockServer::start().await;
         mount_submit(&server, "r1").await;
@@ -1910,6 +2173,138 @@ network = "off"
         assert!(
             result.files.is_empty(),
             "files fetch failure must not fail the run"
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_response_body_read_is_bounded() {
+        // The Hermes gateway is remote and untrusted: a normal body reads back
+        // whole, but a response past the cap is refused, not buffered into the
+        // daemon's memory. wiremock always emits Content-Length, so this trips
+        // the early declared-length reject; the running accumulation guard for
+        // an absent or understated header is inspection-verified.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ok"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let ok = http
+            .get(format!("{}/ok", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(read_capped(ok, 64).await.expect("under cap"), "hello");
+
+        let big = http
+            .get(format!("{}/big", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        let err = read_capped(big, 64).await.expect_err("over cap");
+        assert!(
+            matches!(err, RunnerError::Remote { status: 0, .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_capped_keeps_a_body_sized_exactly_at_the_cap() {
+        // read_capped keeps a gateway body whose size is exactly the cap: both
+        // the Content-Length early reject (`len > max`, hermes.rs:665) and the
+        // running accumulation guard (`buf.len() + chunk.len() > max`,
+        // hermes.rs:671) use `>`, not `>=`, so a body of max bytes is allowed
+        // and only max+1 is refused. gateway_response_body_read_is_bounded
+        // brackets this far from the boundary — 5 bytes under a 64-byte cap,
+        // 4096 over it — and fetch_files probes only MAX+1, so a `>` -> `>=`
+        // flip on either guard, which would refuse a body sized exactly at the
+        // cap, passes every test. Read a body of known length N: cap=N returns
+        // it verbatim (re-pinning both keep-arms) and cap=N-1 refuses.
+        let server = MockServer::start().await;
+        let body = "a".repeat(64);
+        Mock::given(method("GET"))
+            .and(path("/exact"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body.clone()))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+
+        let at_cap = http
+            .get(format!("{}/exact", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(
+            read_capped(at_cap, body.len())
+                .await
+                .expect("a gateway body sized exactly at the cap must read back whole"),
+            body,
+            "read_capped must return an at-cap gateway body verbatim — equality is the keep-arm; \
+             a > -> >= flip would refuse it as over-cap",
+        );
+
+        let over = http
+            .get(format!("{}/exact", server.uri()))
+            .send()
+            .await
+            .expect("request");
+        let err = read_capped(over, body.len() - 1)
+            .await
+            .expect_err("a body one byte over the cap must be refused, not buffered");
+        assert!(
+            matches!(err, RunnerError::Remote { status: 0, .. }),
+            "one byte over the cap must surface RunnerError::Remote {{ status: 0 }}; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_files_is_bounded_and_best_effort() {
+        // The gateway is untrusted: a normal /files body reads back whole, a
+        // malformed one degrades to an empty list, and an oversized one is
+        // refused by the shared cap rather than buffered into the daemon's
+        // memory. fetch_files is best-effort, so every failure yields an empty
+        // list — the run trail and result still stand.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/runs/ok/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "files": [{ "path": "src/main.rs", "content": "fn main() {}", "truncated": false }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/bad/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/runs/big/files"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("a".repeat(MAX_RESPONSE_BYTES + 1)),
+            )
+            .mount(&server)
+            .await;
+
+        let runner = runner(&server);
+
+        let files = runner.fetch_files("ok").await;
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "src/main.rs");
+
+        assert!(
+            runner.fetch_files("bad").await.is_empty(),
+            "a malformed files body must degrade to an empty list"
+        );
+        assert!(
+            runner.fetch_files("big").await.is_empty(),
+            "an oversized files body must be refused, not buffered into memory"
         );
     }
 }

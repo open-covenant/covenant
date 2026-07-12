@@ -155,6 +155,32 @@ describe('compute-broker server', () => {
     await nokey.close();
   });
 
+  it('bonds/cancel returns 503 without broker key', async () => {
+    // Symmetric to the bonds/request 503 above: an unprovisioned broker (no
+    // signing key) must refuse to cancel a bond rather than proceeding. The
+    // body is zod-valid so the request reaches the signingKeyHex gate, which
+    // sits before any signature verification.
+    const nokey = build({
+      cfg: loadConfig({ OPERATOR_BEARER_TOKEN: operatorBearer }),
+      providers: { ionet: new FakeProvider('ionet'), akash: new FakeProvider('akash') },
+    });
+    await nokey.ready();
+    const res = await nokey.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: 'lease-nokey',
+        agent_did: '11111111111111111111111111111111',
+        signed_request: bs58.encode(new Uint8Array(64)),
+        nonce: bs58.encode(new Uint8Array(16)),
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'broker key not loaded' });
+    await nokey.close();
+  });
+
   const freshCancelPayload = async (leaseId: string, opts: { expirySecs?: number } = {}) => {
     const agentKey = hexToKey('cd'.repeat(32));
     const agentPk = await deriveAgentKey(agentKey);
@@ -272,6 +298,137 @@ describe('compute-broker server', () => {
     expect(replay.json()).toMatchObject({ error: 'nonce already used' });
   });
 
+  it('bonds/cancel does not burn the nonce on a signature-verification failure', async () => {
+    const leaseId = 'ionet-lease-badsig-nonce';
+    const { agentDid, nonce, expires_at, signed_request } = await freshCancelPayload(leaseId);
+
+    // A bad signature carrying a fresh, valid nonce must be rejected *before* the
+    // nonce is recorded — otherwise an attacker could poison a victim's nonce.
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: agentDid,
+        signed_request: bs58.encode(new Uint8Array(64)),
+        nonce,
+        expires_at,
+      },
+    });
+    expect(bad.statusCode).toBe(403);
+
+    // The real signer retries the SAME nonce with the valid signature and must
+    // succeed; a 409 here would mean the failed attempt consumed the nonce.
+    const good = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: agentDid,
+        signed_request,
+        nonce,
+        expires_at,
+      },
+    });
+    expect(good.statusCode).toBe(200);
+    expect(good.json()).toMatchObject({ lease_id: leaseId, status: 'cancelled' });
+  });
+
+  it('bonds/cancel refuses a second cancel of an already-cancelled lease without re-refunding', async () => {
+    const leaseId = 'ionet-lease-double-cancel';
+    const first = await freshCancelPayload(leaseId);
+    const firstRes = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: first.agentDid,
+        signed_request: first.signed_request,
+        nonce: first.nonce,
+        expires_at: first.expires_at,
+      },
+    });
+    expect(firstRes.statusCode).toBe(200);
+
+    const second = await freshCancelPayload(leaseId);
+    const secondRes = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: second.agentDid,
+        signed_request: second.signed_request,
+        nonce: second.nonce,
+        expires_at: second.expires_at,
+      },
+    });
+    expect(secondRes.statusCode).toBe(409);
+    expect(secondRes.json()).toMatchObject({ error: 'lease already cancelled' });
+    const cancels = ionet.calls.filter((c) => c.op === 'cancel' && c.leaseId === leaseId);
+    expect(cancels).toHaveLength(1);
+  });
+
+  it('bonds/cancel refuses cancel of a reclaimed lease', async () => {
+    const leaseId = 'ionet-lease-reclaimed';
+    const reclaim = await app.inject({
+      method: 'POST',
+      url: '/leases/reclaim',
+      headers: operatorAuth,
+      payload: { lease_id: leaseId, provider: 'ionet' },
+    });
+    expect(reclaim.statusCode).toBe(200);
+
+    const { agentDid, nonce, expires_at, signed_request } = await freshCancelPayload(leaseId);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: {
+        lease_id: leaseId,
+        agent_did: agentDid,
+        signed_request,
+        nonce,
+        expires_at,
+      },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'lease already reclaimed' });
+    expect(ionet.calls).not.toContainEqual({ op: 'cancel', leaseId });
+  });
+
+  it('bonds/cancel returns 404 when the lease exists on no provider and burns the nonce first', async () => {
+    class UnavailableProvider extends FakeProvider {
+      async status(): Promise<'reserved' | 'active' | 'cancelled' | 'reclaimed'> {
+        throw new Error('provider status backend unavailable');
+      }
+    }
+    const isolated = build({
+      cfg,
+      providers: { ionet: new UnavailableProvider('ionet'), akash: new UnavailableProvider('akash') },
+    });
+    await isolated.ready();
+
+    const leaseId = 'ghost-lease';
+    const { agentDid, nonce, expires_at, signed_request } = await freshCancelPayload(leaseId);
+    const res = await isolated.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: { lease_id: leaseId, agent_did: agentDid, signed_request, nonce, expires_at },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: 'lease not found on any provider' });
+
+    // The nonce is recorded before the provider lookup, so a same-nonce replay is
+    // refused as used — it is never re-evaluated against the providers (anti-probe).
+    const replay = await isolated.inject({
+      method: 'POST',
+      url: '/bonds/cancel',
+      payload: { lease_id: leaseId, agent_did: agentDid, signed_request, nonce, expires_at },
+    });
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json()).toMatchObject({ error: 'nonce already used' });
+    await isolated.close();
+  });
+
   it('leases/activate requires operator bearer', async () => {
     const noAuth = await app.inject({
       method: 'POST',
@@ -286,6 +443,47 @@ describe('compute-broker server', () => {
       payload: { lease_id: 'ionet-lease-badauth', provider: 'ionet' },
     });
     expect(badAuth.statusCode).toBe(403);
+  });
+
+  it('leases/activate rejects a same-length wrong operator bearer', async () => {
+    // The badauth test above sends a different-length token, so requireOperator
+    // short-circuits on the cheap length check and never runs timingSafeEqual.
+    // Flip one byte while keeping the length identical so the constant-time
+    // byte-comparison is the only thing that can reject it — without this, a
+    // mutation trusting length alone would accept any same-length forgery.
+    const last = operatorBearer.slice(-1);
+    const sameLengthWrong = `${operatorBearer.slice(0, -1)}${last === 'x' ? 'y' : 'x'}`;
+    expect(sameLengthWrong).toHaveLength(operatorBearer.length);
+    expect(sameLengthWrong).not.toBe(operatorBearer);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/leases/activate',
+      headers: { authorization: `Bearer ${sameLengthWrong}` },
+      payload: { lease_id: 'ionet-lease-samelen', provider: 'ionet' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'invalid bearer' });
+  });
+
+  it('leases/activate returns 503 when no operator bearer is configured', async () => {
+    // Deny-by-default: a deploy that never set OPERATOR_BEARER_TOKEN must
+    // refuse every operator-gated route, even when the caller supplies a
+    // Bearer header — the missing *server* credential, not a missing client
+    // header, is what fails the request closed.
+    const nobearer = build({
+      cfg: loadConfig({ BROKER_SIGNING_KEY_HEX: key }),
+      providers: { ionet: new FakeProvider('ionet'), akash: new FakeProvider('akash') },
+    });
+    await nobearer.ready();
+    const res = await nobearer.inject({
+      method: 'POST',
+      url: '/leases/activate',
+      headers: { authorization: `Bearer ${operatorBearer}` },
+      payload: { lease_id: 'ionet-lease-nobearer', provider: 'ionet' },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: /operator bearer not configured/ });
+    await nobearer.close();
   });
 
   it('leases/activate activates the selected provider lease', async () => {
@@ -332,5 +530,53 @@ describe('compute-broker server', () => {
       errors: 0,
     });
     expect(ionet.calls).toContainEqual({ op: 'reclaim', leaseId: 'ionet-expired' });
+  });
+
+  class FailingProvider extends FakeProvider {
+    async activate(): Promise<void> {
+      throw new Error('provider activate backend down');
+    }
+    async reclaim(): Promise<void> {
+      throw new Error('provider reclaim backend down');
+    }
+  }
+
+  it('leases/activate surfaces a provider failure as 502', async () => {
+    const failing = build({
+      cfg,
+      providers: { ionet: new FailingProvider('ionet'), akash: new FailingProvider('akash') },
+    });
+    await failing.ready();
+    const res = await failing.inject({
+      method: 'POST',
+      url: '/leases/activate',
+      headers: operatorAuth,
+      payload: { lease_id: 'ionet-lease-fail', provider: 'ionet' },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: /provider activate backend down/ });
+    await failing.close();
+  });
+
+  it('leases/expire-sweep reports an error status when a provider reclaim fails', async () => {
+    const failing = build({
+      cfg,
+      providers: { ionet: new FailingProvider('ionet'), akash: new FailingProvider('akash') },
+    });
+    await failing.ready();
+    const res = await failing.inject({
+      method: 'POST',
+      url: '/leases/expire-sweep',
+      headers: operatorAuth,
+      payload: {
+        now_unix: 1_700_000_100,
+        leases: [{ lease_id: 'ionet-expired-fail', provider: 'ionet', slashable_until: 1_700_000_000 }],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ reclaimed: 0, skipped: 0, errors: 1 });
+    const body = res.json() as { results: Array<{ lease_id: string; status: string; reason?: string }> };
+    expect(body.results[0]).toMatchObject({ lease_id: 'ionet-expired-fail', status: 'error' });
+    await failing.close();
   });
 });

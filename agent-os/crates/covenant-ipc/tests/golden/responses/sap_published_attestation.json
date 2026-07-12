@@ -1,0 +1,7 @@
+{
+  "kind": "sap_published_attestation",
+  "attestation_pda": "Attest1111111111111111111111111111111111111",
+  "attester": "Verifier111111111111111111111111111111111111",
+  "agent_pda": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+  "signature": "5sigPublishAttestationExampleBase58Signature"
+}

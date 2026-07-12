@@ -38,6 +38,42 @@ pub enum SearchError {
     Status { status: u16, body: String },
     #[error("missing api key for {0}")]
     MissingKey(&'static str),
+    #[error("response body exceeds the {limit}-byte cap")]
+    ResponseTooLarge { limit: usize },
+}
+
+/// Total per-request timeout for a search provider call. The endpoints are
+/// operator-configured third-party search APIs; a hung or slow-drip provider
+/// must not be able to block a daemon worker forever.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Maximum search-response body the client will buffer into memory. The
+/// endpoints are operator-configured third-party search APIs reached with the
+/// operator's api_key; a compromised or malicious provider must not be able to
+/// exhaust a daemon worker's memory with an unbounded body. 16 MiB sits far
+/// above any real search page yet stops a runaway stream — the memory-axis
+/// sibling of [`REQUEST_TIMEOUT`].
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Buffer a response body, refusing anything past `max`. The `Content-Length`
+/// check rejects an oversized declared body before it is streamed; the running
+/// accumulation check is the real guard, since the header is optional and
+/// provider-controlled. A mid-stream transport fault surfaces as
+/// [`SearchError::Http`]; an over-cap body as [`SearchError::ResponseTooLarge`].
+async fn read_body_capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>, SearchError> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(SearchError::ResponseTooLarge { limit: max });
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if buf.len() + chunk.len() > max {
+            return Err(SearchError::ResponseTooLarge { limit: max });
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 #[async_trait]
@@ -84,20 +120,35 @@ impl SearchProvider for MockSearch {
 
 // ---------- Brave ----------
 
+const BRAVE_ENDPOINT: &str = "https://api.search.brave.com/res/v1/web/search";
+
 pub struct BraveSearch {
     pub api_key: String,
+    endpoint: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl BraveSearch {
     pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_limits(api_key, BRAVE_ENDPOINT, REQUEST_TIMEOUT, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        api_key: impl Into<String>,
+        endpoint: impl Into<String>,
+        timeout: Duration,
+        max_bytes: usize,
+    ) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(20))
+            .timeout(timeout)
             .build()
             .expect("reqwest client");
         Self {
             api_key: api_key.into(),
+            endpoint: endpoint.into(),
             client,
+            max_bytes,
         }
     }
 }
@@ -131,7 +182,7 @@ impl SearchProvider for BraveSearch {
         }
         let resp = self
             .client
-            .get("https://api.search.brave.com/res/v1/web/search")
+            .get(&self.endpoint)
             .header("X-Subscription-Token", &self.api_key)
             .header("Accept", "application/json")
             .query(&[("q", query), ("count", &limit.to_string())])
@@ -139,13 +190,17 @@ impl SearchProvider for BraveSearch {
             .await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(SearchError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: BraveResponse = resp.json().await?;
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: BraveResponse = serde_json::from_slice(&bytes)?;
         let hits = parsed
             .web
             .map(|w| w.results)
@@ -167,20 +222,40 @@ impl SearchProvider for BraveSearch {
 
 // ---------- SerpAPI ----------
 
+const SERPAPI_ENDPOINT: &str = "https://serpapi.com/search";
+
 pub struct SerpApiSearch {
     pub api_key: String,
+    endpoint: String,
     client: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl SerpApiSearch {
     pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_limits(
+            api_key,
+            SERPAPI_ENDPOINT,
+            REQUEST_TIMEOUT,
+            MAX_RESPONSE_BYTES,
+        )
+    }
+
+    fn with_limits(
+        api_key: impl Into<String>,
+        endpoint: impl Into<String>,
+        timeout: Duration,
+        max_bytes: usize,
+    ) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(20))
+            .timeout(timeout)
             .build()
             .expect("reqwest client");
         Self {
             api_key: api_key.into(),
+            endpoint: endpoint.into(),
             client,
+            max_bytes,
         }
     }
 }
@@ -209,7 +284,7 @@ impl SearchProvider for SerpApiSearch {
         }
         let resp = self
             .client
-            .get("https://serpapi.com/search")
+            .get(&self.endpoint)
             .query(&[
                 ("engine", "google"),
                 ("q", query),
@@ -220,13 +295,17 @@ impl SearchProvider for SerpApiSearch {
             .await?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, self.max_bytes)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             return Err(SearchError::Status {
                 status: status.as_u16(),
                 body,
             });
         }
-        let parsed: SerpApiResponse = resp.json().await?;
+        let bytes = read_body_capped(resp, self.max_bytes).await?;
+        let parsed: SerpApiResponse = serde_json::from_slice(&bytes)?;
         let hits = parsed
             .organic_results
             .unwrap_or_default()
@@ -570,10 +649,12 @@ mod tests {
 
     #[test]
     fn search_error_display_messages_pin_three_string_variant_format_strings() {
-        // SearchError has seven variants parallel to
-        // covenant_llm::ProviderError. Four wrap external errors via
-        // #[from]. The three string-literal variants emit operator-
-        // facing format strings that no existing test inspects.
+        // SearchError has eight variants. Four wrap external errors via
+        // #[from] (Http, Serde, Io, Toml); Empty, Status, and MissingKey
+        // parallel covenant_llm::ProviderError; ResponseTooLarge is the
+        // memory-axis response-body cap with no ProviderError analog. The
+        // three string-literal variants emit operator-facing format strings
+        // that no existing test inspects.
         // brave_without_key_returns_missing_key and
         // serpapi_without_key_returns_missing_key assert
         // MissingKey via `matches!` which ignores the Display rendering;
@@ -676,6 +757,20 @@ api_key = "BSA-test"
 provider = "made-up"
 "#;
         let cfg: SearchConfig = toml::from_str(toml_src).unwrap();
+        assert!(search_from_config(&cfg).is_none());
+    }
+
+    #[test]
+    fn search_from_config_returns_none_when_no_search_block_configured() {
+        // Distinct from the unknown-provider None above: that arm means
+        // a provider was named but isn't recognized; this one means no
+        // [search] block exists at all, the default for a daemon that
+        // never configured web search. pick_search depends on this None
+        // to fall back to the no-op search path — an unwrap here would
+        // crash that default daemon, a default provider would silently
+        // enable search no operator asked for.
+        let cfg = SearchConfig::default();
+        assert!(cfg.search.is_none(), "default config has no [search] block");
         assert!(search_from_config(&cfg).is_none());
     }
 
@@ -1261,6 +1356,221 @@ api_key = "BSA-test"
         assert!(
             source.downcast_ref::<toml::de::Error>().is_some(),
             "covenant_tools::SearchError::Toml source() must downcast_ref to toml::de::Error so search-tool config-load diagnostics can inspect rendered line/column span context for malformed-search-config identification; a refactor that wrapped the inner in a project-local newtype (e.g., SearchTomlError(toml::de::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<toml::de::Error>() at every downstream callsite that classifies search-config TOML parse faults (concrete-source-type downcast regression class)"
+        );
+    }
+
+    #[tokio::test]
+    async fn brave_search_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // BraveSearch and SerpApiSearch buffer the whole provider response
+        // into memory. The 20s timeout bounds the time axis; read_body_capped
+        // bounds the memory axis so a compromised or buggy provider cannot
+        // OOM the daemon worker with a multi-GB body. A single ~80-byte
+        // Brave-shaped success body is served to every GET: a generous cap
+        // reads it whole and parses out the hit, a tiny cap rejects it. The
+        // base-URL seam (with_limits) points the provider at the wiremock
+        // server, mirroring the das.rs HttpDasClient::with_limits test.
+        //
+        // wiremock always sets Content-Length, so the over-cap assertion
+        // exercises the early-reject branch; the running chunk-accumulation
+        // guard (the real defense against an omitted/understated header) is
+        // inspection-verified, since wiremock cannot omit the header.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"web":{"results":[{"title":"t","url":"https://example.com","description":"d"}]}}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let under_cap = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 16 * 1024)
+            .search("q", 5)
+            .await
+            .expect("an under-cap Brave body must read back through read_body_capped as hits");
+        assert_eq!(under_cap.len(), 1);
+        assert_eq!(
+            under_cap[0].url, "https://example.com",
+            "the under-cap read must still deserialize the Brave response body verbatim",
+        );
+
+        let err = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 8)
+            .search("q", 5)
+            .await
+            .expect_err("an over-cap Brave body must be rejected, not buffered");
+        assert!(
+            matches!(err, SearchError::ResponseTooLarge { limit: 8 }),
+            "Brave over-cap read must surface SearchError::ResponseTooLarge {{ limit: 8 }} so a \
+             malicious provider cannot OOM the daemon worker; got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn brave_search_surfaces_non_success_status() {
+        // BraveSearch::search turns a non-200 provider response into
+        // SearchError::Status carrying the status code and response body
+        // (lib.rs:192-201). Only the variant's Display string was pinned
+        // before; this drives the production status.is_success() path so a
+        // regression that dropped the check and parsed a 4xx/5xx body as
+        // results is caught.
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
+            .mount(&server)
+            .await;
+
+        let err = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 16 * 1024)
+            .search("q", 5)
+            .await
+            .expect_err("a 429 Brave response must surface, not be parsed as hits");
+        match err {
+            SearchError::Status { status, body } => {
+                assert_eq!(status, 429, "got {status}");
+                assert!(
+                    body.contains("rate limited"),
+                    "body must carry provider text: {body}"
+                );
+            }
+            other => panic!("expected SearchError::Status, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn brave_search_surfaces_empty_results() {
+        // A 200 response with no results surfaces SearchError::Empty
+        // (lib.rs:216-218), distinct from a successful hit list, so the
+        // caller can tell a genuine empty-search apart from hits.
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"web":{"results":[]}}"#))
+            .mount(&server)
+            .await;
+
+        let err = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 16 * 1024)
+            .search("q", 5)
+            .await
+            .expect_err("a no-results Brave response must surface Empty, not Ok([])");
+        assert!(
+            matches!(err, SearchError::Empty),
+            "expected SearchError::Empty, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn serpapi_search_surfaces_non_success_status() {
+        // Parity for SerpApiSearch::search (lib.rs:296-305): a non-200 must
+        // surface SearchError::Status with the code + body, mirroring Brave.
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .mount(&server)
+            .await;
+
+        let err = SerpApiSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 16 * 1024)
+            .search("q", 5)
+            .await
+            .expect_err("a 401 SerpApi response must surface, not be parsed as hits");
+        match err {
+            SearchError::Status { status, body } => {
+                assert_eq!(status, 401, "got {status}");
+                assert!(
+                    body.contains("unauthorized"),
+                    "body must carry provider text: {body}"
+                );
+            }
+            other => panic!("expected SearchError::Status, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn brave_search_reads_a_body_sized_exactly_at_the_cap() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // read_body_capped keeps a body whose size is exactly the cap: both
+        // the Content-Length early reject (`if len > max`, lib.rs:65) and the
+        // running accumulation guard (`if buf.len() + chunk.len() > max`,
+        // lib.rs:71) use `>`, not `>=`, so a body of max bytes is allowed and
+        // only max+1 is rejected. The sibling cap tests bracket that boundary
+        // from far away — an 8-byte cap rejects the ~80-byte body, a 16 KiB
+        // cap accepts it — so a `>` -> `>=` flip on either guard, which would
+        // reject a body sized exactly at the cap, passes both. Serve a body of
+        // known length N: cap=N must read back the hit (re-pinning both
+        // keep-arms on the boundary) and cap=N-1 must be rejected. A `>=` flip
+        // on line 65 or line 71 turns the cap=N read into ResponseTooLarge.
+        let body =
+            r#"{"web":{"results":[{"title":"t","url":"https://example.com","description":"d"}]}}"#;
+        let exact = body.len();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let at_cap = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, exact)
+            .search("q", 5)
+            .await
+            .expect("a body sized exactly at the cap must read back through read_body_capped");
+        assert_eq!(at_cap.len(), 1);
+        assert_eq!(
+            at_cap[0].url, "https://example.com",
+            "the at-cap read must still deserialize the Brave response body verbatim",
+        );
+
+        let err = BraveSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, exact - 1)
+            .search("q", 5)
+            .await
+            .expect_err("a body one byte over the cap must be rejected, not buffered");
+        assert!(
+            matches!(err, SearchError::ResponseTooLarge { limit } if limit == exact - 1),
+            "one byte over the cap must surface SearchError::ResponseTooLarge {{ limit: {} }} so a \
+             malicious provider cannot OOM the daemon worker; got {err:?}",
+            exact - 1,
+        );
+    }
+
+    #[tokio::test]
+    async fn serpapi_search_caps_oversized_body_and_reads_a_small_body() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"organic_results":[{"title":"t","link":"https://example.com","snippet":"d"}]}"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let under_cap = SerpApiSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 16 * 1024)
+            .search("q", 5)
+            .await
+            .expect("an under-cap SerpApi body must read back through read_body_capped as hits");
+        assert_eq!(under_cap.len(), 1);
+        assert_eq!(
+            under_cap[0].url, "https://example.com",
+            "the under-cap read must still deserialize the SerpApi response body verbatim",
+        );
+
+        let err = SerpApiSearch::with_limits("k", server.uri(), REQUEST_TIMEOUT, 8)
+            .search("q", 5)
+            .await
+            .expect_err("an over-cap SerpApi body must be rejected, not buffered");
+        assert!(
+            matches!(err, SearchError::ResponseTooLarge { limit: 8 }),
+            "SerpApi over-cap read must surface SearchError::ResponseTooLarge {{ limit: 8 }} so a \
+             malicious provider cannot OOM the daemon worker; got {err:?}",
         );
     }
 }

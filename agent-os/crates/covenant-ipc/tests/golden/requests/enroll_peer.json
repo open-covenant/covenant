@@ -1,0 +1,8 @@
+{
+  "kind": "enroll_peer",
+  "display": "peer@example",
+  "actions": [
+    "a2a.task.send",
+    "a2a.result.read"
+  ]
+}

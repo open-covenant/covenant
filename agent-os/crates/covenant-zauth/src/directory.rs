@@ -1,29 +1,53 @@
 //! Read-only client for `https://api.zauth.inc/api/directory`.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, ZauthError};
 
 const DEFAULT_BASE_URL: &str = "https://api.zauth.inc";
 
+/// Per-request timeout for the directory read. `api.zauth.inc` is an
+/// external service; a hung or slow-drip response must not make a CLI
+/// invocation hang forever. The listing is a stateless read with no
+/// payment settlement, so a short read timeout is sufficient.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// The reqwest client the CLI should drive [`DirectoryClient`] with —
+/// bounded so an unresponsive registry cannot hang the command.
+pub fn http_client() -> reqwest::Client {
+    http_client_with_timeout(REQUEST_TIMEOUT)
+}
+
+fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 #[derive(Debug, Clone)]
 pub struct DirectoryClient {
     http: reqwest::Client,
     base_url: String,
+    max_bytes: usize,
 }
 
 impl DirectoryClient {
     pub fn new(http: reqwest::Client) -> Self {
-        Self {
-            http,
-            base_url: DEFAULT_BASE_URL.into(),
-        }
+        Self::with_limits(http, DEFAULT_BASE_URL, crate::http::MAX_RESPONSE_BYTES)
     }
 
     pub fn with_base_url(http: reqwest::Client, base_url: impl Into<String>) -> Self {
+        Self::with_limits(http, base_url, crate::http::MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(http: reqwest::Client, base_url: impl Into<String>, max_bytes: usize) -> Self {
         Self {
             http,
             base_url: base_url.into(),
+            max_bytes,
         }
     }
 
@@ -48,7 +72,8 @@ impl DirectoryClient {
         if !status.is_success() {
             return Err(ZauthError::UnexpectedStatus(status.as_u16()));
         }
-        let text = resp.text().await?;
+        let text =
+            crate::http::read_capped(resp, self.max_bytes, ZauthError::DecodeDirectory).await?;
         serde_json::from_str(&text)
             .map_err(|e| ZauthError::DecodeDirectory(format!("{e}: body={text}")))
     }
@@ -277,6 +302,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn slow_directory_times_out_instead_of_hanging() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/directory"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let client = DirectoryClient::with_base_url(
+            http_client_with_timeout(Duration::from_millis(50)),
+            server.uri(),
+        );
+        let err = client
+            .list(ListQuery::default())
+            .await
+            .expect_err("must time out");
+        assert!(matches!(err, ZauthError::Http(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_directory_body_is_rejected_instead_of_buffered() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/directory"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let client = DirectoryClient::with_limits(reqwest::Client::new(), server.uri(), 64);
+        let err = client
+            .list(ListQuery::default())
+            .await
+            .expect_err("must reject an oversized directory body");
+        assert!(matches!(err, ZauthError::DecodeDirectory(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn directory_body_at_exact_cap_is_accepted() {
+        // oversized_directory_body_is_rejected_instead_of_buffered trips
+        // read_capped's Content-Length pre-check and returns before the
+        // streaming accumulation check (the doc's "real guard") runs. Both
+        // compare with `>`, so a body of exactly the cap must be accepted: an
+        // at-cap body is the only shape that drives both guards to their
+        // `== max` edge, where a `>`-to-`>=` regression on either would reject
+        // a body sitting precisely on the limit while every oversized test
+        // still passed.
+        let body = concat!(
+            r#"{"endpoints":[],"#,
+            r#""pagination":{"total":0,"limit":0,"offset":0,"hasMore":false},"#,
+            r#""stats":{"totalEndpoints":0,"verified":0,"working":0}}"#,
+        );
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/directory"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let at_cap = DirectoryClient::with_limits(reqwest::Client::new(), server.uri(), body.len());
+        let page = at_cap
+            .list(ListQuery::default())
+            .await
+            .expect("a body of exactly the cap must be accepted, not rejected at the boundary");
+        assert!(page.endpoints.is_empty());
+
+        let over_cap =
+            DirectoryClient::with_limits(reqwest::Client::new(), server.uri(), body.len() - 1);
+        let err = over_cap
+            .list(ListQuery::default())
+            .await
+            .expect_err("a body one byte over the cap must still be rejected");
+        assert!(matches!(err, ZauthError::DecodeDirectory(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
     async fn surfaces_unexpected_status() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -305,5 +403,32 @@ mod tests {
             matches!(err, ZauthError::DecodeDirectory(m) if m.contains("body=")),
             "expected DecodeDirectory carrying the raw body"
         );
+    }
+
+    #[tokio::test]
+    async fn list_passes_offset_and_verified_false() {
+        // list_passes_query_params leaves the pagination offset arm and the
+        // verified=false stringification unexercised; this mock only matches if
+        // both reach the server with these exact values.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/directory"))
+            .and(query_param("verified", "false"))
+            .and(query_param("offset", "40"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(LIVE_SAMPLE))
+            .mount(&server)
+            .await;
+
+        let client = DirectoryClient::with_base_url(reqwest::Client::new(), server.uri());
+        let page = client
+            .list(ListQuery {
+                verified: Some(false),
+                network: None,
+                limit: None,
+                offset: Some(40),
+            })
+            .await
+            .expect("offset and verified=false must both reach the server");
+        assert_eq!(page.endpoints.len(), 1);
     }
 }

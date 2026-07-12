@@ -1,0 +1,10 @@
+{
+  "kind": "settle_spend",
+  "decision_id": "5e111ed0-0000-0000-0000-000000000001",
+  "provider": "xona",
+  "network": "solana",
+  "asset": "USDC",
+  "amount": "0.25",
+  "credits": 250,
+  "tx_sig": "2Zq7Xs9wV3kLp8mNc1bR4tYd6uHf"
+}

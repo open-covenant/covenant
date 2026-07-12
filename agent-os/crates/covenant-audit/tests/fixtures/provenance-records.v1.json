@@ -1,0 +1,36 @@
+{
+  "description": "Frozen golden vectors for the provenance/audit record schema (covenant-audit AuditEvent + the capability family of AuditKind). canonical_json is the exact serde_json wire form of each AuditEvent — the bytes hashed into the tamper-evident chain; event_hash_hex is sha256(canonical_json); chain_root_hash_hex is the genesis-seeded chain fold over all records in order, as computed by AuditLog::verify_integrity. This is an external conformance contract other implementations verify against. A change here breaks every downstream verifier: update only as a deliberate, reviewed schema change (and bump the .v<n> suffix for an incompatible shape) — never blindly regenerate to make a failing test pass.",
+  "records": [
+    {
+      "name": "capability_check_partial_grant",
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000001\",\"timestamp_ms\":1700000000000,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_check\",\"agent_id\":\"research@agent\",\"required_actions\":[\"memory.write\",\"a2a.send\"],\"missing_actions\":[\"a2a.send\"],\"passed\":false,\"authorized_by\":[{\"action\":\"memory.write\",\"granted_by_display\":\"operator@covenant\",\"signature_b58\":\"GrantSigWrite\"}]}}",
+      "event_hash_hex": "c97fb86b1f118722ceb044660eac72efcd0cef9559095238cefe1b89158495c0"
+    },
+    {
+      "name": "capability_granted",
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000002\",\"timestamp_ms\":1700000000001,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_granted\",\"subject_display\":\"research@agent\",\"action\":\"memory.write\",\"granted_by_display\":\"operator@covenant\",\"signature_b58\":\"GrantSigWrite\"}}",
+      "event_hash_hex": "4f5a2844fbcc094555ac6708fb201c50466a3145ed7fb66f97a5babff3b9e645"
+    },
+    {
+      "name": "capability_grant_rejected",
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000003\",\"timestamp_ms\":1700000000002,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_grant_rejected\",\"subject_display\":\"research@agent\",\"action\":\"memory.write\",\"reason\":\"capability expired\"}}",
+      "event_hash_hex": "6fe27199fe885242db51c8065dfc706553e8ff9c114e4f09e29efdf470b97d4d"
+    },
+    {
+      "name": "capability_scope_rejected",
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000004\",\"timestamp_ms\":1700000000003,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_scope_rejected\",\"agent_id\":\"research@agent\",\"action\":\"audit.purge\",\"reason\":\"before_ms exceeds granted scope\"}}",
+      "event_hash_hex": "36efd437dbe137975483068f392edef362984095e83c34d33c451da7eecf0d0d"
+    },
+    {
+      "name": "capability_revoked",
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000005\",\"timestamp_ms\":1700000000004,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_revoked\",\"subject_display\":\"research@agent\",\"action\":\"memory.write\",\"signature_b58\":\"GrantSigWrite\",\"removed\":true}}",
+      "event_hash_hex": "8219b3736976d98d6d7d5f54114207abeedd20a6e078346f9cce8e1638662e2b"
+    },
+    {
+      "name": "capability_revoke_rejected",
+      "canonical_json": "{\"id\":\"00000000-0000-0000-0000-000000000006\",\"timestamp_ms\":1700000000005,\"issuer\":{\"display\":\"operator@covenant\",\"pubkey\":\"US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx\"},\"kind\":{\"type\":\"capability_revoke_rejected\",\"signature_b58\":\"OtherSig\",\"reason\":\"not the capability subject\"}}",
+      "event_hash_hex": "489ae9ce9d1c19f4d75724803d44d4b6d9eea99ef9162b27c4fa50172b1132be"
+    }
+  ],
+  "chain_root_hash_hex": "a7e20494893290efda2d70681d31bdba8a4dc1c47b808eceb1aac7d272fc08cf"
+}

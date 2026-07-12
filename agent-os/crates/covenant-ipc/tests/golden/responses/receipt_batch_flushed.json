@@ -1,0 +1,11 @@
+{
+  "kind": "receipt_batch_flushed",
+  "batch": {
+    "batch_id": "batch-1",
+    "merkle_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "receipt_count": 0,
+    "tx_sig": null,
+    "slot": null
+  },
+  "receipts_updated": 0
+}

@@ -1,0 +1,85 @@
+{
+  "source": {
+    "repo": "erc-8004/erc-8004-contracts",
+    "commit": "68fc6765761a10fb26f0692df21c8a6f9d12b1be",
+    "abi": "abis/IdentityRegistry.json",
+    "retrieved": "2026-07-01"
+  },
+  "proxy": "IdentityRegistry is an upgradeable ERC-721 (CREATE2 vanity 0x8004...). The address is stable across chains; the implementation behind it can change, so re-verify the live contract against staged calldata immediately before submission.",
+  "identityRegistry": {
+    "8453": { "network": "Base", "address": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" },
+    "84532": { "network": "Base Sepolia", "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e" },
+    "11155111": { "network": "Ethereum Sepolia", "address": "0x8004A818BFB912233c491871b3d84c89A494BD9e" }
+  },
+  "register": {
+    "signature": "register(string)",
+    "selector": "0xf2c298be",
+    "returns": "uint256 agentId",
+    "event": "Registered(uint256 indexed agentId, string agentURI, address indexed owner)"
+  },
+  "covenantMainnet": {
+    "network": "Base",
+    "chainId": 8453,
+    "deployed": "2026-07-05",
+    "issuerAddress": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",
+    "reputationSchema": {
+      "registry": "0x4200000000000000000000000000000000000020",
+      "uid": "0x84738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc39",
+      "schema": "uint32 score,uint8 score_decimals,uint64 expiry,string source_chain,bytes32 solana_attestation_pda",
+      "resolver": "0x0000000000000000000000000000000000000000",
+      "revocable": true,
+      "tx": "0x14b0d3bf59b75552f1c5fee60f05dc69908150caac476bd4f72dcc791262b473"
+    },
+    "erc8004Registration": {
+      "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+      "agentId": 58403,
+      "owner": "0x5fA1d0C0bfFE257a20027C523093F941834f5D66",
+      "agentURI": "https://opencovenant.org/agents/covenant-foundation.json",
+      "deployed": "2026-07-07",
+      "tx": "0xaa55d6bebffb50d653fbb9bbfcffb1f3dc3e2b6311bafba6c120c3a4940a54ad",
+      "note": "the launch/de-stealth registration; Covenant is now discoverable in ERC-8004 tooling on Base. owner is the relayer EOA (holds no signing authority); the card points at the Solana metaplex identity."
+    },
+    "bondReceiptVerifier": {
+      "address": "0xBee387DD4A2fF215d6f997E5DA464C92285BCb6e",
+      "trustedAttestor": "0x186953d5b4A290f8f53b8377cb38EDA75D664211",
+      "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "deployed": "2026-07-07",
+      "tx": "0xe4012e6cda96c4f823a5956c331c4e56bcf4e6710d0613c537ef8ebc4b8b6c27",
+      "note": "hardened redeploy: rejects malleable signatures (high-S and v outside {27,28}). replay protection remains the consuming escrow's job. supersedes the first deploy below (unannounced, unconsumed).",
+      "supersedes": {
+        "address": "0x2B03E47CB3900BA9ccf861B214233E4c237EA309",
+        "tx": "0x4517c9265edff3f543f033edaff8232f204b2947bb0cd3b99c2bdf2aad65bef5",
+        "reason": "no malleability guard; never announced or consumed"
+      }
+    }
+  },
+  "ethereumMainnet": {
+    "network": "Ethereum",
+    "chainId": 1,
+    "ens": {
+      "name": "opencovenant.eth",
+      "namehash": "0x932e2a1a7ef681c3e5f9c30f21490e3323e40d235d7ed03df919a6ef97eece11",
+      "owner": "0x5fA1d0C0bfFE257a20027C523093F941834f5D66",
+      "wrapped": true,
+      "publicResolver": "0x231b0Ee14048e9dCcD1d247744d114a4EB5E8E63",
+      "solanaIdentity": "4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc",
+      "addrCoinType501": "0x347cb1af926f368342eb8c64f6e4ec7e31a1eb45c5d41a04ea996dad85bc690f",
+      "expires": "2027-07-07",
+      "note": "base name; records (addr(501) + text url/twitter/description) on the ENS public resolver. RENEW before expiry."
+    },
+    "offchainResolver": {
+      "address": "0xADDE5F806613FFE71c8d5E137998C511a24e9630",
+      "deployed": "2026-07-07",
+      "tx": "0xac72857442b9be13b48a94d476556618d48cce882bf146ea6068008795f41f3e",
+      "url": "https://ens-gateway.opencovenant.org/{sender}/{data}.json",
+      "gatewaySigner": "0x70d879160ead90b9267bbb41f80bbab694824af2",
+      "subname": {
+        "name": "agents.opencovenant.eth",
+        "namehash": "0x0dd84cb68d62bf9dac0df51ab32e4c117ddccdcd8ab61042dd23b77388dfaad4",
+        "tx": "0x9fc90d7ddcacb923545c8b3190dc53b85a8defcd5506f19887de4f9337e8af0f",
+        "note": "resolver set to the OffchainResolver; *.agents.opencovenant.eth wildcard-resolves per-agent via the CCIP gateway (addr(node,501))."
+      },
+      "gatewayService": "Render covenant-ens-gateway (srv-d96m3b8k1i2s73a5d9eg)"
+    }
+  }
+}

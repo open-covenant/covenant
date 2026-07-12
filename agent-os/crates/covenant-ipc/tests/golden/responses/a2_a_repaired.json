@@ -1,0 +1,9 @@
+{
+  "kind": "a2_a_repaired",
+  "outcome": {
+    "task_id": "00000000-0000-0000-0000-000000000000",
+    "action": "requeued",
+    "state": "queued",
+    "attempt": 0
+  }
+}

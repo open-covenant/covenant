@@ -163,10 +163,12 @@ pub fn to_payment_requirements(accept: &Accept) -> PaymentRequirements {
         extra: accept
             .extra
             .as_ref()
-            .and_then(|e| e.fee_payer.clone())
-            .map(|fee_payer| PaymentExtra {
-                fee_payer: Some(fee_payer),
-            }),
+            .map(|e| PaymentExtra {
+                fee_payer: e.fee_payer.clone(),
+                name: e.name.clone(),
+                version: e.version.clone(),
+            })
+            .filter(|extra| *extra != PaymentExtra::default()),
     }
 }
 
@@ -321,7 +323,10 @@ mod tests {
             50_000,
         )
         .expect_err("unpinned");
-        assert!(matches!(err, ZauthError::UnpinnedPayTo { .. }), "got {err:?}");
+        assert!(
+            matches!(err, ZauthError::UnpinnedPayTo { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -345,19 +350,209 @@ mod tests {
         assert_eq!(pr.amount, "50000");
         assert_eq!(pr.amount_usdc, 0.05);
         assert_eq!(pr.pay_to, crate::treasury::SOLANA);
-        assert_eq!(
-            pr.extra.as_ref().unwrap().fee_payer.as_deref(),
-            Some(crate::treasury::SOLANA)
+        let extra = pr.extra.as_ref().unwrap();
+        assert_eq!(extra.fee_payer.as_deref(), Some(crate::treasury::SOLANA));
+        assert!(
+            extra.name.is_none() && extra.version.is_none(),
+            "Solana option carries no EIP-712 domain"
         );
     }
 
     #[test]
-    fn to_requirements_drops_non_fee_payer_extra_on_base() {
+    fn to_requirements_lifts_base_eip712_domain() {
+        // The Base accept's extra carries the EIP-712 domain the EVM signer
+        // needs for the TransferWithAuthorization separator; dropping it here
+        // would make build_payment fail closed (or sign under a wrong pinned
+        // domain) even though the facilitator supplied the real one.
         let c = decode_from_headers(&live_headers()).unwrap();
         let pr = to_payment_requirements(&c.accepts[0]);
+        let extra = pr.extra.expect("Base {name, version} extra is lifted");
+        assert_eq!(extra.name.as_deref(), Some("USD Coin"));
+        assert_eq!(extra.version.as_deref(), Some("2"));
+        assert!(extra.fee_payer.is_none(), "Base option has no gas sponsor");
+    }
+
+    #[test]
+    fn to_requirements_propagates_unexpected_solana_domain_fields() {
+        // A hostile Solana accept can tack on EIP-712 domain fields; they
+        // propagate verbatim (the Solana signer never reads them) rather
+        // than being silently rewritten here.
+        let mut a = mk_accept(
+            "solana",
+            "usdc",
+            "1000",
+            "PinnedTreasury11111111111111111111111111111",
+        );
+        a.extra = Some(AcceptExtra {
+            fee_payer: None,
+            name: Some("USD Coin".into()),
+            version: Some("2".into()),
+        });
+        let pr = to_payment_requirements(&a);
+        let extra = pr.extra.expect("non-empty extra is lifted");
+        assert!(extra.fee_payer.is_none());
+        assert_eq!(extra.name.as_deref(), Some("USD Coin"));
+        assert_eq!(extra.version.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn to_requirements_maps_empty_extra_to_none() {
+        let mut a = mk_accept(
+            "solana",
+            "usdc",
+            "1000",
+            "PinnedTreasury11111111111111111111111111111",
+        );
+        a.extra = Some(AcceptExtra {
+            fee_payer: None,
+            name: None,
+            version: None,
+        });
+        let pr = to_payment_requirements(&a);
+        assert!(pr.extra.is_none(), "an empty extra block stays absent");
+    }
+
+    fn mk_accept(network: &str, asset: &str, amount: &str, pay_to: &str) -> Accept {
+        Accept {
+            scheme: "exact".into(),
+            network: network.into(),
+            asset: asset.into(),
+            amount: amount.into(),
+            pay_to: pay_to.into(),
+            max_timeout_seconds: 0,
+            extra: None,
+        }
+    }
+
+    #[test]
+    fn select_rejects_a_first_unpinned_match_even_when_a_later_one_is_pinned() {
+        // A hostile or misconfigured 402 that lists a wrong payTo first must be
+        // rejected outright, not skipped in favour of a later pinned option.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![
+            mk_accept(
+                "solana",
+                "usdc",
+                "1000",
+                "WrongTreasury111111111111111111111111111111",
+            ),
+            mk_accept("solana", "usdc", "1000", pinned),
+        ];
+        let err = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect_err("first unpinned match shadows the later pinned accept");
         assert!(
-            pr.extra.is_none(),
-            "Base extra is {{name, version}} only; no feePayer to lift"
+            matches!(err, ZauthError::UnpinnedPayTo { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn select_skips_an_over_cap_match_and_takes_a_later_within_cap_one() {
+        // Over-cap is not a hard reject: a cheaper later accept on the same
+        // pair is still eligible.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![
+            mk_accept("solana", "usdc", "90000", pinned),
+            mk_accept("solana", "usdc", "40000", pinned),
+        ];
+        let picked = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect("the later within-cap accept is selected");
+        assert_eq!(picked.amount, "40000");
+    }
+
+    #[test]
+    fn to_requirements_coerces_an_unparseable_amount_to_zero() {
+        let a = mk_accept(
+            "solana",
+            "usdc",
+            "abc",
+            "PinnedTreasury11111111111111111111111111111",
+        );
+        let pr = to_payment_requirements(&a);
+        assert_eq!(pr.amount, "abc", "raw amount string is preserved");
+        assert_eq!(pr.amount_usdc, 0.0, "unparseable amount degrades to 0");
+    }
+
+    #[test]
+    fn select_rejects_a_matching_accept_with_an_unparseable_amount() {
+        // A pinned accept on the right (network, asset) whose amount is not a
+        // u128 must hard-fail: to_payment_requirements coerces a bad amount to
+        // 0, but select runs first and must never let garbage reach the cap
+        // check and get signed for.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![mk_accept("solana", "usdc", "abc", pinned)];
+        let err = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect_err("unparseable amount on a matching pinned accept");
+        assert!(
+            matches!(err, ZauthError::DecodeChallenge(ref m) if m.contains("amount: abc")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn non_ascii_header_value_errors() {
+        // obs-text bytes (0x80-0xff) are a legal header value but not visible
+        // ASCII, so to_str() rejects them before any base64/json decode.
+        let mut h = HeaderMap::new();
+        h.insert(HEADER, HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap());
+        let err = decode_from_headers(&h).expect_err("non-ascii header");
+        assert!(
+            matches!(err, ZauthError::DecodeChallenge(ref m) if m.contains("not ascii")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn select_skips_a_non_exact_scheme_on_the_matching_pair() {
+        // Only the "exact" scheme is honoured. A non-exact offer (e.g. a
+        // variable-amount "upto" scheme) on the pinned (network, asset, payTo)
+        // and within cap is skipped before it is even counted as a chain-asset
+        // match, so the caller sees "no accept on" rather than an over-cap or
+        // unpinned-payTo error: nothing variable-amount reaches signing.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![Accept {
+            scheme: "upto".into(),
+            ..mk_accept("solana", "usdc", "1000", pinned)
+        }];
+        let err = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect_err("a non-exact scheme is not a match");
+        assert!(
+            matches!(err, ZauthError::NoMatch(ref m) if m.contains("no accept on")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn select_does_not_let_a_non_exact_scheme_shadow_a_later_exact_accept() {
+        // The scheme filter is per-accept, not a short-circuit: a leading
+        // non-exact offer must not block a valid later exact accept on the
+        // same pair, or a payable challenge degrades into a spurious NoMatch.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![
+            Accept {
+                scheme: "upto".into(),
+                ..mk_accept("solana", "usdc", "1000", pinned)
+            },
+            mk_accept("solana", "usdc", "2000", pinned),
+        ];
+        let picked = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect("the later exact accept is selected");
+        assert_eq!(picked.scheme, "exact");
+        assert_eq!(picked.amount, "2000");
+    }
+
+    #[test]
+    fn select_rejects_a_wrong_asset_on_the_right_network() {
+        // (network, asset) is a conjunction: an accept on the right network
+        // carrying a different asset is no match, independently of the network
+        // arm already covered by select_rejects_wrong_network.
+        let pinned = "PinnedTreasury11111111111111111111111111111";
+        let accepts = vec![mk_accept("solana", "other-mint", "1000", pinned)];
+        let err = select(&accepts, "solana", "usdc", pinned, 50_000)
+            .expect_err("wrong asset on the right network");
+        assert!(
+            matches!(err, ZauthError::NoMatch(ref m) if m.contains("no accept on")),
+            "got {err:?}"
         );
     }
 }

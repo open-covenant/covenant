@@ -31,13 +31,14 @@ use covenant_types::{AgentEvent, Intent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 mod hermes;
@@ -213,6 +214,8 @@ pub enum RunnerError {
     Serde(#[from] serde_json::Error),
     #[error("timed out after {0:?}")]
     Timeout(Duration),
+    #[error("agent output exceeded the {limit}-byte cap")]
+    OutputTooLarge { limit: usize },
     #[error("agent exited non-zero: status={status}, stderr={stderr}")]
     NonZeroExit { status: i32, stderr: String },
     #[error("agent stdout was not a valid AgentResult JSON line: {source}")]
@@ -292,6 +295,30 @@ fn truncate_stderr_for_diagnostics(mut stderr: String) -> String {
     format!("...(truncated)\n{stderr}")
 }
 
+/// Maximum bytes the runner buffers from one agent subprocess stream. The
+/// subprocess is the agent — untrusted code — so an unbounded read lets a
+/// runaway or hostile agent exhaust the daemon worker's memory before the
+/// wall-clock timeout can fire. The agent result is a single JSON line and
+/// stderr is diagnostic, so 16 MiB sits far above any legitimate payload while
+/// still capping a flood; it is the memory-axis sibling of the run timeout.
+const MAX_AGENT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Reads up to `max` bytes from an agent stream, reporting whether the stream
+/// had more to give. `AsyncReadExt::take` stops the read at the cap instead of
+/// buffering an unbounded body; reading one extra byte lets the caller tell an
+/// exact-fit payload from a truncated flood. The returned buffer is always
+/// clamped to `max`.
+async fn read_agent_output_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut buf = Vec::new();
+    reader.take(max as u64 + 1).read_to_end(&mut buf).await?;
+    let overflowed = buf.len() > max;
+    buf.truncate(max);
+    Ok((buf, overflowed))
+}
+
 fn workspace_entry(entry: &str) -> String {
     let entry = entry.strip_prefix("./").unwrap_or(entry);
     format!("/workspace/{entry}")
@@ -311,18 +338,133 @@ pub struct TrackedSubprocess {
     pub started_at_ms: u64,
 }
 
-/// Daemon-side in-memory tracker of subprocesses spawned for in-flight
-/// intents. Keyed by `intent_id: Uuid` so the budget-projection tick
-/// (sub-slice B) and signal dispatcher (sub-slice C) can look up the
-/// spawn record without scanning the entire process table.
+/// Process-identity token captured for a tracked subprocess so a daemon
+/// restart can tell a genuine survivor from a reused pid before it ever
+/// signals one. `pgid` and `start_time_ticks` are read straight from
+/// `/proc/<pid>/stat` (fields 5 and 22) at register time on Linux; both
+/// are absent on targets without `/proc`. `start_time_ticks` is the
+/// kernel's boot-relative process start time in clock ticks — a value the
+/// kernel does not reissue for a reused pid, so an exact match proves
+/// identity with no USER_HZ / boot-time arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct ProcIdentity {
+    pgid: i64,
+    start_time_ticks: u64,
+}
+
+impl ProcIdentity {
+    /// Live identity for `pid` from `/proc` on Linux. `None` when the
+    /// process is gone, the stat line is unparseable, or the target has
+    /// no `/proc`; recovery treats every `None` as "cannot prove
+    /// ownership → do not re-track".
+    #[cfg(target_os = "linux")]
+    fn current(pid: u32) -> Option<Self> {
+        parse_proc_stat(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn current(_pid: u32) -> Option<Self> {
+        None
+    }
+}
+
+/// Extract pgid (field 5) and starttime (field 22) from a
+/// `/proc/<pid>/stat` line. Field 2 (`comm`) is parenthesized and may
+/// itself contain spaces or parens, so the trailing fields are located
+/// relative to the LAST `')'` rather than by naive whitespace splitting.
+/// Compiled on every target so the parser is unit-testable off Linux,
+/// where it is otherwise unused.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_stat(stat: &str) -> Option<ProcIdentity> {
+    let after_comm = stat.get(stat.rfind(')')? + 1..)?;
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    // `after_comm` begins at field 3 (state), so field N sits at index N-3.
+    Some(ProcIdentity {
+        pgid: fields.get(2)?.parse().ok()?,
+        start_time_ticks: fields.get(19)?.parse().ok()?,
+    })
+}
+
+/// Internal storage for one tracked subprocess: the public
+/// [`TrackedSubprocess`] plus the [`ProcIdentity`] captured at register
+/// time. Private so the tracker's public API and `TrackedSubprocess`
+/// stay unchanged while recovery gains the ownership token it needs.
+#[derive(Debug, Clone)]
+struct StoredEntry {
+    tracked: TrackedSubprocess,
+    identity: Option<ProcIdentity>,
+}
+
+/// One JSON line in `subprocess-tracker.jsonl`. The file is rewritten
+/// atomically on every mutation, so the newest file is always a complete,
+/// self-compacting snapshot of the live set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedEntry {
+    intent_id: Uuid,
+    agent_id: String,
+    pid: u32,
+    started_at_ms: u64,
+    #[serde(default)]
+    identity: Option<ProcIdentity>,
+}
+
+/// Per-row ownership verdict recovery reaches for a persisted pid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// SameProcess/Vanished/Reused are constructed only by the Linux
+// `validate_ownership` (which reads /proc); off Linux the production path
+// builds only `Unverifiable`, so the lib build (which does not see the test
+// seam's constructions) would otherwise flag them dead. Mirrors the
+// `parse_proc_stat` cfg-allow below for the same Linux-only reason.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+enum OwnershipCheck {
+    /// The pid still maps to the recorded process — safe to re-track.
+    SameProcess,
+    /// The pid no longer exists — drop the stale row (benign).
+    Vanished,
+    /// The pid exists but its identity differs from the record: the pid
+    /// was reused, so re-tracking is refused and it is never signalled.
+    Reused,
+    /// Ownership cannot be established (no `/proc`, no recorded token) —
+    /// refused conservatively.
+    Unverifiable,
+}
+
+/// Outcome counts from one [`SubprocessTracker::recover`] pass, for
+/// startup logging and test assertions.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryReport {
+    /// Survivors re-tracked so the projection tick can reap any over budget.
+    pub retracked: usize,
+    /// Persisted pids that no longer exist (ESRCH) — benign.
+    pub dropped_vanished: usize,
+    /// Persisted pids whose live identity does not match the record (pid
+    /// reuse) — refused, never signalled.
+    pub dropped_reused: usize,
+    /// Persisted pids that could not be validated — refused conservatively.
+    pub dropped_unverifiable: usize,
+}
+
+/// Daemon-side tracker of subprocesses spawned for in-flight intents.
+/// Keyed by `intent_id: Uuid` so the budget-projection tick can look up a
+/// spawn record without scanning the process table.
 ///
-/// In-memory only by design: a daemon restart loses the tracker and the
-/// orphan subprocesses outlive their preempt window. Recovery via
-/// pidfile or `/proc` scan is a separate followup slice documented in
-/// the parent task's expected failure mode 3.
+/// In-memory by default ([`Self::new`]). A tracker built with
+/// [`Self::with_persistence`] additionally mirrors its entries to a JSONL
+/// snapshot on every mutation so a daemon restart can re-adopt still-live
+/// subprocesses via [`Self::recover`] instead of orphaning them past
+/// their preempt window. Recovery validates each persisted pid's process
+/// identity (pgid + `/proc` start time) and refuses to re-track — and
+/// therefore to signal — a pid that was reused.
 #[derive(Debug, Default)]
 pub struct SubprocessTracker {
-    entries: RwLock<HashMap<Uuid, TrackedSubprocess>>,
+    entries: RwLock<HashMap<Uuid, StoredEntry>>,
+    /// `Some` enables durable snapshots to this path; `None` (the
+    /// `new()`/`default()` case) is a pure in-memory tracker — the
+    /// behavior every existing caller and test relies on.
+    persist_path: Option<PathBuf>,
+    /// Serializes snapshot writes so two concurrent mutations cannot
+    /// interleave their tempfile + rename.
+    persist_lock: std::sync::Mutex<()>,
 }
 
 impl SubprocessTracker {
@@ -330,26 +472,63 @@ impl SubprocessTracker {
         Self::default()
     }
 
-    /// Inserts a tracker entry. If `intent_id` is already present the
-    /// existing entry is overwritten — this should not happen under
-    /// normal dispatch flow and may indicate a race in the runner
-    /// integration that this slice intentionally does not yet wire.
+    /// Tracker that durably mirrors its entries to `path` (typically
+    /// `$COVENANT_HOME/runtime/subprocess-tracker.jsonl`) for restart
+    /// recovery. The parent directory is created eagerly; a failure there
+    /// is logged and falls back to an in-memory-only tracker rather than
+    /// aborting daemon startup.
+    pub fn with_persistence(path: PathBuf) -> Self {
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                warn!(
+                    path = %parent.display(),
+                    error = %e,
+                    "subprocess-tracker: cannot create persistence dir; continuing in-memory only"
+                );
+                return Self::new();
+            }
+        }
+        Self {
+            persist_path: Some(path),
+            ..Self::default()
+        }
+    }
+
+    /// Inserts a tracker entry, capturing the process's identity token for
+    /// later restart validation, then best-effort persists the snapshot.
+    /// If `intent_id` is already present the existing entry is overwritten.
     pub fn register(&self, intent_id: Uuid, entry: TrackedSubprocess) {
-        let mut guard = self
-            .entries
-            .write()
-            .expect("subprocess tracker rwlock poisoned");
-        guard.insert(intent_id, entry);
+        let identity = ProcIdentity::current(entry.pid);
+        {
+            let mut guard = self
+                .entries
+                .write()
+                .expect("subprocess tracker rwlock poisoned");
+            guard.insert(
+                intent_id,
+                StoredEntry {
+                    tracked: entry,
+                    identity,
+                },
+            );
+        }
+        self.persist();
     }
 
     /// Removes the tracker entry for `intent_id` if present, returning
     /// the previous value for callers that want to audit the lifetime.
     pub fn unregister(&self, intent_id: &Uuid) -> Option<TrackedSubprocess> {
-        let mut guard = self
-            .entries
-            .write()
-            .expect("subprocess tracker rwlock poisoned");
-        guard.remove(intent_id)
+        let removed = {
+            let mut guard = self
+                .entries
+                .write()
+                .expect("subprocess tracker rwlock poisoned");
+            guard.remove(intent_id)
+        };
+        if removed.is_some() {
+            self.persist();
+        }
+        removed.map(|s| s.tracked)
     }
 
     pub fn get(&self, intent_id: &Uuid) -> Option<TrackedSubprocess> {
@@ -357,7 +536,7 @@ impl SubprocessTracker {
             .entries
             .read()
             .expect("subprocess tracker rwlock poisoned");
-        guard.get(intent_id).cloned()
+        guard.get(intent_id).map(|s| s.tracked.clone())
     }
 
     pub fn len(&self) -> usize {
@@ -383,8 +562,175 @@ impl SubprocessTracker {
             .entries
             .read()
             .expect("subprocess tracker rwlock poisoned");
-        guard.iter().map(|(k, v)| (*k, v.clone())).collect()
+        guard.iter().map(|(k, v)| (*k, v.tracked.clone())).collect()
     }
+
+    /// Re-adopt in-flight subprocesses persisted by a prior daemon
+    /// instance: load the snapshot, validate each pid's current ownership,
+    /// re-track only genuine survivors, and rewrite the snapshot to drop
+    /// the rest. A missing or corrupt file recovers as empty. No-op for an
+    /// in-memory-only tracker.
+    ///
+    /// MUST run before the projection-tick driver is spawned so the driver
+    /// never races a half-populated tracker (the double-kill race in the
+    /// parent task's failure modes); the daemon's `main` calls this
+    /// synchronously at the construction site, before the driver spawn.
+    /// Recovery itself never signals — re-tracked survivors are reaped by
+    /// the projection tick only if they are over budget, reusing the
+    /// already-validated preempt path.
+    pub fn recover(&self) -> RecoveryReport {
+        self.recover_with(validate_ownership)
+    }
+
+    fn recover_with(&self, validate: impl Fn(&PersistedEntry) -> OwnershipCheck) -> RecoveryReport {
+        let Some(path) = self.persist_path.as_ref() else {
+            return RecoveryReport::default();
+        };
+        let rows = load_snapshot(path);
+        let mut report = RecoveryReport::default();
+        {
+            let mut guard = self
+                .entries
+                .write()
+                .expect("subprocess tracker rwlock poisoned");
+            for row in &rows {
+                match validate(row) {
+                    OwnershipCheck::SameProcess => {
+                        guard.insert(
+                            row.intent_id,
+                            StoredEntry {
+                                tracked: TrackedSubprocess {
+                                    agent_id: row.agent_id.clone(),
+                                    pid: row.pid,
+                                    started_at_ms: row.started_at_ms,
+                                },
+                                identity: row.identity,
+                            },
+                        );
+                        report.retracked += 1;
+                    }
+                    OwnershipCheck::Vanished => report.dropped_vanished += 1,
+                    OwnershipCheck::Reused => {
+                        warn!(
+                            pid = row.pid,
+                            intent_id = %row.intent_id,
+                            "subprocess-tracker: recovered pid was reused by another process; refusing to re-track"
+                        );
+                        report.dropped_reused += 1;
+                    }
+                    OwnershipCheck::Unverifiable => report.dropped_unverifiable += 1,
+                }
+            }
+        }
+        // Rewrite the on-disk snapshot so it reflects only survivors.
+        self.persist();
+        if report.retracked > 0 || report.dropped_reused > 0 {
+            info!(
+                retracked = report.retracked,
+                dropped_vanished = report.dropped_vanished,
+                dropped_reused = report.dropped_reused,
+                dropped_unverifiable = report.dropped_unverifiable,
+                "subprocess-tracker: restart recovery complete"
+            );
+        }
+        report
+    }
+
+    /// Best-effort snapshot of the current entries to the JSONL file via a
+    /// tempfile + atomic rename. A persist failure is logged and swallowed
+    /// — durability must never block or fail a spawn.
+    fn persist(&self) {
+        let Some(path) = self.persist_path.as_ref() else {
+            return;
+        };
+        // Hold the persist lock across BOTH the snapshot read and the write.
+        // Serializing only the write would let two concurrent mutations read
+        // in one order and rename in the other, stranding an older snapshot
+        // over a newer one (and racing the shared `.tmp` path). With the read
+        // under the lock, the last mutation to acquire it observes the latest
+        // committed entries and writes them last.
+        let _serialize = self
+            .persist_lock
+            .lock()
+            .expect("subprocess tracker persist mutex poisoned");
+        let rows: Vec<PersistedEntry> = {
+            let guard = self
+                .entries
+                .read()
+                .expect("subprocess tracker rwlock poisoned");
+            guard
+                .iter()
+                .map(|(id, s)| PersistedEntry {
+                    intent_id: *id,
+                    agent_id: s.tracked.agent_id.clone(),
+                    pid: s.tracked.pid,
+                    started_at_ms: s.tracked.started_at_ms,
+                    identity: s.identity,
+                })
+                .collect()
+        };
+        if let Err(e) = write_snapshot(path, &rows) {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                "subprocess-tracker: snapshot persist failed; recovery may miss in-flight pids"
+            );
+        }
+    }
+}
+
+/// Validate a persisted pid's ownership before recovery re-tracks it. On
+/// Linux this compares the live `/proc` identity against the recorded
+/// token; off Linux ownership is unprovable, so recovery never re-tracks
+/// (a documented no-op on targets without `/proc`).
+#[cfg(target_os = "linux")]
+fn validate_ownership(row: &PersistedEntry) -> OwnershipCheck {
+    let Some(recorded) = row.identity else {
+        return OwnershipCheck::Unverifiable;
+    };
+    match ProcIdentity::current(row.pid) {
+        None => OwnershipCheck::Vanished,
+        Some(live) if live == recorded => OwnershipCheck::SameProcess,
+        Some(_) => OwnershipCheck::Reused,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn validate_ownership(_row: &PersistedEntry) -> OwnershipCheck {
+    OwnershipCheck::Unverifiable
+}
+
+/// Read a `subprocess-tracker.jsonl` snapshot, tolerating a missing file
+/// (empty) and skipping any unparseable line so one corrupt row cannot
+/// strand recovery of the rest.
+fn load_snapshot(path: &Path) -> Vec<PersistedEntry> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|line| match serde_json::from_str::<PersistedEntry>(line) {
+            Ok(row) => Some(row),
+            Err(e) => {
+                warn!(error = %e, "subprocess-tracker: skipping unparseable recovery row");
+                None
+            }
+        })
+        .collect()
+}
+
+/// Atomically replace the snapshot file with one JSON line per entry.
+fn write_snapshot(path: &Path, rows: &[PersistedEntry]) -> std::io::Result<()> {
+    let mut buf = String::new();
+    for row in rows {
+        let line = serde_json::to_string(row).map_err(std::io::Error::other)?;
+        buf.push_str(&line);
+        buf.push('\n');
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    std::fs::write(&tmp, buf.as_bytes())?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Outcome of one [`preempt_subprocess_pg`] call. The daemon-side
@@ -501,9 +847,18 @@ pub async fn preempt_subprocess_pg(_pid: u32, _grace: Duration) -> PreemptOutcom
     PreemptOutcome::UnsupportedPlatform
 }
 
-#[derive(Default)]
 pub struct SubprocessRunner {
     tracker: Option<Arc<SubprocessTracker>>,
+    max_output_bytes: usize,
+}
+
+impl Default for SubprocessRunner {
+    fn default() -> Self {
+        Self {
+            tracker: None,
+            max_output_bytes: MAX_AGENT_OUTPUT_BYTES,
+        }
+    }
 }
 
 /// RAII guard that keeps a [`SubprocessTracker`] entry alive for the
@@ -536,7 +891,14 @@ impl SubprocessRunner {
     pub fn with_tracker(tracker: Arc<SubprocessTracker>) -> Self {
         Self {
             tracker: Some(tracker),
+            ..Self::default()
         }
+    }
+
+    #[cfg(test)]
+    fn with_max_output_bytes(mut self, max: usize) -> Self {
+        self.max_output_bytes = max;
+        self
     }
 
     fn ensure_allowed(&self, card: &AgentCard) -> Result<(), RunnerError> {
@@ -580,6 +942,39 @@ impl SubprocessRunner {
     }
 }
 
+/// The environment a trusted-local agent subprocess is given.
+///
+/// The daemon's own environment carries operator secrets — an
+/// `ANTHROPIC_API_KEY` an agent reads directly, the `HERMES_API_KEY` the
+/// daemon loads for the gateway, anything the operator exported. Letting the
+/// child inherit that environment wholesale hands every agent those secrets
+/// for free and routes around the capability-gated, audited secret broker.
+/// So the child starts from a cleared environment and receives only what an
+/// agent legitimately needs that is not a secret: `PATH` (so the `python3`
+/// and `node` interpreters resolve; a rust-bin entry runs by absolute path),
+/// `HOME` (interpreter and config lookup), and Covenant's own `COVENANT_*`
+/// configuration namespace. The capability-gated, audited broker (`GetSecret`)
+/// is the sanctioned channel for an agent that needs a secret.
+///
+/// This is least-privilege, not a sandbox boundary: trusted-local agents run
+/// as the operator's user and can still read host secrets by other means (see
+/// `docs/runtime-sandbox-security.md`). `GvisorRunner` withholds the host
+/// environment entirely through its OCI `process.env`.
+fn agent_subprocess_env() -> Vec<(OsString, OsString)> {
+    filter_agent_env(std::env::vars_os())
+}
+
+fn filter_agent_env(vars: impl Iterator<Item = (OsString, OsString)>) -> Vec<(OsString, OsString)> {
+    vars.filter(|(key, _)| is_inheritable_agent_env_key(key))
+        .collect()
+}
+
+fn is_inheritable_agent_env_key(key: &OsStr) -> bool {
+    key == OsStr::new("PATH")
+        || key == OsStr::new("HOME")
+        || key.to_str().is_some_and(|k| k.starts_with("COVENANT_"))
+}
+
 #[async_trait]
 impl Runner for SubprocessRunner {
     async fn run(&self, card: &AgentCard, intent: &Intent) -> Result<AgentResult, RunnerError> {
@@ -612,6 +1007,8 @@ impl Runner for SubprocessRunner {
             }
         };
         cmd.current_dir(&card.package_dir)
+            .env_clear()
+            .envs(agent_subprocess_env())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -658,25 +1055,30 @@ impl Runner for SubprocessRunner {
         stdin.write_all(b"\n").await?;
         drop(stdin);
 
-        let read_stdout = async {
-            let mut buf = Vec::new();
-            stdout.read_to_end(&mut buf).await?;
-            Ok::<_, std::io::Error>(buf)
-        };
-
-        let stdout_buf = match tokio::time::timeout(timeout, read_stdout).await {
-            Ok(Ok(buf)) => buf,
-            Ok(Err(e)) => return Err(RunnerError::Io(e)),
-            Err(_) => {
-                warn!(agent = %card.id, ?timeout, "agent timed out — killing");
-                let _ = child.kill().await;
-                return Err(RunnerError::Timeout(timeout));
-            }
-        };
+        let max_output = self.max_output_bytes;
+        let (stdout_buf, stdout_overflowed) =
+            match tokio::time::timeout(timeout, read_agent_output_capped(&mut stdout, max_output))
+                .await
+            {
+                Ok(Ok(pair)) => pair,
+                Ok(Err(e)) => return Err(RunnerError::Io(e)),
+                Err(_) => {
+                    warn!(agent = %card.id, ?timeout, "agent timed out — killing");
+                    let _ = child.kill().await;
+                    return Err(RunnerError::Timeout(timeout));
+                }
+            };
+        if stdout_overflowed {
+            warn!(agent = %card.id, limit = max_output, "agent stdout exceeded cap — killing");
+            let _ = child.kill().await;
+            return Err(RunnerError::OutputTooLarge { limit: max_output });
+        }
 
         let status = child.wait().await?;
-        let mut stderr_buf = String::new();
-        let _ = stderr.read_to_string(&mut stderr_buf).await;
+        let stderr_buf = match read_agent_output_capped(&mut stderr, max_output).await {
+            Ok((bytes, _)) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(_) => String::new(),
+        };
         if !status.success() {
             return Err(RunnerError::NonZeroExit {
                 status: status.code().unwrap_or(-1),
@@ -975,14 +1377,13 @@ impl Runner for GvisorRunner {
         }
         drop(stdin);
 
-        let read_stdout = async {
-            let mut buf = Vec::new();
-            stdout.read_to_end(&mut buf).await?;
-            Ok::<_, std::io::Error>(buf)
-        };
-
-        let stdout_buf = match tokio::time::timeout(timeout, read_stdout).await {
-            Ok(Ok(buf)) => buf,
+        let (stdout_buf, stdout_overflowed) = match tokio::time::timeout(
+            timeout,
+            read_agent_output_capped(&mut stdout, MAX_AGENT_OUTPUT_BYTES),
+        )
+        .await
+        {
+            Ok(Ok(pair)) => pair,
             Ok(Err(e)) => {
                 Self::cleanup_bundle(&bundle_dir);
                 return Err(RunnerError::Io(e));
@@ -994,6 +1395,14 @@ impl Runner for GvisorRunner {
                 return Err(RunnerError::Timeout(timeout));
             }
         };
+        if stdout_overflowed {
+            warn!(agent = %card.id, limit = MAX_AGENT_OUTPUT_BYTES, "sandboxed agent stdout exceeded cap");
+            let _ = child.kill().await;
+            Self::cleanup_bundle(&bundle_dir);
+            return Err(RunnerError::OutputTooLarge {
+                limit: MAX_AGENT_OUTPUT_BYTES,
+            });
+        }
 
         let status = match child.wait().await {
             Ok(status) => status,
@@ -1002,8 +1411,10 @@ impl Runner for GvisorRunner {
                 return Err(RunnerError::Io(e));
             }
         };
-        let mut stderr_buf = String::new();
-        let _ = stderr.read_to_string(&mut stderr_buf).await;
+        let stderr_buf = match read_agent_output_capped(&mut stderr, MAX_AGENT_OUTPUT_BYTES).await {
+            Ok((bytes, _)) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(_) => String::new(),
+        };
         let stderr_buf =
             Self::redact_stderr(&stderr_buf, &[&bundle_dir, &card.package_dir, &self.rootfs]);
         if !status.success() {
@@ -1713,6 +2124,65 @@ cpu_ms_per_task = 5000
         }
     }
 
+    #[tokio::test]
+    async fn read_agent_output_capped_clamps_and_flags_overflow() {
+        // Over the cap: buffer clamped to max, overflow reported so the caller
+        // can reject and kill rather than keep reading an unbounded flood.
+        let data = [b'x'; 100];
+        let (buf, overflowed) = read_agent_output_capped(&mut &data[..], 64).await.unwrap();
+        assert!(overflowed);
+        assert_eq!(buf.len(), 64);
+
+        // Exactly the cap: full payload, no overflow.
+        let data = [b'y'; 64];
+        let (buf, overflowed) = read_agent_output_capped(&mut &data[..], 64).await.unwrap();
+        assert!(!overflowed);
+        assert_eq!(buf.len(), 64);
+
+        // Under the cap: full payload returned verbatim.
+        let data = vec![b'z'; 10];
+        let (buf, overflowed) = read_agent_output_capped(&mut &data[..], 64).await.unwrap();
+        assert!(!overflowed);
+        assert_eq!(buf, data);
+    }
+
+    /// A flooding agent + a tight output cap → `OutputTooLarge`, child killed,
+    /// the worker never buffers the whole flood.
+    #[tokio::test]
+    async fn subprocess_runner_rejects_oversized_stdout() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("flood.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat >/dev/null\nhead -c 100000 /dev/zero\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let manifest_toml = r#"
+[agent]
+id = "flood"
+name = "Flood"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./flood.sh"
+
+[resources]
+cpu_ms_per_task = 5000
+"#;
+        let card = card_for(manifest_toml, dir.path().to_path_buf());
+        let result = SubprocessRunner::new()
+            .with_max_output_bytes(64)
+            .run(&card, &dummy_intent())
+            .await;
+        match result {
+            Err(RunnerError::OutputTooLarge { limit }) => assert_eq!(limit, 64),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     /// Long-running script + tight budget → `Timeout`, child killed.
     #[tokio::test]
     async fn subprocess_runner_kills_on_timeout() {
@@ -1965,6 +2435,126 @@ backend = "linux-gvisor"
         let namespaces = config["linux"]["namespaces"].as_array().unwrap();
         assert!(namespaces.iter().any(|ns| ns["type"] == "network"));
         assert!(!config.to_string().contains("HOME="));
+    }
+
+    #[test]
+    fn gvisor_oci_config_pins_memory_mb_byte_limit() {
+        // oci_config projects resources.memory_mb into the OCI cgroup memory
+        // ceiling at linux.resources.memory.limit, converting MiB -> bytes via
+        // saturating_mul(1024 * 1024) (lib.rs:1212-1216, 1261-1263). That limit
+        // is the sandbox's memory-exhaustion guard: a unit slip (MiB -> KiB)
+        // would cap a 64-MiB agent at 64 KiB and brick it, while dropping the
+        // field removes the bound entirely. The restrictive-OCI-config test
+        // above asserts process/root/mounts/namespaces but never reads the
+        // memory block, so the conversion is otherwise unpinned.
+        //
+        // memory_mb belongs to [resources], not [sandbox] (where the
+        // sandbox_manifest extra-block lands), so build the card from a literal
+        // manifest with a distinctive non-default value (64, not the 512
+        // default) — the assertion must not be able to pass on a coincidence.
+        let dir = tempdir().unwrap();
+        let rootfs = tempdir().unwrap();
+        let scratch = tempdir().unwrap();
+        std::fs::write(dir.path().join("agent.sh"), "#!/bin/sh\n").unwrap();
+
+        let runner = GvisorRunner::with_paths("runsc", rootfs.path(), scratch.path());
+        let manifest = r#"
+[agent]
+id = "sandboxed"
+name = "Sandboxed"
+version = "0.0.1"
+runtime = "rust-bin"
+entry = "./agent.sh"
+
+[resources]
+cpu_ms_per_task = 5000
+memory_mb = 64
+network = "off"
+
+[sandbox]
+required = true
+backend = "linux-gvisor"
+filesystem = "read-only-package"
+"#;
+        let card = card_for(manifest, dir.path().to_path_buf());
+        let config = runner.oci_config(&card).unwrap();
+
+        assert_eq!(
+            config["linux"]["resources"]["memory"]["limit"],
+            json!(64u64 * 1024 * 1024),
+            "OCI memory.limit must be memory_mb converted to BYTES (MiB); a unit \
+             slip (x1024 instead of x1024^2) silently caps a 64-MiB sandbox at \
+             64 KiB or removes the memory-exhaustion guard: {config}",
+        );
+    }
+
+    #[test]
+    fn agent_subprocess_env_withholds_operator_secrets_but_keeps_path_home_and_covenant_config() {
+        use std::collections::BTreeMap;
+
+        let daemon_env = [
+            ("PATH", "/usr/local/bin:/usr/bin"),
+            ("HOME", "/home/agent"),
+            ("COVENANT_HOME", "/var/lib/covenant"),
+            ("COVENANT_DEMO_DAILY_REQUESTS", "500"),
+            ("ANTHROPIC_API_KEY", "sk-ant-must-not-leak"),
+            ("ANTHROPIC_MODEL", "claude-must-not-leak"),
+            ("HERMES_API_KEY", "hk-must-not-leak"),
+            ("AWS_SECRET_ACCESS_KEY", "aws-must-not-leak"),
+            ("OPENAI_API_KEY", "sk-openai-must-not-leak"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+
+        let kept: BTreeMap<String, String> = filter_agent_env(daemon_env)
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+
+        // Mechanically-required vars and Covenant's own config namespace pass
+        // through so agents still resolve interpreters, find $COVENANT_HOME,
+        // and read their COVENANT_* settings.
+        assert_eq!(
+            kept.get("PATH").map(String::as_str),
+            Some("/usr/local/bin:/usr/bin")
+        );
+        assert_eq!(kept.get("HOME").map(String::as_str), Some("/home/agent"));
+        assert_eq!(
+            kept.get("COVENANT_HOME").map(String::as_str),
+            Some("/var/lib/covenant")
+        );
+        assert_eq!(
+            kept.get("COVENANT_DEMO_DAILY_REQUESTS").map(String::as_str),
+            Some("500")
+        );
+
+        // Every operator secret in the daemon's environment is withheld — an
+        // agent that needs one goes through the capability-gated, audited
+        // broker, it does not inherit it for free. A future change that
+        // re-broadens the allowlist (or restores a blanket inherit) trips this.
+        for secret_key in [
+            "ANTHROPIC_API_KEY",
+            "HERMES_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "OPENAI_API_KEY",
+        ] {
+            assert!(
+                !kept.contains_key(secret_key),
+                "operator secret {secret_key} must not reach the agent subprocess: {kept:?}"
+            );
+        }
+        // The allowlist is deny-by-default, not a secret-name denylist: a
+        // non-secret but non-COVENANT_* var (a third-party model setting) is
+        // dropped too, so a differently-named secret can never slip through.
+        assert!(
+            !kept.contains_key("ANTHROPIC_MODEL"),
+            "non-allowlisted env must be dropped regardless of whether it looks like a secret: {kept:?}"
+        );
     }
 
     #[test]
@@ -3100,6 +3690,319 @@ cpu_ms_per_task = 5000
         assert_eq!(tracker.unregister(&intent_id), None);
     }
 
+    fn persisted(intent_id: Uuid, pid: u32, identity: Option<ProcIdentity>) -> PersistedEntry {
+        PersistedEntry {
+            intent_id,
+            agent_id: "agent.research@local".into(),
+            pid,
+            started_at_ms: 1_700_000_000_000,
+            identity,
+        }
+    }
+
+    fn tracked(pid: u32) -> TrackedSubprocess {
+        TrackedSubprocess {
+            agent_id: "agent.research@local".into(),
+            pid,
+            started_at_ms: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn parse_proc_stat_reads_fields_past_a_parenthesized_comm() {
+        // The comm field is parenthesized and may itself contain spaces
+        // and a ')', so pgid (field 5) and starttime (field 22) must be
+        // located relative to the LAST ')'. A naive split on the first
+        // whitespace would read the wrong columns.
+        let mut fields = vec!["4242", "(weird ) name)", "R", "1", "4200"];
+        fields.extend(std::iter::repeat_n("0", 16)); // fields 6..=21
+        fields.push("99887"); // field 22: starttime
+        let id = parse_proc_stat(&fields.join(" ")).expect("stat must parse past the tricky comm");
+        assert_eq!(
+            id.pgid, 4200,
+            "pgid must be read from field 5, after the last ')'"
+        );
+        assert_eq!(
+            id.start_time_ticks, 99887,
+            "starttime must be read from field 22"
+        );
+    }
+
+    #[test]
+    fn parse_proc_stat_fails_closed_on_every_malformed_line() {
+        // ProcIdentity::current treats a `None` from the parser as "cannot
+        // prove ownership → do not re-track", and recover() refuses to adopt a
+        // pid it cannot prove identity for. The happy-path test above proves the
+        // parser reads the right columns; this proves the other half — that a
+        // malformed /proc/<pid>/stat line (a corrupt or truncated kernel read, a
+        // hostile container /proc) fails closed to `None` rather than fabricating
+        // a bogus pgid/starttime that recovery would then compare against the
+        // value captured at register time. A parser that defaulted a bad field to
+        // 0 or dropped a guard would mint a wrong-but-valid identity and break the
+        // pid-reuse refusal, yet pass every existing test.
+
+        // No ')' at all: the comm anchor the trailing fields are read relative to
+        // is missing, so there is nothing to parse.
+        assert!(
+            parse_proc_stat("4242 weird-comm-without-parens R 1 4200").is_none(),
+            "a line with no ')' has no comm anchor and must fail closed"
+        );
+
+        // Well-formed up to the last ')', but pgid (field 5) is not a number.
+        let mut bad_pgid = vec!["4242", "(comm)", "R", "1", "not-a-pgid"];
+        bad_pgid.extend(std::iter::repeat_n("0", 16)); // fields 6..=21
+        bad_pgid.push("99887");
+        assert!(
+            parse_proc_stat(&bad_pgid.join(" ")).is_none(),
+            "a non-numeric pgid must fail closed, not default to a fabricated value"
+        );
+
+        // Well-formed up to the last ')', but starttime (field 22) is not a number.
+        let mut bad_start = vec!["4242", "(comm)", "R", "1", "4200"];
+        bad_start.extend(std::iter::repeat_n("0", 16)); // fields 6..=21
+        bad_start.push("not-a-time");
+        assert!(
+            parse_proc_stat(&bad_start.join(" ")).is_none(),
+            "a non-numeric starttime must fail closed"
+        );
+
+        // Truncated before pgid: only state and ppid follow the comm.
+        assert!(
+            parse_proc_stat("4242 (comm) R 1").is_none(),
+            "fewer than 3 post-comm fields means no pgid (field 5) and must fail closed"
+        );
+
+        // Truncated after pgid but before starttime: pgid parses, field 22 is absent.
+        assert!(
+            parse_proc_stat("4242 (comm) R 1 4200").is_none(),
+            "a line that stops before field 22 has no starttime and must fail closed"
+        );
+    }
+
+    #[test]
+    fn subprocess_tracker_recover_retracks_validated_survivor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+        let id = Uuid::new_v4();
+        let seed = SubprocessTracker::with_persistence(path.clone());
+        seed.register(id, tracked(4242));
+
+        let fresh = SubprocessTracker::with_persistence(path);
+        let report = fresh.recover_with(|_| OwnershipCheck::SameProcess);
+        assert_eq!(
+            report.retracked, 1,
+            "a validated survivor must be re-tracked"
+        );
+        assert!(
+            fresh.get(&id).is_some(),
+            "the re-tracked entry must be visible so the projection tick can reap it"
+        );
+    }
+
+    #[test]
+    fn subprocess_tracker_recover_refuses_reused_pid_so_it_is_never_signalled() {
+        // The load-bearing security property (failure mode 1): a recovered
+        // pid whose live identity differs from the record was reused, so it
+        // must NOT be re-tracked — recovery never re-populates it, so the
+        // projection tick never signals it. Mutation-proof: routing Reused
+        // to the re-track arm would leave the entry present and fail here.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+        let id = Uuid::new_v4();
+        let seed = SubprocessTracker::with_persistence(path.clone());
+        seed.register(id, tracked(4242));
+
+        let fresh = SubprocessTracker::with_persistence(path);
+        let report = fresh.recover_with(|_| OwnershipCheck::Reused);
+        assert_eq!(report.dropped_reused, 1);
+        assert_eq!(report.retracked, 0);
+        assert!(
+            fresh.get(&id).is_none(),
+            "a reused pid must never be re-tracked, so the daemon can never signal it"
+        );
+        assert!(fresh.is_empty());
+    }
+
+    #[test]
+    fn subprocess_tracker_recover_drops_vanished_and_unverifiable_pids() {
+        // Failure mode 2: a vanished pid (ESRCH) is benign; a live but
+        // unverifiable pid is do-not-signal. Both drop without re-tracking.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (decision, tag) in [
+            (OwnershipCheck::Vanished, "vanished"),
+            (OwnershipCheck::Unverifiable, "unverifiable"),
+        ] {
+            let path = dir.path().join(format!("tracker-{tag}.jsonl"));
+            let id = Uuid::new_v4();
+            let seed = SubprocessTracker::with_persistence(path.clone());
+            seed.register(id, tracked(4242));
+
+            let fresh = SubprocessTracker::with_persistence(path);
+            let report = fresh.recover_with(move |_| decision);
+            assert!(fresh.get(&id).is_none(), "{tag}: must not re-track");
+            assert_eq!(report.retracked, 0, "{tag}: must not re-track");
+            match decision {
+                OwnershipCheck::Vanished => assert_eq!(report.dropped_vanished, 1),
+                OwnershipCheck::Unverifiable => assert_eq!(report.dropped_unverifiable, 1),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn subprocess_tracker_recover_tolerates_missing_and_corrupt_files() {
+        // Failure mode 5: a missing file recovers as empty; a corrupt line
+        // is skipped so one bad row cannot strand recovery of the rest.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = SubprocessTracker::with_persistence(dir.path().join("absent.jsonl"));
+        assert_eq!(
+            missing.recover_with(|_| OwnershipCheck::SameProcess),
+            RecoveryReport::default(),
+            "a missing snapshot must recover as empty"
+        );
+
+        let path = dir.path().join("mixed.jsonl");
+        let good = persisted(Uuid::new_v4(), 4242, None);
+        let line = serde_json::to_string(&good).expect("serialize good row");
+        std::fs::write(&path, format!("{{ not json\n{line}\ngarbage}}\n"))
+            .expect("write mixed file");
+        let tracker = SubprocessTracker::with_persistence(path);
+        let report = tracker.recover_with(|_| OwnershipCheck::SameProcess);
+        assert_eq!(
+            report.retracked, 1,
+            "the one valid row recovers despite corrupt neighbors"
+        );
+        assert!(tracker.get(&good.intent_id).is_some());
+    }
+
+    #[test]
+    fn subprocess_tracker_persist_snapshot_round_trips_through_register_unregister() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+        let tracker = SubprocessTracker::with_persistence(path.clone());
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        tracker.register(id_a, tracked(1));
+        tracker.register(id_b, tracked(2));
+        assert_eq!(load_snapshot(&path).len(), 2, "both registers land on disk");
+
+        tracker.unregister(&id_a);
+        let rows = load_snapshot(&path);
+        assert_eq!(
+            rows.len(),
+            1,
+            "unregister rewrites the snapshot without the removed entry"
+        );
+        assert_eq!(rows[0].intent_id, id_b);
+    }
+
+    #[test]
+    fn subprocess_tracker_new_performs_no_disk_io() {
+        // The in-memory constructor every existing caller uses must stay a
+        // pure memory tracker: register/unregister touch no disk and
+        // recover() is a no-op.
+        let tracker = SubprocessTracker::new();
+        let id = Uuid::new_v4();
+        tracker.register(id, tracked(1));
+        assert_eq!(tracker.len(), 1);
+        tracker.unregister(&id);
+        assert_eq!(tracker.recover(), RecoveryReport::default());
+    }
+
+    #[test]
+    fn subprocess_tracker_persist_failure_does_not_block_register() {
+        // Failure mode 5: persistence is best-effort on the spawn hot path.
+        // Pointing the snapshot under a path whose parent is a regular file
+        // makes every write fail; register must still succeed in-memory and
+        // must not panic. (Constructed directly because with_persistence
+        // would detect the bad parent and fall back to in-memory.)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"regular file, not a directory").expect("write blocker");
+        let tracker = SubprocessTracker {
+            persist_path: Some(blocker.join("tracker.jsonl")),
+            ..SubprocessTracker::default()
+        };
+        let id = Uuid::new_v4();
+        tracker.register(id, tracked(1));
+        assert_eq!(
+            tracker.len(),
+            1,
+            "register must succeed in-memory even when the snapshot write fails"
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn subprocess_tracker_recover_off_linux_is_a_documented_no_op() {
+        // Failure mode 3: with no /proc, the real validator cannot prove
+        // ownership, so recover() re-tracks nothing and reports every row
+        // unverifiable — the off-Linux no-op proven on the macOS dev host.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+        let id = Uuid::new_v4();
+        let seed = SubprocessTracker::with_persistence(path.clone());
+        seed.register(id, tracked(4242));
+
+        let fresh = SubprocessTracker::with_persistence(path);
+        let report = fresh.recover();
+        assert_eq!(
+            report.retracked, 0,
+            "off Linux recovery must re-track nothing"
+        );
+        assert_eq!(report.dropped_unverifiable, 1);
+        assert!(fresh.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subprocess_tracker_recover_real_proc_retracks_live_then_refuses_reused() {
+        // End-to-end on real /proc: a live child whose recorded identity
+        // matches is re-tracked; tampering the recorded start_time (the
+        // pid-reuse shape) makes the live identity diverge and recovery
+        // refuses it. Exercises the cfg(linux) validate_ownership + /proc
+        // read the cross-platform seam tests stub out.
+        use std::os::unix::process::CommandExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("subprocess-tracker.jsonl");
+
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+
+        let id = Uuid::new_v4();
+        let seed = SubprocessTracker::with_persistence(path.clone());
+        seed.register(id, tracked(pid));
+
+        let live = SubprocessTracker::with_persistence(path.clone());
+        assert_eq!(
+            live.recover().retracked,
+            1,
+            "live child with matching /proc identity must re-track"
+        );
+        assert!(live.get(&id).is_some());
+
+        let mut rows = load_snapshot(&path);
+        rows[0].identity = rows[0].identity.map(|idn| ProcIdentity {
+            start_time_ticks: idn.start_time_ticks.wrapping_add(1),
+            ..idn
+        });
+        write_snapshot(&path, &rows).expect("rewrite tampered snapshot");
+        let tampered = SubprocessTracker::with_persistence(path);
+        let report = tampered.recover();
+        assert_eq!(
+            report.dropped_reused, 1,
+            "a mismatched start_time must be refused as a reused pid"
+        );
+        assert!(tampered.get(&id).is_none());
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn subprocess_runner_spawn_places_child_in_its_own_process_group() {
@@ -3449,6 +4352,128 @@ cpu_ms_per_task = 5000
             truncated.len() < 8000,
             "truncate must actually shrink: got {} bytes",
             truncated.len()
+        );
+    }
+
+    #[test]
+    fn truncate_stderr_keeps_a_buffer_sized_exactly_at_the_cap() {
+        // truncate_stderr_for_diagnostics returns a buffer untouched when its
+        // length is <= MAX_LEN (lib.rs:286): equality is the keep-arm, so a
+        // stderr sized exactly at the cap comes back verbatim with no
+        // `...(truncated)` marker, and only MAX_LEN+1 is clipped. The sibling
+        // test brackets this far from the boundary — a 13-byte buffer kept, an
+        // 8011-byte buffer tailed — so a `<=` -> `<` flip, which would clip a
+        // buffer sized exactly at the cap (prepend the marker, drop a byte),
+        // passes every assertion there. Pin both arms: exactly MAX_LEN is
+        // returned verbatim, MAX_LEN+1 is clipped.
+        const MAX_LEN: usize = 4096;
+
+        let exact = "a".repeat(MAX_LEN);
+        assert_eq!(
+            truncate_stderr_for_diagnostics(exact.clone()),
+            exact,
+            "a stderr buffer sized exactly at MAX_LEN must be returned verbatim — equality is the \
+             keep-arm; a <= -> < flip would clip it and prepend the truncated marker",
+        );
+
+        let over = "a".repeat(MAX_LEN + 1);
+        let truncated = truncate_stderr_for_diagnostics(over);
+        assert!(
+            truncated.starts_with("...(truncated)"),
+            "one byte over the cap must be clipped and marked, bracketing the keep-arm: {truncated}",
+        );
+    }
+
+    #[test]
+    fn truncate_stderr_advances_past_a_two_byte_char_split_by_the_cut() {
+        // Both sibling truncation tests feed pure-ASCII buffers, where every
+        // byte index is already a char boundary, so the is_char_boundary
+        // advance in truncate_stderr_for_diagnostics never runs. Craft an
+        // over-cap buffer whose len-MAX_LEN cut lands on the continuation byte
+        // of a 2-byte `é`: a raw drain(..len-MAX_LEN) would panic mid-char
+        // (String::drain requires a char boundary) — a DoS via untrusted agent
+        // stderr — so the advance to the next boundary must fire, drop the
+        // straddling char whole, and resume the retained tail at a whole char.
+        const MAX_LEN: usize = 4096;
+
+        // Size the tail to MAX_LEN-1 so the cut lands on the second byte of the
+        // `é` in front of it; open the tail with a 3-byte `€` to prove the body
+        // resumes at a whole multibyte char, not a dangling continuation byte.
+        let marker = "TAIL-MARKER";
+        let pad = "b".repeat(MAX_LEN - 1 - "€".len() - marker.len());
+        let tail = format!("€{pad}{marker}");
+        assert_eq!(tail.len(), MAX_LEN - 1);
+
+        let over_cap = format!("XXé{tail}");
+        let cut = over_cap.len() - MAX_LEN;
+        assert!(
+            !over_cap.is_char_boundary(cut),
+            "precondition: the cut must land mid-char to exercise the boundary advance",
+        );
+
+        let truncated = truncate_stderr_for_diagnostics(over_cap);
+
+        let body = truncated
+            .strip_prefix("...(truncated)\n")
+            .expect("the clipped head must be marked with the truncation prefix");
+        assert_eq!(
+            body, tail,
+            "the straddling `é` must be dropped whole so the body resumes at the tail's first char",
+        );
+        assert_eq!(
+            body.chars().next(),
+            Some('€'),
+            "the retained body must resume at a whole char, not a dangling continuation byte",
+        );
+        assert!(
+            truncated.ends_with(marker),
+            "the operator-actionable tail must survive the cut",
+        );
+        assert!(
+            !truncated.contains('\u{FFFD}'),
+            "a byte-offset cut must not leave a replacement char from a split code point: {truncated:?}",
+        );
+    }
+
+    #[test]
+    fn truncate_stderr_advances_over_multiple_continuation_bytes_to_the_next_boundary() {
+        // Sharpen the two-byte sibling: land the cut on the FIRST of a 3-byte
+        // char's two continuation bytes so the boundary search must step over
+        // TWO non-boundary bytes to reach the next char. Guards a
+        // `drop_until + 1` shortcut that assumes every split is a 2-byte char
+        // and would leave the drain mid-char on a 3- or 4-byte split.
+        const MAX_LEN: usize = 4096;
+
+        let marker = "TAIL-MARKER";
+        let pad = "b".repeat(MAX_LEN - 2 - "é".len() - marker.len());
+        let tail = format!("é{pad}{marker}");
+        assert_eq!(tail.len(), MAX_LEN - 2);
+
+        let over_cap = format!("Z€{tail}");
+        let cut = over_cap.len() - MAX_LEN;
+        assert!(
+            !over_cap.is_char_boundary(cut) && !over_cap.is_char_boundary(cut + 1),
+            "precondition: the cut must land on the first of two continuation bytes",
+        );
+
+        let truncated = truncate_stderr_for_diagnostics(over_cap);
+
+        let body = truncated
+            .strip_prefix("...(truncated)\n")
+            .expect("the clipped head must be marked with the truncation prefix");
+        assert_eq!(
+            body, tail,
+            "the 3-byte char straddling the cut must be dropped whole across both continuation bytes",
+        );
+        assert_eq!(
+            body.chars().next(),
+            Some('é'),
+            "the retained body must resume at a whole char after skipping two continuation bytes",
+        );
+        assert!(truncated.ends_with(marker));
+        assert!(
+            !truncated.contains('\u{FFFD}'),
+            "a byte-offset cut must not leave a replacement char from a split code point: {truncated:?}",
         );
     }
 }

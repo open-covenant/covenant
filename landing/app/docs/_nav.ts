@@ -7,6 +7,7 @@ export const DOCS_NAV: DocsSection[] = [
     items: [
       { href: "/", label: "Overview" },
       { href: "/getting-started", label: "Getting started" },
+      { href: "/agent-quickstart", label: "Agent quickstart" },
       { href: "/concepts", label: "Concepts" },
       { href: "/autonomy", label: "Autonomous workflow" },
       { href: "/validation", label: "Validation profile" },
@@ -40,6 +41,7 @@ export const DOCS_NAV: DocsSection[] = [
       { href: "/a2a-idempotency", label: "A2A idempotency policy" },
       { href: "/audit", label: "Audit log" },
       { href: "/audit-integrity", label: "Audit integrity" },
+      { href: "/conformance", label: "Conformance" },
       { href: "/settlement", label: "Settlement" },
     ],
   },

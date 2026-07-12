@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SpendLedger, modelCostUsd, type BudgetCaps } from "../src/budget.js";
+import { SpendLedger, modelCostUsd, sandboxCostUsd, type BudgetCaps } from "../src/budget.js";
+import { config } from "../src/config.js";
 
 const caps: BudgetCaps = {
   dailyUsd: 6,
@@ -38,6 +39,24 @@ describe("SpendLedger", () => {
     expect(snap.reserved).toBe(0);
     expect(snap.dailyUsd).toBeCloseTo(0.1);
     expect(snap.active).toBe(0);
+  });
+
+  it("clamps active and reserved at zero on a duplicate commit (no underflow)", () => {
+    // A double-dispatched completion (retry, missed splice) calls commit twice
+    // on the same id. The Math.max(0, ...) floors keep active/reserved from
+    // going negative — an underflowed active would silently inflate the
+    // concurrency gate's headroom (reserve checks active >= maxConcurrent).
+    // Parity with ip-bucket's "release is idempotent on double-release".
+    const l = new SpendLedger(caps);
+    const r = l.reserve();
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      l.commit(r.id, r.max, 0.1, "completed");
+      l.commit(r.id, r.max, 0.1, "completed"); // duplicate
+    }
+    const snap = l.snapshot();
+    expect(snap.active).toBe(0);
+    expect(snap.reserved).toBe(0);
   });
 
   it("enforces the concurrency cap independent of spend", () => {
@@ -140,6 +159,31 @@ describe("SpendLedger", () => {
     expect(cost).toBeCloseTo(4.5);
   });
 
+  it("falls back to Sonnet pricing for a model absent from the PRICING table", () => {
+    // model flows in from config.model = CODER_MODEL, an operator-settable
+    // string. A model not yet priced (new release, typo, comparison tier)
+    // must bill as Sonnet rather than throw on undefined.input or silently
+    // bill zero.
+    const usage = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const cost = modelCostUsd("claude-future-9", usage);
+    expect(cost).toBeCloseTo(modelCostUsd("claude-sonnet-4-6", usage));
+    expect(cost).toBeGreaterThan(0);
+  });
+
+  it("prices cache reads and creations at their distinct multipliers", () => {
+    // Sonnet: cacheRead $0.3/M, cacheWrite $3.75/M (a 12.5x spread). Cached
+    // turns dominate a long agent loop, so the two multipliers must stay
+    // distinct — transposing them, or dropping either term, mis-accounts the
+    // spend the ledger caps. 2M read + 1M write = $0.6 + $3.75 = $4.35.
+    const cost = modelCostUsd("claude-sonnet-4-6", {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 2_000_000,
+      cacheCreationTokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(4.35);
+  });
+
   it("first-boot ENOENT loads silently — missing path is normal", () => {
     const path = join(tmpdir(), `covenant-ledger-missing-${Date.now()}.json`);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -149,6 +193,24 @@ describe("SpendLedger", () => {
       expect(err).not.toHaveBeenCalled();
     } finally {
       err.mockRestore();
+    }
+  });
+
+  it("surfaces a non-ENOENT ledger read error instead of silently resetting the cap", () => {
+    // EACCES/EIO/a-vanished-tmpfs is operator misconfiguration; the read catch
+    // must log it rather than swallow it as if the file were simply missing,
+    // otherwise a bad LEDGER_PATH silently zeroes the daily tally. A directory
+    // path makes readFileSync throw EISDIR — a code other than ENOENT.
+    const dir = mkdtempSync(join(tmpdir(), "covenant-ledger-dir-"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const l = new SpendLedger(caps, dir);
+      expect(l.snapshot().dailyUsd).toBe(0);
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(err.mock.calls[0]![0]).toMatch(/ledger load failed/);
+    } finally {
+      err.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -242,6 +304,38 @@ describe("SpendLedger", () => {
       expect(onDisk.pending.length).toBe(1);
     } finally {
       rmSync(path, { force: true });
+    }
+  });
+
+  it("treats a pending deadline equal to the boot clock as expired (exclusive deadline boundary)", () => {
+    // The +30s/+120s warm-recovery tests above straddle the deadline but never
+    // land on it. restorePending keeps an entry only while deadlineEpochMs > now,
+    // so at exactly the deadline millisecond the reservation must prune (its
+    // wall-clock ceiling has been reached and the microVM has self-destructed),
+    // while one millisecond earlier it is still live. A `> -> >=` slip would
+    // wrongly reinstate a finished run as live admission capacity at the boundary.
+    const tinyCaps: BudgetCaps = { ...caps, wallMs: 60_000 };
+    const T = 1_000_000_000_000;
+    const seed = (path: string) => {
+      const before = new SpendLedger(tinyCaps, path, () => T);
+      expect(before.reserve().ok).toBe(true); // deadlineEpochMs = T + 60_000
+    };
+    const atPath = join(tmpdir(), `covenant-ledger-deadline-eq-${Date.now()}.json`);
+    const ltPath = join(tmpdir(), `covenant-ledger-deadline-lt-${Date.now()}-2.json`);
+    try {
+      seed(atPath);
+      seed(ltPath);
+
+      const atDeadline = new SpendLedger(tinyCaps, atPath, () => T + 60_000).snapshot();
+      expect(atDeadline.reserved).toBe(0);
+      expect(atDeadline.active).toBe(0);
+
+      const oneMsEarlier = new SpendLedger(tinyCaps, ltPath, () => T + 60_000 - 1).snapshot();
+      expect(oneMsEarlier.reserved).toBe(tinyCaps.perRunUsdMax);
+      expect(oneMsEarlier.active).toBe(1);
+    } finally {
+      rmSync(atPath, { force: true });
+      rmSync(ltPath, { force: true });
     }
   });
 
@@ -346,5 +440,112 @@ describe("SpendLedger", () => {
     } finally {
       rmSync(path, { force: true });
     }
+  });
+
+  it("discards a persisted daily counter from a previous day so a new-day boot gets a fresh daily cap", () => {
+    // The daily tally is a same-day counter: a restart on a new day must start at
+    // $0, not inherit yesterday's spend (which would silently eat today's headroom).
+    // month is held at the current month so this isolates the day-equality guard
+    // while confirming the monthly tally still carries across the day boundary.
+    const path = join(tmpdir(), `covenant-ledger-staleday-${Date.now()}.json`);
+    const month = new Date().toISOString().slice(0, 7);
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          day: "2000-01-01", // a day that is never today
+          month,
+          dailyUsd: 5,
+          monthlyUsd: 5,
+          outcomes: { completed: 0, failed: 0, cancelled: 0 },
+          pending: [],
+        }),
+      );
+      const snap = new SpendLedger(caps, path).snapshot();
+      expect(snap.dailyUsd).toBe(0); // stale day → daily counter reset
+      expect(snap.monthlyUsd).toBeCloseTo(5); // same month → monthly counter carried
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  it("discards a persisted monthly counter from a previous month so a new-month boot gets a fresh monthly cap", () => {
+    // Symmetric to the daily case at the month granularity: a boot in a new month
+    // must not inherit last month's spend against the monthly cap, while the daily
+    // tally still restores when the persisted day matches today.
+    const path = join(tmpdir(), `covenant-ledger-stalemonth-${Date.now()}.json`);
+    const day = new Date().toISOString().slice(0, 10);
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          day,
+          month: "2000-01", // a month that is never now
+          dailyUsd: 3,
+          monthlyUsd: 99,
+          outcomes: { completed: 0, failed: 0, cancelled: 0 },
+          pending: [],
+        }),
+      );
+      const snap = new SpendLedger(caps, path).snapshot();
+      expect(snap.monthlyUsd).toBe(0); // stale month → monthly counter reset
+      expect(snap.dailyUsd).toBeCloseTo(3); // same day → daily counter carried
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  it("rejects a non-numeric persisted daily counter instead of poisoning the cap arithmetic", () => {
+    // A truncated/corrupt ledger could carry a string (or null) where a USD number
+    // is expected. Assigning it would make every subsequent cap comparison operate
+    // on a non-number (NaN/string concat), so the typeof guard must drop it and
+    // keep the in-memory counter a real number starting from $0.
+    const path = join(tmpdir(), `covenant-ledger-corrupt-${Date.now()}.json`);
+    const day = new Date().toISOString().slice(0, 10);
+    const month = new Date().toISOString().slice(0, 7);
+    try {
+      writeFileSync(
+        path,
+        JSON.stringify({
+          day,
+          month,
+          dailyUsd: "5", // corrupt: a string where a number is required
+          monthlyUsd: 0,
+          outcomes: { completed: 0, failed: 0, cancelled: 0 },
+          pending: [],
+        }),
+      );
+      const snap = new SpendLedger(caps, path).snapshot();
+      expect(snap.dailyUsd).toBe(0); // the string was rejected, not assigned through
+      expect(typeof snap.dailyUsd).toBe("number");
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+});
+
+describe("sandboxCostUsd", () => {
+  // The completion commit charges modelCostUsd(model, usage) + sandboxCostUsd(seconds)
+  // (server.ts), and that sum is what the daily/monthly caps meter — so the
+  // sandbox term bounds how long a run can burn wall clock before admission refuses.
+  it("charges nothing for a zero-second run", () => {
+    // The cheapest `*`->`+` tripwire: 0 * rate is 0, but 0 + rate would bill a
+    // flat per-second charge on a run that used no sandbox time at all.
+    expect(sandboxCostUsd(0)).toBe(0);
+  });
+
+  it("scales linearly with wall-clock seconds", () => {
+    // (2s)*rate == 2*(s*rate) but (2s)+rate != 2*(s+rate): linearity catches a
+    // `+` or otherwise non-linear mutation without depending on the exact rate.
+    expect(sandboxCostUsd(7200)).toBeCloseTo(2 * sandboxCostUsd(3600));
+    expect(sandboxCostUsd(3600)).toBeGreaterThan(0);
+  });
+
+  it("meters at the configured default rate of $0.0001/s", () => {
+    // A zeroed/garbled CODER_SANDBOX_USD_PER_SEC would silently stop metering
+    // sandbox wall-clock entirely. Pin the default against an independent
+    // constant (10000s -> $1), not a config-derived self-check.
+    expect(config.sandboxUsdPerSec).toBe(0.0001);
+    expect(sandboxCostUsd(10_000)).toBeCloseTo(1);
   });
 });

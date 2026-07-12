@@ -1,0 +1,4 @@
+{
+  "kind": "sap_publish_agent",
+  "manifest_json": "{\"name\":\"example\",\"authority\":\"example\"}"
+}

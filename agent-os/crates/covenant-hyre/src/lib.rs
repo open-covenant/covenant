@@ -28,6 +28,7 @@
 pub mod catalog;
 pub mod config;
 pub mod facilitator;
+mod http;
 pub mod manifest;
 pub mod publish;
 pub mod tools;
@@ -41,7 +42,7 @@ pub use config::HyreConfig;
 // path keeps that visible at the call site.
 pub use manifest::Endpoint;
 pub use tools::{hyre_specs, hyre_tool, hyre_tools, PaidExecutor, PaidRequest, PaidResponse};
-pub use x402::{execute_paid, parse_challenge, PaidHttp};
+pub use x402::{execute_paid, http_client, parse_challenge, PaidHttp};
 
 /// Default Hyre OpenAPI manifest, vendored for offline startup.
 ///
@@ -60,6 +61,8 @@ pub enum HyreError {
     NotAllowed(String),
     #[error("paid call: {0}")]
     Execute(String),
+    #[error("signer: {0}")]
+    Sign(String),
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),
 }

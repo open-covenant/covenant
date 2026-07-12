@@ -1,0 +1,6 @@
+{
+  "kind": "list_peers",
+  "limit": 25,
+  "pubkey_prefix": "5x",
+  "status_filter": "live"
+}

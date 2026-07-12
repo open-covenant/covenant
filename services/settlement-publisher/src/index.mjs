@@ -27,6 +27,9 @@ import http from "node:http";
 import { readFileSync, mkdirSync, appendFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseOperatorKeypairBytes } from "./keypair.mjs";
+import { restoreSigs } from "./sigs-replay.mjs";
+import { selectDispatches } from "./dispatch-select.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -58,19 +61,7 @@ const CREDIT_ACCOUNT = new PublicKey(
 // Operator keypair: raw `[u8; 64]` JSON, same shape solana-keygen writes.
 // Loaded from env so the wallet never lives on a disk image.
 function loadOperatorKeypair() {
-  const raw = process.env.COVENANT_OPERATOR_KEYPAIR_JSON?.trim();
-  if (!raw) {
-    throw new Error(
-      "COVENANT_OPERATOR_KEYPAIR_JSON is not set; sidecar can't sign",
-    );
-  }
-  const arr = JSON.parse(raw);
-  if (!Array.isArray(arr) || arr.length !== 64) {
-    throw new Error(
-      "COVENANT_OPERATOR_KEYPAIR_JSON must be a 64-byte JSON array",
-    );
-  }
-  return Keypair.fromSecretKey(Uint8Array.from(arr));
+  return Keypair.fromSecretKey(parseOperatorKeypairBytes());
 }
 
 const POLL_MS = Number(process.env.SETTLE_POLL_MS ?? "4000");
@@ -90,17 +81,10 @@ const sigByIntent = new Map(); // intent_id -> { tx_sig, slot, settled_at_ms, in
 const processedIntents = new Set();
 
 if (existsSync(SIGS_PATH)) {
-  for (const line of readFileSync(SIGS_PATH, "utf8").split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const row = JSON.parse(line);
-      if (row.intent_id && row.tx_sig) {
-        sigByIntent.set(row.intent_id, row);
-        processedIntents.add(row.intent_id);
-      }
-    } catch {
-      // skip malformed lines
-    }
+  const restored = restoreSigs(readFileSync(SIGS_PATH, "utf8"));
+  for (const [intentId, row] of restored) {
+    sigByIntent.set(intentId, row);
+    processedIntents.add(intentId);
   }
   console.log(`[init] restored ${sigByIntent.size} sigs from disk`);
 }
@@ -191,9 +175,7 @@ async function pollOnce() {
 
   // Walk oldest -> newest so the order on-chain mirrors the order
   // tasks actually fired in the sandbox.
-  const dispatches = events
-    .filter((e) => e?.kind?.type === "intent_dispatched")
-    .sort((a, b) => (a.timestamp_ms ?? 0) - (b.timestamp_ms ?? 0));
+  const dispatches = selectDispatches(events);
 
   let published = 0;
   for (const e of dispatches) {

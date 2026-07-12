@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::{keypair::Keypair, Signer};
 
 const AGENT: [u8; 32] = [11u8; 32];
@@ -84,46 +85,182 @@ fn full_slash_then_close_then_restake() {
     assert_eq!(agent_stake(&env, &AGENT), 250);
 }
 
-#[cfg(feature = "task-escrow")]
+// Happy path: provider delivers, client approves, provider is paid.
 #[test]
-fn task_create_and_release_pays_provider() {
+fn task_submit_then_release_pays_provider() {
     let mut env = boot();
+    warp_unix(&mut env, 1_000);
     register_agent(&mut env, &AGENT);
     let task_id = [21u8; 32];
-    let provider = Keypair::new().pubkey();
+    let provider = Keypair::new();
+    let client = env.payer.insecure_clone();
     let provider_covnt = create_token_account(
         &mut env.svm,
         &env.payer.insecure_clone(),
         &env.mint,
-        &provider,
+        &provider.pubkey(),
     );
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider, 600, 10_000, &tc).expect("create_task");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
     assert_eq!(token_balance(&env, &tc.escrow_vault), 600);
     assert_eq!(token_balance(&env, &tc.client_covnt), 400);
 
-    release_task(&mut env, &tc, &provider_covnt).expect("release");
+    submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit");
+    assert_eq!(task_status(&env, &tc.task), 2); // TASK_SUBMITTED
+
+    release_task(&mut env, &tc, &provider_covnt, &client).expect("release");
     assert_eq!(token_balance(&env, &provider_covnt), 600);
     assert_eq!(token_balance(&env, &tc.escrow_vault), 0);
-    assert_eq!(task_status(&env, &tc.task), 2); // TASK_RELEASED
+    assert_eq!(task_status(&env, &tc.task), 3); // TASK_RELEASED
 }
 
-#[cfg(feature = "task-escrow")]
+// Provider recourse: the client goes silent, so after the review window the
+// provider self-claims the delivered work. This is the case that kept task
+// escrow disabled before.
+#[test]
+fn task_claim_after_review_window_pays_provider() {
+    let mut env = boot();
+    warp_unix(&mut env, 1_000);
+    register_agent(&mut env, &AGENT);
+    let task_id = [23u8; 32];
+    let provider = Keypair::new();
+    let provider_covnt = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &provider.pubkey(),
+    );
+
+    let tc = task_setup(&mut env, &task_id, 1_000);
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
+    submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit"); // submitted_at = 1_000
+
+    warp_unix(&mut env, 1_301); // past submitted_at + review_window
+    claim_task(&mut env, &tc, &provider_covnt, &provider).expect("claim");
+    assert_eq!(token_balance(&env, &provider_covnt), 600);
+    assert_eq!(task_status(&env, &tc.task), 3); // TASK_RELEASED
+}
+
+// Dispute resolved for the provider: the arbiter releases mid-window.
+#[test]
+fn task_arbiter_release_pays_provider() {
+    let mut env = boot();
+    warp_unix(&mut env, 1_000);
+    register_agent(&mut env, &AGENT);
+    let task_id = [24u8; 32];
+    let provider = Keypair::new();
+    let arbiter = Keypair::new();
+    let provider_covnt = create_token_account(
+        &mut env.svm,
+        &env.payer.insecure_clone(),
+        &env.mint,
+        &provider.pubkey(),
+    );
+
+    let tc = task_setup(&mut env, &task_id, 1_000);
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &arbiter.pubkey(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
+    submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit");
+
+    release_task(&mut env, &tc, &provider_covnt, &arbiter).expect("arbiter release");
+    assert_eq!(token_balance(&env, &provider_covnt), 600);
+    assert_eq!(task_status(&env, &tc.task), 3); // TASK_RELEASED
+}
+
+// Client recourse: the provider never submits, so after the deadline the
+// client reclaims the escrow.
 #[test]
 fn task_refund_after_deadline_returns_client() {
     let mut env = boot();
+    warp_unix(&mut env, 1_000);
     register_agent(&mut env, &AGENT);
     let task_id = [22u8; 32];
-    let provider = Keypair::new().pubkey();
+    let provider = Keypair::new();
+    let client = env.payer.insecure_clone();
 
     let tc = task_setup(&mut env, &task_id, 1_000);
-    create_task(&mut env, &AGENT, &task_id, &provider, 600, 5_000, &tc).expect("create_task");
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &Pubkey::default(),
+        600,
+        5_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
 
-    warp_unix(&mut env, 6_000); // past the deadline
-    refund_task(&mut env, &tc).expect("refund");
+    warp_unix(&mut env, 6_000); // past the deadline, provider never submitted
+    refund_task(&mut env, &tc, &client).expect("refund");
     assert_eq!(token_balance(&env, &tc.client_covnt), 1_000); // fully refunded
-    assert_eq!(task_status(&env, &tc.task), 3); // TASK_REFUNDED
+    assert_eq!(task_status(&env, &tc.task), 4); // TASK_REFUNDED
+}
+
+// Dispute resolved for the client: the arbiter refunds during the window.
+#[test]
+fn task_arbiter_refund_within_window_returns_client() {
+    let mut env = boot();
+    warp_unix(&mut env, 1_000);
+    register_agent(&mut env, &AGENT);
+    let task_id = [25u8; 32];
+    let provider = Keypair::new();
+    let arbiter = Keypair::new();
+    let client = env.payer.insecure_clone();
+
+    let tc = task_setup(&mut env, &task_id, 1_000);
+    create_task(
+        &mut env,
+        &AGENT,
+        &task_id,
+        &provider.pubkey(),
+        &arbiter.pubkey(),
+        600,
+        10_000,
+        300,
+        &tc,
+    )
+    .expect("create_task");
+    submit_task(&mut env, &tc, &provider, [6u8; 32], [7u8; 32]).expect("submit"); // submitted_at 1_000
+
+    warp_unix(&mut env, 1_100); // inside the review window
+    refund_task(&mut env, &tc, &arbiter).expect("arbiter refund");
+    assert_eq!(token_balance(&env, &tc.client_covnt), 1_000);
+    assert_eq!(task_status(&env, &tc.task), 4); // TASK_REFUNDED
 }
 
 #[test]

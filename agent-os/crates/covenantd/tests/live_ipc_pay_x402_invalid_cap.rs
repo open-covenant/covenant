@@ -16,7 +16,7 @@
 //! after the grant does the cap-parse become the rejecting gate.
 //!
 //! Hermetic — x402 dispatch is enabled from env alone (`COVENANT_X402_ENABLED`
-//! + a `/bin/true` signer binary so `x402_dispatch_config_from_env` resolves
+//! and a `/bin/true` signer binary so `x402_dispatch_config_from_env` resolves
 //! `Some`); the malformed-cap path short-circuits before the signer is even
 //! constructed, so no real signer, Solana RPC, or x402 endpoint is touched.
 //! `#[ignore]`'d. Run with

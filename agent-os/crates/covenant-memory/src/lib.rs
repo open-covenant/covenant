@@ -1419,6 +1419,110 @@ mod tests {
         assert_eq!(recent[1].text, "c");
     }
 
+    #[tokio::test]
+    async fn sqlite_recent_filters_by_tier() {
+        // SqliteStore is the production backend, and recent()'s `WHERE tier = ?1`
+        // arm is what enforces memory.read.<tier> isolation there. The sibling
+        // sqlite_recent_orders_by_created_at_desc seeds Working-only rows, so
+        // dropping that clause would still pass it; mixed tiers make the filter
+        // load-bearing — recent(Some(Episodic)) must surface only the Episodic row.
+        let s = SqliteStore::open_in_memory().unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w", 1))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e", 2))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::LongTerm, "l", 3))
+            .await
+            .unwrap();
+        let only_episodic = s.recent(Some(MemoryTier::Episodic), 10).await.unwrap();
+        assert_eq!(only_episodic.len(), 1);
+        assert_eq!(only_episodic[0].text, "e");
+    }
+
+    /// `recent` must apply the `memory.read.<tier>` filter *before* the limit:
+    /// the returned page is the newest `limit` rows among the tier-matching
+    /// rows, not the tier-matching subset of the newest `limit` rows.
+    /// `in_memory_recent_filters_by_tier` keeps `limit` slack (10) so truncate
+    /// is a no-op, and `sqlite_recent_orders_by_created_at_desc` binds the
+    /// limit but seeds one tier, so neither pins the ordering. Here three
+    /// Episodic rows sit behind two newer Working rows under a cap of two:
+    /// filter-then-truncate returns the two newest Episodic rows; a
+    /// `sort -> truncate -> filter` reorder takes the newer Working rows first
+    /// and filters them away, collapsing to an empty page on the live
+    /// `memory recent --tier Episodic --limit 2` path.
+    #[tokio::test]
+    async fn in_memory_recent_tier_filter_with_binding_limit_keeps_matching_rows_beyond_cap() {
+        let s = InMemoryStore::new();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e1", 1))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e2", 2))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e3", 3))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w4", 4))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w5", 5))
+            .await
+            .unwrap();
+
+        let page = s.recent(Some(MemoryTier::Episodic), 2).await.unwrap();
+        assert_eq!(page.len(), 2, "limit binds among the Episodic rows");
+        assert!(
+            page.iter().all(|r| r.tier == MemoryTier::Episodic),
+            "newer Working rows must not displace tier-matching rows"
+        );
+        let texts: Vec<&str> = page.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["e3", "e2"],
+            "newest two Episodic rows, newest first; a third (e1) exists beyond the cap"
+        );
+    }
+
+    /// SQLite mirror: the production backend pages the tier+limit interaction
+    /// through `WHERE tier = ?1 ORDER BY created_at DESC LIMIT ?2`, so the
+    /// filter binds before the limit in SQL. Pin it so moving the tier
+    /// predicate to a post-`LIMIT` Rust take regresses identically to the
+    /// in-memory reorder.
+    #[tokio::test]
+    async fn sqlite_recent_tier_filter_with_binding_limit_keeps_matching_rows_beyond_cap() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e1", 1))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e2", 2))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "e3", 3))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w4", 4))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "w5", 5))
+            .await
+            .unwrap();
+
+        let page = s.recent(Some(MemoryTier::Episodic), 2).await.unwrap();
+        assert_eq!(page.len(), 2, "limit binds among the Episodic rows");
+        assert!(
+            page.iter().all(|r| r.tier == MemoryTier::Episodic),
+            "newer Working rows must not displace tier-matching rows"
+        );
+        let texts: Vec<&str> = page.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["e3", "e2"],
+            "newest two Episodic rows, newest first; a third (e1) exists beyond the cap"
+        );
+    }
+
     #[test]
     fn parse_tier_pins_canonical_tier_mapping_and_silent_catch_all_to_long_term() {
         // SqliteStore::parse_tier is the reverse of SqliteStore::tier_str
@@ -1475,6 +1579,17 @@ mod tests {
              path into a hard failure that takes down list_records and \
              get_record for the entire SqliteStore"
         );
+    }
+
+    #[test]
+    fn memory_tier_slug_pins_canonical_forward_mapping_for_the_backfill_plan() {
+        // The forward map feeding the `tier` field of every candidate in
+        // memory_receipt_backfill_plan_json. The plan tests pin that schema's
+        // keys but never the value, so the per-variant slug is only pinned here;
+        // it must stay in lock-step with parse_tier's reverse map above.
+        assert_eq!(memory_tier_slug(MemoryTier::Working), "working");
+        assert_eq!(memory_tier_slug(MemoryTier::Episodic), "episodic");
+        assert_eq!(memory_tier_slug(MemoryTier::LongTerm), "longterm");
     }
 
     #[test]
@@ -2003,6 +2118,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_search_respects_tier_filter() {
+        // InMemoryStore is the default backend when persistence is off, so
+        // its inline `tier.is_none_or(|t| r.tier == t)` predicate is what
+        // enforces memory.read.<tier> isolation in that configuration. Two
+        // equal-similarity records in different tiers pin it: a search scoped
+        // to Episodic must drop the higher-scoring-eligible Working record.
+        let s = InMemoryStore::new();
+        let mut w = record(Uuid::new_v4(), MemoryTier::Working, "w-alpha", 1);
+        w.embedding = vec![1.0, 0.0, 0.0];
+        let mut e = record(Uuid::new_v4(), MemoryTier::Episodic, "e-alpha", 2);
+        e.embedding = vec![1.0, 0.0, 0.0];
+        s.put(w).await.unwrap();
+        s.put(e).await.unwrap();
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], Some(MemoryTier::Episodic), 5, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "e-alpha");
+    }
+
+    #[tokio::test]
     async fn sqlite_search_respects_tier_filter() {
         let s = SqliteStore::open_in_memory().unwrap();
         let mut w = record(Uuid::new_v4(), MemoryTier::Working, "w-alpha", 1);
@@ -2017,6 +2154,78 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "e-alpha");
+    }
+
+    /// `search_similar` must apply the `memory.read.<tier>` filter *before* the
+    /// limit: the page is the top-`limit` rows among the tier-matching rows,
+    /// not the tier-matching subset of the top-`limit` rows overall. The
+    /// `*_search_respects_tier_filter` tests seed equal-similarity rows under a
+    /// slack limit, so neither a binding limit nor a higher-similarity off-tier
+    /// row is exercised. Here a Working row outscores two Episodic matches under
+    /// a cap of one: filter-then-take returns the top Episodic row; a
+    /// `take -> filter` reorder takes the Working row first and filters it away,
+    /// collapsing to an empty page on the live `memory search --tier --limit`
+    /// path.
+    #[tokio::test]
+    async fn in_memory_search_tier_filter_with_binding_limit_keeps_matching_rows_beyond_cap() {
+        let s = InMemoryStore::new();
+        let mut w = record(Uuid::new_v4(), MemoryTier::Working, "w1", 1);
+        w.embedding = vec![1.0, 0.0, 0.0];
+        let mut e1 = record(Uuid::new_v4(), MemoryTier::Episodic, "e1", 2);
+        e1.embedding = vec![0.8, 0.6, 0.0];
+        let mut e2 = record(Uuid::new_v4(), MemoryTier::Episodic, "e2", 3);
+        e2.embedding = vec![0.6, 0.8, 0.0];
+        s.put(w).await.unwrap();
+        s.put(e1).await.unwrap();
+        s.put(e2).await.unwrap();
+
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], Some(MemoryTier::Episodic), 1, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "limit binds among the Episodic rows");
+        assert_eq!(
+            hits[0].tier,
+            MemoryTier::Episodic,
+            "the higher-similarity Working row must not consume the slot"
+        );
+        assert_eq!(
+            hits[0].text, "e1",
+            "the top-similarity Episodic row, with a second Episodic match beyond the cap"
+        );
+    }
+
+    /// SQLite mirror: the production backend filters with `WHERE tier = ?1`
+    /// before scoring and taking the limit in Rust, so the tier predicate binds
+    /// before the cap. Pin it so moving the tier filter to a post-`take` Rust
+    /// step regresses identically to the in-memory reorder.
+    #[tokio::test]
+    async fn sqlite_search_tier_filter_with_binding_limit_keeps_matching_rows_beyond_cap() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let mut w = record(Uuid::new_v4(), MemoryTier::Working, "w1", 1);
+        w.embedding = vec![1.0, 0.0, 0.0];
+        let mut e1 = record(Uuid::new_v4(), MemoryTier::Episodic, "e1", 2);
+        e1.embedding = vec![0.8, 0.6, 0.0];
+        let mut e2 = record(Uuid::new_v4(), MemoryTier::Episodic, "e2", 3);
+        e2.embedding = vec![0.6, 0.8, 0.0];
+        s.put(w).await.unwrap();
+        s.put(e1).await.unwrap();
+        s.put(e2).await.unwrap();
+
+        let hits = s
+            .search_similar(vec![1.0, 0.0, 0.0], Some(MemoryTier::Episodic), 1, None)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1, "limit binds among the Episodic rows");
+        assert_eq!(
+            hits[0].tier,
+            MemoryTier::Episodic,
+            "the higher-similarity Working row must not consume the slot"
+        );
+        assert_eq!(
+            hits[0].text, "e1",
+            "the top-similarity Episodic row, with a second Episodic match beyond the cap"
+        );
     }
 
     #[tokio::test]
@@ -2050,6 +2259,14 @@ mod tests {
         s.put(record(Uuid::new_v4(), MemoryTier::Working, "newer", 500))
             .await
             .unwrap();
+        // A same-age record in another tier proves the delete is tier-scoped,
+        // not just age-scoped. purge_older_than is destructive, so a dropped
+        // `tier = ?1` clause is cross-tier data loss, not a read leak: this
+        // Episodic row is older than the cutoff and must survive a
+        // Working-scoped purge.
+        s.put(record(Uuid::new_v4(), MemoryTier::Episodic, "old-ep", 100))
+            .await
+            .unwrap();
         let n = s
             .purge_older_than(Some(MemoryTier::Working), 200)
             .await
@@ -2058,6 +2275,148 @@ mod tests {
         let recent = s.recent(Some(MemoryTier::Working), 10).await.unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].text, "newer");
+        let episodic = s.recent(Some(MemoryTier::Episodic), 10).await.unwrap();
+        assert_eq!(
+            episodic.len(),
+            1,
+            "a Working-scoped purge must spare the older Episodic record"
+        );
+        assert_eq!(episodic[0].text, "old-ep");
+    }
+
+    #[tokio::test]
+    async fn in_memory_purge_older_than_keeps_record_stamped_exactly_at_cutoff() {
+        // InMemoryStore::purge_older_than retains a record unless it is
+        // STRICTLY older than the cutoff: `!(r.created_at < before_ms && ..)`.
+        // The trait contract (the `purge_older_than` doc) says "strictly older
+        // than before_ms", so a record stamped EXACTLY at before_ms survives.
+        // in_memory_purge_older_than_drops_old_records stamps 100/500 with
+        // cutoff 200, so no record ever lands on the cutoff and the equality
+        // arm is exercised by zero tests. A `<` -> `<=` flip (a "purge older OR
+        // EQUAL TO before_ms" misreading) would silently purge every record
+        // stamped on the cutoff tick — an operator running a TTL purge with a
+        // cutoff aligned to a record timestamp loses that record every cycle,
+        // and the strict-less-than test still passes. Pin both the equality
+        // keep arm and the strict-less-than drop arm so a coordinated swap
+        // cannot land silently.
+        let s = InMemoryStore::new();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "below", 100))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "boundary", 200))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "above", 300))
+            .await
+            .unwrap();
+
+        // cutoff=200 lands the boundary on the middle record: 100 is strictly
+        // less (purged), 200 sits on the cutoff (kept), 300 is greater (kept).
+        let purged = s
+            .purge_older_than(Some(MemoryTier::Working), 200)
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must purge only the 100-stamped record; the \
+             200-stamped record sits on the cutoff and `<` keeps it. A flip \
+             to `<=` would purge both and return 2, silently losing every \
+             cutoff-equal record. got: {purged}",
+        );
+        let mut stamps: Vec<u64> = s
+            .recent(Some(MemoryTier::Working), 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.created_at)
+            .collect();
+        stamps.sort();
+        assert_eq!(
+            stamps,
+            vec![200, 300],
+            "survivors must be the cutoff-equal record (200) and the \
+             strictly-greater one (300); purging cutoff-equal records would \
+             leave [300] and inverting the predicate would leave [100]",
+        );
+
+        // Re-purge with the boundary moved to 300 so the equality arm is
+        // pinned on a second cutoff value, not a phase-1 coincidence.
+        let purged = s
+            .purge_older_than(Some(MemoryTier::Working), 300)
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge at cutoff=300 drops the now-strictly-less 200 while \
+             keeping the cutoff-equal 300; pins the equality arm is invariant \
+             to the cutoff value. got: {purged}",
+        );
+        let remaining = s.recent(Some(MemoryTier::Working), 10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].created_at, 300,
+            "the lone survivor must be the cutoff-equal 300-stamped record",
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_purge_older_than_keeps_record_stamped_exactly_at_cutoff() {
+        // SqliteStore::purge_older_than deletes via the same strict cutoff as
+        // the in-memory backend: `DELETE FROM memories WHERE .. created_at < ?2`,
+        // so a row stamped EXACTLY at before_ms survives. sqlite_purge_older_
+        // than_clears_only_matching_rows stamps 100/500 with cutoff 200 and
+        // pins tier scoping, never the cutoff-equality arm. A `<` -> `<=` flip
+        // in the SQL predicate would DELETE the boundary row on every purge and
+        // diverge from the in-memory backend and the trait contract. Mirror the
+        // in-memory equality pin so the two backends stay aligned.
+        let s = SqliteStore::open_in_memory().unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "below", 100))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "boundary", 200))
+            .await
+            .unwrap();
+        s.put(record(Uuid::new_v4(), MemoryTier::Working, "above", 300))
+            .await
+            .unwrap();
+
+        let purged = s
+            .purge_older_than(Some(MemoryTier::Working), 200)
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 1,
+            "cutoff=200 must delete only the 100-stamped row; the 200-stamped \
+             row sits on the cutoff and `created_at < ?2` keeps it. A flip to \
+             `<=` would delete both and return 2. got: {purged}",
+        );
+        let mut stamps: Vec<u64> = s
+            .recent(Some(MemoryTier::Working), 10)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.created_at)
+            .collect();
+        stamps.sort();
+        assert_eq!(
+            stamps,
+            vec![200, 300],
+            "survivors must be the cutoff-equal row (200) and the \
+             strictly-greater one (300)",
+        );
+
+        let purged = s
+            .purge_older_than(Some(MemoryTier::Working), 300)
+            .await
+            .unwrap();
+        assert_eq!(
+            purged, 1,
+            "re-purge at cutoff=300 drops the now-strictly-less 200 while \
+             keeping the cutoff-equal 300. got: {purged}",
+        );
+        let remaining = s.recent(Some(MemoryTier::Working), 10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].created_at, 300);
     }
 
     #[tokio::test]
@@ -2537,6 +2896,81 @@ mod tests {
     }
 
     #[test]
+    fn plan_compaction_skips_remarking_longterm_record_that_already_carries_matching_stale_context()
+    {
+        // plan_compaction stale-marks a LongTerm record by inserting a
+        // stale_context object, but only when the record does not already
+        // hold that exact value:
+        //
+        //   if metadata.get("stale_context") != Some(&stale_context) {
+        //       metadata.insert("stale_context", stale_context);
+        //       ... stale_marked.push(after.id); changed = true;
+        //   } else {
+        //       after.metadata = Value::Object(metadata);  // untouched
+        //   }
+        //
+        // The else arm is the compaction idempotency guarantee documented
+        // on compact() ("already present ... keeps repeated invocations
+        // idempotent"): a second run over an already-marked corpus is a
+        // no-op. Every other compaction test seeds records WITHOUT a
+        // pre-existing stale_context, so they only exercise the insert
+        // arm. Without this test a refactor that dropped the inequality
+        // guard and always inserted + pushed would re-mark unchanged
+        // records on every run — flipping would_change/changed to true on
+        // a genuine no-op, re-emitting the row in `updates` (rewriting it
+        // and recording a mutation each cycle at the store layer), and
+        // poisoning stale_marked as a what-changed-this-run signal.
+        let policy = MemoryCompactionPolicy {
+            mark_longterm_stale_before_ms: Some(100),
+            marked_at_ms: Some(150),
+            ..MemoryCompactionPolicy::default()
+        };
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy,
+            reason: "idempotent re-run".into(),
+        };
+
+        // created_at (10) < cutoff (100), so the record still qualifies
+        // for stale marking — the skip must come from the value guard, not
+        // from the record falling outside the staleness window. The seeded
+        // stale_context is byte-identical to what this request would write:
+        // marked_at_ms = policy.marked_at_ms (150), reason = request.reason.
+        let id = Uuid::new_v4();
+        let mut already_marked = record(id, MemoryTier::LongTerm, "durable", 10);
+        already_marked.metadata = serde_json::json!({
+            "stale_context": { "marked_at_ms": 150, "reason": "idempotent re-run" },
+        });
+
+        let (outcome, updates) = plan_compaction(&[already_marked], &request);
+
+        assert!(
+            outcome.stale_marked.is_empty(),
+            "a LongTerm record already carrying the exact stale_context \
+             must not be re-listed in stale_marked — pins the inequality \
+             guard's else arm; a refactor that always re-marked would \
+             surface here with stale_marked = [{id}]",
+        );
+        assert!(
+            !outcome.would_change,
+            "re-running compaction over an already-marked corpus must be a \
+             no-op: would_change stays false when nothing is deleted, \
+             detached, or freshly marked",
+        );
+        assert!(
+            !outcome.changed,
+            "changed must stay false on an idempotent re-run even in Apply \
+             mode — changed is gated on would_change",
+        );
+        assert!(
+            updates.is_empty(),
+            "no updated record may be emitted for an unchanged stale \
+             record — a spurious update would rewrite the row and record a \
+             mutation on every compaction cycle",
+        );
+    }
+
+    #[test]
     fn plan_repair_detach_parent_pins_parent_mismatch_arms_and_field_composition() {
         // covenant_memory::plan_repair, DetachParent arm, guards on
         //
@@ -2849,6 +3283,407 @@ mod tests {
              default-arm assertion above would still pass; pinning the \
              explicit override on the same record family anchors both \
              halves of the .unwrap_or contract",
+        );
+    }
+
+    #[test]
+    fn plan_compaction_pins_inclusive_keep_arm_at_each_cutoff_boundary() {
+        // plan_compaction gates all three age-based actions on a STRICT
+        // `created_at < before` comparison: delete_working_before_ms
+        // (lib.rs:297), delete_episodic_before_ms (:305), and
+        // mark_longterm_stale_before_ms (:342). The `<` is exclusive, so a
+        // record created EXACTLY at the cutoff is on the keep side —
+        // working/episodic records are not deleted and a long-term record
+        // is not marked stale. Every other compaction test seeds
+        // created_at strictly below the cutoff (10 vs 20, 10 vs 200), so
+        // the keep-arm at created_at == before is pinned by no test. A
+        // `<` -> `<=` flip on a delete site would silently destroy a
+        // record the operator's "delete strictly older than N" policy
+        // intended to keep — an irreversible loss of the boundary record;
+        // the same flip on the stale-mark site would mark a long-term
+        // record stale one tick early. Pin the equality keep-arm at all
+        // three sites and bracket each from below (created_at == before-1
+        // must still act) so the cutoff is proven exact, not off by one.
+        const CUTOFF: u64 = 100;
+        let working_at = Uuid::new_v4();
+        let working_below = Uuid::new_v4();
+        let episodic_at = Uuid::new_v4();
+        let episodic_below = Uuid::new_v4();
+        let longterm_at = Uuid::new_v4();
+        let longterm_below = Uuid::new_v4();
+
+        let records = vec![
+            record(working_at, MemoryTier::Working, "working at cutoff", CUTOFF),
+            record(
+                working_below,
+                MemoryTier::Working,
+                "working below",
+                CUTOFF - 1,
+            ),
+            record(
+                episodic_at,
+                MemoryTier::Episodic,
+                "episodic at cutoff",
+                CUTOFF,
+            ),
+            record(
+                episodic_below,
+                MemoryTier::Episodic,
+                "episodic below",
+                CUTOFF - 1,
+            ),
+            record(
+                longterm_at,
+                MemoryTier::LongTerm,
+                "longterm at cutoff",
+                CUTOFF,
+            ),
+            record(
+                longterm_below,
+                MemoryTier::LongTerm,
+                "longterm below",
+                CUTOFF - 1,
+            ),
+        ];
+        // plan_compaction is pure, so the mode only colors `changed`; the
+        // deleted/stale_marked sets are computed independent of mode.
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(CUTOFF),
+                delete_episodic_before_ms: Some(CUTOFF),
+                mark_longterm_stale_before_ms: Some(CUTOFF),
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "boundary-equality pin".into(),
+        };
+
+        let (outcome, _updates) = plan_compaction(&records, &request);
+
+        assert!(
+            !outcome.deleted.contains(&working_at),
+            "a Working record created exactly at delete_working_before_ms must be \
+             kept (created_at < before is strict); a `<` -> `<=` flip would delete it",
+        );
+        assert!(
+            !outcome.deleted.contains(&episodic_at),
+            "an Episodic record created exactly at delete_episodic_before_ms must be \
+             kept (created_at < before is strict); a `<` -> `<=` flip would delete it",
+        );
+        let mut expected_deleted = vec![working_below, episodic_below];
+        expected_deleted.sort();
+        assert_eq!(
+            outcome.deleted, expected_deleted,
+            "only the strictly-below-cutoff working/episodic records may be deleted — \
+             exactly the CUTOFF-1 pair and neither at-cutoff record; this brackets the \
+             `<` delete boundary from both sides so an off-by-one cannot pass",
+        );
+
+        assert!(
+            !outcome.stale_marked.contains(&longterm_at),
+            "a LongTerm record created exactly at mark_longterm_stale_before_ms must NOT \
+             be marked stale (created_at < before is strict); a `<` -> `<=` flip would \
+             mark it one tick early",
+        );
+        assert_eq!(
+            outcome.stale_marked,
+            vec![longterm_below],
+            "only the strictly-below-cutoff LongTerm record may be stale-marked, pinning \
+             the exclusive stale-mark cutoff against an off-by-one",
+        );
+    }
+
+    #[test]
+    fn plan_compaction_pins_tier_matched_delete_cutoffs_under_differing_horizons() {
+        // plan_compaction deletes a Working record only on
+        // delete_working_before_ms (lib.rs:293-300) and an Episodic record
+        // only on delete_episodic_before_ms (lib.rs:301-308); LongTerm has no
+        // delete arm. The two cutoffs are independent and tier-matched, but
+        // every other compaction test sets them EQUAL (apply: both 20;
+        // plan_compaction_pins_inclusive_keep_arm_at_each_cutoff_boundary:
+        // both 100) or sets only the working cutoff with a too-new episodic
+        // record (compaction_dry_run_plans_without_mutating: episodic@30 vs
+        // cutoff 20). Under equal cutoffs a swap of which field each arm
+        // reads — or an arm widened to also match the other tier on the wider
+        // horizon — leaves `deleted` unchanged and survives. Pin the binding
+        // with DIFFERENT horizons (working=100, episodic=200) and records in
+        // the gap between them: a Working record at 150 is above its own
+        // cutoff and must be KEPT (a swap reading episodic's 200 would delete
+        // it); an Episodic record at 150 is below its own cutoff and must be
+        // DELETED (a swap reading working's 100 would keep it). An old
+        // LongTerm record stays immune.
+        const WORKING_CUTOFF: u64 = 100;
+        const EPISODIC_CUTOFF: u64 = 200;
+        let working_old = Uuid::new_v4();
+        let working_between = Uuid::new_v4();
+        let episodic_between = Uuid::new_v4();
+        let episodic_above = Uuid::new_v4();
+        let longterm_old = Uuid::new_v4();
+
+        let records = vec![
+            record(working_old, MemoryTier::Working, "working old", 50),
+            record(
+                working_between,
+                MemoryTier::Working,
+                "working between cutoffs",
+                150,
+            ),
+            record(
+                episodic_between,
+                MemoryTier::Episodic,
+                "episodic between cutoffs",
+                150,
+            ),
+            record(
+                episodic_above,
+                MemoryTier::Episodic,
+                "episodic above its cutoff",
+                250,
+            ),
+            record(longterm_old, MemoryTier::LongTerm, "durable fact", 50),
+        ];
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(WORKING_CUTOFF),
+                delete_episodic_before_ms: Some(EPISODIC_CUTOFF),
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "tier-matched cutoff pin".into(),
+        };
+
+        let (outcome, _updates) = plan_compaction(&records, &request);
+
+        // The Working record at 150 is ABOVE its own 100 cutoff: it must be
+        // kept. A swap that read the wider episodic 200 cutoff would delete it.
+        assert!(
+            !outcome.deleted.contains(&working_between),
+            "a Working record above delete_working_before_ms (150 vs 100) must be kept; \
+             deleting it means the Working arm read the wider episodic cutoff (200)",
+        );
+        // The Episodic record at 150 is BELOW its own 200 cutoff: it must be
+        // deleted. A swap that read the narrower working 100 cutoff would keep it.
+        assert!(
+            outcome.deleted.contains(&episodic_between),
+            "an Episodic record below delete_episodic_before_ms (150 vs 200) must be deleted; \
+             keeping it means the Episodic arm read the narrower working cutoff (100)",
+        );
+        // The Episodic record at 250 is above its own 200 cutoff: a regression
+        // that dropped the episodic cutoff and deleted the whole tier is caught here.
+        assert!(
+            !outcome.deleted.contains(&episodic_above),
+            "an Episodic record above delete_episodic_before_ms (250 vs 200) must be kept",
+        );
+        // LongTerm has no delete arm regardless of age.
+        assert!(
+            !outcome.deleted.contains(&longterm_old),
+            "a LongTerm record is never deleted by age — only stale-marked",
+        );
+
+        let mut expected = vec![working_old, episodic_between];
+        expected.sort();
+        assert_eq!(
+            outcome.deleted, expected,
+            "deleted must be exactly the tier-matched set: working_old (50<100) and \
+             episodic_between (150<200); working_between (150) and episodic_above (250) sit \
+             above their own cutoffs and longterm_old is immune, so an arm swap, a cross-tier \
+             widening, or any LongTerm delete path all change this set",
+        );
+    }
+
+    #[test]
+    fn plan_compaction_detach_stale_parents_flag_gates_detachment() {
+        // plan_compaction detaches a record from a stale parent (one absent
+        // from the retained set) only when policy.detach_stale_parents is set
+        // (lib.rs:330). Every compaction test that exercises detachment sets
+        // the flag TRUE (compaction_dry_run_plans_without_mutating,
+        // compaction_apply_deletes_short_horizon_marks_longterm_and_detaches_parents);
+        // the two tests that set it false (sqlite_compact_apply_rolls_back...,
+        // sqlite_compact_apply_persists_full_plan...) seed no parented
+        // records, so the OFF arm — a record whose parent is dangling stays
+        // attached when the operator did not opt in — is pinned by no test.
+        // Dropping the `if detach_stale_parents` guard would always rewrite
+        // parents, silently severing lineage the operator never asked to
+        // touch. Pin both arms over the SAME dangling-parent input so the
+        // flag is proven to be the sole discriminator.
+        let child = Uuid::new_v4();
+        let missing_parent = Uuid::new_v4();
+        let mut child_record = record(child, MemoryTier::Episodic, "child", 10);
+        child_record.parent = Some(missing_parent);
+        let records = vec![child_record];
+
+        let off = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                detach_stale_parents: false,
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "detach gate off".into(),
+        };
+        let (outcome_off, updates_off) = plan_compaction(&records, &off);
+        assert!(
+            outcome_off.parents_detached.is_empty(),
+            "with detach_stale_parents=false a dangling parent must NOT be detached; \
+             a dropped or inverted gate would sever it",
+        );
+        assert!(
+            !outcome_off.would_change,
+            "the off arm performs no work over this input, so would_change must be false",
+        );
+        assert!(
+            updates_off.is_empty(),
+            "no record may be rewritten when the detach flag is off and no other policy fires",
+        );
+
+        // Control: same record, flag ON. The parent IS dangling (absent from
+        // the retained set), so detachment proceeds — proving the parent was
+        // detachable all along and only the flag held it back.
+        let on = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                detach_stale_parents: true,
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "detach gate on".into(),
+        };
+        let (outcome_on, updates_on) = plan_compaction(&records, &on);
+        assert_eq!(
+            outcome_on.parents_detached,
+            vec![child],
+            "with detach_stale_parents=true the dangling parent is detached; flipping the \
+             !retained.contains(parent) detection would leave this orphan attached",
+        );
+        assert_eq!(
+            updates_on.len(),
+            1,
+            "the single detached record is emitted as exactly one update",
+        );
+        assert_eq!(
+            updates_on[0].parent, None,
+            "detachment sets the record's parent to None",
+        );
+    }
+
+    #[test]
+    fn plan_compaction_apply_mode_no_op_plan_is_not_marked_changed() {
+        // outcome.changed = (mode == Apply) && would_change (lib.rs:384), and
+        // would_change is false unless something was deleted, stale-marked, or
+        // detached (lib.rs:378-379). Every test that asserts changed seeds a
+        // plan that DOES change something; the DryRun tests assert !changed
+        // because mode != Apply, not because would_change is false. The
+        // Apply-mode no-op — a non-empty policy whose cutoffs match nothing —
+        // is pinned by no test, yet it is what gates the daemon from opening a
+        // write transaction and emitting a MemoryCompactionApplied audit row
+        // for a compaction that touched zero rows. Simplifying changed to
+        // (mode == Apply) would pass every existing test but flip changed to
+        // true here.
+        let untouched = Uuid::new_v4();
+        // created_at 100 is well above the cutoff, so nothing is deleted.
+        let records = vec![record(untouched, MemoryTier::Working, "fresh", 100)];
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                delete_working_before_ms: Some(5),
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "no-op apply".into(),
+        };
+
+        let (outcome, updates) = plan_compaction(&records, &request);
+
+        assert!(
+            !outcome.would_change,
+            "a policy whose cutoff (5) matches no record (created_at 100) plans no change",
+        );
+        assert!(
+            !outcome.changed,
+            "changed must stay false on a no-op plan even in Apply mode — it is \
+             (mode == Apply) && would_change, not mode == Apply alone; a spurious true here \
+             makes the daemon emit a MemoryCompactionApplied audit row for zero rows",
+        );
+        assert!(outcome.deleted.is_empty(), "no record may be deleted");
+        assert!(
+            outcome.stale_marked.is_empty(),
+            "no record may be stale-marked"
+        );
+        assert!(
+            outcome.parents_detached.is_empty(),
+            "no record may be detached"
+        );
+        assert!(
+            updates.is_empty(),
+            "a no-op plan emits no record updates to apply"
+        );
+    }
+
+    #[test]
+    fn plan_compaction_detaches_only_stale_parent_not_retained() {
+        // With detach_stale_parents on, plan_compaction detaches a parent only
+        // when it is absent from the retained set — `if let Some(parent) =
+        // after.parent { if !retained.contains(&parent)` (lib.rs:331-332).
+        // Every detach test uses a parent that is NOT retained (missing, or a
+        // deleted old_working), so the detection predicate is unpinned: no
+        // test has a child whose parent SURVIVES the compaction and asserts it
+        // stays attached. Run both shapes in ONE flag-on plan with no delete
+        // cutoffs (so every input record is retained): a child whose parent is
+        // a surviving record must keep it; a child whose parent is a dangling
+        // id must lose it. An unconditional detach, or an inverted membership
+        // test, flips which child is detached.
+        let alive_parent = Uuid::new_v4();
+        let child_alive = Uuid::new_v4();
+        let child_dangling = Uuid::new_v4();
+        let dangling_parent = Uuid::new_v4();
+
+        let mut child_alive_record = record(child_alive, MemoryTier::Episodic, "kept lineage", 50);
+        child_alive_record.parent = Some(alive_parent);
+        let mut child_dangling_record = record(child_dangling, MemoryTier::Episodic, "orphan", 50);
+        child_dangling_record.parent = Some(dangling_parent);
+        let records = vec![
+            record(alive_parent, MemoryTier::LongTerm, "surviving parent", 100),
+            child_alive_record,
+            child_dangling_record,
+        ];
+
+        // detach on, NO delete cutoffs => nothing is deleted, so alive_parent
+        // is in the retained set and child_alive's edge is live.
+        let request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::Apply,
+            policy: MemoryCompactionPolicy {
+                detach_stale_parents: true,
+                ..MemoryCompactionPolicy::default()
+            },
+            reason: "stale-only detach pin".into(),
+        };
+
+        let (outcome, updates) = plan_compaction(&records, &request);
+
+        assert!(
+            outcome.deleted.is_empty(),
+            "no delete cutoff is set, so every record is retained",
+        );
+        assert_eq!(
+            outcome.parents_detached,
+            vec![child_dangling],
+            "only the child whose parent is absent from the retained set may be detached; \
+             an unconditional detach would also list child_alive and an inverted \
+             retained.contains would list child_alive INSTEAD of child_dangling",
+        );
+        assert!(
+            !outcome.parents_detached.contains(&child_alive),
+            "a child whose parent survives the compaction keeps its parent edge",
+        );
+        assert_eq!(
+            updates.len(),
+            1,
+            "exactly one record changed: the orphan whose dangling parent was detached",
+        );
+        assert_eq!(
+            updates[0].id, child_dangling,
+            "the detached record is the orphan"
+        );
+        assert_eq!(
+            updates[0].parent, None,
+            "detachment clears the parent to None"
         );
     }
 
@@ -3418,6 +4253,108 @@ mod tests {
             Some(0)
         );
         assert_eq!(value["refusal"]["apply_supported"], false);
+    }
+
+    #[test]
+    fn memory_receipt_backfill_plan_json_binds_two_same_payer_receipts_to_distinct_records() {
+        // match_legacy_receipts_to_memory_records makes the greedy
+        // assignment injective within a run: each receipt binds to the
+        // first eligible record in slice order, which is then inserted
+        // into used_memory so a later same-payer receipt skips it
+        //
+        //   let candidate = memories.iter().find(|memory| {
+        //       memory.owner.pubkey == receipt.payer.pubkey
+        //           && !correlated.contains(&memory.id)
+        //           && !used_memory.contains(&memory.id)   // <- the guard
+        //   });
+        //   if let Some(memory) = candidate { used_memory.insert(memory.id); ... }
+        //
+        // The pairs_legacy_receipts_by_owner test uses one receipt + one
+        // record and never reaches a second same-payer receipt, so the
+        // used_memory guard is unexercised. Drop it and both receipts'
+        // .find() would resolve to the same first record — double-binding
+        // two payments onto one memory_record_id and stranding the second
+        // record as unmatched. (This is the within-run guard; the cross-run
+        // `correlated` set is covered separately.)
+        let owner = AgentId::new("owner@local", [4u8; 32]);
+        let mk_memory = |n: u128| MemoryRecord {
+            id: uuid::Uuid::from_u128(n),
+            tier: MemoryTier::Working,
+            owner: owner.clone(),
+            text: "legacy memory".into(),
+            embedding: Vec::new(),
+            metadata: serde_json::json!({}),
+            created_at: 1,
+            parent: None,
+        };
+        let mk_receipt = |n: u128| SettlementReceipt {
+            id: uuid::Uuid::from_u128(n),
+            payer: owner.clone(),
+            resource: ResourceKind::Memory,
+            memory_record_id: None,
+            credits_consumed: 3,
+            settled_at: 2,
+            chain: None,
+            cluster: None,
+            batch_id: None,
+            merkle_root: None,
+            tx_sig: None,
+            slot: None,
+            confirmed_at: None,
+            onchain_sig: None,
+        };
+
+        // Input order fixes the deterministic outcome: the first receipt
+        // takes the first record; the second receipt skips it (now used)
+        // and takes the second.
+        let value = memory_receipt_backfill_plan_json(
+            100,
+            &[mk_memory(10), mk_memory(11)],
+            &[mk_receipt(20), mk_receipt(21)],
+        );
+
+        let records = value["records"]
+            .as_array()
+            .expect("records must be an array");
+        assert_eq!(
+            records.len(),
+            2,
+            "both same-payer receipts must match — each to its own record",
+        );
+        assert_eq!(
+            records[0]["receipt_id"],
+            uuid::Uuid::from_u128(20).to_string()
+        );
+        assert_eq!(
+            records[0]["memory_record_id"],
+            uuid::Uuid::from_u128(10).to_string(),
+            "first receipt (slice order) binds the first eligible record",
+        );
+        assert_eq!(
+            records[1]["receipt_id"],
+            uuid::Uuid::from_u128(21).to_string()
+        );
+        assert_eq!(
+            records[1]["memory_record_id"],
+            uuid::Uuid::from_u128(11).to_string(),
+            "second receipt skips the used first record and binds the second",
+        );
+        assert_ne!(
+            records[0]["memory_record_id"], records[1]["memory_record_id"],
+            "the two receipts must bind to DISTINCT memory records — pins the \
+             used_memory anti-double-bind guard; dropping it binds both to \
+             the first record",
+        );
+        assert_eq!(
+            value["unmatched_legacy_receipts"].as_array().map(Vec::len),
+            Some(0),
+            "neither receipt may be left unmatched when two eligible records exist",
+        );
+        assert_eq!(
+            value["unmatched_memory_records"].as_array().map(Vec::len),
+            Some(0),
+            "no record may be stranded — a double-bind would leave the second here",
+        );
     }
 
     #[test]

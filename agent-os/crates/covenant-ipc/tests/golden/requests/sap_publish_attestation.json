@@ -1,0 +1,7 @@
+{
+  "kind": "sap_publish_attestation",
+  "agent_pda": "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+  "root_hash_hex": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+  "attestation_type": "verification",
+  "expires_at_unix": 1700000000
+}

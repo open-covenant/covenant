@@ -67,7 +67,17 @@ async fn main() -> Result<()> {
     let router = Arc::new(covenant_router::Router::from_cards(cards));
     let runtime_config = covenantd::runtime_runner_config_from_env(&home)?;
     let hermes_config = covenantd::hermes_gateway_config_from_env();
-    let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::new());
+    let subprocess_tracker = Arc::new(covenant_runtime::SubprocessTracker::with_persistence(
+        home.join("runtime").join("subprocess-tracker.jsonl"),
+    ));
+    // Re-adopt in-flight subprocess pids persisted by a prior daemon
+    // instance BEFORE the tracker is handed to the runner/server or the
+    // projection-tick driver spawns, so nothing races a half-populated
+    // tracker. recover() validates each pid's ownership and re-tracks only
+    // genuine survivors; reused or unverifiable pids are refused, never
+    // signalled. Survivors that are over budget are reaped by the
+    // projection tick on its next iteration.
+    subprocess_tracker.recover();
     // Live audit step-trail (opt-in via COVENANT_LIVE_TRACE=1): the Hermes
     // runner streams each tool trace through this channel and the drainer
     // writes them into the chain as they arrive. Off by default — the proven
@@ -258,6 +268,23 @@ async fn main() -> Result<()> {
     );
     info!(path = %mailbox_path.display(), "a2a mailbox open");
 
+    // Cross-host A2A replay cache (slice 4b-2): restart-durable anti-replay
+    // store for inbound envelopes admitted by `Server::admit_remote_a2a_task`.
+    // A missing file is an empty cache; a corrupt one fails closed so the daemon
+    // never boots having forgotten which envelopes it already admitted.
+    let cross_host_dedup_path = home.join("a2a").join("cross-host-dedup.jsonl");
+    let cross_host_dedup = Arc::new(
+        covenantd::cross_host::JsonlCrossHostDedup::open(cross_host_dedup_path.clone())
+            .await
+            .with_context(|| {
+                format!(
+                    "open cross-host A2A dedup log at {}",
+                    cross_host_dedup_path.display()
+                )
+            })?,
+    );
+    info!(path = %cross_host_dedup_path.display(), "cross-host a2a dedup log open");
+
     let peers_path = home.join("peers").join("registry.jsonl");
     let peers: Arc<dyn covenant_peer_auth::PeerRegistry> = Arc::new(
         covenant_peer_auth::JsonlPeerRegistry::open(peers_path.clone())
@@ -265,6 +292,25 @@ async fn main() -> Result<()> {
             .with_context(|| format!("open peer registry at {}", peers_path.display()))?,
     );
     info!(path = %peers_path.display(), "peer registry open");
+
+    // Cross-host registry (slice 3): load-and-hold only — no dispatch, no
+    // socket. A missing file is local-only (empty); a malformed or unreadable
+    // one fails closed here so the daemon never boots believing peering is
+    // configured when it is not.
+    let known_hosts_path = covenantd::known_hosts_path(&home);
+    let known_hosts = covenant_peer_auth::KnownHosts::load_from_path(known_hosts_path.clone())
+        .await
+        .with_context(|| {
+            format!(
+                "load known-hosts registry at {}",
+                known_hosts_path.display()
+            )
+        })?;
+    info!(
+        path = %known_hosts_path.display(),
+        hosts = known_hosts.len(),
+        "known-hosts registry loaded"
+    );
 
     bootstrap_operator_token(&home, &peers, &identity).await?;
 
@@ -319,6 +365,8 @@ async fn main() -> Result<()> {
         budget,
     )
     .with_home(home.clone())
+    .with_known_hosts(known_hosts)
+    .with_cross_host_dedup(cross_host_dedup)
     .with_budget_checkpoints(budget_checkpoints)
     .with_subprocess_tracker(subprocess_tracker)
     .with_sap_bridge(sap_bridge);
@@ -970,19 +1018,25 @@ fn hyre_config_from_env() -> Option<covenant_hyre::HyreConfig> {
     Some(cfg)
 }
 
-/// Mask secret query params (api keys, tokens) in a URL before logging it,
-/// so a keyed RPC endpoint in `sap.env` never lands in stdout/journald.
+/// Mask secret query params (api keys, tokens) in a URL before logging it, so a
+/// keyed RPC endpoint in `sap.env` never lands in stdout/journald. Masks every
+/// occurrence of each key, not just the first, and covers the hyphenated
+/// `api-key` form (used by common Solana RPC providers) alongside the underscore
+/// form. Best-effort: a secret carried as a path segment rather than a
+/// `key=value` query param is out of scope.
 fn redact_url(url: &str) -> String {
     let mut out = url.to_string();
-    for key in ["api_key", "apikey", "token", "secret"] {
+    for key in ["api_key", "api-key", "apikey", "token", "secret"] {
         let needle = format!("{key}=");
-        if let Some(start) = out.find(&needle) {
-            let val_start = start + needle.len();
+        let mut from = 0;
+        while let Some(rel) = out[from..].find(&needle) {
+            let val_start = from + rel + needle.len();
             let val_end = out[val_start..]
                 .find('&')
                 .map(|i| val_start + i)
                 .unwrap_or(out.len());
             out.replace_range(val_start..val_end, "***");
+            from = val_start + 3; // resume past the inserted mask
         }
     }
     out
@@ -1020,6 +1074,71 @@ fn default_ignorefile() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn redact_url_masks_every_secret_query_param_occurrence_and_hyphen_form() {
+        // redact_url is the only guard between a keyed sap.env RPC endpoint and
+        // the daemon's startup info log (the `rpc_url = %redact_url(...)` field).
+        // It has no direct test today, so three real leaks have no signal:
+        //
+        //  (a) the hyphenated `api-key=` form (used by common Solana RPC
+        //      providers) — masking only `api_key`/`apikey` leaves it in the log;
+        //  (b) a second occurrence of a key — masking only the first match leaks
+        //      the rest;
+        //  (c) a refactor that narrowed the value span past the next `&` and
+        //      swallowed a following non-secret param, or stopped short of the
+        //      string end and left a trailing secret.
+
+        // (a) Hyphen form: a Helius-style endpoint must not leak its key.
+        let helius = redact_url("https://mainnet.helius-rpc.com/?api-key=HELIUSSECRET");
+        assert!(
+            !helius.contains("HELIUSSECRET"),
+            "the hyphenated api-key= form must be masked — common Solana RPC \
+             providers key on `api-key`, and leaving it unmasked writes the \
+             secret straight to journald: {helius}"
+        );
+        assert!(
+            helius.contains("api-key=***"),
+            "the api-key value must be replaced with the *** mask sentinel: {helius}"
+        );
+
+        // (b) Every occurrence, not just the first.
+        let repeated =
+            redact_url("https://rpc.example.com/?api_key=FIRSTKEY&hint=1&api_key=SECONDKEY");
+        assert!(
+            !repeated.contains("FIRSTKEY") && !repeated.contains("SECONDKEY"),
+            "a key repeated in the query must be masked at EVERY occurrence — \
+             masking only the first leaks the rest into the log: {repeated}"
+        );
+        assert!(
+            repeated.contains("hint=1"),
+            "a non-secret param between two masked keys must survive untouched: {repeated}"
+        );
+
+        // (c) Value span ends at the next `&`, and runs to the end of the string
+        //     when the secret is the trailing param.
+        let mid = redact_url("https://rpc.example.com/?token=MIDSECRET&cluster=mainnet");
+        assert!(
+            !mid.contains("MIDSECRET") && mid.contains("cluster=mainnet"),
+            "a secret followed by `&param` must be masked up to (not past) the \
+             `&`, preserving the trailing param: {mid}"
+        );
+        let trailing = redact_url("https://rpc.example.com/?cluster=mainnet&secret=ENDSECRET");
+        assert!(
+            !trailing.contains("ENDSECRET") && trailing.contains("secret=***"),
+            "a secret as the final param (no trailing `&`) must be masked through \
+             the end of the string: {trailing}"
+        );
+
+        // A URL with no secret query param is returned unchanged — the redactor
+        // must not corrupt or over-mask an already-safe endpoint.
+        let plain = "https://rpc.example.com/v1/mainnet";
+        assert_eq!(
+            redact_url(plain),
+            plain,
+            "an endpoint with no secret query param must pass through verbatim"
+        );
+    }
 
     #[test]
     fn default_ignorefile_pins_each_credential_path_pattern_and_operator_comment_header() {

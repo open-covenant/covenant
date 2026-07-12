@@ -47,6 +47,24 @@ pub enum PeerError {
     Serde(#[from] serde_json::Error),
     #[error("invalid token base58: {0}")]
     BadTokenB58(String),
+    /// A `name@host` was routed to a host absent from the operator's
+    /// known-hosts registry. Surfaced explicitly so the caller fails loudly
+    /// instead of defaulting the unknown host to the local daemon.
+    #[error("unknown host: {0}")]
+    UnknownHost(String),
+    /// The remote daemon presented an identity that does not match the pubkey
+    /// the registry binds to that host — a registry-poisoning or MITM endpoint.
+    /// The connection must be dropped.
+    #[error("peer identity mismatch for host {host}: registry expected {expected}, remote presented {presented}")]
+    PeerIdentityMismatch {
+        host: String,
+        expected: String,
+        presented: String,
+    },
+    /// An identity string was not the expected `name@host` form, so no host
+    /// component could be routed.
+    #[error("malformed agent id (expected name@host): {0}")]
+    MalformedAgentId(String),
 }
 
 /// 32-byte opaque peer token. Equality is constant-time via
@@ -429,7 +447,7 @@ impl PeerRegistry for InMemoryPeerRegistry {
             .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
             .filter(|s| summary_matches(s, pubkey_prefix))
             .filter(|s| summary_passes_status(s, status_filter))
-            .take(limit + 1)
+            .take(limit.saturating_add(1))
             .collect();
         let truncated = peeked.len() > limit;
         if truncated {
@@ -468,7 +486,7 @@ impl PeerRegistry for InMemoryPeerRegistry {
         let mut matched: Vec<&PeerEntry> = entries
             .iter()
             .filter(|e| e.token.to_b58().starts_with(prefix))
-            .take(limit + 1)
+            .take(limit.saturating_add(1))
             .collect();
         if matched.is_empty() {
             return Ok(RevokeOutcome::NotFound);
@@ -665,7 +683,7 @@ impl PeerRegistry for JsonlPeerRegistry {
             .map(|e| summary_from(e, revoked.get(e.token.as_bytes()).copied()))
             .filter(|s| summary_matches(s, pubkey_prefix))
             .filter(|s| summary_passes_status(s, status_filter))
-            .take(limit + 1)
+            .take(limit.saturating_add(1))
             .collect();
         let truncated = peeked.len() > limit;
         if truncated {
@@ -764,7 +782,7 @@ impl PeerRegistry for JsonlPeerRegistry {
             let mut matched: Vec<&PeerEntry> = entries
                 .iter()
                 .filter(|e| e.token.to_b58().starts_with(prefix))
-                .take(limit + 1)
+                .take(limit.saturating_add(1))
                 .collect();
             if matched.is_empty() {
                 return Ok(RevokeOutcome::NotFound);
@@ -835,6 +853,170 @@ fn epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// A reachable network endpoint for a remote Covenant daemon, bound to the
+/// ed25519 pubkey that daemon MUST present during the authenticated handshake.
+/// The pubkey is the trust anchor: an endpoint that answers at `url` but proves
+/// a different identity is rejected by [`KnownHosts::verify_remote_identity`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerEndpoint {
+    /// Transport address of the remote daemon's gateway (e.g. `http://10.0.0.4:7777`).
+    pub url: String,
+    /// The remote's expected ed25519 identity, base58-encoded on the wire and
+    /// decoded to 32 bytes on load — the same key form as [`AgentId::pubkey`].
+    #[serde(with = "pubkey_b58")]
+    pub pubkey: [u8; 32],
+}
+
+/// A static, operator-provided `host -> endpoint` map: the known-hosts registry
+/// for cross-host peering. Resolution is *explicit only* — a host absent from
+/// the map is an [`PeerError::UnknownHost`], never a DNS/DHT lookup and never a
+/// silent default to the local daemon. Each host is bound to the pubkey its
+/// remote daemon must prove, so a poisoned or man-in-the-middle endpoint that
+/// answers at the right url with the wrong key is refused at the handshake.
+///
+/// This type carries no network code: it resolves and verifies identity bindings
+/// only. The transport handshake (proof-of-possession of the bound key, request
+/// timeouts) is layered on top by the daemon and does not change the local bind.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KnownHosts {
+    hosts: HashMap<String, PeerEndpoint>,
+}
+
+impl KnownHosts {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_entries(entries: impl IntoIterator<Item = (String, PeerEndpoint)>) -> Self {
+        Self {
+            hosts: entries.into_iter().collect(),
+        }
+    }
+
+    /// Builder-style insert; a repeated host overwrites the earlier entry so the
+    /// operator's last word for a host wins.
+    pub fn with_host(mut self, host: impl Into<String>, endpoint: PeerEndpoint) -> Self {
+        self.hosts.insert(host.into(), endpoint);
+        self
+    }
+
+    pub fn len(&self) -> usize {
+        self.hosts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hosts.is_empty()
+    }
+
+    /// Resolve a bare host component to its endpoint, or [`PeerError::UnknownHost`].
+    /// Hosts match byte-exact — no case-folding, no trailing-dot normalization — so
+    /// the operator must spell a registry key exactly as the `name@host` host
+    /// segment that routes to it. Byte-exact keeps this slice single-pathed; a
+    /// transport follow-up that derives a host from SNI, a URL authority, or DNS
+    /// (all case-insensitive) MUST normalize both the registry key and the
+    /// presented host identically, or it reopens a host-confusion gap.
+    pub fn resolve_host(&self, host: &str) -> Result<&PeerEndpoint, PeerError> {
+        self.hosts
+            .get(host)
+            .ok_or_else(|| PeerError::UnknownHost(host.to_owned()))
+    }
+
+    /// Resolve a full `name@host` agent to its remote endpoint by the host part.
+    /// Only the host selects the route; the [`AgentId`] stays the full principal,
+    /// so `alice@host1` and `alice@host2` resolve to different endpoints and can
+    /// never collapse onto one another's grants.
+    pub fn resolve_agent(&self, agent: &AgentId) -> Result<&PeerEndpoint, PeerError> {
+        self.resolve_host(host_component(&agent.display)?)
+    }
+
+    /// The authenticated-handshake binding check: the pubkey the remote daemon
+    /// presents MUST equal the pubkey the registry binds to `host`. Returns the
+    /// endpoint on a match so the caller proceeds; a mismatch is a
+    /// [`PeerError::PeerIdentityMismatch`] and the caller MUST drop the
+    /// connection. This verifies the *binding* (presented identity is the one the
+    /// operator trusts for this host); cryptographic proof that the remote holds
+    /// the matching private key is the transport handshake's job, layered on top.
+    pub fn verify_remote_identity(
+        &self,
+        host: &str,
+        presented: &[u8; 32],
+    ) -> Result<&PeerEndpoint, PeerError> {
+        let endpoint = self.resolve_host(host)?;
+        if &endpoint.pubkey != presented {
+            return Err(PeerError::PeerIdentityMismatch {
+                host: host.to_owned(),
+                expected: bs58::encode(endpoint.pubkey).into_string(),
+                presented: bs58::encode(presented).into_string(),
+            });
+        }
+        Ok(endpoint)
+    }
+
+    /// Load the operator's known-hosts registry from a JSON file on disk.
+    /// Fail-closed on absence: a missing file means the operator has not
+    /// configured cross-host peering, so it loads as an EMPTY registry — every
+    /// host then resolves to [`PeerError::UnknownHost`], never a panic and never
+    /// a default-to-local — mirroring how the peer registry tolerates a missing
+    /// JSONL. Any OTHER io fault (permission denied, a directory in the path)
+    /// surfaces as [`PeerError::Io`] so a dropped registry is never silently
+    /// swallowed into an empty one; malformed JSON surfaces as
+    /// [`PeerError::Serde`].
+    pub async fn load_from_path(path: PathBuf) -> Result<Self, PeerError> {
+        match fs::read_to_string(&path).await {
+            Ok(raw) => Ok(serde_json::from_str(&raw)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+/// Host component of a `name@host` display string. Gates on the canonical
+/// [`covenant_types::validate_agent_id_display`] grammar (exactly one `@`,
+/// non-empty `local` and `host`, host limited to `[A-Za-z0-9_.-]`) as the single
+/// source of truth, then returns the host segment. Sharing that one validator
+/// keeps host routing from ever diverging from how an [`AgentId`] is validated on
+/// the wire, so a multi-`@` or odd-character display is rejected as
+/// [`PeerError::MalformedAgentId`] instead of silently routing to an
+/// attacker-chosen segment.
+fn host_component(display: &str) -> Result<&str, PeerError> {
+    covenant_types::validate_agent_id_display(display)
+        .map_err(|_| PeerError::MalformedAgentId(display.to_owned()))?;
+    // The validator already proved a single '@' with a non-empty host, so this
+    // split mirrors it and always matches. The error arm is unreachable
+    // defense-in-depth — kept (not unwrapped) so a future validator change can't
+    // turn a parse gap into a panic on the dispatch path.
+    display
+        .split_once('@')
+        .map(|(_, host)| host)
+        .ok_or_else(|| PeerError::MalformedAgentId(display.to_owned()))
+}
+
+/// serde adapter for the 32-byte pubkey: base58 string on the wire, validated to
+/// 32 bytes on load — mirrors [`AgentId`]'s own pubkey encoding.
+mod pubkey_b58 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(pubkey: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&bs58::encode(pubkey).into_string())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+        let s = String::deserialize(d)?;
+        let bytes = bs58::decode(&s)
+            .into_vec()
+            .map_err(serde::de::Error::custom)?;
+        if bytes.len() != 32 {
+            return Err(serde::de::Error::custom(format!(
+                "pubkey must decode to 32 bytes, got {}",
+                bytes.len()
+            )));
+        }
+        let mut pubkey = [0u8; 32];
+        pubkey.copy_from_slice(&bytes);
+        Ok(pubkey)
+    }
 }
 
 #[cfg(test)]
@@ -2281,6 +2463,154 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn in_memory_peer_registry_purge_keeps_revocation_stamped_exactly_at_cutoff() {
+        // InMemoryPeerRegistry::purge_revoked_older_than drops a revocation
+        // tombstone (and its peer entry in lockstep) only when its timestamp is
+        // STRICTLY less than the cutoff: `filter(|(_, ts)| **ts < before_ms)`.
+        // The trait contract says "Drop revocation tombstones with revoked_at <
+        // before_ms", so a revocation stamped EXACTLY at before_ms survives.
+        // The existing purge tests stamp revoked_at=50 with cutoff 100, so no
+        // revocation lands on the cutoff and the equality keep arm is untested.
+        // resolve() returns None for both a kept tombstone and a purged one, so
+        // the survivor proof is a drain-count sequence over moving cutoffs: a
+        // `<` -> `<=` flip makes the first purge drop two, and a `<` -> `>`
+        // inversion makes the second purge drop zero.
+        let r = InMemoryPeerRegistry::new();
+        let (live_token, live_entry) = entry("live@local");
+        let (below_token, below_entry) = entry("below@local");
+        let (boundary_token, boundary_entry) = entry("boundary@local");
+        let (above_token, above_entry) = entry("above@local");
+        r.register(live_entry.clone()).await.unwrap();
+        r.register(below_entry).await.unwrap();
+        r.register(boundary_entry).await.unwrap();
+        r.register(above_entry).await.unwrap();
+        assert!(r.revoke(&below_token).await.unwrap());
+        assert!(r.revoke(&boundary_token).await.unwrap());
+        assert!(r.revoke(&above_token).await.unwrap());
+
+        // Deterministic timestamps bracketing the cutoff.
+        {
+            let mut g = r.revoked.lock().await;
+            g.insert(*below_token.as_bytes(), 100);
+            g.insert(*boundary_token.as_bytes(), 200);
+            g.insert(*above_token.as_bytes(), 300);
+        }
+
+        assert_eq!(
+            r.purge_revoked_older_than(200).await.unwrap(),
+            1,
+            "cutoff=200 must purge only the strictly-older below(100); the \
+             boundary(200) revocation sits on the cutoff and `<` keeps it. A \
+             flip to `<=` would purge both and return 2.",
+        );
+        assert_eq!(
+            r.purge_revoked_older_than(300).await.unwrap(),
+            1,
+            "cutoff=300 drops the now-strictly-older boundary(200) while \
+             keeping the cutoff-equal above(300); a `>` inversion would have \
+             nothing strictly greater than 300 and return 0 here.",
+        );
+        assert_eq!(
+            r.purge_revoked_older_than(1000).await.unwrap(),
+            1,
+            "a cutoff above every stamp drains the last survivor above(300); \
+             confirms exactly the two cutoff-equal revocations survived their \
+             own phase rather than leaking out a phase early.",
+        );
+
+        // Every purge is scoped to revocations: the never-revoked live entry
+        // is untouched and is the lone remaining entry.
+        assert_eq!(
+            r.resolve(&live_token).await.unwrap(),
+            Some(live_entry.agent_id),
+        );
+        let recent = r.recent(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].token, live_token);
+    }
+
+    #[tokio::test]
+    async fn jsonl_peer_registry_purge_keeps_revocation_stamped_exactly_at_cutoff() {
+        // JsonlPeerRegistry::purge_revoked_older_than uses the same strict
+        // cutoff as the in-memory backend: it drops PeerEvent::Revoked whose
+        // revoked_at is strictly less than before_ms, so a revocation stamped
+        // EXACTLY at before_ms survives the rewrite. The existing jsonl purge
+        // test stamps revoked_at=50 with cutoff 100 and never lands a
+        // revocation on the cutoff. Mirror the in-memory drain-count proof.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+
+        let (live_token, live_entry) = entry("live@local");
+        let (below_token, below_entry) = entry("below@local");
+        let (boundary_token, boundary_entry) = entry("boundary@local");
+        let (above_token, above_entry) = entry("above@local");
+        r.register(live_entry.clone()).await.unwrap();
+        r.register(below_entry).await.unwrap();
+        r.register(boundary_entry).await.unwrap();
+        r.register(above_entry).await.unwrap();
+        assert!(r.revoke(&below_token).await.unwrap());
+        assert!(r.revoke(&boundary_token).await.unwrap());
+        assert!(r.revoke(&above_token).await.unwrap());
+
+        // Rewrite each on-disk revocation with a deterministic timestamp
+        // bracketing the cutoff (the in-process revoke just stamped now).
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut out: Vec<String> = Vec::new();
+        for line in raw.lines() {
+            if line.contains("\"revoked\"") {
+                if let PeerEvent::Revoked { token, .. } = serde_json::from_str(line).unwrap() {
+                    let revoked_at = if token == below_token {
+                        100
+                    } else if token == boundary_token {
+                        200
+                    } else {
+                        300
+                    };
+                    out.push(
+                        serde_json::to_string(&PeerEvent::Revoked { token, revoked_at }).unwrap(),
+                    );
+                    continue;
+                }
+            }
+            out.push(line.to_string());
+        }
+        std::fs::write(&path, out.join("\n") + "\n").unwrap();
+
+        // Reopen so in-memory state matches the rewritten file, then drain.
+        let r2 = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        assert_eq!(
+            r2.purge_revoked_older_than(200).await.unwrap(),
+            1,
+            "cutoff=200 must purge only the strictly-older below(100); the \
+             boundary(200) revocation sits on the cutoff and `<` keeps it. A \
+             flip to `<=` would rewrite both out and return 2.",
+        );
+        assert_eq!(
+            r2.purge_revoked_older_than(300).await.unwrap(),
+            1,
+            "cutoff=300 drops the now-strictly-older boundary(200) while \
+             keeping the cutoff-equal above(300); a `>` inversion would return \
+             0 here.",
+        );
+        assert_eq!(
+            r2.purge_revoked_older_than(1000).await.unwrap(),
+            1,
+            "a cutoff above every stamp drains the last survivor above(300).",
+        );
+
+        // Reopen once more — only the never-revoked live entry survived.
+        let r3 = JsonlPeerRegistry::open(path.clone()).await.unwrap();
+        assert_eq!(
+            r3.resolve(&live_token).await.unwrap(),
+            Some(live_entry.agent_id),
+        );
+        let recent = r3.recent(10).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].token, live_token);
+    }
+
+    #[tokio::test]
     async fn jsonl_purge_revoked_propagates_non_notfound_io_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("registry.jsonl");
@@ -2764,6 +3094,85 @@ mod tests {
         assert!(truncated);
     }
 
+    /// Regression: a `usize::MAX` limit must not overflow the peek
+    /// increment. `limit + 1` panics under `[profile.release]
+    /// overflow-checks`, so the increment saturates; at the ceiling no
+    /// real row count can exceed `limit`, so `truncated` is `false` and
+    /// the caller sees every resident row.
+    #[tokio::test]
+    async fn list_summaries_usize_max_limit_does_not_overflow() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, e1) = entry("a@local");
+        let (_, e2) = entry("b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let (rows, truncated) = r.list_summaries(usize::MAX, None, None).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(!truncated, "all rows fit under a saturating limit");
+    }
+
+    /// JSONL mirror: the production registry must survive the same
+    /// `usize::MAX` limit without panicking.
+    #[tokio::test]
+    async fn jsonl_list_summaries_usize_max_limit_does_not_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (_, e1) = entry("a@local");
+        let (_, e2) = entry("b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let (rows, truncated) = r.list_summaries(usize::MAX, None, None).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(!truncated);
+    }
+
+    /// Regression: `revoke_by_token_prefix` peeks `limit + 1` for its
+    /// ambiguity check; a `usize::MAX` match_limit must saturate rather
+    /// than overflow. Two prefix matches stay `Ambiguous { truncated:
+    /// false }` and the registry is left unchanged.
+    #[tokio::test]
+    async fn revoke_by_token_prefix_usize_max_limit_does_not_overflow() {
+        let r = InMemoryPeerRegistry::new();
+        let (t1, e1) = entry_with_token_b58_starting_with("1", "a@local");
+        let (t2, e2) = entry_with_token_b58_starting_with("1", "b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let outcome = r.revoke_by_token_prefix("1", usize::MAX).await.unwrap();
+        match outcome {
+            RevokeOutcome::Ambiguous { matches, truncated } => {
+                assert_eq!(matches.len(), 2);
+                assert!(!truncated, "both matches fit under a saturating limit");
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        assert!(r.resolve(&t1).await.unwrap().is_some());
+        assert!(r.resolve(&t2).await.unwrap().is_some());
+    }
+
+    /// JSONL mirror of the revoke overflow guard.
+    #[tokio::test]
+    async fn jsonl_revoke_by_token_prefix_usize_max_limit_does_not_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (t1, e1) = entry_with_token_b58_starting_with("1", "a@local");
+        let (t2, e2) = entry_with_token_b58_starting_with("1", "b@local");
+        r.register(e1).await.unwrap();
+        r.register(e2).await.unwrap();
+        let outcome = r.revoke_by_token_prefix("1", usize::MAX).await.unwrap();
+        match outcome {
+            RevokeOutcome::Ambiguous { matches, truncated } => {
+                assert_eq!(matches.len(), 2);
+                assert!(!truncated);
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+        // Ambiguous refuses to mutate: both tokens still resolve.
+        assert!(r.resolve(&t1).await.unwrap().is_some());
+        assert!(r.resolve(&t2).await.unwrap().is_some());
+    }
+
     /// Stale callers that don't know about `truncated` still
     /// deserialise an `Ambiguous` payload from a new daemon. The
     /// `#[serde(default)]` reads as `false`, the safe degradation.
@@ -3012,6 +3421,86 @@ mod tests {
         assert_eq!(rows[0].token_prefix, &live_tok.to_b58()[..6]);
     }
 
+    /// The returned page and `truncated` must be computed over the
+    /// *prefix-filtered* rows, not the raw newest-first window. The
+    /// `pubkey_prefix` tests all keep `limit` slack (take is a no-op) and
+    /// every truncation test passes `prefix=None`, so neither pins a
+    /// filtering prefix against a binding limit. Here three matching rows
+    /// sit behind two newer non-matching rows under a cap of two:
+    /// filter-then-take returns the two newest matching rows truncated;
+    /// a `status -> take -> pubkey` reorder takes the newer non-matching
+    /// rows first and filters them away, collapsing to one row with
+    /// `truncated == false` on the live `peers list --prefix --limit` path.
+    #[tokio::test]
+    async fn list_summaries_prefix_filter_with_binding_limit_truncates_matching_rows() {
+        let r = InMemoryPeerRegistry::new();
+        let (_, m1) = entry_with_pubkey("m1@local", 0xff);
+        let (_, m2) = entry_with_pubkey("m2@local", 0xff);
+        let (_, m3) = entry_with_pubkey("m3@local", 0xff);
+        let (_, o1) = entry_with_pubkey("o1@local", 0x01);
+        let (_, o2) = entry_with_pubkey("o2@local", 0x01);
+        for e in [m1, m2, m3, o1, o2] {
+            r.register(e).await.unwrap();
+        }
+
+        let mut matching_pk = [0u8; 32];
+        matching_pk[0] = 0xff;
+        let target_b58 = bs58::encode(matching_pk).into_string();
+        let prefix: String = target_b58.chars().take(4).collect();
+
+        let (rows, truncated) = r.list_summaries(2, Some(&prefix), None).await.unwrap();
+        assert_eq!(rows.len(), 2, "limit binds among the matching rows");
+        assert!(truncated, "a third matching row exists beyond the cap");
+        let displays: Vec<&str> = rows.iter().map(|s| s.agent_id.display.as_str()).collect();
+        assert_eq!(
+            displays,
+            vec!["m3@local", "m2@local"],
+            "newest two matching rows, newest first; newer non-matching rows must not displace them"
+        );
+        assert!(
+            rows.iter()
+                .all(|s| s.agent_id.pubkey_base58().starts_with(&prefix)),
+            "every returned row matches the requested pubkey prefix"
+        );
+    }
+
+    /// JSONL mirror: the post-restart production registry must page the
+    /// prefix+limit interaction identically to the in-memory path.
+    #[tokio::test]
+    async fn jsonl_list_summaries_prefix_filter_with_binding_limit_truncates_matching_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.jsonl");
+        let r = JsonlPeerRegistry::open(path).await.unwrap();
+        let (_, m1) = entry_with_pubkey("m1@local", 0xff);
+        let (_, m2) = entry_with_pubkey("m2@local", 0xff);
+        let (_, m3) = entry_with_pubkey("m3@local", 0xff);
+        let (_, o1) = entry_with_pubkey("o1@local", 0x01);
+        let (_, o2) = entry_with_pubkey("o2@local", 0x01);
+        for e in [m1, m2, m3, o1, o2] {
+            r.register(e).await.unwrap();
+        }
+
+        let mut matching_pk = [0u8; 32];
+        matching_pk[0] = 0xff;
+        let target_b58 = bs58::encode(matching_pk).into_string();
+        let prefix: String = target_b58.chars().take(4).collect();
+
+        let (rows, truncated) = r.list_summaries(2, Some(&prefix), None).await.unwrap();
+        assert_eq!(rows.len(), 2, "limit binds among the matching rows");
+        assert!(truncated, "a third matching row exists beyond the cap");
+        let displays: Vec<&str> = rows.iter().map(|s| s.agent_id.display.as_str()).collect();
+        assert_eq!(
+            displays,
+            vec!["m3@local", "m2@local"],
+            "newest two matching rows, newest first; newer non-matching rows must not displace them"
+        );
+        assert!(
+            rows.iter()
+                .all(|s| s.agent_id.pubkey_base58().starts_with(&prefix)),
+            "every returned row matches the requested pubkey prefix"
+        );
+    }
+
     #[test]
     fn peer_error_bad_token_b58_display_message_pins_prefix_encoding_qualifier_and_payload() {
         let err = PeerError::BadTokenB58("not-a-token".into());
@@ -3133,5 +3622,228 @@ mod tests {
             source.downcast_ref::<serde_json::Error>().is_some(),
             "covenant_peer_auth::PeerError::Serde source() must downcast_ref to serde_json::Error so daemon-side peer-registry diagnostics can call serde_json::Error::line/column/classify for malformed-peer-row identification; a refactor that wrapped the inner in a project-local newtype (e.g., PeerSerdeError(serde_json::Error) under a 'consolidate parse errors into one Wire variant' rationale) would silently break downcast_ref::<serde_json::Error>() at every downstream callsite that classifies peers.jsonl parse faults (concrete-source-type downcast regression class)"
         );
+    }
+
+    // ---------- KnownHosts endpoint resolution ----------
+
+    fn endpoint(url: &str, pubkey: [u8; 32]) -> PeerEndpoint {
+        PeerEndpoint {
+            url: url.to_owned(),
+            pubkey,
+        }
+    }
+
+    #[test]
+    fn resolve_agent_routes_by_host_and_keeps_principals_distinct() {
+        let key1 = [1u8; 32];
+        let key2 = [2u8; 32];
+        let hosts = KnownHosts::new()
+            .with_host("host1", endpoint("http://host1:7777", key1))
+            .with_host("host2", endpoint("http://host2:7777", key2));
+
+        // Same local-part, different host: distinct principals (display differs),
+        // so a remote alice cannot inherit the local alice's grants.
+        let local = AgentId::new("alice@host1", key1);
+        let remote = AgentId::new("alice@host2", key2);
+        assert_ne!(
+            local, remote,
+            "alice@host1 and alice@host2 must be distinct principals, not collapsed by local-part",
+        );
+
+        assert_eq!(
+            hosts.resolve_agent(&local).unwrap().url,
+            "http://host1:7777"
+        );
+        assert_eq!(
+            hosts.resolve_agent(&remote).unwrap().url,
+            "http://host2:7777",
+        );
+        assert_ne!(
+            hosts.resolve_agent(&local).unwrap(),
+            hosts.resolve_agent(&remote).unwrap(),
+            "each host must route to its own endpoint",
+        );
+    }
+
+    #[test]
+    fn resolve_host_unknown_is_explicit_error_not_default() {
+        let hosts = KnownHosts::new().with_host("known", endpoint("http://known:7777", [9u8; 32]));
+
+        match hosts.resolve_host("ghost") {
+            Err(PeerError::UnknownHost(h)) => assert_eq!(h, "ghost"),
+            other => panic!("an unknown host must be an explicit UnknownHost error, got {other:?}"),
+        }
+        // The agent path surfaces the same explicit error, never a default-to-local.
+        match hosts.resolve_agent(&AgentId::new("bob@ghost", [0u8; 32])) {
+            Err(PeerError::UnknownHost(h)) => assert_eq!(h, "ghost"),
+            other => panic!("resolve_agent of an unknown host must fail loudly, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_remote_identity_refuses_pubkey_mismatch() {
+        let bound = [3u8; 32];
+        let impostor = [4u8; 32];
+        let hosts = KnownHosts::new().with_host("host2", endpoint("http://host2:7777", bound));
+
+        let err = hosts
+            .verify_remote_identity("host2", &impostor)
+            .expect_err("a remote presenting the wrong pubkey must be refused");
+        match err {
+            PeerError::PeerIdentityMismatch {
+                host,
+                expected,
+                presented,
+            } => {
+                assert_eq!(host, "host2");
+                assert_eq!(expected, bs58::encode(bound).into_string());
+                assert_eq!(presented, bs58::encode(impostor).into_string());
+            }
+            other => panic!("expected PeerIdentityMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_remote_identity_accepts_matching_pubkey() {
+        let bound = [5u8; 32];
+        let hosts = KnownHosts::new().with_host("host2", endpoint("http://host2:7777", bound));
+
+        let endpoint = hosts
+            .verify_remote_identity("host2", &bound)
+            .expect("a remote proving the bound identity must be accepted");
+        assert_eq!(endpoint.url, "http://host2:7777");
+    }
+
+    #[test]
+    fn verify_remote_identity_on_unknown_host_is_unknown_host_not_mismatch() {
+        let hosts = KnownHosts::new();
+        match hosts.verify_remote_identity("ghost", &[0u8; 32]) {
+            Err(PeerError::UnknownHost(h)) => assert_eq!(h, "ghost"),
+            other => {
+                panic!("verifying against an unregistered host must be UnknownHost, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn host_component_rejects_malformed_and_multi_at_displays() {
+        let hosts = KnownHosts::new();
+        // No '@', empty host, empty local, and — critically — multiple '@' are
+        // all rejected by the shared canonical grammar, so a multi-'@' display
+        // can never route to an attacker-chosen segment.
+        for bad in ["noatsign", "trailing@", "@emptylocal", "alice@host@evil"] {
+            let res = hosts.resolve_agent(&AgentId::new(bad, [0u8; 32]));
+            assert!(
+                matches!(res, Err(PeerError::MalformedAgentId(_))),
+                "{bad:?} must be MalformedAgentId, not routed, got {res:?}",
+            );
+        }
+        // A well-formed but unregistered host routes to an explicit UnknownHost.
+        assert!(matches!(
+            hosts.resolve_agent(&AgentId::new("alice@unregistered", [0u8; 32])),
+            Err(PeerError::UnknownHost(_)),
+        ));
+    }
+
+    #[test]
+    fn known_hosts_roundtrips_through_json_with_b58_pubkeys() {
+        let key = [7u8; 32];
+        let hosts = KnownHosts::new().with_host("host2", endpoint("http://host2:7777", key));
+
+        let json = serde_json::to_string(&hosts).unwrap();
+        assert!(
+            json.contains(&bs58::encode(key).into_string()),
+            "the pubkey must serialize as base58, not a raw byte array: {json}",
+        );
+
+        let back: KnownHosts = serde_json::from_str(&json).unwrap();
+        let ep = back.resolve_host("host2").unwrap();
+        assert_eq!(ep.url, "http://host2:7777");
+        assert_eq!(ep.pubkey, key);
+    }
+
+    #[test]
+    fn peer_endpoint_rejects_non_32_byte_pubkey_on_load() {
+        let json = r#"{"hosts":{"host2":{"url":"http://host2:7777","pubkey":"11111111"}}}"#;
+        let err = serde_json::from_str::<KnownHosts>(json)
+            .expect_err("a pubkey that does not decode to 32 bytes must be rejected");
+        assert!(
+            err.to_string().contains("32 bytes"),
+            "the error must name the 32-byte requirement, got {err}",
+        );
+    }
+
+    #[test]
+    fn peer_endpoint_rejects_malformed_base58_pubkey_on_load() {
+        // '0', 'O', 'I', 'l' are excluded from the base58 alphabet, so a pubkey
+        // field carrying them must fail the bs58 decode before the length gate.
+        let json = r#"{"hosts":{"host2":{"url":"http://host2:7777","pubkey":"0OIl"}}}"#;
+        serde_json::from_str::<KnownHosts>(json)
+            .expect_err("a pubkey that is not valid base58 must be rejected on load");
+    }
+
+    #[tokio::test]
+    async fn load_from_path_missing_file_is_empty_registry_not_default_to_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.json");
+        // Fail-closed: a missing registry means no cross-host peering is
+        // configured, so it loads empty and every host is UnknownHost — never a
+        // panic, never a silent default-to-local.
+        let hosts = KnownHosts::load_from_path(path).await.unwrap();
+        assert!(
+            hosts.is_empty(),
+            "a missing registry file must load as an empty KnownHosts",
+        );
+        match hosts.resolve_host("anyhost") {
+            Err(PeerError::UnknownHost(h)) => assert_eq!(h, "anyhost"),
+            other => {
+                panic!("an empty registry must resolve every host to UnknownHost, got {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn load_from_path_non_notfound_io_error_surfaces_not_empty() {
+        // A directory at the path is a real, non-NotFound io fault. It must
+        // surface as PeerError::Io, not be swallowed into a silently-empty
+        // registry that would drop the operator's configured peers.
+        let dir = tempfile::tempdir().unwrap();
+        let err = KnownHosts::load_from_path(dir.path().to_path_buf())
+            .await
+            .expect_err("reading a directory as a registry file must fail, not return empty");
+        assert!(
+            matches!(err, PeerError::Io(_)),
+            "a non-NotFound io fault must surface as PeerError::Io, not an empty registry: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn load_from_path_malformed_json_surfaces_serde_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known-hosts.json");
+        tokio::fs::write(&path, b"{not valid json").await.unwrap();
+        let err = KnownHosts::load_from_path(path)
+            .await
+            .expect_err("a malformed registry file must fail, not load empty or partial");
+        assert!(
+            matches!(err, PeerError::Serde(_)),
+            "malformed registry JSON must surface as PeerError::Serde: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn load_from_path_round_trips_a_written_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known-hosts.json");
+        let key = [8u8; 32];
+        let original = KnownHosts::new().with_host("host2", endpoint("http://host2:7777", key));
+        tokio::fs::write(&path, serde_json::to_vec(&original).unwrap())
+            .await
+            .unwrap();
+
+        let loaded = KnownHosts::load_from_path(path).await.unwrap();
+        let ep = loaded.resolve_host("host2").unwrap();
+        assert_eq!(ep.url, "http://host2:7777");
+        assert_eq!(ep.pubkey, key);
     }
 }

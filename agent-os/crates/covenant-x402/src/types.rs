@@ -57,6 +57,16 @@ pub struct PaymentExtra {
     /// partial-signs as the funder only.
     #[serde(rename = "feePayer", default, skip_serializing_if = "Option::is_none")]
     pub fee_payer: Option<String>,
+    /// EIP-712 domain `name` for the EVM `exact` scheme (EIP-3009). x402
+    /// facilitators put the paying token's on-chain `name()` here so the
+    /// signer can build the `TransferWithAuthorization` domain separator
+    /// without an RPC round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// EIP-712 domain `version` for the EVM `exact` scheme — the token's
+    /// EIP-712 `version` string (USDC uses `"2"`). Paired with `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// A daemon-issued authorization to call paid endpoints.
@@ -151,6 +161,7 @@ mod tests {
         // the Rust `fee_payer`, and survive a round-trip unchanged.
         let original = requirement(Some(PaymentExtra {
             fee_payer: Some("2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4".into()),
+            ..Default::default()
         }));
         let json = serde_json::to_value(&original).expect("encode");
         assert_eq!(

@@ -1,0 +1,10 @@
+{
+  "kind": "intent_result",
+  "intent_id": "00000000-0000-0000-0000-000000000051",
+  "status": "ok",
+  "text": "echo",
+  "sources": [
+    "path/one.md"
+  ],
+  "settlement": null
+}

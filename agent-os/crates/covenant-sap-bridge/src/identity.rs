@@ -278,6 +278,55 @@ mod tests {
     }
 
     #[test]
+    fn each_metadata_field_change_marks_metadata_changed() {
+        // metadata_changed gates whether the daemon calls update_agent to
+        // correct a stale on-chain identity record. Only the name operand
+        // was pinned; description, agent_id, agent_uri, and x402_endpoint
+        // are each an independent drift source, and a missed one leaves
+        // peers discovering the wrong URI or endpoint.
+        let mut desc = manifest("demo", &[], &[]);
+        desc.description = Some("now documented".into());
+
+        let mut agent_id = manifest("demo", &[], &[]);
+        agent_id.agent_id = Some("did:demo".into());
+
+        let mut uri = manifest("demo", &[], &[]);
+        uri.agent_uri = Some("https://demo.example/agent".into());
+
+        let mut x402 = manifest("demo", &[], &[]);
+        x402.x402_endpoint = Some("https://demo.example/pay".into());
+
+        for (label, m) in [
+            ("description", &desc),
+            ("agent_id", &agent_id),
+            ("agent_uri", &uri),
+            ("x402_endpoint", &x402),
+        ] {
+            let d = ManifestDiff::between(&detail("demo", &[], &[]), m);
+            assert!(
+                d.metadata_changed,
+                "{label} change must flag metadata_changed"
+            );
+        }
+    }
+
+    #[test]
+    fn cleared_manifest_description_marks_metadata_changed_against_chain_text() {
+        // The description operand normalizes a None manifest description to
+        // "" before comparing; when the chain still carries text that
+        // normalized "" must read as a change, so a description cleared in
+        // the manifest gets pushed out instead of leaving stale text on chain.
+        let mut on_chain = detail("demo", &[], &[]);
+        on_chain.description = "left over from a prior publish".into();
+        let m = manifest("demo", &[], &[]); // description defaults to None
+        let d = ManifestDiff::between(&on_chain, &m);
+        assert!(
+            d.metadata_changed,
+            "a None manifest description against non-empty chain text must flag a change"
+        );
+    }
+
+    #[test]
     fn pricing_changed_is_false_when_manifest_has_no_pricing_even_if_chain_carries_some() {
         // Regression pin for the sap-bridge-worker-robustness fix: the
         // prior `pricing_changed = !manifest.is_empty() || !current.is_empty()`

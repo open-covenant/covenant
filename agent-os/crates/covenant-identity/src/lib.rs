@@ -12,6 +12,16 @@
 
 #![deny(unsafe_code)]
 
+mod binding;
+pub use binding::{BindingError, IdentityBinding, Secp256k1IssuerKey};
+
+mod registration;
+pub use registration::{
+    AgentRegistration, Capabilities, CardSignature, Registration, RegistrationError,
+    RegistrationParams, Service, Skill, A2A_PROTOCOL_VERSION, A2A_SPEC_COMMIT,
+    DEFAULT_SUPPORTED_TRUST, ERC8004_REGISTRATION_TYPE, ERC8004_SPEC_COMMIT, SOLANA_MAINNET_CAIP2,
+};
+
 use covenant_types::AgentId;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
@@ -32,6 +42,8 @@ pub enum IdentityError {
     Crypto(#[from] ed25519_dalek::SignatureError),
     #[error("bad encoding: {0}")]
     BadEncoding(String),
+    #[error("secp256k1: {0}")]
+    Secp256k1(String),
 }
 
 pub struct LocalIdentity {
@@ -76,6 +88,37 @@ impl LocalIdentity {
         self.signing_key.sign(message)
     }
 
+    /// Bind this canonical ed25519 identity to a secp256k1 issuer key,
+    /// anchored to the agent's 32-byte audit root. The result is a
+    /// bidirectional [`IdentityBinding`] — the ed25519 key authorizes the
+    /// secp256k1 address and the secp256k1 key authorizes this ed25519
+    /// pubkey (EVM-`ecrecover`-verifiable). See [`binding`].
+    pub fn bind_issuer(
+        &self,
+        issuer: &Secp256k1IssuerKey,
+        audit_root: [u8; 32],
+    ) -> IdentityBinding {
+        IdentityBinding::create(&self.signing_key, issuer, audit_root)
+    }
+
+    /// Build the unsigned dual-shaped A2A AgentCard / ERC-8004 registration
+    /// document for this identity, with the `did:pkh` subject bound to this
+    /// key's Solana address. See [`registration`].
+    pub fn registration_document(&self, params: &RegistrationParams) -> AgentRegistration {
+        AgentRegistration::build(&self.agent_id().pubkey_base58(), params)
+    }
+
+    /// Build the document and attach a detached JWS (EdDSA over the RFC
+    /// 8785 JCS body) signed by this identity's ed25519 key.
+    pub fn signed_registration_document(
+        &self,
+        params: &RegistrationParams,
+    ) -> Result<AgentRegistration, RegistrationError> {
+        let mut doc = self.registration_document(params);
+        doc.sign(&self.signing_key)?;
+        Ok(doc)
+    }
+
     /// Load an existing identity from disk; create a new one and persist it
     /// if the file is missing. Default display is `user@local` (kept
     /// generic so logs and commits don't leak the operator's hostname).
@@ -111,7 +154,7 @@ impl LocalIdentity {
 }
 
 #[cfg(unix)]
-fn require_identity_key_secure(path: &Path) -> Result<(), IdentityError> {
+pub(crate) fn require_identity_key_secure(path: &Path) -> Result<(), IdentityError> {
     use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() {
@@ -134,23 +177,23 @@ fn require_identity_key_secure(path: &Path) -> Result<(), IdentityError> {
 }
 
 #[cfg(not(unix))]
-fn require_identity_key_secure(_path: &Path) -> Result<(), IdentityError> {
+pub(crate) fn require_identity_key_secure(_path: &Path) -> Result<(), IdentityError> {
     Ok(())
 }
 
 #[cfg(unix)]
-fn set_dir_mode_0700(path: &Path) -> std::io::Result<()> {
+pub(crate) fn set_dir_mode_0700(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
 }
 
 #[cfg(not(unix))]
-fn set_dir_mode_0700(_path: &Path) -> std::io::Result<()> {
+pub(crate) fn set_dir_mode_0700(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
 #[cfg(unix)]
-fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     if path.exists() {
         let _ = std::fs::remove_file(path);
@@ -165,7 +208,7 @@ fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_with_mode_0600(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)
 }
 
@@ -205,6 +248,18 @@ pub fn verify_b58(
     verify_with_pubkey(pubkey, message, &Signature::from_bytes(&sig_bytes))
 }
 
+/// Verify a detached signature carried as raw bytes, so callers holding a
+/// 64-byte signature off the wire need not name `ed25519_dalek::Signature`.
+/// The byte array is the fixed 64-byte ed25519 form; length is enforced by the
+/// `&[u8; 32]`/`&[u8; 64]` types at the call site, not here.
+pub fn verify_with_pubkey_bytes(
+    pubkey: [u8; 32],
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Result<(), IdentityError> {
+    verify_with_pubkey(pubkey, message, &Signature::from_bytes(signature))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +278,45 @@ mod tests {
         let id = LocalIdentity::generate("user@local");
         let sig = id.sign(b"original");
         assert!(verify_with_pubkey(id.pubkey_bytes(), b"tampered", &sig).is_err());
+    }
+
+    #[test]
+    fn signed_registration_document_binds_real_pubkey_and_verifies() {
+        let id = LocalIdentity::generate("agent@local");
+        let params = RegistrationParams::solana_mainnet(
+            "covenant-agent",
+            "governed, accountable execution",
+            "https://covenant.example/agent.png",
+            "https://covenant.example/a2a",
+            "0.1.0",
+            "CovRegistry1111111111111111111111111111111",
+        );
+        let doc = id.signed_registration_document(&params).unwrap();
+        // Verifies under this identity's own ed25519 key via the crate helper.
+        let vk = verifying_key_from_bytes(id.pubkey_bytes()).unwrap();
+        doc.verify(&vk).unwrap();
+        // The did:pkh subject is this identity's canonical Solana address —
+        // cross-checks registration.rs's derivation against the real bs58.
+        let did = doc.services.iter().find(|s| s.name == "DID").unwrap();
+        assert!(did
+            .endpoint
+            .starts_with("did:pkh:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:"));
+        assert!(did.endpoint.ends_with(&id.agent_id().pubkey_base58()));
+    }
+
+    #[test]
+    fn verify_with_pubkey_bytes_accepts_a_faithful_signature_and_rejects_a_tampered_one() {
+        let id = LocalIdentity::generate("user@local");
+        let msg = b"covenant cross-host envelope";
+        let sig = id.sign(msg).to_bytes();
+        verify_with_pubkey_bytes(id.pubkey_bytes(), msg, &sig)
+            .expect("a faithful 64-byte signature must verify");
+        let mut tampered = sig;
+        tampered[0] ^= 0xff;
+        assert!(
+            verify_with_pubkey_bytes(id.pubkey_bytes(), msg, &tampered).is_err(),
+            "a tampered signature must not verify through the bytes helper"
+        );
     }
 
     #[test]
@@ -489,9 +583,10 @@ mod tests {
 
     #[test]
     fn identity_error_display_messages_pin_three_field_bearing_variant_format_strings() {
-        // IdentityError has five variants. Two wrap external errors via
-        // #[from] (Io, Crypto); the three field-bearing variants emit
-        // security-relevant operator-facing format strings that no
+        // IdentityError has six variants. Two wrap external errors via
+        // #[from] (Io, Crypto), one wraps a stringified secp256k1 scalar-
+        // decode failure (Secp256k1); the three field-bearing variants
+        // emit security-relevant operator-facing format strings that no
         // existing test inspects via Display.
         // load_or_create_rejects_wrong_size_file asserts BadSize via
         // `matches!` and ignores Display;

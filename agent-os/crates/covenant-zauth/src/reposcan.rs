@@ -10,6 +10,7 @@
 //! first hit is a 402.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use std::time::Duration;
 use covenant_x402::Signer;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -20,24 +21,67 @@ use crate::{Result, ZauthError};
 
 const DEFAULT_BASE_URL: &str = "https://api.zauth.inc";
 
+/// Per-request timeout for the unpaid first POST. It only fetches the 402
+/// challenge (or a cached gratis result) and never settles, so a hung or
+/// slow-drip `api.zauth.inc` must fail fast rather than wedge the CLI — the
+/// time-axis sibling of the body-size cap on the same client.
+const FIRST_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Floor and ceiling for the paid retry's timeout. The challenge advertises
+/// `maxTimeoutSeconds` as the settlement window the server commits to, so the
+/// paid request must be willing to wait that long — a short fixed ceiling
+/// would abort a legitimate settlement after funds have already committed.
+/// The advertised value is untrusted: a hostile 402 could push it to 0
+/// (instant abort) or to `u32::MAX` (~forever), so the derived timeout is
+/// clamped to a sane band.
+const PAID_TIMEOUT_MIN_SECS: u64 = 30;
+const PAID_TIMEOUT_MAX_SECS: u64 = 600;
+
+/// The reqwest client the CLI should drive [`RepoScanClient`] with — the
+/// unpaid first request is bounded so an unresponsive registry cannot hang
+/// the command. The paid retry overrides this per-request with a
+/// settlement-aware timeout (see [`paid_timeout`]).
+pub fn http_client() -> reqwest::Client {
+    http_client_with_timeout(FIRST_REQUEST_TIMEOUT)
+}
+
+fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Derive the paid retry's timeout from the challenge's advertised
+/// `maxTimeoutSeconds`, clamped so an untrusted value cannot abort a real
+/// settlement instantly or hang the CLI indefinitely.
+fn paid_timeout(max_timeout_seconds: u32) -> Duration {
+    Duration::from_secs(
+        (max_timeout_seconds as u64).clamp(PAID_TIMEOUT_MIN_SECS, PAID_TIMEOUT_MAX_SECS),
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct RepoScanClient {
     http: reqwest::Client,
     base_url: String,
+    max_bytes: usize,
 }
 
 impl RepoScanClient {
     pub fn new(http: reqwest::Client) -> Self {
-        Self {
-            http,
-            base_url: DEFAULT_BASE_URL.into(),
-        }
+        Self::with_limits(http, DEFAULT_BASE_URL, crate::http::MAX_RESPONSE_BYTES)
     }
 
     pub fn with_base_url(http: reqwest::Client, base_url: impl Into<String>) -> Self {
+        Self::with_limits(http, base_url, crate::http::MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(http: reqwest::Client, base_url: impl Into<String>, max_bytes: usize) -> Self {
         Self {
             http,
             base_url: base_url.into(),
+            max_bytes,
         }
     }
 
@@ -53,7 +97,9 @@ impl RepoScanClient {
         let status = first.status();
 
         if status.is_success() {
-            let body_text = first.text().await?;
+            let body_text =
+                crate::http::read_capped(first, self.max_bytes, ZauthError::ResponseTooLarge)
+                    .await?;
             return Ok(RepoScanResult {
                 status: status.as_u16(),
                 body: body_text,
@@ -66,7 +112,8 @@ impl RepoScanClient {
         }
 
         let headers = first.headers().clone();
-        let _drained = first.text().await?;
+        let _drained =
+            crate::http::read_capped(first, self.max_bytes, ZauthError::ResponseTooLarge).await?;
         let parsed = challenge::decode_from_headers(&headers)?;
         let raw = challenge::decode_value_from_headers(&headers)?;
 
@@ -102,12 +149,16 @@ impl RepoScanClient {
             .http
             .post(&url)
             .header("x-payment", header_value)
+            .timeout(paid_timeout(accept.max_timeout_seconds))
             .json(&body)
             .send()
             .await?;
         let paid_status = paid.status();
         let paid_headers = paid.headers().clone();
-        let paid_body = paid.text().await.unwrap_or_default();
+        let paid_body =
+            crate::http::read_capped(paid, self.max_bytes, ZauthError::ResponseTooLarge)
+                .await
+                .unwrap_or_default();
         let paid_amount = paid_status.is_success().then(|| requirements.amount.clone());
         // A rejected retry carries the reason in the same header-encoded
         // challenge; surface it so a failure is diagnosable, not opaque.
@@ -277,13 +328,11 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/x402/reposcan"))
             .and(header_exists("x-payment"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": "scanned",
-                    "score": 92,
-                    "scanId": "abc123"
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "scanned",
+                "score": 92,
+                "scanId": "abc123"
+            })))
             .mount(&server)
             .await;
 
@@ -300,11 +349,9 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/x402/reposcan"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": "cached", "score": 88
-                })),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "cached", "score": 88
+            })))
             .expect(1)
             .mount(&server)
             .await;
@@ -375,5 +422,100 @@ mod tests {
             .expect("loop surfaces rejection, not an error");
         assert_eq!(result.status, 402);
         assert!(result.paid_amount.is_none());
+    }
+
+    #[tokio::test]
+    async fn signer_failure_surfaces_as_typed_sign_error() {
+        // The money path must fail closed: if the signer cannot build the
+        // payment header (custody key offline, blockhash expired), scan() must
+        // return a typed ZauthError::Sign and stop, never panic and never fall
+        // through to the paid POST for a payment that was never signed.
+        struct FailingSigner;
+        #[async_trait::async_trait]
+        impl Signer for FailingSigner {
+            async fn build_payment(
+                &self,
+                _requirements: &covenant_x402::PaymentRequirements,
+            ) -> covenant_x402::Result<String> {
+                Err(covenant_x402::X402Error::Sign(
+                    "funding key unavailable".into(),
+                ))
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/x402/reposcan"))
+            .respond_with(
+                ResponseTemplate::new(402)
+                    .insert_header("payment-required", challenge_header().as_str())
+                    .set_body_string("{}"),
+            )
+            .mount(&server)
+            .await;
+        let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
+        let err = client
+            .scan(&req(), &FailingSigner)
+            .await
+            .expect_err("a signer failure must abort the scan");
+        assert!(
+            matches!(err, ZauthError::Sign(ref m) if m.contains("funding key unavailable")),
+            "got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_reposcan_body_is_rejected_instead_of_buffered() {
+        // A gratis 2xx whose body dwarfs the cap must be refused rather than
+        // buffered whole into memory — the same OOM guard the directory read
+        // already carries, applied to the RepoScan body.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/x402/reposcan"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let client = RepoScanClient::with_limits(reqwest::Client::new(), server.uri(), 64);
+        let err = client
+            .scan(&req(), &FakeEnvelopeSigner)
+            .await
+            .expect_err("must reject an oversized reposcan body");
+        assert!(
+            matches!(err, ZauthError::ResponseTooLarge(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_reposcan_request_times_out_instead_of_hanging() {
+        // A hung api.zauth.inc on the unpaid first POST must fail fast with a
+        // typed error rather than wedge the CLI forever.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/x402/reposcan"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let client = RepoScanClient::with_base_url(
+            http_client_with_timeout(Duration::from_millis(50)),
+            server.uri(),
+        );
+        let err = client
+            .scan(&req(), &FakeEnvelopeSigner)
+            .await
+            .expect_err("must time out");
+        assert!(matches!(err, ZauthError::Http(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn paid_timeout_clamps_untrusted_max_timeout_seconds() {
+        // The advertised window is honored within the band; a hostile 0 cannot
+        // instant-abort a settlement and a hostile u32::MAX cannot hang forever.
+        assert_eq!(paid_timeout(300), Duration::from_secs(300));
+        assert_eq!(paid_timeout(0), Duration::from_secs(PAID_TIMEOUT_MIN_SECS));
+        assert_eq!(
+            paid_timeout(u32::MAX),
+            Duration::from_secs(PAID_TIMEOUT_MAX_SECS)
+        );
     }
 }

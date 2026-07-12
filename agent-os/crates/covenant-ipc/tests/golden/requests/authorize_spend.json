@@ -1,0 +1,10 @@
+{
+  "kind": "authorize_spend",
+  "provider": "xona",
+  "network": "solana",
+  "asset": "USDC",
+  "amount": "0.25",
+  "per_call_cap": "1.00",
+  "credits": 250,
+  "destination": "So11111111111111111111111111111111111111112"
+}

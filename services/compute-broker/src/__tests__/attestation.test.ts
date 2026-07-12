@@ -21,6 +21,16 @@ describe('attestation', () => {
     expect(hexToKey('00'.repeat(32)).length).toBe(32);
   });
 
+  it('hexToKey rejects non-hex input instead of silently zeroing it', () => {
+    // A 64-char but non-hex key would otherwise parseInt->NaN->0 silently,
+    // booting a broker with a wrong-but-valid signing identity.
+    expect(() => hexToKey('zz'.repeat(32))).toThrow('broker key hex must be valid hex');
+    // A single bad nibble in an otherwise valid key must also fail loudly.
+    expect(() => hexToKey(`g${'a'.repeat(63)}`)).toThrow('broker key hex must be valid hex');
+    // Mixed-case valid hex still decodes.
+    expect(Array.from(hexToKey(`AbCd${'00'.repeat(30)}`))).toEqual([0xab, 0xcd, ...Array(30).fill(0)]);
+  });
+
   it('canonical form is deterministic and stable under key order', () => {
     const a = canonicalAttestation(payload);
     const b = canonicalAttestation({ ...payload, gpu_hours: payload.gpu_hours });
@@ -50,5 +60,23 @@ describe('attestation', () => {
 
   it('verify fails gracefully on garbage input', async () => {
     expect(await verify(payload, 'not-bs58!!', 'also-garbage!!')).toBe(false);
+  });
+
+  it('hexToKey accepts a 0x prefix and yields the same bytes as the bare hex', () => {
+    const bare = hexToKey('ab'.repeat(32));
+    const prefixed = hexToKey('0x' + 'ab'.repeat(32));
+    expect(Array.from(prefixed)).toEqual(Array.from(bare));
+  });
+
+  it('hexToKey decodes each hex byte pair in base-16', () => {
+    const key = hexToKey('ab00ff' + '00'.repeat(29));
+    expect(key[0]).toBe(0xab);
+    expect(key[1]).toBe(0x00);
+    expect(key[2]).toBe(0xff);
+    expect(key[31]).toBe(0x00);
+  });
+
+  it('sign rejects a non-32-byte key with an explicit message', async () => {
+    await expect(sign(payload, new Uint8Array(31))).rejects.toThrow('broker key must be 32 bytes');
   });
 });

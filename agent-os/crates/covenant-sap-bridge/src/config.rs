@@ -249,6 +249,29 @@ mod tests {
     }
 
     #[test]
+    fn cluster_specific_enabled_and_rpc_url_beat_global() {
+        // enabled, program_id, and rpc_url share one cluster-specific-beats-global
+        // .or_else(global) rule, but only program_id's is pinned above. Set a global
+        // and a disagreeing devnet-specific value for enabled and rpc_url so only the
+        // layering decides the outcome: a global-only read would flip both.
+        let cfg = Config::from_env(env(&[
+            ("COVENANT_SOLANA_CLUSTER", "devnet"),
+            ("COVENANT_SAP_ENABLED", "false"),
+            ("COVENANT_SAP_DEVNET_ENABLED", "true"),
+            ("COVENANT_SAP_RPC_URL", "https://global.example"),
+            ("COVENANT_SAP_DEVNET_RPC_URL", "https://devnet.example"),
+        ]));
+        assert!(
+            cfg.enabled,
+            "cluster-specific COVENANT_SAP_DEVNET_ENABLED=true must beat the global =false opt-out",
+        );
+        assert_eq!(
+            cfg.rpc_url, "https://devnet.example",
+            "cluster-specific COVENANT_SAP_DEVNET_RPC_URL must beat the global RPC url",
+        );
+    }
+
+    #[test]
     fn falls_back_to_cluster_default_rpc() {
         let cfg = Config::from_env(env(&[
             ("COVENANT_SOLANA_CLUSTER", "mainnet"),
@@ -279,6 +302,73 @@ mod tests {
         for value in ["0", "false", "no", ""] {
             let cfg = Config::from_env(env(&[("COVENANT_SAP_ENABLED", value)]));
             assert!(!cfg.enabled, "value={value}");
+        }
+    }
+
+    #[test]
+    fn worker_fields_default_when_unset() {
+        let cfg = Config::from_env(env(&[]));
+        assert_eq!(cfg.worker_timeout, DEFAULT_WORKER_TIMEOUT);
+        assert_eq!(cfg.worker_command, vec!["covenant-sap-worker"]);
+    }
+
+    #[test]
+    fn worker_timeout_override_parses_and_trims() {
+        // A finite per-call budget is the only thing keeping a hung SAP
+        // worker from pinning the offline daemon's reconciliation task, so
+        // a valid override has to resolve to exactly that many seconds —
+        // and survive an operator's stray padding, which makes the trim
+        // load-bearing rather than cosmetic.
+        let cfg = Config::from_env(env(&[("COVENANT_SAP_WORKER_TIMEOUT_SECS", "60")]));
+        assert_eq!(cfg.worker_timeout, Duration::from_secs(60));
+
+        let padded = Config::from_env(env(&[("COVENANT_SAP_WORKER_TIMEOUT_SECS", "  90  ")]));
+        assert_eq!(padded.worker_timeout, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn worker_timeout_rejects_zero_and_garbage_to_safety_default() {
+        // Zero and non-numeric values must fall back to the 30s safety
+        // default, never be kept verbatim — a 0s or unparsed budget is the
+        // unbounded-wait regression DEFAULT_WORKER_TIMEOUT exists to stop.
+        for value in ["0", "abc", "-5", "", "   "] {
+            let cfg = Config::from_env(env(&[("COVENANT_SAP_WORKER_TIMEOUT_SECS", value)]));
+            assert_eq!(
+                cfg.worker_timeout, DEFAULT_WORKER_TIMEOUT,
+                "value={value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_command_override_splits_on_whitespace_runs() {
+        // An operator override must reach the spawn path intact, args and
+        // all, or the daemon launches the wrong worker. Runs of whitespace
+        // collapse so a tab- or double-space-formatted command can't
+        // smuggle empty entries into argv.
+        let cfg = Config::from_env(env(&[(
+            "COVENANT_SAP_WORKER_CMD",
+            "node \t /opt/covenant/sap-worker.js  --quiet",
+        )]));
+        assert_eq!(
+            cfg.worker_command,
+            vec!["node", "/opt/covenant/sap-worker.js", "--quiet"]
+        );
+    }
+
+    #[test]
+    fn worker_command_blank_override_falls_back_to_default() {
+        // A whitespace-only or empty override splits to an empty argv; the
+        // empty-filter has to reject it so the daemon never tries to spawn
+        // a command with no program rather than silently dropping back to
+        // the default.
+        for value in ["", "   ", "\t\n"] {
+            let cfg = Config::from_env(env(&[("COVENANT_SAP_WORKER_CMD", value)]));
+            assert_eq!(
+                cfg.worker_command,
+                vec!["covenant-sap-worker"],
+                "value={value:?}"
+            );
         }
     }
 }

@@ -45,6 +45,7 @@ use solana_sdk::{
 use spl_associated_token_account::get_associated_token_address;
 use tracing::debug;
 
+use crate::http::{read_capped, MAX_RESPONSE_BYTES};
 use crate::solana::decimals_for_mint;
 use crate::{PaymentRequirements, Result, Signer, X402Error};
 
@@ -59,6 +60,7 @@ pub struct PayaiSolanaSigner {
     keypair: Keypair,
     rpc_url: String,
     http: reqwest::Client,
+    max_bytes: usize,
 }
 
 impl PayaiSolanaSigner {
@@ -67,10 +69,20 @@ impl PayaiSolanaSigner {
     }
 
     pub fn with(keypair: Keypair, rpc_url: impl Into<String>, http: reqwest::Client) -> Self {
+        Self::with_limits(keypair, rpc_url, http, MAX_RESPONSE_BYTES)
+    }
+
+    fn with_limits(
+        keypair: Keypair,
+        rpc_url: impl Into<String>,
+        http: reqwest::Client,
+        max_bytes: usize,
+    ) -> Self {
         Self {
             keypair,
             rpc_url: rpc_url.into(),
             http,
+            max_bytes,
         }
     }
 
@@ -98,12 +110,14 @@ impl PayaiSolanaSigner {
         let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(X402Error::Sign(format!(
-                "rpc status {status}: {}",
-                resp.text().await.unwrap_or_default()
-            )));
+            let body = read_capped(resp, self.max_bytes, X402Error::Sign)
+                .await
+                .unwrap_or_default();
+            return Err(X402Error::Sign(format!("rpc status {status}: {body}")));
         }
-        let parsed: serde_json::Value = resp.json().await?;
+        let text = read_capped(resp, self.max_bytes, X402Error::Sign).await?;
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| X402Error::Sign(format!("decode rpc response: {e}")))?;
         let blockhash_str = parsed
             .pointer("/result/value/blockhash")
             .and_then(|v| v.as_str())
@@ -127,12 +141,16 @@ impl PayaiSolanaSigner {
         let resp = self.http.post(&self.rpc_url).json(&body).send().await?;
         let status = resp.status();
         if !status.is_success() {
+            let body = read_capped(resp, self.max_bytes, X402Error::Sign)
+                .await
+                .unwrap_or_default();
             return Err(X402Error::Sign(format!(
-                "rpc getAccountInfo status {status}: {}",
-                resp.text().await.unwrap_or_default()
+                "rpc getAccountInfo status {status}: {body}"
             )));
         }
-        let parsed: serde_json::Value = resp.json().await?;
+        let text = read_capped(resp, self.max_bytes, X402Error::Sign).await?;
+        let parsed: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| X402Error::Sign(format!("decode rpc response: {e}")))?;
         Ok(parsed
             .pointer("/result/value")
             .map(|v| !v.is_null())
@@ -397,6 +415,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn short_network_strips_caip2_solana_prefix_else_passthrough() {
+        // The envelope's "network" field is emitted straight from short_network,
+        // and PayAI's facilitator expects the short "solana" id, not the CAIP-2
+        // form. Pin the exact mapping a mutation could otherwise break silently.
+        assert_eq!(
+            short_network("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
+            "solana",
+            "CAIP-2 mainnet collapses to the short form"
+        );
+        assert_eq!(
+            short_network("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"),
+            "solana",
+            "the match is namespace-prefix based, not an exact CAIP-2 string"
+        );
+        assert_eq!(
+            short_network("solana"),
+            "solana",
+            "the already-short form passes through the else branch unchanged"
+        );
+        assert_eq!(
+            short_network("ethereum"),
+            "ethereum",
+            "a non-Solana network must not be relabelled (kills always-solana and swapped branches)"
+        );
+        assert_eq!(
+            short_network("solana-localnet"),
+            "solana-localnet",
+            "a 'solana'-prefixed label without the CAIP-2 colon is left intact (the ':' is load-bearing)"
+        );
+    }
+
     #[tokio::test]
     async fn build_payment_errors_without_fee_payer_in_extra() {
         let signer = PayaiSolanaSigner::new(Keypair::new(), "https://unused");
@@ -428,6 +478,7 @@ mod tests {
             scheme: "exact".into(),
             extra: Some(PaymentExtra {
                 fee_payer: Some(PAYAI_FEE_PAYER.into()),
+                ..Default::default()
             }),
         };
         let err = signer.build_payment(&req).await.expect_err("unknown mint");
@@ -453,12 +504,14 @@ mod tests {
             scheme: "exact".into(),
             extra: Some(PaymentExtra {
                 fee_payer: Some(PAYAI_FEE_PAYER.into()),
+                ..Default::default()
             }),
         };
 
         let mut req = valid();
         req.extra = Some(PaymentExtra {
             fee_payer: Some("not-a-pubkey".into()),
+            ..Default::default()
         });
         assert!(matches!(
             signer.build_payment(&req).await.expect_err("bad feePayer"),
@@ -549,5 +602,73 @@ mod tests {
             .await
             .expect_err("rpc error status");
         assert!(matches!(err, X402Error::Sign(msg) if msg.contains("getAccountInfo status")));
+    }
+
+    #[tokio::test]
+    async fn build_payment_rejects_when_funder_ata_missing_on_chain() {
+        // The funder's source ATA does not exist on chain: getAccountInfo
+        // returns 200 with result.value=null, so account_exists resolves to
+        // Ok(false). build_payment must fail closed as a Sign error before
+        // building or signing a transfer PayAI could never settle, rather than
+        // treat a missing ATA as spendable. Distinct from
+        // account_exists_rejects_rpc_error_status, which covers the RPC-fault
+        // (Err) propagation, not this Ok(false) guard branch — and from the
+        // other build_payment tests, which all fail before any RPC.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"context": {"slot": 1}, "value": null}
+            })))
+            .mount(&server)
+            .await;
+        let req = PaymentRequirements {
+            network: "solana".into(),
+            asset: USDC_MAINNET.into(),
+            amount: "1".into(),
+            amount_usdc: 0.000001,
+            pay_to: RECIPIENT.into(),
+            scheme: "exact".into(),
+            extra: Some(PaymentExtra {
+                fee_payer: Some(PAYAI_FEE_PAYER.into()),
+                ..Default::default()
+            }),
+        };
+        // account_exists is the first RPC; its Ok(false) returns before
+        // latest_blockhash is reached, so a single getAccountInfo mock suffices.
+        let err = PayaiSolanaSigner::new(Keypair::new(), server.uri())
+            .build_payment(&req)
+            .await
+            .expect_err("missing funder ATA");
+        assert!(
+            matches!(&err, X402Error::Sign(msg) if msg.contains("does not exist on chain")),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_blockhash_rejects_oversized_rpc_body() {
+        // The Solana RPC is untrusted: a compromised or malicious node returning
+        // a body past the cap must fail closed as a Sign error rather than buffer
+        // the whole response into the keypair-custody signer and OOM it.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let signer = PayaiSolanaSigner::with_limits(
+            Keypair::new(),
+            server.uri(),
+            reqwest::Client::new(),
+            64,
+        );
+        let err = signer
+            .latest_blockhash()
+            .await
+            .expect_err("oversized rpc body");
+        assert!(
+            matches!(err, X402Error::Sign(ref msg) if msg.contains("cap")),
+            "got: {err:?}"
+        );
     }
 }

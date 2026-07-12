@@ -1,0 +1,5 @@
+{
+  "kind": "submit_intent",
+  "text": "summarise the audit log",
+  "prefer_stream": true
+}

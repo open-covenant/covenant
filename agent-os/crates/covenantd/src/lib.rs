@@ -8,11 +8,13 @@
 
 #![deny(unsafe_code)]
 
+pub mod cross_host;
 pub mod escrow;
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
 pub mod reputation;
+pub mod secret;
 pub mod sns;
 pub mod spend_authz;
 pub mod sse;
@@ -22,7 +24,10 @@ pub mod x402;
 
 use anyhow::{Context, Result};
 use covenant_a2a::Mailbox;
-use covenant_audit::{hash_hex, AuditError, AuditEvent, AuditKind, AuditLog};
+use covenant_audit::{
+    hash_hex, project_privileged_actions, AuditError, AuditEvent, AuditKind, AuditLog,
+    CapabilityAuthorization, ProvenanceFilter, ToolCallOutcome,
+};
 use covenant_budget::{
     BudgetCheckpointError, BudgetError, BudgetLedger, JsonlPauseCheckpointStore,
 };
@@ -34,7 +39,7 @@ use covenant_ipc::{
 use covenant_llm::Embedder;
 use covenant_mcp::ToolRegistry;
 use covenant_memory::{memory_receipt_backfill_correlations, IgnoreSet, MemoryStore};
-use covenant_peer_auth::{PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
+use covenant_peer_auth::{KnownHosts, PeerEntry, PeerRegistry, PeerToken, RevokeOutcome};
 #[cfg(test)]
 use covenant_permissions::verify_with_clock;
 use covenant_permissions::{
@@ -83,6 +88,14 @@ pub fn covenant_home() -> Result<PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set")?;
     Ok(PathBuf::from(home).join(".covenant"))
+}
+
+/// Conventional on-disk location of the operator's known-hosts registry,
+/// `<home>/peers/known-hosts.json`, alongside the local peer registry and
+/// operator token. A missing file is local-only operation (empty registry);
+/// [`KnownHosts::load_from_path`] fails closed on a malformed or unreadable one.
+pub fn known_hosts_path(home: &Path) -> PathBuf {
+    home.join("peers").join("known-hosts.json")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,11 +270,13 @@ pub fn sap_attest_config_from_values(
     enabled: Option<&str>,
     interval_secs: Option<&str>,
 ) -> SapAttestConfig {
-    let mut config = SapAttestConfig::default();
-    config.enabled = matches!(
-        enabled.map(str::trim),
-        Some("1") | Some("true") | Some("yes")
-    );
+    let mut config = SapAttestConfig {
+        enabled: matches!(
+            enabled.map(str::trim),
+            Some("1") | Some("true") | Some("yes")
+        ),
+        ..Default::default()
+    };
     if let Some(secs) = interval_secs
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|s| *s > 0)
@@ -624,17 +639,29 @@ fn parse_env_usize(name: &str, value: &str) -> Result<usize> {
         .with_context(|| format!("{name} must be an integer"))
 }
 
-/// Cadence and grace window for the budget projection tick driver.
-/// `period_ms` controls how often [`Server::run_projection_tick_iteration`]
-/// runs; `grace_ms` is the SIGTERM→SIGKILL window passed to every
-/// dispatched [`Server::preempt_intent`] call. Both are read from
-/// environment variables at daemon startup (see
-/// [`projection_tick_config_from_env`]) so operators can tune cadence
-/// without a rebuild.
+/// Conservative thresholds applied when an operator selects the
+/// `linear` projection policy without specifying the gates explicitly.
+/// A window floor keeps a sub-second initial spike from extrapolating to
+/// infinity; a sample floor keeps a single fee-paying tool call from
+/// projecting a runaway agent. Operators tune them via
+/// `COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS` / `_MIN_SAMPLES`.
+const DEFAULT_PROJECTION_MIN_WINDOW_MS: u64 = 1_000;
+const DEFAULT_PROJECTION_MIN_SAMPLES: u32 = 3;
+
+/// Cadence, grace window, and projection policy for the budget tick
+/// driver. `period_ms` controls how often
+/// [`Server::run_projection_tick_iteration`] runs; `grace_ms` is the
+/// SIGTERM→SIGKILL window passed to every dispatched
+/// [`Server::preempt_intent`] call; `policy` selects whether the tick
+/// preempts only on bucket exhaustion (the default) or also on linear
+/// debit-rate extrapolation. All three are read from environment
+/// variables at daemon startup (see [`projection_tick_config_from_env`])
+/// so operators can tune behavior without a rebuild.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectionTickConfig {
     pub period_ms: u64,
     pub grace_ms: u64,
+    pub policy: covenant_budget::BudgetProjectionPolicy,
 }
 
 impl Default for ProjectionTickConfig {
@@ -642,6 +669,7 @@ impl Default for ProjectionTickConfig {
         Self {
             period_ms: 250,
             grace_ms: 2_000,
+            policy: covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
         }
     }
 }
@@ -654,12 +682,24 @@ pub fn projection_tick_config_from_env() -> Result<ProjectionTickConfig> {
         std::env::var("COVENANT_BUDGET_PREEMPT_GRACE_MS")
             .ok()
             .as_deref(),
+        std::env::var("COVENANT_BUDGET_PROJECTION_POLICY")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS")
+            .ok()
+            .as_deref(),
+        std::env::var("COVENANT_BUDGET_PROJECTION_MIN_SAMPLES")
+            .ok()
+            .as_deref(),
     )
 }
 
 pub fn projection_tick_config_from_values(
     period_ms: Option<&str>,
     grace_ms: Option<&str>,
+    policy: Option<&str>,
+    min_window_ms: Option<&str>,
+    min_samples: Option<&str>,
 ) -> Result<ProjectionTickConfig> {
     let mut config = ProjectionTickConfig::default();
     if let Some(value) = period_ms {
@@ -671,7 +711,48 @@ pub fn projection_tick_config_from_values(
     if let Some(value) = grace_ms {
         config.grace_ms = parse_env_u64("COVENANT_BUDGET_PREEMPT_GRACE_MS", value)?;
     }
+    config.policy = parse_projection_policy(policy, min_window_ms, min_samples)?;
     Ok(config)
+}
+
+/// Resolve the [`covenant_budget::BudgetProjectionPolicy`] from operator
+/// env input. Absent/`none`/`no_extrapolation` selects the conservative
+/// default; `linear`/`linear_extrapolation` selects rate extrapolation,
+/// reading its observation-window and sample gates from the threshold
+/// env vars (falling back to [`DEFAULT_PROJECTION_MIN_WINDOW_MS`] /
+/// [`DEFAULT_PROJECTION_MIN_SAMPLES`]). An unrecognized policy or a
+/// non-integer threshold is a hard error so a typo never silently
+/// downgrades enforcement to the default.
+fn parse_projection_policy(
+    policy: Option<&str>,
+    min_window_ms: Option<&str>,
+    min_samples: Option<&str>,
+) -> Result<covenant_budget::BudgetProjectionPolicy> {
+    use covenant_budget::BudgetProjectionPolicy;
+    let policy = policy.map(str::trim).filter(|s| !s.is_empty());
+    match policy {
+        None | Some("none") | Some("no_extrapolation") => {
+            Ok(BudgetProjectionPolicy::NoExtrapolation)
+        }
+        Some("linear") | Some("linear_extrapolation") => {
+            let min_observation_window_ms = match min_window_ms {
+                Some(value) => parse_env_u64("COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS", value)?,
+                None => DEFAULT_PROJECTION_MIN_WINDOW_MS,
+            };
+            let min_debit_samples = match min_samples {
+                Some(value) => parse_env_u32("COVENANT_BUDGET_PROJECTION_MIN_SAMPLES", value)?,
+                None => DEFAULT_PROJECTION_MIN_SAMPLES,
+            };
+            Ok(BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms,
+                min_debit_samples,
+            })
+        }
+        Some(other) => anyhow::bail!(
+            "COVENANT_BUDGET_PROJECTION_POLICY must be one of none, no_extrapolation, \
+             linear, linear_extrapolation; got {other:?}"
+        ),
+    }
 }
 
 /// Spawn the budget projection tick driver. Returns a `JoinHandle` so
@@ -691,11 +772,12 @@ pub fn spawn_projection_tick_driver(
     tokio::spawn(async move {
         let period = Duration::from_millis(config.period_ms);
         let grace = Duration::from_millis(config.grace_ms);
+        let policy = config.policy;
         let mut interval = tokio::time::interval(period);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let preempted = server.run_projection_tick_iteration(grace).await;
+            let preempted = server.run_projection_tick_iteration(grace, policy).await;
             if preempted > 0 {
                 info!(
                     preempted,
@@ -1173,6 +1255,25 @@ pub struct Server {
     tools: Arc<ToolRegistry>,
     mailbox: Arc<dyn Mailbox>,
     pub peers: Arc<dyn PeerRegistry>,
+    /// Operator-provided cross-host registry: `host -> endpoint` bound to the
+    /// pubkey each remote daemon must prove. Distinct from [`Self::peers`],
+    /// which is local token auth; this is the static map of remote hosts an
+    /// A2A `name@host` can route to. Loaded fail-closed at startup from
+    /// `<home>/peers/known-hosts.json` via [`known_hosts_path`]: a missing file
+    /// is the default empty registry (local-only — every host resolves
+    /// [`covenant_peer_auth::PeerError::UnknownHost`]), a malformed one refuses
+    /// daemon startup. Held here so slice 4 can have A2A dispatch consult
+    /// [`KnownHosts::resolve_agent`] and run the authenticated remote handshake;
+    /// this slice neither dispatches nor opens any socket.
+    known_hosts: Arc<KnownHosts>,
+    /// Restart-durable anti-replay cache for admitted cross-host A2A envelopes
+    /// (multi-host slice 4b-2). `None` until the daemon's `main` wires the
+    /// JSONL store from `<home>/a2a/cross-host-dedup.jsonl` via
+    /// [`Server::with_cross_host_dedup`]; when absent,
+    /// [`Server::admit_remote_a2a_task`] fails closed rather than admit an
+    /// unrecorded envelope. Keyed on the payload-identity tuple, not the
+    /// signature bytes (ed25519 verify is malleable).
+    cross_host_dedup: Option<Arc<cross_host::JsonlCrossHostDedup>>,
     budget: Arc<dyn BudgetLedger>,
     budget_checkpoints: Option<Arc<JsonlPauseCheckpointStore>>,
     active_budget_pauses: Arc<Mutex<BTreeMap<Uuid, BudgetPauseCheckpoint>>>,
@@ -1215,6 +1316,10 @@ pub struct Server {
     /// completion proof; `Request::ProveCompletion` returns a "not
     /// configured" error and no release signal is ever produced.
     escrow: Option<Arc<escrow::EscrowConfig>>,
+    /// Opt-in secret broker backend. `None` when no operator has wired a
+    /// secret source; in that state every `Request::GetSecret` returns a
+    /// "not configured" error and no secret is ever released.
+    secret_source: Option<Arc<dyn secret::SecretSource>>,
     /// Opt-in Hyre provider profile: the materialised catalog + config.
     /// None when the operator has not enabled Hyre; in that state no
     /// `hyre.*` tool is advertised or callable.
@@ -1277,6 +1382,8 @@ impl Server {
             tools,
             mailbox,
             peers,
+            known_hosts: Arc::new(KnownHosts::default()),
+            cross_host_dedup: None,
             budget,
             budget_checkpoints: None,
             active_budget_pauses: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1286,6 +1393,7 @@ impl Server {
             x402_dispatch: None,
             spend_authz: None,
             escrow: None,
+            secret_source: None,
             hyre: None,
             metaplex: None,
             sns: None,
@@ -1356,6 +1464,34 @@ impl Server {
         self
     }
 
+    /// Wire the operator's known-hosts registry. Daemon `main` calls this once
+    /// at boot with the registry loaded from [`known_hosts_path`]. Without it
+    /// the daemon keeps the default empty registry and operates local-only —
+    /// every cross-host route is [`covenant_peer_auth::PeerError::UnknownHost`].
+    /// Replacing the registry never touches [`Self::peers`]; the two stay
+    /// distinct (local token auth vs remote host endpoints).
+    pub fn with_known_hosts(mut self, known_hosts: KnownHosts) -> Self {
+        self.known_hosts = Arc::new(known_hosts);
+        self
+    }
+
+    /// The loaded cross-host registry. Empty when the operator has not
+    /// configured peering. Slice 4's A2A dispatch reads this to resolve a
+    /// `name@host` route and verify the remote's bound identity.
+    pub fn known_hosts(&self) -> &KnownHosts {
+        &self.known_hosts
+    }
+
+    /// Wire the restart-durable cross-host A2A replay cache. Daemon `main` calls
+    /// this once at boot with the store opened from
+    /// `<home>/a2a/cross-host-dedup.jsonl`. Without it,
+    /// [`Server::admit_remote_a2a_task`] refuses every cross-host envelope
+    /// (fail-closed: no durable claim, no admission).
+    pub fn with_cross_host_dedup(mut self, dedup: Arc<cross_host::JsonlCrossHostDedup>) -> Self {
+        self.cross_host_dedup = Some(dedup);
+        self
+    }
+
     /// Wire the outbound x402 dispatch config. Without this, every
     /// `Request::PayX402` returns a "not configured" error and no
     /// paid call leaves the daemon. The daemon's `main` calls this
@@ -1383,6 +1519,13 @@ impl Server {
     /// mirroring [`Self::with_spend_authz`].
     pub fn with_escrow(mut self, config: escrow::EscrowConfig) -> Self {
         self.escrow = Some(Arc::new(config));
+        self
+    }
+
+    /// Wire a backend for the daemon's secret broker. Until this is set, every
+    /// `Request::GetSecret` is refused as "not configured".
+    pub fn with_secret_source(mut self, source: Arc<dyn secret::SecretSource>) -> Self {
+        self.secret_source = Some(source);
         self
     }
 
@@ -1806,26 +1949,17 @@ impl Server {
         }
     }
 
-    /// Walk every in-flight tracker entry, ask the budget ledger whether
-    /// the owning agent's bucket is exhausted, and dispatch
-    /// [`Server::preempt_intent`] for every flagged entry. Returns the
-    /// number of successful preempts (`PreemptResult::Preempted`).
+    /// Walk every in-flight tracker entry and dispatch
+    /// [`Server::preempt_intent`] for each entry [`Self::projection_decision`]
+    /// flags under `policy`. Returns the number of successful preempts
+    /// (`PreemptResult::Preempted`).
     ///
     /// This is the single-iteration core of the budget projection tick.
     /// The `spawn_projection_tick_driver` task wires a `tokio::time::interval`
-    /// driver that calls this on each tick; the iteration is exposed as
-    /// a separate `pub async fn` so tests can drive it deterministically
-    /// without time-mocking, and so the driver keeps only scheduling
-    /// concerns (cadence, shutdown signal, policy).
-    ///
-    /// `would_exceed(agent, 1)` is the v0.x exhaustion trigger: the
-    /// [`BudgetLedger`] trait does not expose per-agent capacity, so the
-    /// `LinearExtrapolation` policy from
-    /// [`covenant_budget::project_overshoot`] needs a per-intent
-    /// debit-rate signal that the ledger schema does not yet carry.
-    /// Exhaustion-as-trigger delivers the operator-promised hard-guarantee
-    /// shape ("tokens_remaining == 0 → kill the in-flight subprocess")
-    /// without expanding the budget trait surface.
+    /// driver that calls this on each tick with the configured policy; the
+    /// iteration is exposed as a separate `pub async fn` so tests can drive
+    /// it deterministically without time-mocking, and so the driver keeps
+    /// only scheduling concerns (cadence, shutdown signal).
     ///
     /// Error policy: `BudgetError::NoCapacity` for an agent that was
     /// deprovisioned mid-flight skips that entry silently — the agent
@@ -1833,21 +1967,20 @@ impl Server {
     /// fail on its own next debit attempt. Any other `BudgetError`
     /// produces a `warn!` and the entry is skipped; the next tick will
     /// retry.
-    pub async fn run_projection_tick_iteration(&self, grace: std::time::Duration) -> usize {
+    pub async fn run_projection_tick_iteration(
+        &self,
+        grace: std::time::Duration,
+        policy: covenant_budget::BudgetProjectionPolicy,
+    ) -> usize {
         let mut preempted = 0;
         for (intent_id, entry) in self.subprocess_tracker.snapshot() {
             let agent = agent_id_for_card_id(&entry.agent_id);
-            match self.budget.would_exceed(&agent, 1).await {
-                Ok(true) => {
-                    if let PreemptResult::Preempted { .. } = self
-                        .preempt_intent(intent_id, "budget_overshoot".into(), grace)
-                        .await
-                    {
-                        preempted += 1;
-                    }
-                }
-                Ok(false) => {}
-                Err(BudgetError::NoCapacity(_)) => {}
+            let preempt = match self
+                .projection_decision(&agent, entry.started_at_ms, policy)
+                .await
+            {
+                Ok(flag) => flag,
+                Err(BudgetError::NoCapacity(_)) => continue,
                 Err(e) => {
                     warn!(
                         agent = %entry.agent_id,
@@ -1855,10 +1988,75 @@ impl Server {
                         error = %e,
                         "projection-tick: budget lookup failed; skipping entry until next tick"
                     );
+                    continue;
+                }
+            };
+            if preempt {
+                if let PreemptResult::Preempted { .. } = self
+                    .preempt_intent(intent_id, "budget_overshoot".into(), grace)
+                    .await
+                {
+                    preempted += 1;
                 }
             }
         }
         preempted
+    }
+
+    /// Decide whether the in-flight subprocess for one tracker entry must
+    /// be preempted this tick.
+    ///
+    /// The empty-bucket hard guarantee comes first and is
+    /// policy-independent: `would_exceed(agent, 1)` is true exactly when
+    /// `tokens_remaining == 0`, so an exhausted agent is always flagged.
+    /// This preserves the operator-promised "exhausted budget kills the
+    /// in-flight subprocess" shape the daemon shipped before linear
+    /// projection existed.
+    ///
+    /// Under [`BudgetProjectionPolicy::NoExtrapolation`] (the default)
+    /// nothing further runs, so the default tick is byte-identical to the
+    /// pre-projection behavior: it never consults
+    /// [`covenant_budget::project_overshoot`], whose post-completion arm
+    /// (`current_debit > remaining`) would otherwise add preempts the
+    /// exhaustion trigger does not.
+    ///
+    /// Under `LinearExtrapolation` a not-yet-exhausted agent is
+    /// additionally projected from its per-agent debit rate over
+    /// `[started_at_ms, now]` (`debit_rate_since`) against current
+    /// `tokens_remaining`. The window is keyed per-agent, not per-intent:
+    /// an agent running concurrent intents shares one debit window, so the
+    /// projection is a conservative aggregate that can flag every intent
+    /// of an over-spending agent — the same per-agent fan-out the
+    /// exhaustion trigger already has.
+    ///
+    /// [`BudgetProjectionPolicy::NoExtrapolation`]: covenant_budget::BudgetProjectionPolicy
+    async fn projection_decision(
+        &self,
+        agent: &AgentId,
+        started_at_ms: u64,
+        policy: covenant_budget::BudgetProjectionPolicy,
+    ) -> Result<bool, BudgetError> {
+        if self.budget.would_exceed(agent, 1).await? {
+            return Ok(true);
+        }
+        if matches!(
+            policy,
+            covenant_budget::BudgetProjectionPolicy::NoExtrapolation
+        ) {
+            return Ok(false);
+        }
+        let signal = self
+            .budget
+            .debit_rate_since(agent, started_at_ms, epoch_ms())
+            .await?;
+        let remaining = self.budget.tokens_remaining(agent).await?;
+        Ok(covenant_budget::project_overshoot(
+            signal.current_debit,
+            signal.observation_window_ms,
+            signal.observed_debit_samples,
+            remaining,
+            policy,
+        ))
     }
 
     /// Best-effort outbound error frame on the read-side failures the
@@ -2528,6 +2726,7 @@ impl Server {
                     .await
             }
             Request::RecentCapabilities { limit } => self.recent_capabilities(limit, peer).await,
+            Request::CapabilityUsage => self.capability_usage(peer).await,
             Request::GrantCapability {
                 action,
                 scope,
@@ -2557,6 +2756,7 @@ impl Server {
             Request::IgnoreCheck { text } => self.check_ignore(text),
             Request::ListTools => self.list_tools(),
             Request::CallTool { name, arguments } => self.call_tool(name, arguments, peer).await,
+            Request::GetSecret { name } => self.get_secret(name, peer).await,
             Request::RecentAudit {
                 limit,
                 since_ms,
@@ -2565,6 +2765,29 @@ impl Server {
             Request::VerifyAuditIntegrity => self.verify_audit_integrity(peer).await,
             Request::ProveAuditInclusion { event_id } => {
                 self.prove_audit_inclusion(event_id, peer).await
+            }
+            Request::QueryProvenance {
+                since_ms,
+                until_ms,
+                actor,
+                approver,
+                rule,
+                outcome,
+                limit,
+            } => {
+                self.query_provenance(
+                    ProvenanceFilter {
+                        since_ms,
+                        until_ms,
+                        actor,
+                        approver,
+                        rule,
+                        outcome,
+                    },
+                    limit,
+                    peer,
+                )
+                .await
             }
             Request::PurgeAudit { before_ms } => self.purge_audit(before_ms, peer).await,
             Request::PurgeCapabilities { before_ms } => {
@@ -2696,6 +2919,22 @@ impl Server {
                     message: format!("a2a send rejected by invalid capability scope: {reason}"),
                 };
             }
+        }
+        // Cross-host routing (slice 4b-3): once the send is authorized, a
+        // recipient on a configured remote host is delivered over the network,
+        // not queued to the LOCAL mailbox. Known-hosts membership is the sole
+        // definition of "remote" — a host absent from the registry is local and
+        // falls through unchanged. Placed after the capability gate so an
+        // unauthorized caller learns nothing about the registry, and before the
+        // recv-admission gate so a remote recipient is never evaluated against —
+        // and never probes — local recv grants it can never hold. `deliver_cross_host`
+        // owns the identity binding, sealing under this daemon's identity, the
+        // bounded POST, and the outcome mapping. (A malformed recipient display
+        // cannot reach here: AgentId deserialization rejects it via
+        // validate_agent_id_display.)
+        if let Ok(endpoint) = self.known_hosts().resolve_agent(&task.recipient) {
+            let endpoint = endpoint.clone();
+            return self.deliver_cross_host(task, endpoint).await;
         }
         // Recipient admission gate: when sender ≠ recipient (cross-peer
         // send), the recipient peer must have granted `a2a.recv.<sender>`
@@ -4167,6 +4406,80 @@ impl Server {
         }
     }
 
+    /// Operator-only provenance query (mirrors
+    /// [`Self::verify_audit_integrity`]'s operator gate): returns every
+    /// privileged action in the requested window, projected from the
+    /// capability family of audit kinds and narrowed by
+    /// [`ProvenanceFilter`]. The audit hash-chain is verified in the same
+    /// call and the verdict travels in the response, so a provenance
+    /// answer is never silently read from tampered rows. `limit` bounds
+    /// the result to the most recent matching rows (chronological order,
+    /// matching `recent_audit`); `scanned` reports how many in-window
+    /// events were examined so the cost and coverage are visible.
+    ///
+    /// Unlike `recent_audit` this is not scoped to the caller's own feed:
+    /// the operator gate is the access control and the operator wants the
+    /// global privileged-action set. The integrity verdict and the audit
+    /// read are separate calls, so a concurrent append between them can
+    /// leave one extra row in `actions` beyond the verified root — benign
+    /// for v0 single-writer triage; the operator re-runs for a consistent
+    /// snapshot.
+    async fn query_provenance(
+        &self,
+        filter: ProvenanceFilter,
+        limit: usize,
+        peer: &AgentId,
+    ) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "provenance query requires the operator identity".into(),
+            };
+        }
+        let integrity = match self.audit.verify_integrity().await {
+            Ok(report) => report,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("audit: {e}"),
+                }
+            }
+        };
+        let events = match self.audit.recent(usize::MAX).await {
+            Ok(events) => events,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("audit: {e}"),
+                }
+            }
+        };
+        let mut scanned: u64 = 0;
+        let mut actions = Vec::new();
+        for event in &events {
+            if let Some(since) = filter.since_ms {
+                if event.timestamp_ms < since {
+                    continue;
+                }
+            }
+            if let Some(until) = filter.until_ms {
+                if event.timestamp_ms > until {
+                    continue;
+                }
+            }
+            scanned += 1;
+            for action in project_privileged_actions(event) {
+                if filter.matches(&action) {
+                    actions.push(action);
+                }
+            }
+        }
+        let start = actions.len().saturating_sub(limit);
+        let actions = actions.split_off(start);
+        Response::ProvenanceActions {
+            integrity,
+            actions,
+            scanned,
+        }
+    }
+
     async fn purge_capabilities(&self, before_ms: u64, peer: &AgentId) -> Response {
         let required = vec!["capabilities.purge".to_string()];
         let check = self
@@ -4311,7 +4624,62 @@ impl Server {
             return self.acedata_tool_call(name, arguments, peer).await;
         }
 
-        match self.tools.call(&name, arguments).await {
+        // Validate arguments against the tool's published input schema before
+        // invoking it. Back-compatible: only object schemas that declare
+        // required fields or typed properties are enforced, and only clear
+        // required-field or type violations are refused (see
+        // ToolSpec::validate_arguments). A refusal records ToolCallSchemaRejected
+        // instead of ToolCallCompleted and never runs the tool body, so the
+        // refused malformed call is on the chain. Unknown tools resolve to None
+        // and fall through to the call below, which reports them as not found.
+        if let Some(spec) = self.tools.spec(&name) {
+            if let Err(reason) = spec.validate_arguments(&arguments) {
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::ToolCallSchemaRejected {
+                        tool: name.clone(),
+                        arguments_hash_hex: hash_hex(arguments.to_string().as_bytes()),
+                        reason: reason.clone(),
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                return Response::Error {
+                    message: format!("tool {name} rejected by input schema: {reason}"),
+                };
+            }
+        }
+
+        // Record the invocation on both the success and execution-error paths,
+        // so the *executed* action is auditable and not only the capability and
+        // scope denials above. The arguments are hashed (never persisted raw),
+        // the same redaction barrier the Hermes tool-preview path uses.
+        let arguments_hash_hex = hash_hex(arguments.to_string().as_bytes());
+        let started = std::time::Instant::now();
+        let result = self.tools.call(&name, arguments).await;
+        let duration_ms = started.elapsed().as_millis() as u64;
+        let outcome = match &result {
+            Ok(r) if r.is_error => ToolCallOutcome::ErrorResult,
+            Ok(_) => ToolCallOutcome::Ok,
+            Err(_) => ToolCallOutcome::Failed,
+        };
+        self.record_peer_event(
+            peer,
+            AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: peer.clone(),
+                kind: AuditKind::ToolCallCompleted {
+                    tool: name.clone(),
+                    arguments_hash_hex,
+                    duration_ms,
+                    outcome,
+                },
+            },
+        )
+        .await;
+        match result {
             Ok(r) => Response::ToolResult {
                 content: r.content,
                 is_error: r.is_error,
@@ -4619,6 +4987,47 @@ impl Server {
                 &cap.capability.scope,
                 name,
                 arguments,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(false)
+    }
+
+    /// True if the peer holds a live `x402.outbound.pay` capability whose scope
+    /// admits `provider`. Mirrors [`Self::tool_call_scope_allows`]: an unscoped
+    /// grant admits any destination, a `provider`-bound grant admits only its
+    /// class, and grants are additive (any matching capability suffices). A
+    /// malformed scope surfaces as `Err` so the caller fails closed.
+    async fn x402_pay_scope_allows(
+        &self,
+        action: &str,
+        provider: &str,
+        peer: &AgentId,
+    ) -> Result<bool, String> {
+        let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
+            match covenant_permissions::x402_pay_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                provider,
             ) {
                 Ok(true) => return Ok(true),
                 Ok(false) => {}
@@ -5166,17 +5575,41 @@ impl Server {
             .list_for_subject(peer.pubkey)
             .await
             .unwrap_or_default();
-        let valid_actions: Vec<String> = user_caps
+        let valid_caps: Vec<_> = user_caps
             .iter()
             .filter(|c| verify_with_clock_and_trust_root(c, now, trust_root).is_ok())
-            .map(|c| c.capability.action.clone())
             .collect();
         let mut required: Vec<String> = Vec::with_capacity(alternatives_per_required.len());
         let mut missing: Vec<String> = Vec::new();
+        let mut authorized_by: Vec<CapabilityAuthorization> = Vec::new();
+        // (action, signature, max_uses) for each matched capability that carries
+        // a usage budget, consumed after a passed authorization.
+        let mut budgeted: Vec<(String, [u8; 64], u64)> = Vec::new();
         for group in &alternatives_per_required {
-            let matched = group.iter().find(|a| valid_actions.iter().any(|v| v == *a));
+            let matched = group.iter().find_map(|a| {
+                valid_caps
+                    .iter()
+                    .copied()
+                    .find(|c| c.capability.action == *a)
+                    .map(|c| (a.clone(), c))
+            });
             match matched {
-                Some(form) => required.push(form.clone()),
+                Some((form, cap)) => {
+                    if let Some(max_uses) = cap
+                        .capability
+                        .scope
+                        .get("max_uses")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        budgeted.push((form.clone(), cap.signature, max_uses));
+                    }
+                    required.push(form.clone());
+                    authorized_by.push(CapabilityAuthorization {
+                        action: form,
+                        granted_by_display: cap.capability.granted_by.display.clone(),
+                        signature_b58: bs58::encode(cap.signature).into_string(),
+                    });
+                }
                 None => {
                     let canonical = group.first().cloned().unwrap_or_default();
                     required.push(canonical.clone());
@@ -5184,7 +5617,7 @@ impl Server {
                 }
             }
         }
-        let passed = missing.is_empty();
+        let auth_passed = missing.is_empty();
         let event = AuditEvent {
             id: Uuid::new_v4(),
             timestamp_ms: now,
@@ -5193,10 +5626,65 @@ impl Server {
                 agent_id: scope_id,
                 required_actions: required.clone(),
                 missing_actions: missing.clone(),
-                passed,
+                passed: auth_passed,
+                authorized_by,
             },
         };
         self.record_peer_event(peer, event).await;
+
+        // Usage-budget enforcement is a second gate after authorization. A
+        // matched capability still authorizes the action — that is what the
+        // CapabilityCheck row above records — but a spent `max_uses` budget
+        // refuses this invocation. The refusal is a distinct
+        // CapabilityBudgetExhausted event, not a missing_actions entry, so a
+        // spent grant is never mistaken for one that was never granted.
+        let mut passed = auth_passed;
+        if auth_passed && !budgeted.is_empty() {
+            let requests: Vec<covenant_permissions::BudgetConsumeRequest> = budgeted
+                .iter()
+                .map(
+                    |(_, signature, max_uses)| covenant_permissions::BudgetConsumeRequest {
+                        signature: *signature,
+                        max_uses: *max_uses,
+                    },
+                )
+                .collect();
+            match self.capabilities.consume_uses(&requests).await {
+                Ok(covenant_permissions::BudgetConsumeOutcome::Consumed) => {}
+                Ok(covenant_permissions::BudgetConsumeOutcome::Exhausted(spent)) => {
+                    passed = false;
+                    for budget in spent {
+                        let action = budgeted
+                            .iter()
+                            .find(|(_, signature, _)| *signature == budget.signature)
+                            .map(|(action, _, _)| action.clone())
+                            .unwrap_or_default();
+                        missing.push(action.clone());
+                        let event = AuditEvent {
+                            id: Uuid::new_v4(),
+                            timestamp_ms: now,
+                            issuer: peer.clone(),
+                            kind: AuditKind::CapabilityBudgetExhausted {
+                                signature_b58: bs58::encode(budget.signature).into_string(),
+                                action,
+                                max_uses: budget.max_uses,
+                                used: budget.used,
+                            },
+                        };
+                        self.record_peer_event(peer, event).await;
+                    }
+                }
+                Err(error) => {
+                    // Fail closed: a budget-store fault must never authorize an
+                    // unmetered use of a budgeted grant.
+                    warn!(
+                        ?error,
+                        "capability usage-budget store unavailable; denying budgeted action"
+                    );
+                    passed = false;
+                }
+            }
+        }
         CapabilityCheckOutcome {
             passed,
             required,
@@ -6258,6 +6746,46 @@ impl Server {
             };
         }
 
+        // The capability check above admits the holder of any x402.outbound.pay
+        // grant; this scope gate binds the grant to its destination class so a
+        // provider-scoped grant cannot egress to an unlisted destination. It
+        // runs before the dispatch-config check so a denial is auditable even
+        // on a daemon with no funding-key sidecar wired.
+        match self
+            .x402_pay_scope_allows("x402.outbound.pay", &provider, peer)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                let reason =
+                    format!("provider {provider:?} is outside this grant's destination scope");
+                self.record_capability_scope_rejected(
+                    peer,
+                    "x402:pay",
+                    "x402.outbound.pay",
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!("x402 dispatch rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_capability_scope_rejected(
+                    peer,
+                    "x402:pay",
+                    "x402.outbound.pay",
+                    &reason,
+                )
+                .await;
+                return Response::Error {
+                    message: format!(
+                        "x402 dispatch rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        }
+
         let Some(config) = self.x402_dispatch.clone() else {
             return Response::Error {
                 message: "x402 dispatch is not configured on this daemon. \
@@ -6322,7 +6850,7 @@ impl Server {
             issuer: &issuer,
         };
 
-        let client = covenant_x402::Client::new(reqwest::Client::new());
+        let client = covenant_x402::Client::new(covenant_x402::http_client());
         let outcome =
             match x402::pay_and_record(&context, &config, &client, &signer, peer, &call).await {
                 Ok(outcome) => outcome,
@@ -6333,7 +6861,7 @@ impl Server {
                 }
             };
         let status = outcome.response.status().as_u16();
-        let body_text = match outcome.response.text().await {
+        let body_text = match x402::read_response_body(outcome.response).await {
             Ok(t) => t,
             Err(e) => {
                 return Response::Error {
@@ -11940,6 +12468,7 @@ impl Server {
                 required_actions,
                 missing_actions,
                 passed,
+                authorized_by: _,
             } = &event.kind
             {
                 if agent_id.is_empty() {
@@ -14988,15 +15517,15 @@ impl Server {
             }
         }
 
-        let Some(home) = self.home.clone() else {
+        if self.home.is_none() {
             return Response::Error {
                 message: "settlement backfill unavailable: server has no home directory configured"
                     .into(),
             };
-        };
-        let receipts_path = home.join("receipts").join("working.jsonl");
-
-        match covenant_settlement::backfill_receipts(&receipts_path, dry_run).await {
+        }
+        // Route the backfill through the live settlement store so its rewrite
+        // holds the same lock as concurrent record()/mark_batch_confirmed().
+        match self.settlement.backfill(dry_run, &[]).await {
             Ok(outcome) => {
                 let rollback_path = outcome.rollback_path.map(|path| path.display().to_string());
                 // Emitted only here, after backfill_receipts returned Ok —
@@ -15250,6 +15779,229 @@ impl Server {
         }
     }
 
+    /// Operator-only read of capability state: every grant in the ledger — live
+    /// and revoked-but-not-yet-purged — with its action, expiry, revocation
+    /// status, and, for grants that declared a `max_uses` budget, used/remaining
+    /// against that budget. The join to the durable use ledger is keyed on the
+    /// ed25519 signature, so several grants for one action stay distinct. Gated
+    /// on the operator identity like [`Self::query_provenance`]: delegated
+    /// authority state must not leak to a peer that merely holds a grant.
+    /// Read-only — observing usage records no use. `max_uses` is read from the
+    /// signed scope exactly as the enforcement path reads it, so the reported
+    /// budget is the one the daemon would honor.
+    async fn capability_usage(&self, peer: &AgentId) -> Response {
+        if peer.pubkey != self.identity.agent_id().pubkey {
+            return Response::Error {
+                message: "capability usage query requires the operator identity".into(),
+            };
+        }
+        match self.capabilities.usage_snapshot().await {
+            Ok(snapshot) => {
+                let now = epoch_ms();
+                let grants = snapshot
+                    .into_iter()
+                    .map(|usage| {
+                        let signed = &usage.capability;
+                        let budget = signed
+                            .capability
+                            .scope
+                            .get("max_uses")
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|max_uses| covenant_ipc::CapabilityUsageBudget {
+                                max_uses,
+                                used: usage.used,
+                                remaining: max_uses.saturating_sub(usage.used),
+                            });
+                        // Daemon's own verdict, in enforcement order: a revoked
+                        // grant is dropped from the live set before expiry is
+                        // checked, and the usage budget is consumed only after
+                        // the expiry-aware signature check passes. So revoked
+                        // dominates expired, which dominates exhausted. Expiry
+                        // uses `now > exp` to match verify_with_clock, which
+                        // accepts the grant at the equal boundary.
+                        let effective = if usage.revoked {
+                            covenant_ipc::CapabilityEffectiveStatus::Revoked
+                        } else if signed.capability.expires_at.is_some_and(|exp| now > exp) {
+                            covenant_ipc::CapabilityEffectiveStatus::Expired
+                        } else if budget.is_some_and(|b| b.remaining == 0) {
+                            covenant_ipc::CapabilityEffectiveStatus::Exhausted
+                        } else {
+                            covenant_ipc::CapabilityEffectiveStatus::Live
+                        };
+                        covenant_ipc::CapabilityUsageEntry {
+                            signature_b58: bs58::encode(signed.signature).into_string(),
+                            action: signed.capability.action.clone(),
+                            scope: signed.capability.scope.clone(),
+                            subject_display: signed.capability.subject.display.clone(),
+                            subject_pubkey_b58: signed.capability.subject.pubkey_base58(),
+                            expires_at: signed.capability.expires_at,
+                            revoked: usage.revoked,
+                            effective,
+                            budget,
+                        }
+                    })
+                    .collect();
+                Response::CapabilityUsage { grants }
+            }
+            Err(e) => Response::Error {
+                message: format!("permissions: {e}"),
+            },
+        }
+    }
+
+    /// The base58 signature of the live `secret.access` capability whose scope
+    /// admits `name`, or `Ok(None)` if the peer holds no such grant. Like
+    /// [`Self::x402_pay_scope_allows`] an unscoped grant admits any secret, a
+    /// `name`-bound grant admits only its secret, and grants are additive — the
+    /// first matching capability authorizes the read. A malformed scope
+    /// surfaces as `Err` so the caller fails closed. The returned signature is
+    /// the join key the broker records on the release so the audit row names
+    /// the exact grant that authorized it.
+    async fn secret_access_grant_signature(
+        &self,
+        action: &str,
+        name: &str,
+        peer: &AgentId,
+    ) -> Result<Option<String>, String> {
+        let now = epoch_ms();
+        let trust_root = self.identity.agent_id().pubkey;
+        let user_caps = self
+            .capabilities
+            .list_for_subject(peer.pubkey)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut invalid_scope = None;
+        for cap in user_caps.iter().filter(|cap| {
+            cap.capability.action == action
+                && verify_with_clock_and_trust_root(cap, now, trust_root).is_ok()
+        }) {
+            match covenant_permissions::secret_access_scope_allows(
+                &cap.capability.action,
+                &cap.capability.scope,
+                name,
+            ) {
+                Ok(true) => return Ok(Some(bs58::encode(cap.signature).into_string())),
+                Ok(false) => {}
+                Err(e) => {
+                    invalid_scope.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        if let Some(reason) = invalid_scope {
+            return Err(reason);
+        }
+        Ok(None)
+    }
+
+    /// Release a named secret to a peer that holds the `secret.access`
+    /// capability and a scope admitting `name`. The capability check binds the
+    /// action; the scope gate binds the destination secret. Every release and
+    /// refusal is recorded for accountability — the secret *name*, never the
+    /// value. With no secret source wired the broker refuses every request.
+    async fn get_secret(&self, name: String, peer: &AgentId) -> Response {
+        let check = self
+            .check_capabilities("secret:access".into(), vec!["secret.access".into()], peer)
+            .await;
+        if !check.passed {
+            return Response::Error {
+                message: "secret access requires capability \"secret.access\". \
+                          Grant it with `covenant capabilities grant secret.access`."
+                    .into(),
+            };
+        }
+
+        // The capability check above admits the holder of any secret.access
+        // grant; this scope gate binds the grant to its named secret so a
+        // name-scoped grant cannot read an unlisted secret, and returns the
+        // signature of the grant that admitted it so the release names its
+        // authority on the chain. It runs before the not-configured guard so a
+        // denial is auditable even on a daemon with no secret backend wired.
+        let grant_signature = match self
+            .secret_access_grant_signature("secret.access", &name, peer)
+            .await
+        {
+            Ok(Some(signature_b58)) => signature_b58,
+            Ok(None) => {
+                let reason = format!("secret {name:?} is outside this grant's scope");
+                self.record_secret_access_denied(peer, &name, &reason).await;
+                return Response::Error {
+                    message: format!("secret access rejected by capability scope: {reason}"),
+                };
+            }
+            Err(reason) => {
+                self.record_secret_access_denied(peer, &name, &reason).await;
+                return Response::Error {
+                    message: format!(
+                        "secret access rejected by invalid capability scope: {reason}"
+                    ),
+                };
+            }
+        };
+
+        let Some(source) = self.secret_source.clone() else {
+            return Response::Error {
+                message: "secret broker is not configured on this daemon. \
+                          Wire a secret source via Server::with_secret_source and restart."
+                    .into(),
+            };
+        };
+
+        match source.get(&name).await {
+            Ok(Some(value)) => {
+                self.record_secret_access_granted(peer, &name, &grant_signature)
+                    .await;
+                Response::Secret { name, value }
+            }
+            Ok(None) => {
+                let reason = "no secret is registered under that name".to_string();
+                self.record_secret_access_denied(peer, &name, &reason).await;
+                Response::Error {
+                    message: format!("secret access denied: {reason}"),
+                }
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                self.record_secret_access_denied(peer, &name, &reason).await;
+                Response::Error {
+                    message: format!("secret broker backend error: {reason}"),
+                }
+            }
+        }
+    }
+
+    async fn record_secret_access_granted(
+        &self,
+        peer: &AgentId,
+        secret_name: &str,
+        signature_b58: &str,
+    ) {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::SecretAccessGranted {
+                agent_id: peer.display.clone(),
+                secret_name: secret_name.to_string(),
+                signature_b58: signature_b58.to_string(),
+            },
+        };
+        self.record_peer_event(peer, event).await;
+    }
+
+    async fn record_secret_access_denied(&self, peer: &AgentId, secret_name: &str, reason: &str) {
+        let event = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: peer.clone(),
+            kind: AuditKind::SecretAccessDenied {
+                agent_id: peer.display.clone(),
+                secret_name: secret_name.to_string(),
+                reason: reason.to_string(),
+            },
+        };
+        self.record_peer_event(peer, event).await;
+    }
+
     async fn revoke_capability(&self, signature_b58: String, peer: &AgentId) -> Response {
         let bytes = match bs58::decode(&signature_b58).into_vec() {
             Ok(b) if b.len() == 64 => {
@@ -15280,7 +16032,11 @@ impl Server {
                 };
             }
         };
-        if !owned.iter().any(|c| c.signature == bytes) {
+        let Some(action) = owned
+            .iter()
+            .find(|c| c.signature == bytes)
+            .map(|c| c.capability.action.clone())
+        else {
             match self.capabilities.is_revoked(bytes).await {
                 Ok(true) => {
                     return Response::CapabilityRevoked {
@@ -15316,12 +16072,30 @@ impl Server {
                 message: "revoke rejected: capability subject does not match authenticated peer"
                     .into(),
             };
-        }
+        };
         match self.capabilities.revoke(bytes).await {
-            Ok(removed) => Response::CapabilityRevoked {
-                signature_b58,
-                removed,
-            },
+            Ok(removed) => {
+                // Issued by the subject, mirroring CapabilityGranted: the
+                // legitimate owner is withdrawing its own grant, so the row
+                // belongs on its `/audit/recent` feed. (The cross-peer
+                // rejection above is daemon-issued for the operator feed.)
+                let event = AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: peer.clone(),
+                    kind: AuditKind::CapabilityRevoked {
+                        subject_display: peer.display.clone(),
+                        action,
+                        signature_b58: signature_b58.clone(),
+                        removed,
+                    },
+                };
+                self.record_peer_event(peer, event).await;
+                Response::CapabilityRevoked {
+                    signature_b58,
+                    removed,
+                }
+            }
             Err(e) => Response::Error {
                 message: format!("permissions: {e}"),
             },
@@ -15417,7 +16191,7 @@ impl std::error::Error for BudgetSeedError {
     }
 }
 
-fn epoch_ms() -> u64 {
+pub(crate) fn epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -15696,7 +16470,7 @@ mod tests {
     use covenant_memory::{InMemoryStore, MEMORY_BACKFILL_SAVEPOINT_NAME};
     use covenant_router::AgentCard;
     use covenant_runtime::MockRunner;
-    use covenant_settlement::InMemorySettlement;
+    use covenant_settlement::{InMemorySettlement, JsonlReceiptStore, Settlement};
 
     #[test]
     fn extract_acedata_provenance_reads_provenance_block() {
@@ -15960,6 +16734,516 @@ required = {caps:?}
         }
     }
 
+    /// Success-path audit exposure of an IPC [`Request`]. This enum and the
+    /// exhaustive [`audit_exposure`] match are the single source of truth for
+    /// which privileged daemon actions land on the audit log; the operator
+    /// contract is documented in `docs/audit-integrity.md` (Privileged Action
+    /// Coverage).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum AuditExposure {
+        /// Read-only query/inspection — not a privileged action. A few are
+        /// capability-gated and emit a `CapabilityCheck` row, but that is
+        /// authorization logging, not an action record.
+        ReadQuery,
+        /// Privileged action that emits an action-specific audit row on its
+        /// success path (`IntentDispatched`, `CapabilityGranted`, `PeerRevoked`,
+        /// `MemoryCompactionApplied`, ...).
+        ActionAudited,
+        /// Privileged action whose success path is recorded only by the
+        /// `CapabilityCheck` authorization row (`passed = true`); there is no
+        /// action-specific row. The authorized attempt still lands on the chain.
+        AuthorizationAudited,
+        /// Privileged action that records nothing on its success path. A tracked
+        /// accountability gap — see the assertion below and the doc.
+        Unaudited,
+    }
+
+    /// Classify every IPC [`Request`] by its success-path audit exposure.
+    ///
+    /// Exhaustive by design: a new `Request` variant fails to compile here until
+    /// it is classified, so privileged-action audit coverage cannot silently
+    /// shrink as handlers are added.
+    fn audit_exposure(req: &Request) -> AuditExposure {
+        use AuditExposure::*;
+        match req {
+            Request::Ping
+            | Request::ProtocolInfo
+            | Request::RecentMemory { .. }
+            | Request::RecentReceipts { .. }
+            | Request::ChainStatus
+            | Request::ReceiptBatches { .. }
+            | Request::SearchMemory { .. }
+            | Request::RecentCapabilities { .. }
+            | Request::CapabilityUsage
+            | Request::Verify { .. }
+            | Request::IgnoreCheck { .. }
+            | Request::ListTools
+            | Request::RecentAudit { .. }
+            | Request::VerifyAuditIntegrity
+            | Request::QueryProvenance { .. }
+            | Request::TryRecvA2ATask
+            | Request::TryRecvA2AResult
+            | Request::RecentA2ATasks { .. }
+            | Request::RecentA2AResults { .. }
+            | Request::A2AQueue { .. }
+            | Request::RecentDebits { .. }
+            | Request::ListPeers { .. }
+            | Request::GetReputation { .. }
+            | Request::ProveAuditInclusion { .. }
+            | Request::SapStatus => ReadQuery,
+            Request::SubmitIntent { .. }
+            | Request::ResumeIntent { .. }
+            | Request::PayX402 { .. }
+            | Request::GrantCapability { .. }
+            | Request::RevokeCapability { .. }
+            | Request::RevokePeer { .. }
+            | Request::RotateOperatorToken
+            | Request::RepairMemory { .. }
+            | Request::CompactMemory { .. }
+            | Request::BackfillSettlementReceipts { .. }
+            | Request::BackfillMemoryRecords { .. }
+            | Request::RepairA2ATask { .. }
+            | Request::RetryA2AStale { .. }
+            | Request::GetSecret { .. }
+            | Request::AuthorizeSpend { .. }
+            | Request::SettleSpend { .. }
+            | Request::ProveCompletion { .. }
+            | Request::RecordEscrowRelease { .. }
+            | Request::EnrollPeer { .. }
+            | Request::CallTool { .. } => ActionAudited,
+            Request::PurgeMemory { .. }
+            | Request::PurgeAudit { .. }
+            | Request::PurgeCapabilities { .. }
+            | Request::PurgePeers { .. }
+            | Request::FlushReceipts { .. }
+            | Request::SignAttestation { .. }
+            | Request::SendA2ATask { .. }
+            | Request::PostA2AResult { .. }
+            | Request::CompactA2A => AuthorizationAudited,
+            Request::Authenticate { .. }
+            | Request::SapPublishAgent { .. }
+            | Request::SapPublishAuditRoot { .. }
+            | Request::SapPublishAttestation { .. } => Unaudited,
+        }
+    }
+
+    #[test]
+    fn privileged_action_audit_inventory_pins_exposure_and_tracks_unaudited_gaps() {
+        use AuditExposure::*;
+
+        let repair_request = covenant_memory::MemoryRepairRequest {
+            mode: MemoryRepairMode::DryRun,
+            command: MemoryRepairCommand::DetachParent {
+                id: Uuid::nil(),
+                expected_parent: None,
+            },
+            reason: String::new(),
+        };
+        let compaction_request = MemoryCompactionRequest {
+            mode: MemoryRepairMode::DryRun,
+            policy: covenant_types::MemoryCompactionPolicy::default(),
+            reason: String::new(),
+        };
+        let a2a_task = covenant_a2a::A2ATask {
+            id: Uuid::nil(),
+            sender: AgentId::new("sender@local", [0u8; 32]),
+            recipient: AgentId::new("recipient@local", [0u8; 32]),
+            intent_text: String::new(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let a2a_result = covenant_a2a::A2ATaskResult::ok(Uuid::nil(), vec![]);
+        let a2a_repair = covenant_a2a::A2ARepairRequest {
+            task_id: Uuid::nil(),
+            command: covenant_a2a::A2ARepairCommand::Requeue {
+                lease_id: None,
+                duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+            },
+            reason: String::new(),
+        };
+
+        // Every IPC Request and its success-path audit exposure. This list and
+        // the `audit_exposure` match must change together: a one-sided
+        // reclassification trips the per-row assertion below, and a brand-new
+        // variant fails to compile in `audit_exposure` until both are updated.
+        let inventory: Vec<(Request, AuditExposure)> = vec![
+            (Request::Ping, ReadQuery),
+            (Request::ProtocolInfo, ReadQuery),
+            (
+                Request::RecentMemory {
+                    tier: None,
+                    limit: 0,
+                    prefer_stream: None,
+                },
+                ReadQuery,
+            ),
+            (
+                Request::RecentReceipts {
+                    limit: 0,
+                    since_ms: None,
+                },
+                ReadQuery,
+            ),
+            (Request::ChainStatus, ReadQuery),
+            (Request::ReceiptBatches { limit: 0 }, ReadQuery),
+            (
+                Request::SearchMemory {
+                    query: String::new(),
+                    tier: None,
+                    limit: 0,
+                    min_relevance: None,
+                },
+                ReadQuery,
+            ),
+            (Request::RecentCapabilities { limit: 0 }, ReadQuery),
+            (Request::CapabilityUsage, ReadQuery),
+            (Request::Verify { window: 0 }, ReadQuery),
+            (
+                Request::IgnoreCheck {
+                    text: String::new(),
+                },
+                ReadQuery,
+            ),
+            (Request::ListTools, ReadQuery),
+            (
+                Request::RecentAudit {
+                    limit: 0,
+                    since_ms: None,
+                    prefer_stream: None,
+                },
+                ReadQuery,
+            ),
+            (Request::VerifyAuditIntegrity, ReadQuery),
+            (Request::TryRecvA2ATask, ReadQuery),
+            (Request::TryRecvA2AResult, ReadQuery),
+            (Request::RecentA2ATasks { limit: 0 }, ReadQuery),
+            (Request::RecentA2AResults { limit: 0 }, ReadQuery),
+            (
+                Request::A2AQueue {
+                    limit: 0,
+                    min_lease_age_ms: None,
+                    deadline_within_ms: None,
+                    state_filter: None,
+                },
+                ReadQuery,
+            ),
+            (Request::RecentDebits { limit: 0 }, ReadQuery),
+            (
+                Request::ListPeers {
+                    limit: 0,
+                    pubkey_prefix: None,
+                    status_filter: None,
+                },
+                ReadQuery,
+            ),
+            (Request::SapStatus, ReadQuery),
+            (
+                Request::SubmitIntent {
+                    text: String::new(),
+                    prefer_stream: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::ResumeIntent {
+                    intent_id: Uuid::nil(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::PayX402 {
+                    provider: String::new(),
+                    endpoint: String::new(),
+                    method: String::new(),
+                    body: None,
+                    network: String::new(),
+                    asset: String::new(),
+                    per_call_cap: String::new(),
+                    credits: 0,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::GetSecret {
+                    name: String::new(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::GrantCapability {
+                    action: String::new(),
+                    scope: None,
+                    expires_at: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::RevokeCapability {
+                    signature_b58: String::new(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::RevokePeer {
+                    token_prefix: String::new(),
+                    force: false,
+                    match_limit: None,
+                },
+                ActionAudited,
+            ),
+            (Request::RotateOperatorToken, ActionAudited),
+            (
+                Request::RepairMemory {
+                    request: repair_request,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::CompactMemory {
+                    request: compaction_request,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::BackfillSettlementReceipts {
+                    dry_run: true,
+                    scope_pubkey: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::BackfillMemoryRecords {
+                    dry_run: true,
+                    scope_pubkey: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::RepairA2ATask {
+                    request: a2a_repair,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::RetryA2AStale {
+                    policy: covenant_a2a::A2AAutoRetryPolicy::default(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::CallTool {
+                    name: String::new(),
+                    arguments: serde_json::Value::Null,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::PurgeMemory {
+                    tier: None,
+                    before_ms: 0,
+                },
+                AuthorizationAudited,
+            ),
+            (Request::PurgeAudit { before_ms: 0 }, AuthorizationAudited),
+            (
+                Request::PurgeCapabilities { before_ms: 0 },
+                AuthorizationAudited,
+            ),
+            (Request::PurgePeers { before_ms: 0 }, AuthorizationAudited),
+            (Request::FlushReceipts { limit: 0 }, AuthorizationAudited),
+            (
+                Request::SignAttestation {
+                    message_b58: String::new(),
+                    ts: 0,
+                },
+                AuthorizationAudited,
+            ),
+            (
+                Request::SendA2ATask { task: a2a_task },
+                AuthorizationAudited,
+            ),
+            (
+                Request::PostA2AResult { result: a2a_result },
+                AuthorizationAudited,
+            ),
+            (Request::CompactA2A, AuthorizationAudited),
+            (
+                Request::Authenticate {
+                    token_b58: String::new(),
+                },
+                Unaudited,
+            ),
+            (
+                Request::SapPublishAgent {
+                    manifest_json: String::new(),
+                },
+                Unaudited,
+            ),
+            (
+                Request::SapPublishAuditRoot {
+                    root_hash_hex: String::new(),
+                    release_target: String::new(),
+                    release_subject: String::new(),
+                    release_scope: String::new(),
+                },
+                Unaudited,
+            ),
+            (
+                Request::SapPublishAttestation {
+                    agent_pda: String::new(),
+                    root_hash_hex: String::new(),
+                    attestation_type: None,
+                    expires_at_unix: None,
+                },
+                Unaudited,
+            ),
+            (
+                Request::AuthorizeSpend {
+                    provider: String::new(),
+                    network: String::new(),
+                    asset: String::new(),
+                    amount: String::new(),
+                    per_call_cap: String::new(),
+                    credits: 0,
+                    destination: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::SettleSpend {
+                    decision_id: Uuid::nil(),
+                    provider: String::new(),
+                    network: String::new(),
+                    asset: String::new(),
+                    amount: String::new(),
+                    credits: 0,
+                    tx_sig: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::ProveCompletion {
+                    escrow_id: String::new(),
+                    job_id: String::new(),
+                    hirer_address: String::new(),
+                    worker_address: String::new(),
+                    amount: String::new(),
+                    asset: String::new(),
+                    network: String::new(),
+                    provider: String::new(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::RecordEscrowRelease {
+                    escrow_id: String::new(),
+                    decision_id: Uuid::nil(),
+                    hirer_address: String::new(),
+                    worker_address: String::new(),
+                    amount: String::new(),
+                    asset: String::new(),
+                    network: String::new(),
+                    provider: String::new(),
+                    tx_sig: None,
+                },
+                ActionAudited,
+            ),
+            (
+                Request::EnrollPeer {
+                    display: String::new(),
+                    actions: Vec::new(),
+                },
+                ActionAudited,
+            ),
+            (
+                Request::GetReputation {
+                    worker_pubkey: String::new(),
+                },
+                ReadQuery,
+            ),
+            (
+                Request::ProveAuditInclusion {
+                    event_id: Uuid::nil(),
+                },
+                ReadQuery,
+            ),
+            (
+                Request::QueryProvenance {
+                    since_ms: None,
+                    until_ms: None,
+                    actor: None,
+                    approver: None,
+                    rule: None,
+                    outcome: None,
+                    limit: 0,
+                },
+                ReadQuery,
+            ),
+        ];
+
+        let kind_of = |req: &Request| -> String {
+            let value = serde_json::to_value(req).expect("Request serializes to JSON");
+            value
+                .get("kind")
+                .and_then(|k| k.as_str())
+                .expect("Request serializes to a tagged object with a string kind")
+                .to_string()
+        };
+
+        for (req, expected) in &inventory {
+            assert_eq!(
+                audit_exposure(req),
+                *expected,
+                "audit_exposure drifted from the inventory for {}; update BOTH the match in \
+             audit_exposure and this inventory, and reflect the change in \
+             docs/audit-integrity.md",
+                kind_of(req),
+            );
+        }
+
+        let kinds: std::collections::BTreeSet<String> =
+            inventory.iter().map(|(req, _)| kind_of(req)).collect();
+        assert_eq!(
+            kinds.len(),
+            inventory.len(),
+            "duplicate Request kind in the audit inventory"
+        );
+        assert_eq!(
+            inventory.len(),
+            58,
+            "every IPC Request variant must appear in the audit inventory exactly once; a new \
+         variant must be added here and classified in audit_exposure",
+        );
+
+        // Tracked accountability gaps: privileged actions that record nothing on
+        // their success path. Kept explicit so a new unaudited privileged action
+        // cannot land silently — adding one means extending this set AND
+        // docs/audit-integrity.md; closing one means shrinking it.
+        let unaudited: std::collections::BTreeSet<String> = inventory
+            .iter()
+            .filter(|(_, exposure)| *exposure == Unaudited)
+            .map(|(req, _)| kind_of(req))
+            .collect();
+        let expected_unaudited: std::collections::BTreeSet<String> = [
+            "authenticate",
+            "sap_publish_agent",
+            "sap_publish_audit_root",
+            "sap_publish_attestation",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(
+            unaudited, expected_unaudited,
+            "the set of privileged-but-unaudited actions changed. If you added an audit emission \
+         and closed a gap, drop it here and in docs/audit-integrity.md. If a new privileged \
+         action records nothing on success, that is an accountability hole: add an audit \
+         emission, or — if the omission is intentional — document the reason here and in the doc.",
+        );
+    }
+
     #[tokio::test]
     async fn spawn_runtime_event_drainer_publishes_each_trace_to_broadcast_subscribers() {
         // The /intents/:id/events SSE handler subscribes to the broadcast
@@ -16064,7 +17348,35 @@ required = {caps:?}
         )
     }
 
+    /// Like [`server_with`], but injects an arbitrary [`Runner`] so a test can
+    /// drive `dispatch_intent`'s runner-failure bail arm (lib.rs:4766) that the
+    /// infallible `MockRunner` can never hit.
+    fn server_with_runner(cards: Vec<AgentCard>, runner: Arc<dyn Runner>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(cards)),
+            runner,
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
     fn server_with_audit(audit: Arc<covenant_audit::InMemoryAuditLog>) -> Server {
+        server_with_audit_dyn(audit)
+    }
+
+    fn server_with_audit_dyn(audit: Arc<dyn covenant_audit::AuditLog>) -> Server {
         Server::new(
             Arc::new(Router::from_cards(vec![])),
             Arc::new(MockRunner::new("")),
@@ -16085,6 +17397,309 @@ required = {caps:?}
         )
     }
 
+    // Mirrors server_with_audit_dyn but injects the CapabilityStore, so a test
+    // can drive grant_capability with a failing store and reach the bail arm
+    // the infallible InMemoryCapabilityStore default can never hit.
+    fn server_with_capabilities_dyn(
+        capabilities: Arc<dyn covenant_permissions::CapabilityStore>,
+    ) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            capabilities,
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
+    // Mirrors server_with_capabilities_dyn but injects the MemoryStore, so a test
+    // can drive recent_memory / search_memory with a failing store and reach the
+    // bail arm the infallible InMemoryStore default can never hit.
+    fn server_with_memory_dyn(memory: Arc<dyn MemoryStore>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            memory,
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
+    // Mirrors server_with_memory_dyn but injects the Embedder, so a test can
+    // drive search_memory with a failing embedder and reach the `embed: {e}`
+    // bail arm (lib.rs:6460) the infallible MockEmbedder default can never hit.
+    fn server_with_embedder(embedder: Arc<dyn Embedder>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(covenant_memory::InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            embedder,
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
+    // Mirrors server_with_memory_dyn but injects the Settlement store, so a test
+    // can drive recent_receipts / receipt_batches with a failing store and reach
+    // the bail arm the infallible InMemorySettlement default can never hit.
+    fn server_with_settlement_dyn(settlement: Arc<dyn Settlement>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(covenant_memory::InMemoryStore::new()),
+            settlement,
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
+    #[tokio::test]
+    async fn query_provenance_projects_filters_and_gates_on_operator() {
+        use covenant_audit::{AuditEvent, AuditKind, CapabilityAuthorization, InMemoryAuditLog};
+
+        let audit = Arc::new(InMemoryAuditLog::new());
+        let issuer = AgentId::new("user@local", [0u8; 32]);
+        let mk = |timestamp_ms: u64, kind: AuditKind| AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms,
+            issuer: issuer.clone(),
+            kind,
+        };
+        audit
+            .record(mk(
+                1_000,
+                AuditKind::CapabilityGranted {
+                    subject_display: "research@agent".into(),
+                    action: "memory.write".into(),
+                    granted_by_display: "operator@local".into(),
+                    signature_b58: "GrantSig".into(),
+                },
+            ))
+            .await
+            .unwrap();
+        audit
+            .record(mk(
+                2_000,
+                AuditKind::CapabilityCheck {
+                    agent_id: "research@agent".into(),
+                    required_actions: vec!["memory.write".into()],
+                    missing_actions: vec![],
+                    passed: true,
+                    authorized_by: vec![CapabilityAuthorization {
+                        action: "memory.write".into(),
+                        granted_by_display: "operator@local".into(),
+                        signature_b58: "GrantSig".into(),
+                    }],
+                },
+            ))
+            .await
+            .unwrap();
+        audit
+            .record(mk(
+                2_500,
+                AuditKind::AuthenticationFailed {
+                    transport: "ipc".into(),
+                    reason: "bad token".into(),
+                },
+            ))
+            .await
+            .unwrap();
+        audit
+            .record(mk(
+                3_000,
+                AuditKind::CapabilityRevoked {
+                    subject_display: "research@agent".into(),
+                    action: "memory.write".into(),
+                    signature_b58: "GrantSig".into(),
+                    removed: true,
+                },
+            ))
+            .await
+            .unwrap();
+
+        let server = server_with_audit(audit.clone());
+
+        let query = |since_ms,
+                     until_ms,
+                     actor: Option<&str>,
+                     approver: Option<&str>,
+                     rule: Option<&str>,
+                     outcome: Option<&str>,
+                     limit| {
+            Request::QueryProvenance {
+                since_ms,
+                until_ms,
+                actor: actor.map(str::to_string),
+                approver: approver.map(str::to_string),
+                rule: rule.map(str::to_string),
+                outcome: outcome.map(str::to_string),
+                limit,
+            }
+        };
+
+        // Unfiltered: three privileged rows (the auth failure has no
+        // authorizing rule and projects to nothing), all four in-window
+        // events scanned, and the verified chain verdict travels along.
+        let resp = server
+            .op_respond(query(None, None, None, None, None, None, 10))
+            .await;
+        let (integrity, actions, scanned) = match resp {
+            Response::ProvenanceActions {
+                integrity,
+                actions,
+                scanned,
+            } => (integrity, actions, scanned),
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        };
+        assert!(
+            integrity.valid,
+            "a provenance answer carries the verified audit-chain verdict, not raw rows",
+        );
+        assert_eq!(scanned, 4, "every in-window event was examined");
+        assert_eq!(
+            actions
+                .iter()
+                .map(|a| a.outcome.as_str())
+                .collect::<Vec<_>>(),
+            vec!["granted", "authorized", "revoked"],
+            "rows project in chronological order and the auth failure is dropped",
+        );
+
+        // Outcome is an exact filter.
+        let resp = server
+            .op_respond(query(None, None, None, None, None, Some("granted"), 10))
+            .await;
+        let granted = match resp {
+            Response::ProvenanceActions { actions, .. } => actions,
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        };
+        assert_eq!(granted.len(), 1);
+        assert_eq!(granted[0].outcome, "granted");
+
+        // Rule prefix spans every row that names the grant signature.
+        let resp = server
+            .op_respond(query(None, None, None, None, Some("GrantSig"), None, 10))
+            .await;
+        match resp {
+            Response::ProvenanceActions { actions, .. } => assert_eq!(actions.len(), 3),
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        }
+
+        // Approver filter excludes the self-revoke, which records none.
+        let resp = server
+            .op_respond(query(
+                None,
+                None,
+                None,
+                Some("operator@local"),
+                None,
+                None,
+                10,
+            ))
+            .await;
+        match resp {
+            Response::ProvenanceActions { actions, .. } => {
+                assert_eq!(
+                    actions.len(),
+                    2,
+                    "grant + authorized check name the approver; the self-revoke does not",
+                );
+                assert!(actions
+                    .iter()
+                    .all(|a| a.approver.as_deref() == Some("operator@local")));
+            }
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        }
+
+        // The window bounds the scan and the result.
+        let resp = server
+            .op_respond(query(Some(2_500), None, None, None, None, None, 10))
+            .await;
+        match resp {
+            Response::ProvenanceActions {
+                actions, scanned, ..
+            } => {
+                assert_eq!(
+                    scanned, 2,
+                    "only the auth failure and the revoke are in window"
+                );
+                assert_eq!(actions.len(), 1);
+                assert_eq!(actions[0].outcome, "revoked");
+            }
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        }
+
+        // limit keeps the most recent matching row.
+        let resp = server
+            .op_respond(query(None, None, None, None, None, None, 1))
+            .await;
+        match resp {
+            Response::ProvenanceActions { actions, .. } => {
+                assert_eq!(actions.len(), 1);
+                assert_eq!(
+                    actions[0].outcome, "revoked",
+                    "the newest matching row survives the bound",
+                );
+            }
+            other => panic!("expected ProvenanceActions, got {other:?}"),
+        }
+
+        // Non-operator peers are rejected before any projection runs.
+        let intruder = AgentId::new("intruder@local", [9u8; 32]);
+        let resp = server
+            .respond(query(None, None, None, None, None, None, 10), &intruder)
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("operator identity"),
+                "a non-operator provenance query must be rejected, got: {message}",
+            ),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
     fn server_with_budget(budget: Arc<dyn covenant_budget::BudgetLedger>) -> Server {
         Server::new(
             Arc::new(Router::from_cards(vec![])),
@@ -16103,6 +17718,55 @@ required = {caps:?}
             Arc::new(covenant_a2a::InMemoryMailbox::new()),
             Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
             budget,
+        )
+    }
+
+    // Mirrors server_with_budget but injects the PeerRegistry, so a test can
+    // drive list_peers / purge_peers with a failing registry and reach the bail
+    // arm the infallible InMemoryPeerRegistry default can never hit.
+    fn server_with_peers_dyn(peers: Arc<dyn covenant_peer_auth::PeerRegistry>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            peers,
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
+    // Mirrors server_with_peers_dyn but injects the Mailbox, so a test can
+    // drive recent_a2a_tasks / recent_a2a_results / a2a_queue / compact_a2a
+    // with a failing mailbox and reach the bail arms the infallible
+    // InMemoryMailbox default can never hit.
+    fn server_with_mailbox_dyn(mailbox: Arc<dyn covenant_a2a::Mailbox>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![
+                Arc::new(covenant_mcp::native::EchoTool),
+                Arc::new(covenant_mcp::native::ClockTool),
+            ])),
+            mailbox,
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
         )
     }
 
@@ -16579,6 +18243,103 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn verify_reports_memory_receipt_mismatch_drift() {
+        // The "memory . receipts" check reconciles the per-owner total of
+        // memory records against the per-owner total of memory receipts: an
+        // owner whose record and receipt counts disagree emits a
+        // memory_receipt_mismatch drift keyed by the owner pubkey. The
+        // per-record arms (memory_without_receipt, memory_receipt_duplicate,
+        // receipt_without_memory_record) catch gaps and duplicates at the
+        // record level but never the owner-level total, so this is the sole
+        // detector of an accounting imbalance (unbilled memory or phantom
+        // billing). Two records owned by one agent with a single matching
+        // receipt leaves that owner one receipt short, so the totals disagree
+        // and the arm fires.
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        let owner_b58 = me.pubkey_base58();
+        let r1 = Uuid::new_v4();
+        let r2 = Uuid::new_v4();
+        for (id, body) in [(r1, "first owner memory"), (r2, "second owner memory")] {
+            s.memory
+                .put(MemoryRecord {
+                    id,
+                    tier: MemoryTier::Working,
+                    owner: me.clone(),
+                    text: body.into(),
+                    embedding: vec![],
+                    metadata: serde_json::json!({}),
+                    created_at: epoch_ms(),
+                    parent: None,
+                })
+                .await
+                .unwrap();
+            s.audit
+                .record(AuditEvent {
+                    id: Uuid::new_v4(),
+                    timestamp_ms: epoch_ms(),
+                    issuer: me.clone(),
+                    kind: AuditKind::IntentDispatched {
+                        intent_id: id,
+                        intent_text: body.into(),
+                        matched_agent: None,
+                        result_hash_hex: hash_hex(body.as_bytes()),
+                        status: "ok".into(),
+                    },
+                })
+                .await
+                .unwrap();
+        }
+        // Only r1 is settled; r2 has no receipt, so the owner holds two
+        // records but one memory receipt.
+        s.settlement
+            .record(SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: me.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: Some(r1),
+                credits_consumed: 1,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::Verify { window: 100 }).await;
+        match resp {
+            Response::VerifyReport { checks, drift, .. } => {
+                assert!(
+                    checks
+                        .iter()
+                        .any(|check| !check.passed && check.name == "memory ↔ receipts"),
+                    "memory-receipts check should fail on the owner mismatch: {checks:?}"
+                );
+                let item = drift
+                    .iter()
+                    .find(|item| {
+                        item.kind == "memory_receipt_mismatch"
+                            && item.id.as_deref() == Some(&owner_b58)
+                    })
+                    .unwrap_or_else(|| panic!("expected owner mismatch drift: {drift:?}"));
+                assert!(
+                    item.message
+                        .contains("2 memory record(s) vs 1 memory receipt(s)"),
+                    "drift message should report the divergent totals: {:?}",
+                    item.message
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn memory_repair_rejects_without_capability() {
         let s = server_with(vec![], "");
         let id = Uuid::new_v4();
@@ -16616,6 +18377,71 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a2a_repair_requeue_and_force_error_are_mutually_isolated_and_audited() {
+        // `a2a.repair.requeue` and `a2a.repair.force_error` are distinct,
+        // deny-by-default grants: holding one must never authorize the other.
+        // force_error is destructive (it errors a leased task), so a
+        // requeue-only grant reaching it would be a least-privilege break. The
+        // capability gate is the first thing repair_a2a_task does, before any
+        // queue lookup, so the denial is observable without an in-flight task.
+        async fn deny(granted: &str, command: covenant_a2a::A2ARepairCommand, required: &str) {
+            let s = server_with(vec![], "");
+            s.op_respond(Request::GrantCapability {
+                action: granted.into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+
+            let resp = s
+                .op_respond(Request::RepairA2ATask {
+                    request: covenant_a2a::A2ARepairRequest {
+                        task_id: Uuid::new_v4(),
+                        command,
+                        reason: "cross-verb isolation check".into(),
+                    },
+                })
+                .await;
+            match resp {
+                Response::Error { message } => assert!(
+                    message.contains(required) && message.contains("requires capability"),
+                    "a grant of {granted} must not authorize {required}: {message}"
+                ),
+                other => panic!("expected capability denial for {required}, got {other:?}"),
+            }
+
+            let events = s.audit.recent(10).await.unwrap();
+            assert!(
+                events.iter().any(|event| matches!(
+                    &event.kind,
+                    AuditKind::CapabilityCheck { missing_actions, passed: false, .. }
+                        if missing_actions.iter().any(|a| a == required)
+                )),
+                "denial of {required} must be audited as a failed CapabilityCheck"
+            );
+        }
+
+        deny(
+            "a2a.repair.requeue",
+            covenant_a2a::A2ARepairCommand::ForceError {
+                lease_id: None,
+                message: "force".into(),
+            },
+            "a2a.repair.force_error",
+        )
+        .await;
+        deny(
+            "a2a.repair.force_error",
+            covenant_a2a::A2ARepairCommand::Requeue {
+                lease_id: None,
+                duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+            },
+            "a2a.repair.requeue",
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -16960,6 +18786,16 @@ required = {caps:?}
         }
     }
 
+    impl Server {
+        /// Test-only: replace the settlement backend so backfill tests drive
+        /// the file-backed `JsonlReceiptStore` (and its write lock) rather than
+        /// the in-memory default `server_with` installs.
+        fn with_settlement(mut self, settlement: Arc<dyn Settlement>) -> Self {
+            self.settlement = settlement;
+            self
+        }
+    }
+
     /// Seed `<home>/receipts/working.jsonl` with a single legacy-wire
     /// receipt row that omits the default-bearing chain fields. A backfill
     /// re-serializes those fields back as `null`, so the row counts as one
@@ -17020,9 +18856,12 @@ required = {caps:?}
     #[tokio::test]
     async fn settlement_backfill_apply_repairs_rows_with_capability() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
         let original = seed_legacy_receipt_row(dir.path());
         let store_path = dir.path().join("receipts").join("working.jsonl");
+        let store = Arc::new(JsonlReceiptStore::open(store_path.clone()).await.unwrap());
+        let s = server_with(vec![], "")
+            .with_home(dir.path().to_path_buf())
+            .with_settlement(store);
         s.op_respond(Request::GrantCapability {
             action: "settlement.backfill.apply".into(),
             scope: None,
@@ -17063,9 +18902,12 @@ required = {caps:?}
     #[tokio::test]
     async fn settlement_backfill_dry_run_reports_without_writes() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
         let original = seed_legacy_receipt_row(dir.path());
         let store_path = dir.path().join("receipts").join("working.jsonl");
+        let store = Arc::new(JsonlReceiptStore::open(store_path.clone()).await.unwrap());
+        let s = server_with(vec![], "")
+            .with_home(dir.path().to_path_buf())
+            .with_settlement(store);
         s.op_respond(Request::GrantCapability {
             action: "settlement.backfill.dry_run".into(),
             scope: None,
@@ -17103,8 +18945,15 @@ required = {caps:?}
     #[tokio::test]
     async fn settlement_backfill_apply_emits_audit_row_on_operator_feed() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
         seed_legacy_receipt_row(dir.path());
+        let store = Arc::new(
+            JsonlReceiptStore::open(dir.path().join("receipts").join("working.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let s = server_with(vec![], "")
+            .with_home(dir.path().to_path_buf())
+            .with_settlement(store);
         s.op_respond(Request::GrantCapability {
             action: "settlement.backfill.apply".into(),
             scope: None,
@@ -17164,8 +19013,15 @@ required = {caps:?}
     #[tokio::test]
     async fn settlement_backfill_dry_run_emits_audit_row_without_rollback_path() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let s = server_with(vec![], "").with_home(dir.path().to_path_buf());
         seed_legacy_receipt_row(dir.path());
+        let store = Arc::new(
+            JsonlReceiptStore::open(dir.path().join("receipts").join("working.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let s = server_with(vec![], "")
+            .with_home(dir.path().to_path_buf())
+            .with_settlement(store);
         s.op_respond(Request::GrantCapability {
             action: "settlement.backfill.dry_run".into(),
             scope: None,
@@ -26701,6 +28557,28 @@ required = {caps:?}
             limit: usize,
         ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
             Ok(self.debits.iter().take(limit).cloned().collect())
+        }
+        async fn debit_rate_since(
+            &self,
+            agent: &AgentId,
+            since_ms: u64,
+            now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            let mut current_debit: u64 = 0;
+            let mut observed_debit_samples: u32 = 0;
+            for debit in self
+                .debits
+                .iter()
+                .filter(|d| d.agent.pubkey == agent.pubkey && d.at_ms >= since_ms)
+            {
+                current_debit = current_debit.saturating_add(debit.credits);
+                observed_debit_samples = observed_debit_samples.saturating_add(1);
+            }
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit,
+                observation_window_ms: now_ms.saturating_sub(since_ms),
+                observed_debit_samples,
+            })
         }
         async fn compact_older_than(
             &self,
@@ -36396,6 +38274,7 @@ required = {caps:?}
                     required_actions: vec![],
                     missing_actions: vec![],
                     passed: true,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36468,6 +38347,7 @@ required = {caps:?}
                     required_actions: vec!["memory.read".into(), "".into()],
                     missing_actions: vec![],
                     passed: true,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36544,6 +38424,7 @@ required = {caps:?}
                     required_actions: vec!["memory.read".into()],
                     missing_actions: vec!["memory.read".into()],
                     passed: true,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36559,6 +38440,7 @@ required = {caps:?}
                     required_actions: vec!["memory.read".into()],
                     missing_actions: vec![],
                     passed: false,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36653,6 +38535,7 @@ required = {caps:?}
                     required_actions: vec!["mem.read".into(), "mem.write".into()],
                     missing_actions: vec!["foreign.action".into()],
                     passed: false,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -36727,6 +38610,7 @@ required = {caps:?}
                     required_actions: vec!["tool.call.test".into()],
                     missing_actions: vec![],
                     passed: true,
+                    authorized_by: vec![],
                 },
             })
             .await
@@ -46776,6 +48660,45 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn submit_intent_rejects_when_memory_write_capability_absent_and_audits() {
+        // `memory.write` is deny-by-default: dispatch persists the task
+        // summary to memory, so an agent that can otherwise handle the task
+        // (its tool capability is granted) is still blocked when `memory.write`
+        // is absent. The gate runs before the agent-capability check, so the
+        // denial is specifically the missing memory.write, audited as a failed
+        // CapabilityCheck.
+        let s = server_with(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            "summary",
+        );
+        grant_action(&s, "tool.web_search").await;
+
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers".into(),
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("requires capability") && message.contains("memory.write"),
+                "absent memory.write must block dispatch: {message}"
+            ),
+            other => panic!("expected memory.write capability denial, got {other:?}"),
+        }
+
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                AuditKind::CapabilityCheck { missing_actions, passed: false, .. }
+                    if missing_actions.iter().any(|a| a == "memory.write")
+            )),
+            "the absent-capability denial must be audited as a failed CapabilityCheck"
+        );
+    }
+
+    #[tokio::test]
     async fn grant_capability_signs_and_persists() {
         let s = server_with(vec![], "");
         let resp = s
@@ -46998,6 +48921,139 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn call_tool_records_completion_audit_with_hashed_arguments() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let arguments = serde_json::json!({ "text": "hi" });
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: arguments.clone(),
+            })
+            .await;
+        assert!(matches!(
+            resp,
+            Response::ToolResult {
+                is_error: false,
+                ..
+            }
+        ));
+
+        let events = s.audit.recent(50).await.unwrap();
+        let (tool, hash, outcome) = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ToolCallCompleted {
+                    tool,
+                    arguments_hash_hex,
+                    outcome,
+                    ..
+                } => Some((tool.clone(), arguments_hash_hex.clone(), *outcome)),
+                _ => None,
+            })
+            .expect("a ToolCallCompleted row is recorded for a successful call");
+        assert_eq!(tool, "echo");
+        assert_eq!(outcome, ToolCallOutcome::Ok);
+        // Redaction barrier: the row carries the digest of the arguments, not
+        // the raw arguments. The digest is lowercase hex (0-9a-f), so neither
+        // 'h' nor 'i' from the cleartext "hi" can appear in it.
+        assert_eq!(hash, hash_hex(arguments.to_string().as_bytes()));
+        assert!(!hash.contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn call_tool_records_failed_outcome_when_tool_raises() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.does-not-exist".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "does-not-exist".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        assert!(matches!(resp, Response::Error { .. }));
+
+        let events = s.audit.recent(50).await.unwrap();
+        let outcome = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ToolCallCompleted { tool, outcome, .. } if tool == "does-not-exist" => {
+                    Some(*outcome)
+                }
+                _ => None,
+            })
+            .expect("a ToolCallCompleted row is recorded when the tool raises");
+        assert_eq!(outcome, ToolCallOutcome::Failed);
+    }
+
+    #[tokio::test]
+    async fn call_tool_schema_rejection_records_audit_and_skips_execution() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        // echo's published schema requires a string `text`; a number violates it.
+        let arguments = serde_json::json!({ "text": 42 });
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: arguments.clone(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("rejected by input schema"),
+                "expected a schema-rejection error, got: {message}"
+            ),
+            other => panic!("expected a schema-rejection error, got {other:?}"),
+        }
+
+        let events = s.audit.recent(50).await.unwrap();
+        let (hash, reason) = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ToolCallSchemaRejected {
+                    tool,
+                    arguments_hash_hex,
+                    reason,
+                } if tool == "echo" => Some((arguments_hash_hex.clone(), reason.clone())),
+                _ => None,
+            })
+            .expect("a ToolCallSchemaRejected row is recorded for the refused call");
+        // Same redaction barrier as the completion row: the digest of the
+        // arguments, never the raw value; the reason names the field and types.
+        assert_eq!(hash, hash_hex(arguments.to_string().as_bytes()));
+        assert!(reason.contains("field `text`"), "got: {reason}");
+        assert!(
+            !reason.contains("42"),
+            "reason must not echo the value: {reason}"
+        );
+
+        // The tool body never ran: a refused call must not also leave a
+        // completion row, or the chain would imply the malformed call executed.
+        assert!(
+            !events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::ToolCallCompleted { tool, .. } if tool == "echo"
+            )),
+            "a schema-rejected call must not also record a completion row",
+        );
     }
 
     /// Full Hyre path: capability gate → executor → 402-then-pay loop
@@ -47294,6 +49350,143 @@ required = {caps:?}
         }
     }
 
+    #[tokio::test]
+    async fn call_tool_max_uses_budget_denies_after_limit_and_audits_exhaustion() {
+        // A grant with `max_uses` authorizes that many invocations, then
+        // refuses. The refusal is a distinct CapabilityBudgetExhausted audit
+        // row — not a missing-capability denial — so a spent grant stays
+        // visible in the record instead of looking like one never granted.
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: Some(serde_json::json!({ "version": 1, "tool": "echo", "max_uses": 1 })),
+            expires_at: None,
+        })
+        .await;
+
+        match s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+        {
+            Response::ToolResult { is_error, .. } => {
+                assert!(!is_error, "the first call is within budget and must run")
+            }
+            other => panic!("expected a tool result within budget, got {other:?}"),
+        }
+
+        match s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+        {
+            Response::Error { .. } => {}
+            other => panic!("a spent budget must refuse the call, got {other:?}"),
+        }
+
+        let events = s.audit.recent(50).await.unwrap();
+        let exhausted = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::CapabilityBudgetExhausted {
+                    action,
+                    max_uses,
+                    used,
+                    signature_b58,
+                } => Some((action.clone(), *max_uses, *used, signature_b58.clone())),
+                _ => None,
+            })
+            .expect("a CapabilityBudgetExhausted event must record the spent grant");
+        assert_eq!(exhausted.0, "tool.call.echo");
+        assert_eq!(exhausted.1, 1, "max_uses");
+        assert_eq!(exhausted.2, 1, "used must equal max_uses at refusal");
+        assert!(
+            !exhausted.3.is_empty(),
+            "the spent grant's signature must be recorded as the join key"
+        );
+
+        // The second check still matched the grant (authorization layer), so
+        // its CapabilityCheck row is passed with no missing action — the spent
+        // grant is not mislabeled as never-granted.
+        let latest_check = events.iter().rev().find_map(|e| match &e.kind {
+            AuditKind::CapabilityCheck {
+                agent_id,
+                passed,
+                missing_actions,
+                ..
+            } if agent_id == "tool:echo" => Some((*passed, missing_actions.clone())),
+            _ => None,
+        });
+        let (passed, missing) = latest_check.expect("capability check row present");
+        assert!(
+            passed,
+            "authorization matches even when the budget is spent"
+        );
+        assert!(
+            missing.is_empty(),
+            "a spent grant must not appear in missing_actions"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_tool_capability_is_per_tool_and_does_not_leak_across_tools() {
+        // `tool.call.<name>` is per-tool: a grant for one tool must not
+        // authorize a different tool, even one that exists in the registry
+        // and is otherwise callable. The capability gate runs before the
+        // registry lookup, so a cross-tool call is denied as a capability
+        // failure naming the ungranted tool, not as "tool not found".
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.echo".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        // The grant is effective and scoped to echo (keeps the isolation
+        // assertion below non-vacuous).
+        match s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+        {
+            Response::ToolResult { is_error, .. } => assert!(!is_error),
+            other => panic!("echo grant must authorize echo, got {other:?}"),
+        }
+
+        // `clock` is registered and would dispatch, but the echo grant does
+        // not reach it.
+        match s
+            .op_respond(Request::CallTool {
+                name: "clock".into(),
+                arguments: serde_json::Value::Null,
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("requires capability") && message.contains("tool.call.clock"),
+                "an echo-only grant must not authorize clock: {message}"
+            ),
+            other => panic!("expected capability denial for clock, got {other:?}"),
+        }
+
+        let events = s.audit.recent(10).await.unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                AuditKind::CapabilityCheck { missing_actions, passed: false, .. }
+                    if missing_actions.iter().any(|a| a == "tool.call.clock")
+            )),
+            "the cross-tool denial must be audited as a failed CapabilityCheck"
+        );
+    }
+
     /// Builds a task whose `sender` matches `s.identity.agent_id()` so it
     /// passes the send-time sender-spoof check. Tests that need a
     /// mismatched sender construct the task inline.
@@ -47387,6 +49580,1446 @@ required = {caps:?}
         assert!(
             matches!(drained, Response::A2ATaskOpt { task: None }),
             "rejected task must not enqueue: {drained:?}"
+        );
+    }
+
+    fn known_hosts_with_remote() -> KnownHosts {
+        KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://remote:7777".into(),
+                pubkey: [9u8; 32],
+            },
+        )
+    }
+
+    fn a2a_task_to(s: &Server, recipient_display: &str) -> covenant_a2a::A2ATask {
+        covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: s.identity.agent_id(),
+            recipient: AgentId::new(recipient_display, [4u8; 32]),
+            intent_text: "cross-host".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        }
+    }
+
+    // --- Cross-host inbound admission (multi-host slice 4b-2) -------------------
+
+    /// A daemon that knows `alice@host1` as a cross-host peer bound to `sender`'s
+    /// key and has a fresh restart-durable dedup log under `dir`.
+    async fn cross_host_server(dir: &std::path::Path, sender: &LocalIdentity) -> Server {
+        cross_host_server_with_identity(
+            dir,
+            sender,
+            Arc::new(LocalIdentity::generate("user@local")),
+        )
+        .await
+    }
+
+    /// Same, but with an explicit daemon identity so two instances can share one
+    /// identity (and dedup path) to model a restart.
+    async fn cross_host_server_with_identity(
+        dir: &std::path::Path,
+        sender: &LocalIdentity,
+        identity: Arc<LocalIdentity>,
+    ) -> Server {
+        let known_hosts = KnownHosts::new().with_host(
+            "host1",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://host1:7777".into(),
+                pubkey: sender.pubkey_bytes(),
+            },
+        );
+        let dedup = Arc::new(
+            cross_host::JsonlCrossHostDedup::open(dir.join("cross-host-dedup.jsonl"))
+                .await
+                .expect("open cross-host dedup"),
+        );
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            identity,
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_known_hosts(known_hosts)
+        .with_cross_host_dedup(dedup)
+    }
+
+    /// A mailbox whose enqueue (`send_task`) fails while every read stays
+    /// benign, so the post-admission enqueue-failure arm can be driven: the
+    /// task clears every gate and the durable admitted row lands, then the
+    /// mailbox write fails.
+    struct EnqueueFailingMailbox;
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for EnqueueFailingMailbox {
+        async fn send_task(
+            &self,
+            _task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox enqueue (send_task) write failure",
+            )))
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_task_for(
+            &self,
+            _recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_result_for(
+            &self,
+            _peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn recent_tasks(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(Vec::new())
+        }
+        async fn task_queue(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            Ok(Vec::new())
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn recent_results(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(Vec::new())
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            Ok(0)
+        }
+    }
+
+    /// The cross-host admission server with a caller-supplied mailbox, so a
+    /// failing enqueue can be injected at the pipeline's final step. Mirrors
+    /// [`cross_host_server`] otherwise (host1 -> `sender`, fresh dedup log).
+    async fn cross_host_server_with_mailbox(
+        dir: &std::path::Path,
+        sender: &LocalIdentity,
+        mailbox: Arc<dyn covenant_a2a::Mailbox>,
+    ) -> Server {
+        let known_hosts = KnownHosts::new().with_host(
+            "host1",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://host1:7777".into(),
+                pubkey: sender.pubkey_bytes(),
+            },
+        );
+        let dedup = Arc::new(
+            cross_host::JsonlCrossHostDedup::open(dir.join("cross-host-dedup.jsonl"))
+                .await
+                .expect("open cross-host dedup"),
+        );
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![])),
+            mailbox,
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_known_hosts(known_hosts)
+        .with_cross_host_dedup(dedup)
+    }
+
+    async fn grant_recv(s: &Server, sender: &LocalIdentity) {
+        // Cross-host admission requires the pubkey-b58 recv form (4b-2a review
+        // NOTE 3), not the display form.
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.recv.{}", sender.agent_id().pubkey_base58()),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+    }
+
+    /// Seal a cross-host envelope from `sender` addressed to `recipient`.
+    fn sealed_envelope(
+        sender: &LocalIdentity,
+        recipient: AgentId,
+        id: u128,
+        issued_at_ms: u64,
+    ) -> covenant_a2a::SignedA2ATask {
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::from_u128(id),
+            sender: sender.agent_id(),
+            recipient,
+            intent_text: "ship the receipt batch".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        covenant_a2a::SignedA2ATask::seal(&task, issued_at_ms, sender)
+    }
+
+    /// (outcome, reason, sender_pubkey_b58) for every cross-host admission row.
+    async fn cross_host_rows(s: &Server) -> Vec<(String, String, String)> {
+        s.audit
+            .recent(usize::MAX)
+            .await
+            .expect("audit recent")
+            .into_iter()
+            .filter_map(|e| match e.kind {
+                AuditKind::CrossHostA2AAdmission {
+                    outcome,
+                    reason,
+                    sender_pubkey_b58,
+                    ..
+                } => Some((outcome, reason, sender_pubkey_b58)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn admit_enqueues_a_verified_authorized_fresh_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0001, now);
+        let id = envelope.open().unwrap().id;
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id }
+        );
+        let drained = s.op_respond(Request::TryRecvA2ATask).await;
+        assert!(
+            matches!(drained, Response::A2ATaskOpt { task: Some(ref t) } if t.id == id),
+            "the admitted task must reach the local mailbox: {drained:?}"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter()
+                .any(|(outcome, _, sender_b58)| outcome == "admitted"
+                    && *sender_b58 == alice.agent_id().pubkey_base58()),
+            "an admitted row attributing the remote sender must be on the audit feed: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_an_envelope_whose_signature_does_not_verify() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let mallory = LocalIdentity::generate("mallory@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        // The payload claims alice as sender; mallory holds the pen.
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::from_u128(0x4b2a_0002),
+            sender: alice.agent_id(),
+            recipient: s.identity.agent_id(),
+            intent_text: "drain the treasury".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let envelope = covenant_a2a::SignedA2ATask::seal(&task, now, &mallory);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a forged envelope must never enqueue"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "signature_invalid"
+                    && sender_b58.is_empty()),
+            "the open-stage reason is recorded internally with no proven sender: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_malformed_signature_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        // A faithfully sealed envelope whose signature bytes are then truncated
+        // to a non-64-byte length. open() parses the payload first (so the
+        // failure is provably the signature length check, not the payload arm)
+        // and rejects it as MalformedSignature before any authorization runs —
+        // a distinct admission reason from signature_invalid, which owns a
+        // well-formed 64-byte signature that does not verify.
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000f, now);
+        let mut value = serde_json::to_value(&envelope).unwrap();
+        value["signature"] = serde_json::json!([1u8, 2, 3]);
+        let envelope: covenant_a2a::SignedA2ATask = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "an envelope with a malformed signature must never enqueue"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "malformed_signature"
+                    && sender_b58.is_empty()),
+            "a structurally-malformed signature is its own admission reason, distinct \
+             from signature_invalid, recorded with no proven sender: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_malformed_payload_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        // task_json that does not deserialize to an A2ATask. open() fails at the
+        // payload parse, which runs before the signature length check, so this is
+        // the MalformedPayload arm — a distinct admission reason from both
+        // signature_invalid and malformed_signature.
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0010, now);
+        let mut value = serde_json::to_value(&envelope).unwrap();
+        value["task_json"] = serde_json::to_value(b"not a valid task".as_slice()).unwrap();
+        let envelope: covenant_a2a::SignedA2ATask = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "an envelope whose payload is not an A2ATask must never enqueue"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "malformed_payload"
+                    && sender_b58.is_empty()),
+            "an undeserializable payload is its own admission reason, distinct \
+             from signature_invalid, recorded with no proven sender: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_validly_signed_envelope_from_an_unregistered_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        // carol is a real keyholder, validly signs her own envelope, but her host
+        // is not in the registry — authenticity is not admission.
+        let carol = LocalIdentity::generate("carol@elsewhere");
+        grant_recv(&s, &carol).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&carol, s.identity.agent_id(), 0x4b2a_0003, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(matches!(
+            s.op_respond(Request::TryRecvA2ATask).await,
+            Response::A2ATaskOpt { task: None }
+        ));
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "unknown_principal"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_known_host_envelope_signed_by_the_wrong_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1"); // host1 -> alice's key
+        let s = cross_host_server(dir.path(), &alice).await;
+        // eve shares the host but holds a different key. open() succeeds (eve
+        // signs as eve), but the registry binds host1 to alice's key.
+        let eve = LocalIdentity::generate("eve@host1");
+        grant_recv(&s, &eve).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&eve, s.identity.agent_id(), 0x4b2a_0004, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected,
+            "a valid signature is not enough: the host's registry-bound key must be the signer"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "unknown_principal"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_an_envelope_addressed_to_a_different_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        // A verified envelope whose recipient is not this daemon still opens.
+        let envelope = sealed_envelope(
+            &alice,
+            AgentId::new("bob@host2", [5u8; 32]),
+            0x4b2a_0005,
+            now,
+        );
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(matches!(
+            s.op_respond(Request::TryRecvA2ATask).await,
+            Response::A2ATaskOpt { task: None }
+        ));
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "recipient_mismatch"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_stale_envelope_outside_the_freshness_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let issued = now - cross_host::CROSS_HOST_MAX_AGE_MS - 1;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0006, issued);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(matches!(
+            s.op_respond(Request::TryRecvA2ATask).await,
+            Response::A2ATaskOpt { task: None }
+        ));
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "stale"));
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_a_future_dated_envelope_beyond_the_skew_allowance() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let issued = now + cross_host::CROSS_HOST_MAX_SKEW_MS + 1;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0007, issued);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "future_skew"));
+    }
+
+    #[tokio::test]
+    async fn admit_accepts_an_envelope_whose_age_equals_the_freshness_window() {
+        // The staleness gate (cross_host.rs:286) rejects only when
+        // now - issued_at_ms > CROSS_HOST_MAX_AGE_MS — an EXCLUSIVE bound, so an
+        // envelope whose age is exactly the window is still fresh and must be
+        // admitted. admit_rejects_a_stale_envelope_outside_the_freshness_window
+        // probes age = MAX_AGE + 1, where `>` and `>=` agree (both reject), so a
+        // `>` -> `>=` slip would reject this on-the-edge envelope and shrink the
+        // admissible replay window by one tick undetected. Pin the inclusive edge.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let issued = now - cross_host::CROSS_HOST_MAX_AGE_MS;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0012, issued);
+        let id = envelope.open().unwrap().id;
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id },
+            "an envelope whose age equals MAX_AGE exactly is still inside the window and must be admitted"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: Some(ref t) } if t.id == id
+            ),
+            "the boundary envelope reaches the mailbox"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, _, _)| outcome == "admitted"),
+            "the boundary envelope is recorded as admitted, not stale"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_accepts_an_envelope_whose_future_lead_equals_the_skew_allowance() {
+        // The forged-future gate (cross_host.rs:291) rejects only when
+        // issued_at_ms - now > CROSS_HOST_MAX_SKEW_MS — an EXCLUSIVE bound, so an
+        // envelope leading "now" by exactly the allowance is within tolerated
+        // clock skew and must be admitted.
+        // admit_rejects_a_future_dated_envelope_beyond_the_skew_allowance probes
+        // lead = MAX_SKEW + 1, where `>` and `>=` agree, so a `>` -> `>=` slip
+        // would reject a legitimately skewed sender sitting on the allowance. Pin
+        // the inclusive edge.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let issued = now + cross_host::CROSS_HOST_MAX_SKEW_MS;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0013, issued);
+        let id = envelope.open().unwrap().id;
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id },
+            "an envelope leading now by exactly MAX_SKEW is within tolerated skew and must be admitted"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, _, _)| outcome == "admitted"),
+            "the boundary envelope is recorded as admitted, not future_skew"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_rejects_when_the_recipient_has_not_granted_recv() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        // No grant_recv: the recipient never admitted a2a.recv.<alice pubkey>.
+        let s = cross_host_server(dir.path(), &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0008, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected
+        );
+        assert!(matches!(
+            s.op_respond(Request::TryRecvA2ATask).await,
+            Response::A2ATaskOpt { task: None }
+        ));
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "rejected" && reason == "recv_not_granted"));
+    }
+
+    #[tokio::test]
+    async fn admit_absorbs_a_replayed_envelope_within_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_0009, now);
+        let id = envelope.open().unwrap().id;
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope.clone(), now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id }
+        );
+        // The captured envelope, re-sent within the window, is absorbed.
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now + 1).await,
+            cross_host::RemoteAdmission::Duplicate { task_id: id }
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: Some(ref t) } if t.id == id
+            ),
+            "the first copy is enqueued"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "the replay must not enqueue a second copy"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(rows
+            .iter()
+            .any(|(outcome, reason, _)| outcome == "duplicate" && reason == "duplicate"));
+    }
+
+    #[tokio::test]
+    async fn admit_absorbs_a_replay_after_a_daemon_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        // A stable daemon identity shared across the two instances so the same
+        // envelope is recipient-valid before and after the "restart".
+        let identity = Arc::new(LocalIdentity::generate("user@local"));
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, identity.agent_id(), 0x4b2a_000a, now);
+        let id = envelope.open().unwrap().id;
+        {
+            let s = cross_host_server_with_identity(dir.path(), &alice, identity.clone()).await;
+            grant_recv(&s, &alice).await;
+            assert_eq!(
+                s.admit_remote_a2a_task(envelope.clone(), now).await,
+                cross_host::RemoteAdmission::Admitted { task_id: id }
+            );
+        }
+        // A fresh daemon over the SAME dedup log still recognizes the replay.
+        let restarted = cross_host_server_with_identity(dir.path(), &alice, identity.clone()).await;
+        grant_recv(&restarted, &alice).await;
+        assert_eq!(
+            restarted.admit_remote_a2a_task(envelope, now + 1).await,
+            cross_host::RemoteAdmission::Duplicate { task_id: id }
+        );
+        assert!(
+            matches!(
+                restarted.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "the replay must not enqueue on the restarted daemon"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_fails_closed_when_the_dedup_claim_cannot_be_durably_recorded() {
+        // The anti-replay claim is the pipeline's replay guarantee: it must be
+        // durably recorded BEFORE the task is enqueued, so a crash can only lose
+        // a task, never re-admit a replay. If the claim itself cannot be written
+        // (a full or unwritable disk), admission must refuse rather than enqueue
+        // a task whose later replay could slip past an empty cache. Sabotage the
+        // dedup log by turning its path into a directory after the server opened
+        // it — open() creates only the parent, not the file — so the next append
+        // hits EISDIR and claim_fresh returns Err. That filesystem fault is the
+        // only way to drive the write-failure arm of the concrete dedup store.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+        std::fs::create_dir(dir.path().join("cross-host-dedup.jsonl"))
+            .expect("place a directory at the not-yet-created dedup log so its append fails");
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000b, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected,
+            "an un-recordable dedup claim must fail closed, not admit an un-deduplicated task"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a task whose replay claim could not be persisted must never reach the mailbox"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "dedup_write_failed"
+                    && *sender_b58 == alice.agent_id().pubkey_base58()),
+            "the write failure must be attributed to the proven sender on the audit feed: {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admit_reports_rejected_when_the_mailbox_enqueue_fails_after_a_durable_admitted_row() {
+        // The admitted audit row is persisted (required) BEFORE the task is
+        // enqueued, so "a task on the mailbox" always implies "a durable admitted
+        // row". If the enqueue then fails, admission must not over-claim Admitted
+        // for a task that never landed: it emits a best-effort enqueue_failed
+        // correction on the feed and returns Rejected so the sender learns the
+        // task did not reach the mailbox.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server_with_mailbox(dir.path(), &alice, Arc::new(EnqueueFailingMailbox))
+            .await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000c, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected,
+            "a failed enqueue must not be reported as Admitted for a task that never landed"
+        );
+        let rows = cross_host_rows(&s).await;
+        let alice_b58 = alice.agent_id().pubkey_base58();
+        assert!(
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "admitted"
+                    && reason.is_empty()
+                    && *sender_b58 == alice_b58),
+            "the durable admitted row precedes the enqueue and stays on the feed: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                    && reason == "enqueue_failed"
+                    && *sender_b58 == alice_b58),
+            "the enqueue failure must be corrected on the audit feed: {rows:?}"
+        );
+    }
+
+    /// A cross-host admission server with NO anti-replay dedup store wired:
+    /// `cross_host_dedup` is left at its `None` default (never passed to
+    /// [`Server::with_cross_host_dedup`]). Mirrors [`cross_host_server`]
+    /// otherwise (host1 -> `sender`, fresh daemon identity) so an envelope
+    /// clears every security gate and reaches the dedup step, where the
+    /// unconfigured-store arm fails closed.
+    async fn cross_host_server_without_dedup(sender: &LocalIdentity) -> Server {
+        let known_hosts = KnownHosts::new().with_host(
+            "host1",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://host1:7777".into(),
+                pubkey: sender.pubkey_bytes(),
+            },
+        );
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_known_hosts(known_hosts)
+    }
+
+    #[tokio::test]
+    async fn admit_refuses_when_dedup_store_is_unconfigured() {
+        // The anti-replay claim is the pipeline's only replay guarantee. A
+        // cross-host-enabled daemon whose dedup store was never wired
+        // (`cross_host_dedup` at its None default) has no way to absorb a
+        // replay, so admission must fail closed rather than enqueue a
+        // cross-host task with no replay protection at all -- the public
+        // contract documented on the field and on with_cross_host_dedup.
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server_without_dedup(&alice).await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000d, now);
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now).await,
+            cross_host::RemoteAdmission::Rejected,
+            "with no dedup store wired, admission must fail closed, not admit an unprotected task"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a task admitted with no anti-replay store must never reach the mailbox"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter().any(|(outcome, reason, sender_b58)| outcome == "rejected"
+                && reason == "dedup_unconfigured"
+                && *sender_b58 == alice.agent_id().pubkey_base58()),
+            "the missing-dedup refusal must attribute the proven sender on the audit feed: {rows:?}"
+        );
+    }
+
+    /// An audit log that records everything except the cross-host DUPLICATE row,
+    /// modelling an audit outage that strikes exactly when the admission core
+    /// must persist a detected replay before absorbing it as Duplicate. The
+    /// admitted row still lands, so the first delivery succeeds and the second
+    /// admit reaches the duplicate-audit step.
+    struct FailDuplicateCrossHostAudit {
+        inner: covenant_audit::InMemoryAuditLog,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_audit::AuditLog for FailDuplicateCrossHostAudit {
+        async fn record(
+            &self,
+            event: covenant_audit::AuditEvent,
+        ) -> Result<(), covenant_audit::AuditError> {
+            if let AuditKind::CrossHostA2AAdmission { outcome, .. } = &event.kind {
+                if outcome == "duplicate" {
+                    return Err(covenant_audit::AuditError::Io(std::io::Error::other(
+                        "audit outage on cross-host duplicate row (test fixture)",
+                    )));
+                }
+            }
+            self.inner.record(event).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
+            self.inner.recent(limit).await
+        }
+        async fn purge_older_than(
+            &self,
+            before_ms: u64,
+        ) -> Result<u64, covenant_audit::AuditError> {
+            self.inner.purge_older_than(before_ms).await
+        }
+        async fn verify_integrity(
+            &self,
+        ) -> Result<covenant_audit::AuditIntegrityReport, covenant_audit::AuditError> {
+            self.inner.verify_integrity().await
+        }
+    }
+
+    /// The cross-host admission server with a caller-supplied audit log, so a
+    /// failing required-audit write can be injected at a chosen outcome. Mirrors
+    /// [`cross_host_server`] otherwise (host1 -> `sender`, fresh dedup log,
+    /// generated daemon identity).
+    async fn cross_host_server_with_audit(
+        dir: &std::path::Path,
+        sender: &LocalIdentity,
+        audit: Arc<dyn covenant_audit::AuditLog>,
+    ) -> Server {
+        let known_hosts = KnownHosts::new().with_host(
+            "host1",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://host1:7777".into(),
+                pubkey: sender.pubkey_bytes(),
+            },
+        );
+        let dedup = Arc::new(
+            cross_host::JsonlCrossHostDedup::open(dir.join("cross-host-dedup.jsonl"))
+                .await
+                .expect("open cross-host dedup"),
+        );
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit,
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_known_hosts(known_hosts)
+        .with_cross_host_dedup(dedup)
+    }
+
+    #[tokio::test]
+    async fn admit_fails_closed_when_the_duplicate_audit_row_cannot_persist() {
+        // A duplicate absorbs a replay of an already-delivered task, so the
+        // operator must see it durably (carry-forward 4b-2a review NOTE 1). If
+        // the required 'duplicate' row cannot land, admission must fail closed
+        // and return Rejected rather than silently absorb the replay as
+        // Duplicate with no record. Distinct from the admitted-site required
+        // audit (covered over HTTP): the correct outcome here is Rejected, since
+        // the first copy was already delivered -- so a regression that returned
+        // Duplicate while ignoring the audit Err would slip past that sibling.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server_with_audit(
+            dir.path(),
+            &alice,
+            Arc::new(FailDuplicateCrossHostAudit {
+                inner: covenant_audit::InMemoryAuditLog::new(),
+            }),
+        )
+        .await;
+        grant_recv(&s, &alice).await;
+        let now = 10_000_000;
+        let envelope = sealed_envelope(&alice, s.identity.agent_id(), 0x4b2a_000e, now);
+        let id = envelope.open().unwrap().id;
+        // First copy is admitted and enqueued: its 'admitted' row lands.
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope.clone(), now).await,
+            cross_host::RemoteAdmission::Admitted { task_id: id }
+        );
+        // The replay is recognized as a duplicate, but the required 'duplicate'
+        // row cannot persist, so admission fails closed instead of returning
+        // Duplicate.
+        assert_eq!(
+            s.admit_remote_a2a_task(envelope, now + 1).await,
+            cross_host::RemoteAdmission::Rejected,
+            "a duplicate whose required audit row cannot persist must fail closed, not absorb silently as Duplicate"
+        );
+        // Only the first copy reached the mailbox; the refused replay never
+        // enqueues a second.
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: Some(ref t) } if t.id == id
+            ),
+            "the first copy is enqueued"
+        );
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "the refused replay must not enqueue a second copy"
+        );
+        let rows = cross_host_rows(&s).await;
+        assert!(
+            rows.iter()
+                .any(|(outcome, reason, _)| outcome == "admitted" && reason.is_empty()),
+            "the first copy's admitted row is durable on the feed: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|(outcome, _, _)| outcome == "duplicate"),
+            "the duplicate row's required write failed, so it must be absent: {rows:?}"
+        );
+    }
+
+    /// A cross-host task whose sender is this daemon (the v0 cross-host
+    /// principal) and whose recipient carries `pubkey` — set equal to the
+    /// known-hosts binding to clear the identity check, or different to trip it.
+    fn remote_a2a_task(
+        s: &Server,
+        recipient_display: &str,
+        pubkey: [u8; 32],
+    ) -> covenant_a2a::A2ATask {
+        covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: s.identity.agent_id(),
+            recipient: AgentId::new(recipient_display, pubkey),
+            intent_text: "ship the receipt batch".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        }
+    }
+
+    async fn cross_host_delivery_outcomes(s: &Server) -> Vec<(String, String)> {
+        s.audit
+            .recent(usize::MAX)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|e| match e.kind {
+                AuditKind::CrossHostA2ADelivery {
+                    outcome, reason, ..
+                } => Some((outcome, reason)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_remote_host_delivers_over_http_when_the_remote_admits() {
+        // Slice-4b-3 happy path: an authorized send to a known-host recipient is
+        // sealed and POSTed to the remote's /a2a/peer-tasks; a 202 ack maps to
+        // A2ATaskQueued and nothing is enqueued on the LOCAL mailbox.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(
+                ResponseTemplate::new(202).set_body_json(serde_json::json!({ "kind": "accepted" })),
+            )
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let s = server_with(vec![], "").with_known_hosts(KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: remote.uri(),
+                pubkey: key,
+            },
+        ));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.bob@remote".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::A2ATaskQueued { .. } => {}
+            other => panic!("a delivered cross-host send must report queued: {other:?}"),
+        }
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a delivered cross-host task must never enqueue on the local mailbox"
+        );
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("delivered".to_string(), String::new())),
+            "a delivered cross-host send must leave a 'delivered' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_remote_refusal_surfaces_as_error_never_as_queued() {
+        // A remote that runs its admission pipeline and refuses (403) reaches the
+        // caller as a distinct Response::Error plus a 'remote_refused' audit row —
+        // never reported as a successful queue, and never enqueued locally.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(
+                ResponseTemplate::new(403).set_body_json(serde_json::json!({ "kind": "rejected" })),
+            )
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let s = server_with(vec![], "").with_known_hosts(KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: remote.uri(),
+                pubkey: key,
+            },
+        ));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.bob@remote".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => {
+                assert!(message.contains("refused by the remote"), "got: {message}");
+            }
+            other => panic!("a remote refusal must surface as an error, not a queue: {other:?}"),
+        }
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a remotely-refused task must never enqueue locally"
+        );
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("refused".to_string(), "remote_refused".to_string())),
+            "a remote refusal must leave a 'remote_refused' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_remote_with_unexpected_status_surfaces_remote_error() {
+        // A reachable remote that answers with neither 202 (admitted) nor 403
+        // (cleanly refused) is broken, not refusing: a 5xx must reach the caller
+        // as a distinct Response::Error plus a 'remote_error' audit row — never
+        // conflated with a clean 'remote_refused', never reported as a queue, and
+        // never enqueued locally. Conflating the two would hide a remote outage
+        // behind an admission refusal on the operator feed.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let s = server_with(vec![], "").with_known_hosts(KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: remote.uri(),
+                pubkey: key,
+            },
+        ));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.bob@remote".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => {
+                assert!(message.contains("unexpected status"), "got: {message}");
+            }
+            other => panic!("a broken remote must surface as an error, not a queue: {other:?}"),
+        }
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "a task the remote never accepted must never enqueue locally"
+        );
+        let outcomes = cross_host_delivery_outcomes(&s).await;
+        assert!(
+            outcomes.contains(&("refused".to_string(), "remote_error".to_string())),
+            "an unexpected remote status must leave a 'remote_error' audit row, distinct from remote_refused: {outcomes:?}"
+        );
+        assert!(
+            !outcomes.contains(&("refused".to_string(), "remote_refused".to_string())),
+            "a 5xx must not be mislabeled as a clean remote refusal: {outcomes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_remote_with_mismatched_key_is_refused_before_any_post() {
+        // MITM guard: a recipient whose key is NOT the known-hosts binding for its
+        // host is refused by the identity check before a sealed envelope reaches
+        // the wire — the mock's expect(0) verifies on drop that no POST was made.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&remote)
+            .await;
+        let s = server_with(vec![], "").with_known_hosts(KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: remote.uri(),
+                pubkey: [1u8; 32],
+            },
+        ));
+        // Recipient key [2u8; 32] differs from the registry binding [1u8; 32].
+        let task = remote_a2a_task(&s, "bob@remote", [2u8; 32]);
+        s.op_respond(Request::GrantCapability {
+            action: "a2a.send.bob@remote".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("does not match the known-hosts binding"),
+                    "got: {message}"
+                );
+            }
+            other => panic!("a key mismatch must be refused, not delivered: {other:?}"),
+        }
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("refused".to_string(), "identity_mismatch".to_string())),
+            "a key mismatch must leave an 'identity_mismatch' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_unreachable_remote_returns_a_bounded_error() {
+        // Dead-remote guard: a remote that never answers must not hang dispatch.
+        // A tiny explicit timeout against a stub that delays far longer proves the
+        // bound fires and the outcome is 'unreachable'/'timeout'.
+        use std::time::Duration;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(ResponseTemplate::new(202).set_delay(Duration::from_secs(30)))
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let endpoint = covenant_peer_auth::PeerEndpoint {
+            url: remote.uri(),
+            pubkey: key,
+        };
+        let s = server_with(vec![], "")
+            .with_known_hosts(KnownHosts::new().with_host("remote", endpoint.clone()));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        match s
+            .deliver_cross_host_with_timeout(task, endpoint, Duration::from_millis(150))
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("unreachable"), "got: {message}");
+            }
+            other => panic!("an unreachable remote must return a bounded error: {other:?}"),
+        }
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("unreachable".to_string(), "timeout".to_string())),
+            "a timed-out delivery must leave an 'unreachable'/'timeout' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_connection_refused_surfaces_transport_not_timeout() {
+        // The Err arm of cross-host delivery splits on `e.is_timeout()`: a slow
+        // remote is 'timeout' (covered above), a connection-level failure
+        // (refused/reset/DNS) is 'transport'. Bind an ephemeral port and drop the
+        // listener so nothing answers, then deliver there: the connect is refused
+        // at once — not a timeout — so the audit reason must be 'transport', never
+        // 'timeout'. Both arms return the same client-facing error, so the operator
+        // audit reason is the only place the distinction survives.
+        use std::net::TcpListener;
+        use std::time::Duration;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let key = [3u8; 32];
+        let endpoint = covenant_peer_auth::PeerEndpoint {
+            url: format!("http://{addr}"),
+            pubkey: key,
+        };
+        let s = server_with(vec![], "")
+            .with_known_hosts(KnownHosts::new().with_host("remote", endpoint.clone()));
+        let task = remote_a2a_task(&s, "bob@remote", key);
+        match s
+            .deliver_cross_host_with_timeout(task, endpoint, Duration::from_secs(2))
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("unreachable"), "got: {message}");
+            }
+            other => panic!("a refused connection must return a bounded error: {other:?}"),
+        }
+        let outcomes = cross_host_delivery_outcomes(&s).await;
+        assert!(
+            outcomes.contains(&("unreachable".to_string(), "transport".to_string())),
+            "a refused connection must leave an 'unreachable'/'transport' audit row: {outcomes:?}"
+        );
+        assert!(
+            !outcomes.contains(&("unreachable".to_string(), "timeout".to_string())),
+            "a connection refusal must not be mislabeled as a timeout: {outcomes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_cross_host_refuses_a_sender_that_is_not_this_daemon() {
+        // The daemon seals cross-host envelopes under its own identity, so it must
+        // not vouch-seal a task whose sender is a different local peer. Such a task
+        // is refused before any POST (expect(0) verifies no envelope was sent).
+        use std::time::Duration;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let remote = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/a2a/peer-tasks"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&remote)
+            .await;
+        let key = [3u8; 32];
+        let endpoint = covenant_peer_auth::PeerEndpoint {
+            url: remote.uri(),
+            pubkey: key,
+        };
+        let s = server_with(vec![], "")
+            .with_known_hosts(KnownHosts::new().with_host("remote", endpoint.clone()));
+        let mut task = remote_a2a_task(&s, "bob@remote", key);
+        task.sender = AgentId::new("someone@local", [8u8; 32]);
+        match s
+            .deliver_cross_host_with_timeout(task, endpoint, Duration::from_millis(150))
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("own identity"), "got: {message}");
+            }
+            other => panic!("a non-daemon sender must be refused, not vouch-sealed: {other:?}"),
+        }
+        assert!(
+            cross_host_delivery_outcomes(&s)
+                .await
+                .contains(&("refused".to_string(), "sender_not_self".to_string())),
+            "a non-daemon sender must leave a 'sender_not_self' audit row"
+        );
+    }
+
+    #[tokio::test]
+    async fn peer_task_http_ingress_caps_pre_verify_body_and_coarsely_refuses_rejected() {
+        // The bearer-EXEMPT `POST /a2a/peer-tasks` ingress (http::admit_peer_task)
+        // is a thin transport over admit_remote_a2a_task fronted by two security
+        // bounds the loopback live test (happy 202 only) never exercises: a 64 KiB
+        // DefaultBodyLimit (PEER_TASK_BODY_CAP) that bounds the buffer a remote can
+        // force the daemon to hold BEFORE any signature check, and a coarse 403 that
+        // maps every RemoteAdmission::Rejected cause to one body so the rejection
+        // stage stays on the audit feed and the response is never a probing oracle.
+        let dir = tempfile::tempdir().unwrap();
+        let alice = LocalIdentity::generate("alice@host1");
+        let s = cross_host_server(dir.path(), &alice).await;
+
+        let state = crate::http::HttpState {
+            server: s.clone(),
+            live_traces_tx: tokio::sync::broadcast::channel::<covenant_runtime::StreamedTrace>(16)
+                .0,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, crate::http::router(state))
+                .await
+                .unwrap();
+        });
+        let url = format!("http://{addr}/a2a/peer-tasks");
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+
+        // A body one byte past the 64 KiB pre-verify cap is refused by the body-limit
+        // layer before the handler — and admission — ever runs: a 413, not a 202/403
+        // admission outcome. The length must exceed PEER_TASK_BODY_CAP (http.rs);
+        // raising that cap to or above this length makes this assertion bite.
+        let oversized = client
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(vec![b'x'; 64 * 1024 + 1])
+            .send()
+            .await
+            .expect("post oversized body");
+        assert_eq!(
+            oversized.status(),
+            reqwest::StatusCode::PAYLOAD_TOO_LARGE,
+            "a body past the pre-verify cap must be refused 413 before admission"
+        );
+
+        // A faithfully sealed envelope from a host this daemon never registered
+        // opens cleanly, and even holds a recv grant, but fails authorization
+        // (unknown_principal). The ingress answers ONE coarse 403 {kind:rejected};
+        // the rejection cause lives only on the audit feed.
+        let mallory = LocalIdentity::generate("mallory@host9");
+        grant_recv(&s, &mallory).await;
+        let envelope = sealed_envelope(&mallory, s.identity.agent_id(), 0x4b2a_0011, 10_000_000);
+        let rejected = client
+            .post(&url)
+            .json(&envelope)
+            .send()
+            .await
+            .expect("post rejected envelope");
+        assert_eq!(
+            rejected.status(),
+            reqwest::StatusCode::FORBIDDEN,
+            "a rejected admission must map to a coarse 403, not a cause-specific status"
+        );
+        let body: serde_json::Value = rejected.json().await.expect("403 body");
+        assert_eq!(
+            body["kind"], "rejected",
+            "the 403 body must be the coarse rejected ack: {body}"
+        );
+
+        assert!(
+            matches!(
+                s.op_respond(Request::TryRecvA2ATask).await,
+                Response::A2ATaskOpt { task: None }
+            ),
+            "neither an over-cap body nor a rejected envelope may enqueue onto the local mailbox"
+        );
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_remote_host_without_grant_reveals_no_registry_membership() {
+        // Authorize-before-reveal: a caller without the a2a.send capability is
+        // refused by the capability gate with "requires capability" and learns
+        // nothing about whether the recipient host is a configured remote peer.
+        // The remote classification runs only after authorization.
+        let s = server_with(vec![], "").with_known_hosts(known_hosts_with_remote());
+        let task = a2a_task_to(&s, "bob@remote");
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => {
+                assert!(message.contains("requires capability"), "got: {message}");
+                assert!(
+                    !message.contains("remote host"),
+                    "an unauthorized caller must not learn registry membership: {message}"
+                );
+            }
+            other => {
+                panic!("an ungranted send must be refused by the capability gate: {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_send_to_local_host_still_queues_with_nonempty_known_hosts() {
+        // No regression: a recipient whose host is absent from known-hosts is
+        // local and queues exactly as before, even with a remote host loaded.
+        let s = server_with(vec![], "").with_known_hosts(known_hosts_with_remote());
+        let peer = s.identity.agent_id();
+        let task = loopback_a2a_task_for(&s);
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", peer.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await
+        {
+            Response::A2ATaskQueued { task_id } => assert_eq!(task_id, task.id),
+            other => panic!("a local recipient must still queue: {other:?}"),
+        }
+        let recv = s.op_respond(Request::TryRecvA2ATask).await;
+        assert!(
+            matches!(recv, Response::A2ATaskOpt { task: Some(ref t) } if t.id == task.id),
+            "the local task must be drained from the mailbox: {recv:?}"
         );
     }
 
@@ -47711,6 +51344,60 @@ required = {caps:?}
                 );
                 assert_eq!(tasks[0].state, covenant_a2a::A2ATaskQueueState::InFlight);
                 assert_eq!(tasks[0].task.id, in_flight.id);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_queue_deadline_within_filters_before_binding_limit() {
+        let s = server_with(vec![], "");
+        let peer = s.identity.agent_id();
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", peer.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        // The two undated tasks fail the deadline filter; the third,
+        // queued last, carries a long-past deadline that lands inside
+        // any window. Queued order is insertion order, so the only
+        // match sits at index 2 — behind a binding limit of 2. A
+        // take-before-filter reorder fetches the two undated rows and
+        // returns nothing.
+        s.op_respond(Request::SendA2ATask {
+            task: loopback_a2a_task_for(&s),
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask {
+            task: loopback_a2a_task_for(&s),
+        })
+        .await;
+        let near = covenant_a2a::A2ATask {
+            deadline_ms: Some(1),
+            ..loopback_a2a_task_for(&s)
+        };
+        s.op_respond(Request::SendA2ATask { task: near.clone() })
+            .await;
+
+        let queue = s
+            .op_respond(Request::A2AQueue {
+                limit: 2,
+                min_lease_age_ms: None,
+                deadline_within_ms: Some(0),
+                state_filter: None,
+            })
+            .await;
+        match queue {
+            Response::A2AQueue { tasks, .. } => {
+                assert_eq!(
+                    tasks.len(),
+                    1,
+                    "deadline_within_ms must bind before --limit so two undated tasks cannot push the only in-window task out of the result window",
+                );
+                assert_eq!(tasks[0].task.id, near.id);
+                assert_eq!(tasks[0].task.deadline_ms, Some(1));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -48252,6 +51939,255 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_auto_retry_scan_caps_requeues_at_max_requeues_with_limit_reached() {
+        // The scan loop bounds how many leases one pass requeues: after
+        // evaluate_auto_retry returns Requeue, retry_a2a_stale gates on
+        // `report.requeued.len() >= policy.max_requeues` (lib.rs:3036)
+        // and on the cap pushes a LimitReached skip with
+        // lease_age_ms = Some(..) and continues without requeueing.
+        // Every other functional scan test runs max_requeues high or
+        // with a single eligible task, so this cap branch never fires;
+        // LimitReached otherwise appears only in the audit verify-drift
+        // detector. Two eligible idempotent leases with max_requeues=1
+        // is the minimal config that exercises the cap: the first lease
+        // is requeued, the second is capped. Dropping the guard or
+        // flipping `>=` to `>` requeues both and the LimitReached
+        // assertions below bite.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let mut task_a = loopback_a2a_task_for(&s);
+        task_a.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "cap-task-a",
+        ));
+        let mut task_b = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            ..task_a.clone()
+        };
+        task_b.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "cap-task-b",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", task_a.recipient.display)).await;
+        grant_action(&s, "a2a.repair.requeue").await;
+        s.op_respond(Request::SendA2ATask {
+            task: task_a.clone(),
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask {
+            task: task_b.clone(),
+        })
+        .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let report = match s
+            .op_respond(Request::RetryA2AStale {
+                policy: covenant_a2a::A2AAutoRetryPolicy {
+                    enabled: true,
+                    min_lease_age_ms: 0,
+                    max_attempts: 3,
+                    max_requeues: 1,
+                    scan_limit: 10,
+                },
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => report,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        assert_eq!(report.considered, 2, "both leased tasks are scanned");
+        assert_eq!(
+            report.requeued.len(),
+            1,
+            "max_requeues=1 caps the pass at one requeue; a missing cap \
+             would requeue both eligible leases",
+        );
+        assert_eq!(
+            report.skipped.len(),
+            1,
+            "the second eligible lease must be skipped, not requeued",
+        );
+        assert_eq!(
+            report.skipped[0].reason,
+            covenant_a2a::A2AAutoRetrySkipReason::LimitReached,
+            "the over-cap lease is skipped for LimitReached, not an \
+             eligibility reason — evaluate_auto_retry already returned \
+             Requeue for it before the cap rejected it",
+        );
+        assert!(
+            report.skipped[0].lease_age_ms.is_some(),
+            "LimitReached fires inside the Requeue branch after lease-age \
+             computation, so the skip carries Some(lease_age) for audit \
+             attribution — None would mean the cap moved above the \
+             eligibility ladder",
+        );
+
+        let requeued_id = report.requeued[0].task_id;
+        let capped_id = report.skipped[0].task_id;
+        assert_ne!(
+            requeued_id, capped_id,
+            "the requeued and capped leases must be distinct tasks",
+        );
+        let mut got = [requeued_id, capped_id];
+        got.sort();
+        let mut want = [task_a.id, task_b.id];
+        want.sort();
+        assert_eq!(
+            got, want,
+            "the requeued and capped task ids must be exactly the two \
+             sent leases",
+        );
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                let requeued_entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == requeued_id)
+                    .expect("requeued task entry");
+                assert_eq!(
+                    requeued_entry.state,
+                    covenant_a2a::A2ATaskQueueState::Queued,
+                    "the requeued lease returns to Queued",
+                );
+                let capped_entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == capped_id)
+                    .expect("capped task entry");
+                assert_eq!(
+                    capped_entry.state,
+                    covenant_a2a::A2ATaskQueueState::InFlight,
+                    "the LimitReached lease is untouched and stays \
+                     InFlight — the cap prevented the requeue, it did \
+                     not partially apply it",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_auto_retry_scan_skips_scope_mismatched_lease_as_capability_scope_mismatch() {
+        // The scan applies two capability gates. The pre-flight at
+        // retry_a2a_stale (lib.rs:2991) is action-only — check_capabilities
+        // filters on capability.action and ignores scope — so any
+        // a2a.repair.requeue grant clears it. After evaluate_auto_retry
+        // returns Requeue and the max_requeues cap clears, the loop runs a
+        // per-task a2a_scope_check (lib.rs:3061) that threads
+        // task_id/lease_id/peer/duplicate_risk through a2a_scope_allows; on
+        // Ok(allowed: false) it pushes a CapabilityScopeMismatch skip with
+        // lease_age_ms = Some(..) and continues without requeueing
+        // (lib.rs:3066-3074). Every other functional scan test grants an
+        // unscoped a2a.repair.requeue (empty scope = allow-all), so this
+        // per-task scope-deny arm never fires. Granting the action scoped to
+        // a foreign task_id passes the pre-flight but denies the per-task
+        // check: dropping the scope check, or treating allowed:false as
+        // eligible, requeues the lease and the assertions below bite.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        let mut task = loopback_a2a_task_for(&s);
+        task.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "scope-mismatch-task",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", task.recipient.display)).await;
+        // a2a.repair.requeue bound to the all-zeros task_id, which a
+        // Uuid::new_v4() task id can never equal — the action-only
+        // pre-flight still passes, but the per-task scope check denies it.
+        grant_scoped_action(
+            &s,
+            "a2a.repair.requeue",
+            serde_json::json!({
+                "version": 1,
+                "task_id": "00000000-0000-0000-0000-000000000000"
+            }),
+        )
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let report = match s
+            .op_respond(Request::RetryA2AStale {
+                policy: covenant_a2a::A2AAutoRetryPolicy {
+                    enabled: true,
+                    min_lease_age_ms: 0,
+                    max_attempts: 3,
+                    max_requeues: 10,
+                    scan_limit: 10,
+                },
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => report,
+            other => panic!("unexpected: {other:?}"),
+        };
+
+        assert_eq!(report.considered, 1, "the leased task is scanned");
+        assert!(
+            report.requeued.is_empty(),
+            "the scope-mismatched lease must not be requeued — the per-task \
+             scope check denied it after evaluate_auto_retry returned Requeue",
+        );
+        assert_eq!(
+            report.skipped.len(),
+            1,
+            "the one considered task is skipped, not requeued",
+        );
+        assert_eq!(
+            report.skipped[0].task_id, task.id,
+            "the skip names the sent task",
+        );
+        assert_eq!(
+            report.skipped[0].reason,
+            covenant_a2a::A2AAutoRetrySkipReason::CapabilityScopeMismatch,
+            "the lease is eligible per evaluate_auto_retry but the daemon \
+             per-task scope check rejects the scope-bound grant, so the skip \
+             reason is CapabilityScopeMismatch — not an eligibility reason",
+        );
+        assert!(
+            report.skipped[0].lease_age_ms.is_some(),
+            "CapabilityScopeMismatch fires inside the Requeue branch after \
+             lease-age computation, so the skip carries Some(lease_age) — \
+             None would mean the scope check moved above the eligibility ladder",
+        );
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => {
+                let entry = tasks
+                    .iter()
+                    .find(|entry| entry.task.id == task.id)
+                    .expect("scanned task entry");
+                assert_eq!(
+                    entry.state,
+                    covenant_a2a::A2ATaskQueueState::InFlight,
+                    "the scope-denied lease is untouched and stays InFlight — \
+                     the scope check prevented the requeue, it did not \
+                     partially apply it",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_auto_retry_scheduler_once_reuses_gate_and_audits_summary() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let s = server_with_audit(audit.clone());
@@ -48313,6 +52249,104 @@ required = {caps:?}
                 assert_eq!(*requeued, 1);
                 assert_eq!(*skipped, 0);
                 assert!(skipped_by_reason.is_empty());
+                assert_eq!(error, &None);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_auto_retry_scheduler_scan_audit_buckets_skips_by_reason() {
+        // record_a2a_auto_retry_scheduler_scan folds each report.skipped
+        // entry into the audit row's skipped_by_reason map via
+        // *entry(reason.as_str()).or_insert(0) += 1 (lib.rs:2224-2228).
+        // a2a_auto_retry_scheduler_once_reuses_gate_and_audits_summary only
+        // asserts skipped_by_reason.is_empty() for an all-requeued scan, so
+        // the fold never runs with a real skip. Two Unsafe leases produce
+        // two UnsafeDuplicateSafety skips in one scan, pinning both the
+        // bucket key (reason.as_str) and the count (the increment): a
+        // dropped fold blanks the map and a set-to-1 mutation reports 1.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone());
+        let mut first = loopback_a2a_task_for(&s);
+        first.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Unsafe,
+            "unsafe-a",
+        ));
+        let mut second = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            ..first.clone()
+        };
+        second.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Unsafe,
+            "unsafe-b",
+        ));
+
+        grant_action(&s, &format!("a2a.send.{}", first.recipient.display)).await;
+        grant_action(&s, "a2a.repair.requeue").await;
+        s.op_respond(Request::SendA2ATask {
+            task: first.clone(),
+        })
+        .await;
+        s.op_respond(Request::SendA2ATask {
+            task: second.clone(),
+        })
+        .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let report = match s
+            .run_a2a_auto_retry_scheduler_once(covenant_a2a::A2AAutoRetryPolicy {
+                enabled: true,
+                min_lease_age_ms: 0,
+                max_attempts: 3,
+                max_requeues: 10,
+                scan_limit: 10,
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => report,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert_eq!(report.considered, 2);
+        assert!(
+            report.requeued.is_empty(),
+            "both Unsafe leases are skipped, not requeued",
+        );
+        assert_eq!(report.skipped.len(), 2);
+
+        let scan = audit
+            .recent(20)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|event| matches!(event.kind, AuditKind::A2AAutoRetrySchedulerScan { .. }))
+            .expect("scheduler scan audit row");
+        match &scan.kind {
+            AuditKind::A2AAutoRetrySchedulerScan {
+                considered,
+                requeued,
+                skipped,
+                skipped_by_reason,
+                error,
+                ..
+            } => {
+                assert_eq!(*considered, 2);
+                assert_eq!(*requeued, 0);
+                assert_eq!(*skipped, 2, "both Unsafe leases land in the skipped count");
+                assert_eq!(
+                    skipped_by_reason.get("unsafe_duplicate_safety").copied(),
+                    Some(2),
+                    "the two same-reason skips aggregate into one bucket with \
+                     count 2 — a dropped fold blanks the map and a set-to-1 \
+                     mutation reports 1",
+                );
+                assert_eq!(
+                    skipped_by_reason.len(),
+                    1,
+                    "only the unsafe_duplicate_safety key is present — no \
+                     phantom buckets from a miskeyed fold",
+                );
                 assert_eq!(error, &None);
             }
             other => panic!("unexpected: {other:?}"),
@@ -48959,6 +52993,157 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn capability_check_records_approver_and_rule_on_pass() {
+        // A passing capability check must answer "who approved this and
+        // under which rule" on its own audit row: authorized_by names the
+        // identity that signed the matching grant (granted_by_display) and
+        // the exact signed capability (signature_b58). The signature equals
+        // the one the grant returned, so the audit row joins back to the
+        // specific SignedCapability that authorized the action.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let task = dummy_a2a_task_for(&s);
+        let alternatives = task.recipient.scoped_action_alternatives("a2a.send");
+        let b58_form = alternatives[1].clone();
+        let signature_b58 = match s
+            .op_respond(Request::GrantCapability {
+                action: b58_form.clone(),
+                scope: None,
+                expires_at: None,
+            })
+            .await
+        {
+            Response::CapabilityGranted { signature_b58, .. } => signature_b58,
+            other => panic!("expected CapabilityGranted, got {other:?}"),
+        };
+        s.op_respond(Request::SendA2ATask { task }).await;
+
+        let events = audit.recent(20).await.unwrap();
+        let cap = events
+            .iter()
+            .find(|e| match &e.kind {
+                AuditKind::CapabilityCheck {
+                    agent_id, passed, ..
+                } => agent_id.starts_with("a2a-send:") && *passed,
+                _ => false,
+            })
+            .expect("expected a passing CapabilityCheck for the send call");
+        match &cap.kind {
+            AuditKind::CapabilityCheck { authorized_by, .. } => {
+                assert_eq!(
+                    authorized_by,
+                    &vec![covenant_audit::CapabilityAuthorization {
+                        action: b58_form.clone(),
+                        granted_by_display: "user@local".to_string(),
+                        signature_b58,
+                    }],
+                    "a passing check must record the approver (granted_by_display) and the exact signed rule (signature_b58) that authorized each granted action",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn capability_check_records_partial_grant_authorization_on_fail() {
+        // A multi-action check where one required action is granted and
+        // another is missing fails overall (passed = false) but must
+        // still record who authorized the granted action under which
+        // rule. authorized_by is "one entry per granted required action",
+        // not "empty whenever the check failed" — a partial grant leaves
+        // a failed row naming the action it did authorize. dispatch_intent
+        // is the only production caller that passes several required
+        // actions (the agent manifest's capabilities.required); we drive
+        // the sole write-site, check_capabilities, directly because no
+        // single-call handler exposes a multi-action check without
+        // manifest/card scaffolding.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let subject = dummy_a2a_task_for(&s).recipient;
+        let held = subject.scoped_action_alternatives("a2a.send")[1].clone();
+        let signature_b58 = match s
+            .op_respond(Request::GrantCapability {
+                action: held.clone(),
+                scope: None,
+                expires_at: None,
+            })
+            .await
+        {
+            Response::CapabilityGranted { signature_b58, .. } => signature_b58,
+            other => panic!("expected CapabilityGranted, got {other:?}"),
+        };
+
+        let unheld = "a2a.send.unheld@local".to_string();
+        let outcome = s
+            .check_capabilities(
+                "test:partial-grant".into(),
+                vec![held.clone(), unheld.clone()],
+                &subject,
+            )
+            .await;
+        assert!(!outcome.passed);
+        assert_eq!(outcome.missing, vec![unheld]);
+
+        let events = audit.recent(20).await.unwrap();
+        let cap = events
+            .iter()
+            .find(|e| match &e.kind {
+                AuditKind::CapabilityCheck { agent_id, .. } => {
+                    agent_id.as_str() == "test:partial-grant"
+                }
+                _ => false,
+            })
+            .expect("partial-grant capability check audit row present");
+        match &cap.kind {
+            AuditKind::CapabilityCheck {
+                passed,
+                authorized_by,
+                ..
+            } => {
+                assert!(!passed);
+                assert_eq!(
+                    authorized_by,
+                    &vec![covenant_audit::CapabilityAuthorization {
+                        action: held,
+                        granted_by_display: "user@local".to_string(),
+                        signature_b58,
+                    }],
+                    "a partial grant must record the approver and signed rule for the granted action even though the overall check failed — authorized_by is one entry per granted action, never empty-on-fail",
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_send_audit_records_display_on_miss() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let s = Server::new(
@@ -48993,6 +53178,7 @@ required = {caps:?}
                 required_actions,
                 missing_actions,
                 passed,
+                authorized_by,
                 ..
             } => {
                 assert_eq!(
@@ -49004,6 +53190,10 @@ required = {caps:?}
                     &vec!["a2a.send.research@local".to_string()]
                 );
                 assert!(!passed);
+                assert!(
+                    authorized_by.is_empty(),
+                    "this check's only required action (a2a.send) matched no granted capability, so authorized_by is empty — no approver or rule may be recorded for an action that was not authorized",
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -49599,6 +53789,109 @@ required = {caps:?}
         match second {
             Response::CapabilityRevoked { removed, .. } => assert!(!removed),
             other => panic!("expected idempotent CapabilityRevoked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_success_records_capability_revoked_audit_row() {
+        // The success path that actually withdraws a granted capability
+        // must emit a CapabilityRevoked audit row, completing the
+        // grant→revoke lifecycle on the chain. Without it the log shows a
+        // CapabilityGranted row with no record the grant was withdrawn,
+        // overstating live authority. The row records signature_b58 (the
+        // join key back to the grant), the action, the owner that revoked
+        // its own grant (subject_display), and removed=true for a real
+        // authority change. A sequential idempotent re-revoke takes the
+        // already-revoked branch and must NOT add a second row.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        let (signature_b58, action) = match s
+            .op_respond(Request::GrantCapability {
+                action: "memory.read".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await
+        {
+            Response::CapabilityGranted {
+                signature_b58,
+                action,
+                ..
+            } => (signature_b58, action),
+            other => panic!("expected CapabilityGranted, got {other:?}"),
+        };
+
+        match s
+            .op_respond(Request::RevokeCapability {
+                signature_b58: signature_b58.clone(),
+            })
+            .await
+        {
+            Response::CapabilityRevoked { removed, .. } => {
+                assert!(
+                    removed,
+                    "first revoke of an active cap must report removed=true"
+                )
+            }
+            other => panic!("expected CapabilityRevoked, got {other:?}"),
+        }
+
+        // Sequential idempotent re-revoke: the cap is already filtered out
+        // of list_for_subject, so it takes the already-revoked branch and
+        // must not emit another row.
+        s.op_respond(Request::RevokeCapability {
+            signature_b58: signature_b58.clone(),
+        })
+        .await;
+
+        let events = audit.recent(20).await.unwrap();
+        let rows: Vec<&AuditEvent> = events
+            .iter()
+            .filter(|e| matches!(&e.kind, AuditKind::CapabilityRevoked { .. }))
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "exactly one CapabilityRevoked row — the real withdrawal; the sequential idempotent re-revoke must not spam the audit log",
+        );
+        let row = rows[0];
+        assert_eq!(
+            row.issuer.display, "user@local",
+            "issued by the subject so the revoke surfaces on the owner's audit feed, mirroring CapabilityGranted",
+        );
+        match &row.kind {
+            AuditKind::CapabilityRevoked {
+                subject_display,
+                action: row_action,
+                signature_b58: row_sig,
+                removed,
+            } => {
+                assert_eq!(
+                    row_sig, &signature_b58,
+                    "the row must record the revoked capability's signature to join back to its CapabilityGranted row",
+                );
+                assert_eq!(
+                    row_action, &action,
+                    "the row must record the revoked action"
+                );
+                assert_eq!(subject_display, "user@local");
+                assert!(removed, "removed=true marks a real authority change");
+            }
+            other => panic!("unexpected: {other:?}"),
         }
     }
 
@@ -51472,6 +55765,470 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn capability_usage_requires_operator_identity() {
+        let s = server_with(vec![], "");
+        // Seed a grant so there is delegated-authority state that must not leak.
+        let me = s.identity.agent_id();
+        let cap = covenant_types::Capability {
+            subject: AgentId::new("bob@local", [8u8; 32]),
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({ "version": 1, "max_uses": 2 }),
+            granted_by: me,
+            expires_at: None,
+        };
+        s.capabilities
+            .record(sign_capability(cap, s.identity.signing_key()))
+            .await
+            .unwrap();
+
+        // A non-operator peer is refused outright — not filtered to an empty
+        // list — so it cannot learn which grants exist or how much budget
+        // remains.
+        let alien = AgentId::new("eve@local", [7u8; 32]);
+        match s.respond(Request::CapabilityUsage, &alien).await {
+            Response::Error { message } => assert!(
+                message.contains("operator identity"),
+                "unexpected error message: {message}"
+            ),
+            other => panic!("a non-operator peer must be refused, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn capability_usage_operator_sees_budget_expiry_and_no_budget() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // A budgeted, expiring grant.
+        let budgeted = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("bob@local", [8u8; 32]),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1, "max_uses": 3 }),
+                granted_by: me.clone(),
+                expires_at: Some(1_700_000_000_000),
+            },
+            s.identity.signing_key(),
+        );
+        let budgeted_sig = budgeted.signature;
+        s.capabilities.record(budgeted).await.unwrap();
+
+        // An unbudgeted, perpetual grant.
+        s.capabilities
+            .record(sign_capability(
+                covenant_types::Capability {
+                    subject: AgentId::new("carol@local", [9u8; 32]),
+                    action: "memory.read".into(),
+                    scope: serde_json::json!({}),
+                    granted_by: me,
+                    expires_at: None,
+                },
+                s.identity.signing_key(),
+            ))
+            .await
+            .unwrap();
+
+        // Spend one unit of the budget through the durable ledger.
+        s.capabilities
+            .consume_uses(&[covenant_permissions::BudgetConsumeRequest {
+                signature: budgeted_sig,
+                max_uses: 3,
+            }])
+            .await
+            .unwrap();
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        assert_eq!(grants.len(), 2);
+
+        let budgeted_b58 = bs58::encode(budgeted_sig).into_string();
+        let b = grants
+            .iter()
+            .find(|g| g.signature_b58 == budgeted_b58)
+            .expect("budgeted grant present");
+        assert_eq!(b.action, "tool.call.echo");
+        assert_eq!(b.expires_at, Some(1_700_000_000_000));
+        assert!(!b.revoked);
+        assert_eq!(
+            b.budget,
+            Some(covenant_ipc::CapabilityUsageBudget {
+                max_uses: 3,
+                used: 1,
+                remaining: 2,
+            }),
+            "one of three uses spent leaves two remaining",
+        );
+
+        let u = grants
+            .iter()
+            .find(|g| g.action == "memory.read")
+            .expect("unbudgeted grant present");
+        assert_eq!(u.budget, None, "an unbudgeted grant reports no budget");
+        assert_eq!(u.expires_at, None);
+    }
+
+    #[tokio::test]
+    async fn capability_usage_attributes_budget_to_the_right_signature() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Two grants for the SAME action to two subjects: same action, distinct
+        // signatures. A join keyed on the action would smear their budgets.
+        let a = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("alice@local", [1u8; 32]),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1, "max_uses": 9 }),
+                granted_by: me.clone(),
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let b = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("bob@local", [2u8; 32]),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1, "max_uses": 9 }),
+                granted_by: me,
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        assert_ne!(sig_a, sig_b);
+        s.capabilities.record(a).await.unwrap();
+        s.capabilities.record(b).await.unwrap();
+
+        for _ in 0..2 {
+            s.capabilities
+                .consume_uses(&[covenant_permissions::BudgetConsumeRequest {
+                    signature: sig_a,
+                    max_uses: 9,
+                }])
+                .await
+                .unwrap();
+        }
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let used_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .budget
+                .expect("budgeted grant")
+                .used
+        };
+        assert_eq!(used_of(sig_a), 2, "A's two uses attribute to A's signature");
+        assert_eq!(
+            used_of(sig_b),
+            0,
+            "B shares A's action but its budget is untouched — the join is by signature",
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_usage_attributes_subject_to_the_right_signature() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Two grants for the SAME action to two distinct subjects: each entry must
+        // report its own holder. A join keyed on the action — or sourcing the
+        // grantor instead of the subject — would mis-attribute them.
+        let alice = AgentId::new("alice@local", [1u8; 32]);
+        let bob = AgentId::new("bob@local", [2u8; 32]);
+        let a = sign_capability(
+            covenant_types::Capability {
+                subject: alice.clone(),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1 }),
+                granted_by: me.clone(),
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let b = sign_capability(
+            covenant_types::Capability {
+                subject: bob.clone(),
+                action: "tool.call.echo".into(),
+                scope: serde_json::json!({ "version": 1 }),
+                granted_by: me,
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        s.capabilities.record(a).await.unwrap();
+        s.capabilities.record(b).await.unwrap();
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let entry_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .clone()
+        };
+        let ea = entry_of(sig_a);
+        assert_eq!(ea.subject_display, "alice@local");
+        assert_eq!(ea.subject_pubkey_b58, alice.pubkey_base58());
+        let eb = entry_of(sig_b);
+        assert_eq!(eb.subject_display, "bob@local");
+        assert_eq!(eb.subject_pubkey_b58, bob.pubkey_base58());
+        // The subjects don't transpose, and neither is the grantor: both were
+        // granted_by the daemon identity, which must never appear as the holder.
+        assert_ne!(ea.subject_pubkey_b58, eb.subject_pubkey_b58);
+        assert_ne!(
+            ea.subject_pubkey_b58,
+            s.identity.agent_id().pubkey_base58(),
+            "subject is the holder, not the grantor",
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_usage_attributes_scope_to_the_right_signature() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+
+        // Two grants for the SAME action with distinct scopes: each entry must
+        // report its own signed scope verbatim. A join keyed on the action would
+        // transpose or collapse the scopes onto the shared action verb — exactly
+        // the case the action string alone cannot tell apart.
+        let scope_alpha = serde_json::json!({ "version": 1, "recipient": "peer-alpha@host" });
+        let scope_beta = serde_json::json!({ "version": 1, "recipient": "peer-beta@host" });
+        let a = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("alice@local", [1u8; 32]),
+                action: "a2a.send".into(),
+                scope: scope_alpha.clone(),
+                granted_by: me.clone(),
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let b = sign_capability(
+            covenant_types::Capability {
+                subject: AgentId::new("bob@local", [2u8; 32]),
+                action: "a2a.send".into(),
+                scope: scope_beta.clone(),
+                granted_by: me,
+                expires_at: None,
+            },
+            s.identity.signing_key(),
+        );
+        let (sig_a, sig_b) = (a.signature, b.signature);
+        assert_ne!(sig_a, sig_b);
+        s.capabilities.record(a).await.unwrap();
+        s.capabilities.record(b).await.unwrap();
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let scope_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .scope
+                .clone()
+        };
+        assert_eq!(
+            scope_of(sig_a),
+            scope_alpha,
+            "A's entry reports A's signed scope verbatim",
+        );
+        assert_eq!(
+            scope_of(sig_b),
+            scope_beta,
+            "B's entry reports B's signed scope verbatim",
+        );
+        // The scopes don't transpose despite sharing one action — the join is by
+        // signature, so the recipient bound to each grant stays with it.
+        assert_eq!(scope_of(sig_a)["recipient"], "peer-alpha@host");
+        assert_ne!(scope_of(sig_a), scope_of(sig_b));
+    }
+
+    #[tokio::test]
+    async fn capability_usage_effective_status_matches_enforcement() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Distinct subject pubkey per grant: canonical_message signs the subject
+        // pubkey (not its display), so grants must differ in a signed field to
+        // get distinct signatures and stay separate rows.
+        let grant = |seed: u8, scope: serde_json::Value, expires_at: Option<u64>| {
+            sign_capability(
+                covenant_types::Capability {
+                    subject: AgentId::new("sub@local", [seed; 32]),
+                    action: "tool.call.echo".into(),
+                    scope,
+                    granted_by: me.clone(),
+                    expires_at,
+                },
+                s.identity.signing_key(),
+            )
+        };
+
+        // LIVE: budgeted with budget remaining, unexpired, unrevoked.
+        let live = grant(1, serde_json::json!({ "version": 1, "max_uses": 3 }), None);
+        let live_sig = live.signature;
+        s.capabilities.record(live).await.unwrap();
+
+        // EXHAUSTED: spend the one unit through the same consume path enforcement
+        // uses, then confirm enforcement refuses the next consume.
+        let exhausted = grant(2, serde_json::json!({ "version": 1, "max_uses": 1 }), None);
+        let exhausted_sig = exhausted.signature;
+        s.capabilities.record(exhausted).await.unwrap();
+        assert_eq!(
+            s.capabilities
+                .consume_uses(&[covenant_permissions::BudgetConsumeRequest {
+                    signature: exhausted_sig,
+                    max_uses: 1,
+                }])
+                .await
+                .unwrap(),
+            covenant_permissions::BudgetConsumeOutcome::Consumed,
+        );
+        assert!(
+            matches!(
+                s.capabilities
+                    .consume_uses(&[covenant_permissions::BudgetConsumeRequest {
+                        signature: exhausted_sig,
+                        max_uses: 1,
+                    }])
+                    .await
+                    .unwrap(),
+                covenant_permissions::BudgetConsumeOutcome::Exhausted(_)
+            ),
+            "enforcement refuses the spent grant, so the query must report it Exhausted",
+        );
+
+        // REVOKED.
+        let revoked = grant(3, serde_json::json!({ "version": 1, "max_uses": 3 }), None);
+        let revoked_sig = revoked.signature;
+        s.capabilities.record(revoked).await.unwrap();
+        assert!(s.capabilities.revoke(revoked_sig).await.unwrap());
+
+        // EXPIRED: a past expires_at. Tie the query verdict to the actual
+        // enforcement predicate — verify_with_clock rejects it as Expired now.
+        let expired = grant(4, serde_json::json!({ "version": 1 }), Some(1_000));
+        let expired_sig = expired.signature;
+        assert!(
+            matches!(
+                covenant_permissions::verify_with_clock(&expired, epoch_ms()),
+                Err(covenant_permissions::PermissionError::Expired(_))
+            ),
+            "the enforcement clock must reject the past-expiry grant",
+        );
+        s.capabilities.record(expired).await.unwrap();
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let status_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .effective
+        };
+        assert_eq!(
+            status_of(live_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Live
+        );
+        assert_eq!(
+            status_of(exhausted_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Exhausted
+        );
+        assert_eq!(
+            status_of(revoked_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Revoked
+        );
+        assert_eq!(
+            status_of(expired_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Expired
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_usage_effective_status_precedence_matches_enforcement_order() {
+        let s = server_with(vec![], "");
+        let me = s.identity.agent_id();
+        // Distinct subject pubkey per grant so the two grants get distinct
+        // signatures (canonical_message signs the pubkey, not the display).
+        let grant = |seed: u8, expires_at: Option<u64>| {
+            sign_capability(
+                covenant_types::Capability {
+                    subject: AgentId::new("sub@local", [seed; 32]),
+                    action: "tool.call.echo".into(),
+                    scope: serde_json::json!({ "version": 1, "max_uses": 1 }),
+                    granted_by: me.clone(),
+                    expires_at,
+                },
+                s.identity.signing_key(),
+            )
+        };
+        let spend = |sig: [u8; 64]| {
+            [covenant_permissions::BudgetConsumeRequest {
+                signature: sig,
+                max_uses: 1,
+            }]
+        };
+
+        // Expired AND exhausted: enforcement rejects on expiry before the budget
+        // layer runs, so the dominant status is Expired, not Exhausted.
+        let exp_and_spent = grant(1, Some(1_000));
+        let exp_and_spent_sig = exp_and_spent.signature;
+        s.capabilities.record(exp_and_spent).await.unwrap();
+        s.capabilities
+            .consume_uses(&spend(exp_and_spent_sig))
+            .await
+            .unwrap();
+
+        // Revoked AND expired AND exhausted: revocation withdraws authority
+        // outright ahead of every other check, so the status is Revoked.
+        let all_three = grant(2, Some(1_000));
+        let all_three_sig = all_three.signature;
+        s.capabilities.record(all_three).await.unwrap();
+        s.capabilities
+            .consume_uses(&spend(all_three_sig))
+            .await
+            .unwrap();
+        assert!(s.capabilities.revoke(all_three_sig).await.unwrap());
+
+        let grants = match s.op_respond(Request::CapabilityUsage).await {
+            Response::CapabilityUsage { grants } => grants,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let status_of = |sig: [u8; 64]| {
+            grants
+                .iter()
+                .find(|g| g.signature_b58 == bs58::encode(sig).into_string())
+                .expect("grant present")
+                .effective
+        };
+        assert_eq!(
+            status_of(exp_and_spent_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Expired,
+            "expired dominates exhausted",
+        );
+        assert_eq!(
+            status_of(all_three_sig),
+            covenant_ipc::CapabilityEffectiveStatus::Revoked,
+            "revoked dominates expired and exhausted",
+        );
+    }
+
+    #[tokio::test]
     async fn recent_a2a_tasks_scrubs_when_peer_is_neither_side() {
         let s = server_with(vec![], "");
         let alien_a = AgentId::new("alice@local", [9u8; 32]);
@@ -51496,6 +56253,310 @@ required = {caps:?}
                 );
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    // A Mailbox whose four operator/cap-facing read methods fail with a
+    // distinct injected cause, so each handler's `Err(e) => Response::Error
+    // { message: format!("a2a: {e}") }` bail arm — dead under the infallible
+    // InMemoryMailbox default — can be reached and pinned. The blocking
+    // recv_* methods and repair_task are never exercised on these read paths
+    // and return Err(Closed) so the double compiles without constructing
+    // task/result/outcome values.
+    struct FailingMailboxReads;
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingMailboxReads {
+        async fn send_task(
+            &self,
+            _task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_task_for(
+            &self,
+            _recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_result_for(
+            &self,
+            _peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn recent_tasks(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox recent_tasks read failure",
+            )))
+        }
+        async fn task_queue(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox task_queue read failure",
+            )))
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn recent_results(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox recent_results read failure",
+            )))
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox compact read failure",
+            )))
+        }
+    }
+
+    // Fails only lookup_task_sender. post_a2a_result resolves the task's
+    // sender before its capability gate, so a mailbox that cannot resolve the
+    // sender must surface the read failure rather than mask it as an
+    // unknown_task spoof. Every other read stays Ok so the double is focused
+    // on the lookup bail, not a blanket read failure like FailingMailboxReads.
+    struct FailingLookupTaskSenderMailbox;
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingLookupTaskSenderMailbox {
+        async fn send_task(
+            &self,
+            _task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_task_for(
+            &self,
+            _recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_result_for(
+            &self,
+            _peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn recent_tasks(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn task_queue(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn recent_results(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox lookup_task_sender read failure",
+            )))
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn post_a2a_result_surfaces_error_when_mailbox_lookup_fails() {
+        // The a2a.respond path resolves the task's sender via
+        // Mailbox::lookup_task_sender before its capability gate; an Err
+        // there bails with Response::Error { "a2a: {e}" } so a mailbox read
+        // failure surfaces to the poster instead of being masked as an
+        // Ok(None) unknown_task rejection — which the audit-correlation chain
+        // treats as a spoof signal. The arm is uncovered: FailingMailboxReads
+        // returns Ok(None) for lookup, so the 4 mailbox read-failure slices
+        // never reach this bail (and the recent_results sites DROP the Err).
+        let server = server_with_mailbox_dyn(Arc::new(FailingLookupTaskSenderMailbox));
+        let result = covenant_a2a::A2ATaskResult::ok(
+            Uuid::new_v4(),
+            vec![covenant_mcp::Content::text("ok-result")],
+        );
+        match server.op_respond(Request::PostA2AResult { result }).await {
+            Response::Error { message } => assert!(
+                message.contains("a2a:")
+                    && message.contains("injected mailbox lookup_task_sender read failure"),
+                "a lookup_task_sender read failure must surface with its cause: {message}"
+            ),
+            other => panic!("expected a surfaced lookup-failure Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mailbox_read_failure_recent_tasks() {
+        // A recent_a2a_tasks read whose mailbox cannot read its queued/in-flight
+        // tasks must NOT be reported as an empty Response::A2ATasks: the
+        // operator would see a silently-truncated a2a task view
+        // indistinguishable from a genuinely empty queue, hiding a durability
+        // fault behind a clean response. recent_a2a_tasks applies no
+        // capability gate and op_respond IS the operator, so no grant is
+        // needed to reach the recent_tasks bail arm.
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        let resp = server
+            .op_respond(Request::RecentA2ATasks { limit: 10 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a recent_a2a_tasks read whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox recent_tasks read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent_tasks() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mailbox_read_failure_recent_results() {
+        // A recent_a2a_results read whose mailbox cannot read its posted
+        // results must NOT be reported as an empty Response::A2AResults: the
+        // operator would see a silently-truncated result view
+        // indistinguishable from a genuinely empty result set, hiding a
+        // durability fault behind a clean response. recent_a2a_results applies
+        // no capability gate and op_respond IS the operator, so no grant is
+        // needed to reach the recent_results bail arm (the lookup_task_sender
+        // join never runs because recent_results bails first).
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        let resp = server
+            .op_respond(Request::RecentA2AResults { limit: 10 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a recent_a2a_results read whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox recent_results read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent_results() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mailbox_read_failure_task_queue() {
+        // An a2a_queue read whose mailbox cannot read its queued/in-flight
+        // task queue must NOT be reported as an empty Response::A2AQueue: the
+        // operator would see a silently-truncated queue view
+        // indistinguishable from a genuinely empty queue, hiding a durability
+        // fault behind a clean response. a2a_queue applies no capability gate
+        // and op_respond IS the operator, so no grant is needed to reach the
+        // task_queue bail arm. task_queue is read before recent_results, so the
+        // surfaced cause is the task_queue failure (not the later
+        // recent_results join), pinning the FIRST bail arm specifically.
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        let resp = server
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "an a2a_queue read whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox task_queue read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when task_queue() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mailbox_read_failure_compact() {
+        // An a2a compaction whose mailbox cannot compact its backing store
+        // must NOT be reported as Response::A2ACompacted { dropped: 0 }: the
+        // operator would see a clean "compacted" response that hides a
+        // durability fault, then act on stale un-compacted state.
+        // compact_a2a is capability-gated on a2a.compact, but
+        // server_with_mailbox_dyn keeps the real InMemoryCapabilityStore, so
+        // the grant takes and the test reaches the compact Err bail arm.
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        grant_action(&server, "a2a.compact").await;
+        let resp = server.op_respond(Request::CompactA2A).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "an a2a compaction whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox compact read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when compact() fails, got {other:?}"),
         }
     }
 
@@ -52264,6 +57325,148 @@ budget_credits_per_hour = {credits}
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
         }
+    }
+
+    #[test]
+    fn known_hosts_path_is_under_home_peers() {
+        // The cross-host registry lives beside the local peer registry and the
+        // operator token, so an operator manages all peering state in one dir.
+        assert_eq!(
+            known_hosts_path(Path::new("/srv/covenant")),
+            PathBuf::from("/srv/covenant/peers/known-hosts.json"),
+        );
+    }
+
+    #[tokio::test]
+    async fn known_hosts_missing_under_home_loads_empty_local_only() {
+        // Missing file is the default: no cross-host peering configured, so the
+        // daemon's conventional path loads an empty registry and operates
+        // local-only — never a panic, never a silent default-to-local.
+        let home = tempfile::tempdir().unwrap();
+        let hosts = KnownHosts::load_from_path(known_hosts_path(home.path()))
+            .await
+            .expect("a missing known-hosts file under home is local-only, not a boot failure");
+        assert!(hosts.is_empty());
+        let server =
+            server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
+                .with_known_hosts(hosts);
+        assert!(server.known_hosts().is_empty());
+        assert!(
+            matches!(
+                server.known_hosts().resolve_host("anyhost"),
+                Err(covenant_peer_auth::PeerError::UnknownHost(_))
+            ),
+            "local-only daemon resolves every host to UnknownHost",
+        );
+    }
+
+    #[tokio::test]
+    async fn known_hosts_at_conventional_path_is_loaded() {
+        // A registry written at the daemon's conventional path is honored —
+        // proves main.rs consults known_hosts_path, not the empty default.
+        let home = tempfile::tempdir().unwrap();
+        let path = known_hosts_path(home.path());
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        let registry = KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://remote:7777".into(),
+                pubkey: [9u8; 32],
+            },
+        );
+        tokio::fs::write(&path, serde_json::to_vec(&registry).unwrap())
+            .await
+            .unwrap();
+
+        let loaded = KnownHosts::load_from_path(path).await.unwrap();
+        let server =
+            server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
+                .with_known_hosts(loaded);
+        let endpoint = server
+            .known_hosts()
+            .resolve_host("remote")
+            .expect("the configured host must resolve");
+        assert_eq!(endpoint.url, "http://remote:7777");
+        assert_eq!(endpoint.pubkey, [9u8; 32]);
+    }
+
+    #[tokio::test]
+    async fn malformed_known_hosts_at_conventional_path_fails_closed() {
+        // A corrupt registry at the conventional path must surface as an error
+        // the daemon's `?` turns into a refused startup — never an empty
+        // registry the operator mistakes for "peering configured".
+        let home = tempfile::tempdir().unwrap();
+        let path = known_hosts_path(home.path());
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&path, b"{not valid json").await.unwrap();
+        let err = KnownHosts::load_from_path(path)
+            .await
+            .expect_err("a malformed known-hosts file must fail closed, not load empty");
+        assert!(
+            matches!(err, covenant_peer_auth::PeerError::Serde(_)),
+            "malformed registry must surface as a serde error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn server_defaults_to_empty_known_hosts() {
+        // A daemon constructed without with_known_hosts holds an empty registry
+        // (the local-only default), so cross-host routing is off until wired.
+        let server =
+            server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()));
+        assert!(server.known_hosts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn loading_known_hosts_does_not_change_local_peer_auth() {
+        // The two registries stay distinct: holding a remote-host registry must
+        // not alter local token auth, and a local peer must not leak into the
+        // host namespace. Cross-scope isolation (slice-3 failure mode 4).
+        let hosts = KnownHosts::new().with_host(
+            "remote",
+            covenant_peer_auth::PeerEndpoint {
+                url: "http://remote:7777".into(),
+                pubkey: [9u8; 32],
+            },
+        );
+        let server =
+            server_with_peers_dyn(Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()))
+                .with_known_hosts(hosts);
+
+        let token = PeerToken::from_bytes([7u8; 32]);
+        server
+            .peers
+            .register(PeerEntry {
+                token,
+                agent_id: AgentId::new("alice@local", [3u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+
+        let resolved = server
+            .peers
+            .resolve(&token)
+            .await
+            .unwrap()
+            .expect("local token auth is unaffected by loading a known-hosts registry");
+        assert_eq!(resolved.display, "alice@local");
+
+        assert!(
+            server.known_hosts().resolve_host("remote").is_ok(),
+            "the configured remote host resolves",
+        );
+        assert!(
+            matches!(
+                server.known_hosts().resolve_host("local"),
+                Err(covenant_peer_auth::PeerError::UnknownHost(_))
+            ),
+            "a registered local peer must never appear in the known-hosts namespace",
+        );
     }
 
     #[test]
@@ -53216,6 +58419,51 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
+    fn a2a_entry_matches_min_lease_age_pins_inclusive_threshold_equality() {
+        // a2a_entry_matches_min_lease_age keeps an in-flight entry when its
+        // lease age is AT LEAST min_lease_age_ms:
+        //   now_ms.saturating_sub(leased_at) >= min_lease_age_ms
+        // The `>=` is inclusive, so a lease aged EXACTLY min_lease_age_ms ago is
+        // old enough to reclaim and must match. a2a_entry_matches_min_lease_age_
+        // pins_filter_matrix probes age 100 vs min 50 (strictly above) and age
+        // 100 vs min 500 (strictly below) but never age == min, so a `>=` -> `>`
+        // flip would silently drop a lease sitting exactly on the threshold from
+        // the operator's `--min-lease-age-ms` stale-lease reclaim view, delaying
+        // repair by one tick, with the matrix test still green.
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: AgentId::new("sender@local", [1u8; 32]),
+            recipient: AgentId::new("recipient@local", [2u8; 32]),
+            intent_text: "anything".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        let in_flight = covenant_a2a::A2ATaskQueueEntry {
+            state: covenant_a2a::A2ATaskQueueState::InFlight,
+            task,
+            lease_id: Some(Uuid::new_v4()),
+            leased_to: Some(AgentId::new("leasee@local", [3u8; 32])),
+            leased_at_ms: Some(100),
+            attempt: 1,
+        };
+        // Lease age = 200 - 100 = 100, exactly equal to min_lease_age_ms: the
+        // inclusive arm must keep it.
+        assert!(
+            a2a_entry_matches_min_lease_age(&in_flight, Some(100), 200),
+            "a lease aged exactly min_lease_age_ms must match — `>=` includes \
+             the threshold; a `>` flip would drop it and delay reclaim a tick",
+        );
+        // One ms older threshold than the lease age brackets the boundary from
+        // below so the equality case above is the decisive line.
+        assert!(
+            !a2a_entry_matches_min_lease_age(&in_flight, Some(101), 200),
+            "lease age 100 is strictly younger than min 101 and must not match",
+        );
+    }
+
+    #[test]
     fn a2a_entry_visible_to_peer_pins_each_visibility_path() {
         let sender = AgentId::new("sender@local", [1u8; 32]);
         let recipient = AgentId::new("recipient@local", [2u8; 32]);
@@ -53452,6 +58700,7 @@ budget_credits_per_hour = {credits}
                 required_actions: vec!["tool.call.test".into()],
                 missing_actions: vec![],
                 passed: true,
+                authorized_by: vec![],
             },
         }
     }
@@ -53486,6 +58735,7 @@ budget_credits_per_hour = {credits}
                 required_actions: vec!["tool.call.positive".into()],
                 missing_actions: vec![],
                 passed: true,
+                authorized_by: vec![],
             },
         };
         let event_id = event.id;
@@ -53617,6 +58867,53 @@ budget_credits_per_hour = {credits}
                 );
                 assert_eq!(debits[0].agent.display, "beta@agent");
                 assert_eq!(debits[1].agent.display, "alpha@agent");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_debits_truncates_to_limit_after_cross_agent_merge() {
+        // recent_debits fetches up to `limit` debits per agent, merges them,
+        // sorts newest-first, then truncates to `limit` over the MERGED set
+        // (lib.rs:3178-3179). A binding limit must therefore surface the
+        // globally newest `limit` debits across agents, not the first `limit`
+        // before sorting and not `limit` per agent. The newest-first test
+        // uses a slack limit of 10 over two debits, so a truncate-before-sort
+        // or a missing global truncate survives it. Interleave four debits in
+        // time across two agents and bind the limit to 2.
+        let s = server_with(
+            vec![
+                stub_card_with_budget("alpha", vec![], 100),
+                stub_card_with_budget("beta", vec![], 100),
+            ],
+            "ignored",
+        );
+        s.register_agent_budgets().await.unwrap();
+        let alpha = agent_id_for_card(&stub_card_with_budget("alpha", vec![], 100));
+        let beta = agent_id_for_card(&stub_card_with_budget("beta", vec![], 100));
+        s.budget.try_debit(&alpha, 1, Uuid::new_v4()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        s.budget.try_debit(&beta, 1, Uuid::new_v4()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        s.budget.try_debit(&alpha, 1, Uuid::new_v4()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        s.budget.try_debit(&beta, 1, Uuid::new_v4()).await.unwrap();
+        match s.op_respond(Request::RecentDebits { limit: 2 }).await {
+            Response::Debits { debits } => {
+                assert_eq!(
+                    debits.len(),
+                    2,
+                    "binding limit caps the merged set, not per agent"
+                );
+                assert_eq!(
+                    debits[0].agent.display, "beta@agent",
+                    "globally newest debit (beta's last) must survive the truncate",
+                );
+                assert_eq!(
+                    debits[1].agent.display, "alpha@agent",
+                    "second-newest (alpha's last) must survive; the two oldest are dropped",
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -56051,6 +61348,2838 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_preempt_intent_emits_signal_sent_sigkill_for_trapped_subprocess() {
+        // Subprocess installs `trap '' TERM` so it IGNORES the
+        // cooperative SIGTERM and can only be terminated by the
+        // uncatchable SIGKILL once grace expires — the proven SigKilled
+        // recipe from covenant-runtime's
+        // preempt_subprocess_pg_returns_sig_killed_when_group_survives_grace.
+        // Asserts the daemon-layer mapping PreemptOutcome::SigKilled ->
+        // BudgetPreempted{signal_sent="SIGKILL"}. This is the third arm
+        // of the signal_sent map: the "none" (already-dead) and
+        // "SIGTERM" (cooperative-exit) arms are pinned by sibling tests,
+        // but no test asserts a FORCED kill is recorded as "SIGKILL". A
+        // refactor that relabeled the SigKilled arm to "SIGTERM" would
+        // claim a graceful exit where the process actually had to be
+        // force-killed and would pass the rest of the suite; this
+        // catches it.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let server = server_with_audit_and_budget(
+            audit.clone(),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+
+        // `trap '' TERM` is installed FIRST so the shell ignores the
+        // cooperative SIGTERM for the whole grace window; it then prints
+        // a readiness marker and busy-loops to keep the group alive. The
+        // test blocks on that marker before preempting, so the outcome
+        // is deterministically SigKilled even under heavy concurrent test
+        // load — a fixed head-start would race the trap install when the
+        // machine is saturated and flake to ExitedDuringGrace.
+        let mut std_cmd = std::process::Command::new("sh");
+        std_cmd
+            .arg("-c")
+            .arg("trap '' TERM; echo ready; while true; do sleep 0.1; done")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn trap-ignore subprocess");
+        let pid = child.id().expect("child pid available before reap");
+
+        // Block until the shell has installed the TERM trap (it prints
+        // "ready" immediately after `trap ''`) so the preempt SIGTERM can
+        // never beat the trap.
+        let stdout = child.stdout.take().expect("child stdout piped");
+        let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(stdout));
+        let ready = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+            .await
+            .expect("shell must print readiness within 5s")
+            .expect("read readiness line");
+        assert_eq!(
+            ready.as_deref(),
+            Some("ready"),
+            "shell must emit its readiness marker after installing the TERM trap",
+        );
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "trapped@local".into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let (result, _exit) = tokio::join!(
+            server.preempt_intent(
+                intent_id,
+                "test:sigkill_escalation".into(),
+                std::time::Duration::from_millis(250)
+            ),
+            child.wait(),
+        );
+
+        assert!(
+            matches!(
+                result,
+                PreemptResult::Preempted {
+                    outcome: covenant_runtime::PreemptOutcome::SigKilled,
+                }
+            ),
+            "a subprocess that traps and ignores SIGTERM must be SIGKILLed after grace, surfacing PreemptOutcome::SigKilled (not ExitedDuringGrace); got {result:?}",
+        );
+
+        let events = audit.recent(32).await.expect("audit recent must succeed");
+        let row = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::BudgetPreempted {
+                    intent_id: id,
+                    signal_sent,
+                    ..
+                } if *id == intent_id => Some(signal_sent.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected exactly one BudgetPreempted row for intent_id {intent_id}; events seen: {events:?}"
+                )
+            });
+        assert_eq!(
+            row, "SIGKILL",
+            "SigKilled must map to signal_sent=\"SIGKILL\" so post-mortem distinguishes a forced kill from a cooperative SIGTERM exit",
+        );
+    }
+
+    /// An [`AuditLog`](covenant_audit::AuditLog) whose every method fails,
+    /// for exercising the required-audit-write-failed branch of
+    /// [`Server::preempt_intent`]. Only `record` is reached on the preempt
+    /// path; the read methods fail too so the double can never masquerade as
+    /// a working log.
+    #[cfg(unix)]
+    struct FailingAuditLog;
+
+    #[cfg(unix)]
+    fn injected_audit_error() -> covenant_audit::AuditError {
+        covenant_audit::AuditError::Io(std::io::Error::other("injected audit write failure"))
+    }
+
+    #[cfg(unix)]
+    #[async_trait::async_trait]
+    impl covenant_audit::AuditLog for FailingAuditLog {
+        async fn record(
+            &self,
+            _event: covenant_audit::AuditEvent,
+        ) -> Result<(), covenant_audit::AuditError> {
+            Err(injected_audit_error())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
+            Err(injected_audit_error())
+        }
+        async fn purge_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_audit::AuditError> {
+            Err(injected_audit_error())
+        }
+        async fn verify_integrity(
+            &self,
+        ) -> Result<covenant_audit::AuditIntegrityReport, covenant_audit::AuditError> {
+            Err(injected_audit_error())
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_preempt_intent_surfaces_audit_write_failed_when_audit_append_fails() {
+        // The kill lands but the BudgetPreempted accountability row cannot
+        // persist: preempt_intent must surface AuditWriteFailed (carrying the
+        // real subprocess outcome plus the audit error) rather than swallow
+        // the failure and report a clean Preempted. A hard-preempt whose audit
+        // record was lost is an enforcement action with no durable trail; the
+        // operator must be able to tell it apart from a fully-accounted kill.
+        //
+        // Drives the deterministic AlreadyDead path (spawn -> reap -> stale
+        // pid, the recipe from _emits_signal_sent_none_for_already_dead_pid)
+        // so no live signal handling is involved and the only variable under
+        // test is the audit append failing.
+        use std::os::unix::process::CommandExt;
+        let server = server_with_audit_dyn(Arc::new(FailingAuditLog));
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("0.01")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+        let _ = child.wait().await;
+
+        // Let the kernel finalize process-table cleanup so kill(-pid, 0)
+        // returns ESRCH (AlreadyDead) rather than hitting a half-reaped zombie.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "stale@local".into(),
+                pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let result = server
+            .preempt_intent(
+                intent_id,
+                "test:audit_write_failed".into(),
+                std::time::Duration::from_millis(100),
+            )
+            .await;
+
+        match result {
+            PreemptResult::AuditWriteFailed { outcome, error } => {
+                assert!(
+                    matches!(outcome, covenant_runtime::PreemptOutcome::AlreadyDead),
+                    "AuditWriteFailed must carry the real subprocess outcome so the caller learns the kill still landed; got {outcome:?}",
+                );
+                assert!(
+                    !error.is_empty(),
+                    "AuditWriteFailed must surface the audit error string (retry/escalate guidance), not an empty placeholder",
+                );
+            }
+            other => panic!(
+                "a failed required-audit append on the preempt path must surface as AuditWriteFailed, not a swallowed clean Preempted; got {other:?}",
+            ),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_surfaces_ipc_audit_write_failure_as_response_error() {
+        // IPC sibling of the HTTP reject() guard and the preempt
+        // AuditWriteFailed arm above: handle()'s auth loop treats a
+        // successful audit-write as a precondition for the auth-failed
+        // reply. If record_auth_failure("ipc", reason) cannot persist the
+        // AuthenticationFailed row, handle() writes Response::Error
+        // { "audit write failed; refusing to proceed" } instead of
+        // Response::AuthenticationFailed (lib.rs:2053 unknown-token arm,
+        // lib.rs:2067 non-Authenticate-first-frame arm) and closes the
+        // connection, so an attacker who fills the audit disk does not
+        // get clean 401s while the operator's audit feed falls behind
+        // reality. live_peer_auth.rs pins the AuthenticationFailed arms
+        // over the live socket, but this sub-arm is live-unreachable (a
+        // real daemon's audit store cannot be made to fail
+        // deterministically); drive it in-process with a FailingAuditLog
+        // double over a UnixStream::pair().
+        use covenant_ipc::{read_frame, write_frame, Request, Response};
+        use tokio::net::UnixStream;
+
+        let server = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let (mut client, server_side) = UnixStream::pair().expect("unix socket pair");
+        let connection_id = Uuid::new_v4();
+        let task = tokio::spawn(async move {
+            let _ = server.handle(connection_id, server_side).await;
+        });
+
+        // Unregistered token -> authenticate() returns None on the empty
+        // InMemoryPeerRegistry -> the None arm calls record_auth_failure,
+        // which the FailingAuditLog double rejects -> Response::Error.
+        let unregistered = covenant_peer_auth::PeerToken::generate().to_b58();
+        write_frame(
+            &mut client,
+            &Request::Authenticate {
+                token_b58: unregistered,
+            },
+        )
+        .await
+        .expect("write Authenticate frame");
+
+        let resp: Response = read_frame(&mut client)
+            .await
+            .expect("client must receive the framed Response::Error before EOF");
+        match resp {
+            Response::Error { message } => assert_eq!(
+                message,
+                "audit write failed; refusing to proceed",
+                "a failed required-audit write on the IPC auth path must surface as Response::Error, not a clean AuthenticationFailed",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+
+        drop(client);
+        let _ = task.await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_operator_token_rotation_rejected() {
+        // OperatorTokenRotationRejected is a must-record kind: a rotation
+        // attempt by a non-operator peer is a probe that must land on the
+        // operator's /audit feed even when the audit store is degraded. If
+        // record_daemon_event_required cannot persist the row, rotate_operator_token
+        // must surface the generic "audit write failed; refusing to proceed"
+        // bail rather than the normal operator-identity rejection — otherwise
+        // the operator answers a probe with a clean refusal that leaves no
+        // durable trail. A real daemon's audit store cannot be made to fail
+        // deterministically over the live socket, so drive it in-process with
+        // the FailingAuditLog double.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let non_operator = LocalIdentity::generate("non-op@local").agent_id();
+        assert_ne!(
+            non_operator.pubkey,
+            s.identity.agent_id().pubkey,
+            "fixture peer must not share the server operator's pubkey"
+        );
+        match s.rotate_operator_token(&non_operator).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the rotate path must surface as the generic bail, not the normal operator-identity rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_operator_peers_list_rejected() {
+        // OperatorPeersListRejected is a must-record kind: a non-operator
+        // peer listing the registry without `peers.list` is an enumeration
+        // probe that must land on the operator's /audit feed even when the
+        // audit store is degraded. If record_daemon_event_required cannot
+        // persist the row, list_peers must surface the generic
+        // "audit write failed; refusing to proceed" bail rather than the
+        // normal capability rejection — otherwise the operator answers an
+        // enumeration probe with a clean refusal that leaves no durable
+        // trail. Drive it in-process with the FailingAuditLog double.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let non_operator = LocalIdentity::generate("non-op@local").agent_id();
+        assert_ne!(
+            non_operator.pubkey,
+            s.identity.agent_id().pubkey,
+            "fixture peer must not share the server operator's pubkey"
+        );
+        match s.list_peers(10, None, None, &non_operator).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the peers-list path must surface as the generic bail, not the normal capability rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_operator_peer_revoke_rejected() {
+        // OperatorPeerRevokeRejected is a must-record kind: a non-operator
+        // peer attempting to revoke a registry entry without `peers.revoke`
+        // is a destructive probe that must land on the operator's /audit feed
+        // even when the audit store is degraded. If record_daemon_event_required
+        // cannot persist the row, revoke_peer must surface the generic
+        // "audit write failed; refusing to proceed" bail rather than the
+        // normal capability rejection — otherwise the operator answers a
+        // destructive probe with a clean refusal that leaves no durable
+        // trail. Drive it in-process with the FailingAuditLog double.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let non_operator = LocalIdentity::generate("non-op@local").agent_id();
+        assert_ne!(
+            non_operator.pubkey,
+            s.identity.agent_id().pubkey,
+            "fixture peer must not share the server operator's pubkey"
+        );
+        match s.revoke_peer("abcdef".into(), false, None, &non_operator).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the peer-revoke path must surface as the generic bail, not the normal capability rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_a2a_sender_mismatch() {
+        // A2ASenderMismatch is a must-record kind: a peer presenting an A2A
+        // task whose sender is not the authenticated peer is a spoofing
+        // attempt that must land on the peer's own audit feed even when the
+        // audit store is degraded. If record_peer_event_required cannot
+        // persist the row, send_a2a_task must surface the generic
+        // "audit write failed; refusing to proceed" bail rather than the
+        // normal spoof rejection — otherwise the operator/peer answers a
+        // spoof with a clean refusal that leaves no durable trail. Drive it
+        // in-process with the FailingAuditLog double.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let peer = LocalIdentity::generate("peer@local").agent_id();
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: LocalIdentity::generate("spoof@local").agent_id(),
+            recipient: LocalIdentity::generate("recipient@local").agent_id(),
+            intent_text: String::new(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        assert_ne!(
+            task.sender.pubkey, peer.pubkey,
+            "fixture task.sender must not match the authenticated peer"
+        );
+        match s.send_a2a_task(task, &peer).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the a2a sender-mismatch path must surface as the generic bail, not the normal spoof rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_capability_revoke_rejected() {
+        // CapabilityRevokeRejected is a must-record kind: a peer attempting
+        // to revoke a capability signature it does not own (a cross-peer
+        // revoke) is a subject-mismatch probe that must land on the
+        // operator's /audit feed even when the audit store is degraded. If
+        // record_daemon_event_required cannot persist the row, revoke_capability
+        // must surface the generic "audit write failed; refusing to proceed"
+        // bail rather than the normal subject-mismatch rejection — otherwise
+        // the operator answers a cross-peer revoke probe with a clean refusal
+        // that leaves no durable trail. Drive it in-process with the
+        // FailingAuditLog double (the default in-memory capability store is
+        // retained, so list_for_subject returns empty and is_revoked returns
+        // false for a signature that was never granted).
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let peer = LocalIdentity::generate("peer@local").agent_id();
+        let signature_b58 = bs58::encode([0xABu8; 64]).into_string();
+        match s.revoke_capability(signature_b58, &peer).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the cross-peer revoke path must surface as the generic bail, not the normal subject-mismatch rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_a2a_recipient_rejected() {
+        // A2ARecipientRejected (the catch-all arm: the recipient granted no
+        // a2a.recv at all) is a must-record kind: a sender pushing a task at
+        // a recipient that has not admitted it must land on the sender's own
+        // audit feed even when the audit store is degraded. If
+        // record_peer_event_required cannot persist the row, send_a2a_task
+        // must surface the generic "audit write failed; refusing to proceed"
+        // bail rather than the normal recipient-admission rejection —
+        // otherwise an unsolicited-task probe is answered with a clean
+        // refusal that leaves no durable trail.
+        //
+        // The sender is granted a2a.send.<recipient> first. That grant's
+        // CapabilityGranted row writes through the non-required
+        // record_peer_event (which only warns on failure), so the grant
+        // still lands in the in-memory store under FailingAuditLog and the
+        // send reaches the recipient gate. The recipient has no a2a.recv, so
+        // the catch-all arm emits A2ARecipientRejected via the required
+        // variant — the only audit write on this path — which bails.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        let peer = s.identity.agent_id();
+        let foreign_recipient = AgentId::new("victim@local", [7u8; 32]);
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: peer.clone(),
+            recipient: foreign_recipient.clone(),
+            intent_text: "spam".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        s.op_respond(Request::GrantCapability {
+            action: format!("a2a.send.{}", foreign_recipient.display),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        match s.op_respond(Request::SendA2ATask { task }).await {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the a2a recipient-rejected path must surface as the generic bail, not the normal recipient-admission rejection",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
+    /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
+    /// `record` fails, for exercising the bail arm of
+    /// [`Server::grant_capability`] when the capability row cannot persist.
+    /// Only `record` is reached on the grant path; the other methods return
+    /// inert defaults so the double never masquerades as a working store.
+    struct FailingCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability record failure"),
+            ))
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn grant_capability_surfaces_error_when_capability_store_record_fails() {
+        // A capability grant whose backing-store row cannot persist must NOT be
+        // reported as CapabilityGranted: the granted peer would believe it holds
+        // a permission that was never durably recorded (absent from
+        // list_for_subject, gone on restart) while the operator's tamper-evident
+        // record also lacks the matching grant row. grant_capability bails to
+        // Response::Error before the CapabilityGranted audit event is written.
+        let server = server_with_capabilities_dyn(Arc::new(FailingCapabilityStore));
+        let resp = server
+            .op_respond(Request::GrantCapability {
+                action: "memory.write".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("failed to record capability"),
+                    "a grant whose capability row fails to persist must surface the record error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability record failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when record() fails, got {other:?}"),
+        }
+    }
+
+    /// Like [`FailingCapabilityStore`] but the fault is on the read path: only
+    /// `recent` fails, so [`Server::recent_capability`] reaches its bail arm
+    /// while the other trait methods stay inert.
+    struct FailingRecentCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingRecentCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Ok(())
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability recent read failure"),
+            ))
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_capabilities_surfaces_error_when_capability_store_recent_fails() {
+        // A capability-ledger read whose backing store fails must NOT be reported
+        // as an empty Response::Capabilities: the caller would see a silently
+        // truncated ledger (recent grants/revocations invisible) indistinguishable
+        // from a store that genuinely holds nothing, hiding a durability fault.
+        let server = server_with_capabilities_dyn(Arc::new(FailingRecentCapabilityStore));
+        let resp = server
+            .op_respond(Request::RecentCapabilities { limit: 10 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a recent_capabilities read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`MemoryStore`] double whose `recent` read fails, so
+    /// [`Server::recent_memory`] reaches its `memory: {e}` bail arm while the
+    /// other trait methods stay inert. The default `InMemoryStore::recent` is
+    /// infallible, so the arm is dead without this injection.
+    struct FailingRecentMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingRecentMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory recent read failure",
+            )))
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_memory_surfaces_error_when_memory_store_recent_fails() {
+        // A memory read whose backing store fails must NOT be reported as an
+        // empty Response::Memories: the caller would see a silently-truncated
+        // memory view (records invisible) indistinguishable from a store that
+        // genuinely holds nothing, hiding a durability fault behind a clean
+        // response. The operator grants itself memory.read first so the
+        // capability + scope gates pass; the injected store then fails recent().
+        let server = server_with_memory_dyn(Arc::new(FailingRecentMemoryStore));
+        grant_action(&server, "memory.read").await;
+        let resp = server
+            .op_respond(Request::RecentMemory {
+                tier: None,
+                limit: 10,
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a recent_memory read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent() fails, got {other:?}"),
+        }
+    }
+
+    /// Like [`FailingRecentMemoryStore`] but the fault is on the vector-search
+    /// read path: only `search_similar` fails, so [`Server::search_memory`]
+    /// reaches its `memory: {e}` bail arm while the other trait methods stay
+    /// inert.
+    struct FailingSearchMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingSearchMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory search read failure",
+            )))
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+    }
+
+    /// An [`Embedder`] double whose `embed` always fails, so [`Server::search_memory`]
+    /// reaches its `embed: {e}` bail arm (lib.rs:6460) while the rest of the daemon
+    /// behaves normally. Every production path and every existing test constructs
+    /// the Server with the infallible-by-construction `MockEmbedder`, so the
+    /// embedder Err arm is dead without this injection.
+    struct FailingEmbedder;
+
+    #[async_trait::async_trait]
+    impl Embedder for FailingEmbedder {
+        fn name(&self) -> &'static str {
+            "failing"
+        }
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, covenant_llm::ProviderError> {
+            Err(covenant_llm::ProviderError::Status {
+                status: 503,
+                body: "injected embedder failure".into(),
+            })
+        }
+    }
+
+    /// A [`Runner`] double whose `run` always fails, so [`Server::dispatch_intent`]
+    /// reaches its `agent {id} failed: {e}` bail arm (lib.rs:4766) while the rest
+    /// of the daemon behaves normally. Every production path and every existing
+    /// test constructs the Server with the infallible-by-construction
+    /// `MockRunner`, so the runner Err arm is dead without this injection.
+    struct FailingRunner;
+
+    #[async_trait::async_trait]
+    impl Runner for FailingRunner {
+        async fn run(
+            &self,
+            _card: &AgentCard,
+            _intent: &Intent,
+        ) -> Result<AgentResult, covenant_runtime::RunnerError> {
+            Err(covenant_runtime::RunnerError::Io(std::io::Error::other(
+                "injected runner failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_intent_surfaces_error_when_runner_fails() {
+        // A failing agent run must surface to the caller as Response::Error
+        // naming the failing agent and carrying the cause (lib.rs:4766), NOT a
+        // silent success or an attribution-free message — otherwise a crashed
+        // or misbehaving agent looks like a healthy no-op and the intent is
+        // never retried or repaired. Every test builds the Server with the
+        // infallible MockRunner, so this bail arm is dead without the injected
+        // FailingRunner. The default unseeded InMemoryLedger takes its
+        // NoCapacity warn-and-continue path (it does not bail), so dispatch
+        // reaches the runner; the operator grants the card's required cap so
+        // the capability gate passes.
+        let server = server_with_runner(
+            vec![stub_card("research", vec!["tool.web_search"])],
+            Arc::new(FailingRunner),
+        );
+        grant_action(&server, "tool.web_search").await;
+        grant_action(&server, "memory.write").await;
+        match server
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.starts_with("agent research failed: "),
+                    "the bail must name the failing agent with the documented prefix, got {message:?}",
+                );
+                assert!(
+                    message.contains("injected runner failure"),
+                    "the bail must surface the runner cause, got {message:?}",
+                );
+            }
+            other => panic!("a failing runner must bail to Response::Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn search_memory_surfaces_error_when_memory_store_search_fails() {
+        // A vector-search read whose backing store fails must NOT be reported
+        // as an empty Response::Memories: the caller would see a silently
+        // truncated recall view (no matches) indistinguishable from a store
+        // that genuinely holds nothing relevant, hiding a durability fault
+        // behind a clean response. The operator grants itself memory.read so
+        // the cap + scope gates pass and the MockEmbedder succeeds; the
+        // injected store then fails search_similar().
+        let server = server_with_memory_dyn(Arc::new(FailingSearchMemoryStore));
+        grant_action(&server, "memory.read").await;
+        let resp = server
+            .op_respond(Request::SearchMemory {
+                query: "hello".into(),
+                tier: None,
+                limit: 10,
+                min_relevance: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a search_memory read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory search read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when search_similar() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn search_memory_surfaces_error_when_embedder_fails() {
+        // A vector-search read first embeds the query (lib.rs:6458) before it
+        // queries the store; an embedder outage (Ollama unreachable, model-load
+        // failure, response truncation) must NOT surface as an empty
+        // Response::Memories — the caller would see clean "no matches" recall
+        // indistinguishable from a store that genuinely holds nothing relevant,
+        // hiding a dependency fault behind a success. The operator grants itself
+        // memory.read so the cap + scope gates pass and the infallible
+        // InMemoryStore would otherwise return an empty Ok; only the injected
+        // FailingEmbedder stands between the request and that misleading page.
+        let server = server_with_embedder(Arc::new(FailingEmbedder));
+        grant_action(&server, "memory.read").await;
+        let resp = server
+            .op_respond(Request::SearchMemory {
+                query: "hello".into(),
+                tier: None,
+                limit: 10,
+                min_relevance: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("embed:"),
+                    "a search_memory read whose embedder fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected embedder failure"),
+                    "the surfaced error must carry the embedder's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when embed() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_intent_survives_embedder_failure() {
+        // Intent dispatch must stay available during an embedder outage: the
+        // dispatcher warns and stores the record WITHOUT a vector (lib.rs:4782)
+        // rather than failing the intent. A regression that bailed on embed
+        // failure would break every intent whenever the embedder is unreachable.
+        // The mock embedder always succeeds, so this graceful path is dead
+        // without the injected FailingEmbedder. No agent card routes, so the
+        // phase-0 echo branch produces the output that gets stored.
+        let server = server_with_embedder(Arc::new(FailingEmbedder));
+        grant_action(&server, "memory.write").await;
+        let intent_id = match server
+            .op_respond(Request::SubmitIntent {
+                text: "ship the feature".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::IntentResult {
+                intent_id, status, ..
+            } => {
+                assert_eq!(
+                    status, "ok",
+                    "dispatch must succeed during an embedder outage, got status {status}",
+                );
+                intent_id
+            }
+            other => panic!("dispatch must survive an embedder outage, got {other:?}"),
+        };
+        // The record landed WITHOUT a vector — the precise "storing without
+        // vector" degradation, not merely "dispatch did not error".
+        grant_action(&server, "memory.read").await;
+        match server
+            .op_respond(Request::RecentMemory {
+                tier: None,
+                limit: 10,
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::Memories { records } => {
+                let record = records
+                    .iter()
+                    .find(|r| r.id == intent_id)
+                    .expect("the intent record must be stored even when embedding failed");
+                assert!(
+                    record.embedding.is_empty(),
+                    "the record must be stored WITHOUT a vector during an embedder outage, got {} dims",
+                    record.embedding.len(),
+                );
+            }
+            other => panic!("expected Memories read-back, got {other:?}"),
+        }
+    }
+
+    /// A [`MemoryStore`] double whose `purge_older_than` WRITE fails, so
+    /// [`Server::purge_memory`] reaches its `memory: {e}` bail arm while the
+    /// other trait methods stay inert. The default in-memory + sqlite impls
+    /// surface real IO errors, but every existing purge test constructs the
+    /// Server with an infallible-by-construction double, so the write Err arm
+    /// is dead without this injection. `repair`/`compact`/`backfill_receipt_correlation`
+    /// inherit their default trait impls and are unreached on the purge path.
+    struct FailingPurgeMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingPurgeMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory purge write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_write_failure_purge() {
+        // A memory purge whose backing store cannot drop the purged records
+        // must NOT be reported as Response::MemoryPurged: the operator would
+        // believe the purge succeeded (records gone) when the underlying write
+        // failed (records remain), hiding a durability fault behind a clean
+        // success. purge_memory gates on the memory.purge capability + scope;
+        // server_with_memory_dyn keeps the real InMemoryCapabilityStore so the
+        // scoped grant takes, and the proven {before_ms:100} grant + {before_ms:99}
+        // request reaches the purge_older_than write Err bail arm.
+        let server = server_with_memory_dyn(Arc::new(FailingPurgeMemoryStore));
+        server
+            .op_respond(Request::GrantCapability {
+                action: "memory.purge".into(),
+                scope: Some(serde_json::json!({
+                    "version": 1,
+                    "tiers": ["working"],
+                    "before_ms": 100,
+                })),
+                expires_at: None,
+            })
+            .await;
+        let resp = server
+            .op_respond(Request::PurgeMemory {
+                tier: Some(MemoryTier::Working),
+                before_ms: 99,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a purge whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory purge write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => {
+                panic!("expected Response::Error when purge_older_than() fails, got {other:?}")
+            }
+        }
+    }
+
+    /// A [`MemoryStore`] double whose `compact` WRITE fails, so
+    /// [`Server::compact_memory`] reaches its `memory: {e}` bail arm.
+    /// `compact` has a DEFAULT trait impl (composing `all`/`delete`/`put`); this
+    /// override returns `Err` directly so the daemon's
+    /// `match self.memory.compact(request)` hits the bail without seeding
+    /// records. Every existing compact test constructs the Server with an
+    /// infallible-by-construction double, so the write Err arm is dead without
+    /// this injection.
+    struct FailingCompactMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingCompactMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+        async fn compact(
+            &self,
+            _request: MemoryCompactionRequest,
+        ) -> Result<covenant_memory::MemoryCompactionOutcome, covenant_memory::MemoryError>
+        {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory compact write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_write_failure_compact() {
+        // A memory compaction whose backing store cannot apply the plan must
+        // NOT be reported as Response::MemoryCompacted: the operator would
+        // believe stale records were deleted / marked when the write failed,
+        // hiding a durability fault behind a clean success. compact_memory
+        // gates on operator-identity + the memory.compact.<mode> capability;
+        // server_with_memory_dyn keeps the real InMemoryCapabilityStore so the
+        // grant takes, and the request payload is the proven one from the
+        // existing apply-path compact test.
+        let server = server_with_memory_dyn(Arc::new(FailingCompactMemoryStore));
+        grant_action(&server, "memory.compact.apply").await;
+        let resp = server
+            .op_respond(Request::CompactMemory {
+                request: MemoryCompactionRequest {
+                    mode: MemoryRepairMode::Apply,
+                    policy: covenant_types::MemoryCompactionPolicy {
+                        delete_working_before_ms: Some(20),
+                        delete_episodic_before_ms: Some(20),
+                        mark_longterm_stale_before_ms: Some(20),
+                        detach_stale_parents: true,
+                        marked_at_ms: Some(99),
+                    },
+                    reason: "age-based compaction".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a compaction whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory compact write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when compact() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`MemoryStore`] double whose `repair` WRITE fails, so
+    /// [`Server::repair_memory`] reaches its `memory: {e}` bail arm. Unlike
+    /// the compact/purge doubles, repair_memory reads the target record via
+    /// `self.memory.get(id)` (for an ownership/visibility check) BEFORE it
+    /// calls `self.memory.repair(request)`, so this double stores seeded
+    /// records in `get`/`put` (the test seeds via `server.memory.put`) while
+    /// `repair` returns `Err`. Every existing repair test constructs the
+    /// Server with an infallible-by-construction double, so the write Err arm
+    /// is dead without this injection.
+    struct FailingRepairMemoryStore {
+        records: std::sync::Mutex<Vec<MemoryRecord>>,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingRepairMemoryStore {
+        async fn put(&self, record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            let mut guard = self.records.lock().expect("repair double poisoned");
+            guard.retain(|r| r.id != record.id);
+            guard.push(record);
+            Ok(())
+        }
+        async fn get(
+            &self,
+            id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(self
+                .records
+                .lock()
+                .expect("repair double poisoned")
+                .iter()
+                .find(|r| r.id == id)
+                .cloned())
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(self.records.lock().expect("repair double poisoned").clone())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            let mut guard = self.records.lock().expect("repair double poisoned");
+            let before = guard.len();
+            guard.retain(|r| r.id != id);
+            Ok(guard.len() < before)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+        async fn repair(
+            &self,
+            _request: covenant_memory::MemoryRepairRequest,
+        ) -> Result<covenant_memory::MemoryRepairOutcome, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory repair write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_write_failure_repair() {
+        // A memory repair whose backing store cannot apply the command must
+        // NOT be reported as Response::MemoryRepaired: the operator would
+        // believe a record was repaired (parent detached / metadata fixed)
+        // when the write failed, hiding a durability fault behind a clean
+        // success. repair_memory gates on operator-identity + the
+        // memory.repair.<action> capability, then reads the target record for
+        // an ownership check before calling self.memory.repair(); so the
+        // double is seeded with the record (owner = the operator) and its
+        // repair() override returns Err. server_with_memory_dyn keeps the real
+        // InMemoryCapabilityStore so the grant takes.
+        let server = server_with_memory_dyn(Arc::new(FailingRepairMemoryStore {
+            records: std::sync::Mutex::new(Vec::new()),
+        }));
+        let id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        server
+            .memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: server.identity.agent_id(),
+                text: "stale parent".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 0,
+                parent: Some(parent),
+            })
+            .await
+            .unwrap();
+        grant_action(&server, "memory.repair.dry_run").await;
+        let resp = server
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: Some(parent),
+                    },
+                    reason: "verified stale parent".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a repair whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory repair write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when repair() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`MemoryStore`] double whose `backfill_receipt_correlation` WRITE
+    /// fails, so [`Server::backfill_memory_records`] reaches its `memory: {e}`
+    /// bail arm. `backfill_receipt_correlation` has a DEFAULT trait impl (a
+    /// get/put walk); this override returns `Err` directly so the daemon's
+    /// `match self.memory.backfill_receipt_correlation(..)` hits the bail. The
+    /// handler reads `memory.recent()` + `settlement.recent()` first; both
+    /// Ok-empty under `server_with_memory_dyn` (real InMemorySettlement), so
+    /// no seeding is needed. Every existing backfill test constructs the
+    /// Server with an infallible-by-construction double, so the write Err arm
+    /// is dead without this injection.
+    struct FailingBackfillMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingBackfillMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+        async fn backfill_receipt_correlation(
+            &self,
+            _dry_run: bool,
+            _correlations: Vec<covenant_memory::MemoryReceiptBackfillCorrelation>,
+        ) -> Result<covenant_memory::BackfillReceiptCorrelationOutcome, covenant_memory::MemoryError>
+        {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory backfill write failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_write_failure_backfill() {
+        // A memory-receipt backfill whose backing store cannot persist the
+        // correlations must NOT be reported as Response::MemoryRecordsBackfilled:
+        // the operator would believe receipt_id linkage was written when it
+        // failed, hiding a durability fault behind a clean success.
+        // backfill_memory_records gates on operator-identity + the
+        // memory.backfill.<mode> capability + scope, then reads recent memory
+        // and receipts (both Ok-empty under server_with_memory_dyn) before
+        // calling self.memory.backfill_receipt_correlation(); the double's
+        // override returns Err. server_with_memory_dyn keeps the real
+        // InMemoryCapabilityStore so the grant takes.
+        let server = server_with_memory_dyn(Arc::new(FailingBackfillMemoryStore));
+        grant_action(&server, "memory.backfill.apply").await;
+        let resp = server
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory:"),
+                    "a backfill whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected memory backfill write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when backfill() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`Settlement`] double whose `recent` read fails, so
+    /// [`Server::recent_receipts`] and [`Server::receipt_batches`] reach their
+    /// `settlement: {e}` bail arm while the other trait methods stay inert. The
+    /// default `InMemorySettlement::recent` is infallible, so the arm is dead
+    /// without this injection.
+    struct FailingSettlement;
+
+    #[async_trait::async_trait]
+    impl covenant_settlement::Settlement for FailingSettlement {
+        async fn record(
+            &self,
+            _receipt: SettlementReceipt,
+        ) -> Result<(), covenant_settlement::SettlementError> {
+            Ok(())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<SettlementReceipt>, covenant_settlement::SettlementError> {
+            Err(covenant_settlement::SettlementError::Io(
+                std::io::Error::other("injected settlement recent read failure"),
+            ))
+        }
+        async fn mark_batch_confirmed(
+            &self,
+            _receipt_ids: &[Uuid],
+            _confirmation: ChainConfirmation,
+        ) -> Result<u64, covenant_settlement::SettlementError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_receipts_surfaces_error_when_settlement_store_recent_fails() {
+        // A settlement-receipt read whose backing store fails must NOT be
+        // reported as an empty Response::Receipts: the operator would see a
+        // silently-truncated settlement view (paid receipts invisible)
+        // indistinguishable from a store that genuinely holds nothing, hiding a
+        // durability fault behind a clean response. The operator grants itself
+        // chain.receipts first so the cap + scope gates pass; the injected
+        // store then fails recent().
+        let server = server_with_settlement_dyn(Arc::new(FailingSettlement));
+        grant_action(&server, "chain.receipts").await;
+        let resp = server
+            .op_respond(Request::RecentReceipts {
+                limit: 10,
+                since_ms: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement:"),
+                    "a recent_receipts read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected settlement recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => {
+                panic!("expected Response::Error when settlement recent() fails, got {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn receipt_batches_surfaces_error_when_settlement_store_recent_fails() {
+        // A settlement-batch read whose backing store fails must NOT be reported
+        // as an empty batch list: the operator would see a silently-truncated
+        // settlement view (batched receipts invisible) indistinguishable from a
+        // store that genuinely holds nothing, hiding a durability fault behind
+        // a clean response. The operator grants itself chain.batches first so
+        // the cap + scope gates pass; the injected store then fails recent().
+        // The same FailingSettlement double as recent_receipts serves here
+        // because both handlers read self.settlement.recent().
+        let server = server_with_settlement_dyn(Arc::new(FailingSettlement));
+        grant_action(&server, "chain.batches").await;
+        let resp = server
+            .op_respond(Request::ReceiptBatches { limit: 10 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement:"),
+                    "a receipt_batches read whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected settlement recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => {
+                panic!("expected Response::Error when settlement recent() fails, got {other:?}")
+            }
+        }
+    }
+
+    /// A [`Settlement`] double whose `backfill` WRITE fails, so
+    /// [`Server::backfill_settlement_receipts`] reaches its `settlement: {e}`
+    /// bail arm while the other trait methods stay inert. `backfill` has a
+    /// DEFAULT trait impl (a no-op for backends without a durable file); this
+    /// override returns `Err` directly so the daemon's
+    /// `match self.settlement.backfill(..)` (lib.rs:14641) hits the bail at
+    /// lib.rs:14672. The handler reaches `backfill` only after the
+    /// operator-identity + `settlement.backfill.<mode>` capability +
+    /// `before_ms = u64::MAX` scope gates pass and `self.home.is_some()` holds,
+    /// and reads no other settlement method first, so recent/record/
+    /// mark_batch_confirmed stay inert. Every existing backfill test constructs
+    /// the Server with an infallible `JsonlReceiptStore`, so the write Err arm
+    /// is dead without this injection.
+    struct FailingBackfillSettlement;
+
+    #[async_trait::async_trait]
+    impl covenant_settlement::Settlement for FailingBackfillSettlement {
+        async fn record(
+            &self,
+            _receipt: SettlementReceipt,
+        ) -> Result<(), covenant_settlement::SettlementError> {
+            Ok(())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<SettlementReceipt>, covenant_settlement::SettlementError> {
+            Ok(Vec::new())
+        }
+        async fn mark_batch_confirmed(
+            &self,
+            _receipt_ids: &[Uuid],
+            _confirmation: ChainConfirmation,
+        ) -> Result<u64, covenant_settlement::SettlementError> {
+            Ok(0)
+        }
+        async fn backfill(
+            &self,
+            _dry_run: bool,
+            _correlations: &[covenant_settlement::ReceiptBackfillCorrelation],
+        ) -> Result<covenant_settlement::BackfillOutcome, covenant_settlement::SettlementError>
+        {
+            Err(covenant_settlement::SettlementError::Io(
+                std::io::Error::other("injected settlement backfill write failure"),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_write_failure_backfill() {
+        // A receipt backfill whose backing store cannot persist the rewrite must
+        // NOT be reported as Response::SettlementReceiptsBackfilled: the operator
+        // would believe the legacy-receipt correlation was applied when it
+        // failed, hiding a durability fault behind a clean success.
+        // backfill_settlement_receipts gates on operator-identity + the
+        // settlement.backfill.<mode> capability + the before_ms=u64::MAX scope
+        // check + a configured home dir, then calls self.settlement.backfill();
+        // the double's override returns Err. server_with_settlement_dyn keeps the
+        // real InMemoryCapabilityStore so the grant takes, and .with_home(...)
+        // satisfies the home-dir precondition (the handler bails at lib.rs:14633
+        // when home is None, before reaching the write).
+        let home = tempfile::tempdir().expect("tempdir");
+        let server = server_with_settlement_dyn(Arc::new(FailingBackfillSettlement))
+            .with_home(home.path().to_path_buf());
+        grant_action(&server, "settlement.backfill.apply").await;
+        let resp = server
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement:"),
+                    "a backfill whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected settlement backfill write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when backfill() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`Settlement`] double whose `mark_batch_confirmed` WRITE fails, so
+    /// [`Server::flush_receipts`] reaches its `mark receipt batch: {e}` bail arm
+    /// (lib.rs:6115). `recent` returns one unsettled receipt paid by the
+    /// operator so flush_receipts's payer filter
+    /// (`receipt.payer.pubkey == peer.pubkey`) and `chain_receipt_allowed`
+    /// (allow-all `chain.flush` scope) keep it and `build_receipt_batch`
+    /// includes it (it keeps only receipts with `batch_id.is_none()`); `record`
+    /// stays inert. The handler reaches `mark_batch_confirmed` only after the
+    /// operator-identity + `chain.flush` capability + chain-scope gates pass and
+    /// `build_receipt_batch` succeeds, so the write Err arm is dead under
+    /// infallible stores. The operator identity is random
+    /// (`LocalIdentity::generate`), so the double holds the resolved operator
+    /// [`AgentId`] and is swapped onto the server after construction.
+    struct FailingMarkBatchSettlement {
+        operator: AgentId,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_settlement::Settlement for FailingMarkBatchSettlement {
+        async fn record(
+            &self,
+            _receipt: SettlementReceipt,
+        ) -> Result<(), covenant_settlement::SettlementError> {
+            Ok(())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<SettlementReceipt>, covenant_settlement::SettlementError> {
+            Ok(vec![SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: self.operator.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: None,
+                credits_consumed: 1,
+                settled_at: 1_000,
+                chain: None,
+                cluster: Some("devnet".into()),
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            }])
+        }
+        async fn mark_batch_confirmed(
+            &self,
+            _receipt_ids: &[Uuid],
+            _confirmation: ChainConfirmation,
+        ) -> Result<u64, covenant_settlement::SettlementError> {
+            Err(covenant_settlement::SettlementError::Io(
+                std::io::Error::other("injected settlement mark_batch_confirmed write failure"),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_write_failure_flush() {
+        // A receipt-batch confirmation whose backing store cannot persist the
+        // mark_batch_confirmed write must NOT be reported as
+        // Response::ReceiptBatchFlushed: the operator would believe receipts were
+        // anchored (batch_id + confirmation stamped) when the write failed,
+        // hiding a durability fault behind a clean success.
+        // flush_receipts gates on operator-identity + the chain.flush capability
+        // (allow-all scope via grant_action) + the chain scope, then reads
+        // self.settlement.recent(), keeps operator-paid unsettled receipts,
+        // builds the batch, and writes self.settlement.mark_batch_confirmed();
+        // the double's override returns Err. The operator identity is random, so
+        // the double is swapped onto the server after construction with the
+        // resolved operator AgentId (the payer filter requires it).
+        let placeholder = Arc::new(FailingMarkBatchSettlement {
+            operator: AgentId::new("user@local", [0u8; 32]),
+        });
+        let mut server = server_with_settlement_dyn(placeholder);
+        server.settlement = Arc::new(FailingMarkBatchSettlement {
+            operator: server.identity.agent_id(),
+        });
+        grant_action(&server, "chain.flush").await;
+        let resp = server
+            .op_respond(Request::FlushReceipts { limit: 10 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("mark receipt batch:"),
+                    "a flush whose mark_batch_confirmed fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected settlement mark_batch_confirmed write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => {
+                panic!("expected Response::Error when mark_batch_confirmed() fails, got {other:?}")
+            }
+        }
+    }
+
+    /// A [`covenant_budget::BudgetLedger`] double whose read methods fail, so
+    /// [`Server::verify_recent`] (via `recent_debits_all`) and
+    /// [`Server::recent_debits`] (via `recent_debits`) reach their `budget: {e}`
+    /// bail arms while the other trait methods stay inert. The default
+    /// `InMemoryLedger` reads are infallible, so both arms are dead without
+    /// this injection.
+    struct FailingBudgetReads;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingBudgetReads {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget recent_debits read failure",
+            )))
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget recent_debits_all read failure",
+            )))
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    /// A [`covenant_budget::BudgetLedger`] double whose `try_debit` WRITE fails
+    /// with a non-NoCapacity error, so [`Server::dispatch_intent_run`] reaches
+    /// its `budget debit failed for {card.id}: {e}` bail arm (lib.rs:4735).
+    /// dispatch_intent_run gates the debit on the card manifest's
+    /// `budget_credits_per_hour > 0` (a manifest field, NOT a budget call) and
+    /// performs NO budget read before `try_debit`, so a debit-only-failing
+    /// double reaches the bail directly. `try_debit` returning `NoCapacity`
+    /// would instead hit the unseeded warn-and-continue arm (lib.rs:4665, NOT a
+    /// bail), so the override returns `Io` to land on the bail. Every existing
+    /// dispatch test uses the real `InMemoryLedger` (try_debit Ok), so the Err
+    /// arm is dead without this injection.
+    struct FailingDebitBudget;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingDebitBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget try_debit write failure",
+            )))
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn budget_write_failure_try_debit() {
+        // An intent dispatch whose budget ledger cannot persist the debit must
+        // NOT be reported as Response::IntentResult: the operator would believe
+        // the dispatch was free (no credit burn recorded, bucket unchanged)
+        // when the debit failed, hiding an accounting/durability fault behind a
+        // clean success.
+        // dispatch_intent_run gates the debit on the card manifest's
+        // budget_credits_per_hour > 0 (not a budget call) and performs no budget
+        // read before self.budget.try_debit(); the double's override returns
+        // Err(BudgetError::Io) — NOT NoCapacity (which is the unseeded
+        // warn-and-continue arm, not a bail). Setup mirrors
+        // dispatch_passes_when_budget_healthy (lib.rs:53964) with the budget
+        // swapped to the failing double; no register_agent_budgets is needed
+        // because the double's try_debit returns Io, not NoCapacity.
+        let mut s = server_with(
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
+            "mocked summary",
+        );
+        s.budget = Arc::new(FailingDebitBudget);
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("budget debit failed for"),
+                    "a dispatch whose try_debit() fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected budget try_debit write failure"),
+                    "the surfaced error must carry the ledger's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when try_debit() fails, got {other:?}"),
+        }
+    }
+
+    /// Like [`FailingDebitBudget`] but `try_debit` returns
+    /// [`BudgetError::Exhausted`], exercising the BudgetExhausted audit arm
+    /// of `dispatch_intent_run` (lib.rs:4718) — a distinct bail from the
+    /// generic Io arm the Io-returning double reaches. All other methods
+    /// mirror [`FailingDebitBudget`]'s Ok defaults so the double never
+    /// masquerades as a working ledger.
+    struct FailingExhaustedBudget;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingExhaustedBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Exhausted {
+                tokens_remaining: 0,
+                refill_eta_ms: 1000,
+            })
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_write_failure_dispatch_budget_exhausted() {
+        // BudgetExhausted is a must-record kind: a dispatch whose bucket is
+        // drained must land on the peer's audit feed even when the audit
+        // store is degraded. If record_peer_event_required cannot persist the
+        // row, dispatch_intent_run must surface the generic
+        // "audit write failed; refusing to proceed" bail rather than the
+        // normal budget-exhausted reply — otherwise the operator answers a
+        // drained bucket with a clean refusal that leaves no durable trail
+        // (the pause checkpoint saved just above would be the only signal).
+        // This Exhausted arm (lib.rs:4718) is distinct from the Io bail the
+        // FailingDebitBudget double reaches: Exhausted is a policy outcome
+        // the daemon is obligated to record before refusing. Setup mirrors
+        // budget_write_failure_try_debit (lib.rs:60028) with the budget
+        // swapped to the Exhausted double and the audit log swapped to
+        // FailingAuditLog; the seed grants' CapabilityGranted rows write
+        // through the non-required record_peer_event (swallowed under
+        // FailingAuditLog), so the grants still land.
+        let mut s = server_with(
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
+            "mocked summary",
+        );
+        s.budget = Arc::new(FailingExhaustedBudget);
+        s.audit = Arc::new(FailingAuditLog);
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert_eq!(
+                message, "audit write failed; refusing to proceed",
+                "a failed required-audit append on the budget-exhausted path must surface as the generic bail, not the normal budget-exhausted reply",
+            ),
+            other => panic!("expected Response::Error for audit-write failure; got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_recent_surfaces_error_when_budget_ledger_recent_debits_all_fails() {
+        // A verify_recent drift check whose budget ledger cannot read its debit
+        // log must NOT be reported as a clean VerifyReport: the operator would
+        // see a check that silently skipped the budget leg (spent credits
+        // invisible) indistinguishable from a healthy empty ledger, hiding a
+        // durability fault behind a clean response. verify_recent has no cap
+        // gate; the four earlier reads (memory / audit / settlement /
+        // capabilities) stay on real-InMemory defaults and return Ok, so only
+        // the injected budget leg can fail.
+        let server = server_with_budget(Arc::new(FailingBudgetReads));
+        let resp = server.op_respond(Request::Verify { window: 10 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("budget:"),
+                    "a verify_recent budget read whose ledger fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected budget recent_debits_all read failure"),
+                    "the surfaced error must carry the ledger's cause for triage, got: {message}",
+                );
+            }
+            other => {
+                panic!("expected Response::Error when recent_debits_all() fails, got {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_debits_surfaces_error_when_budget_ledger_recent_debits_fails() {
+        // A recent_debits fan-out whose budget ledger cannot read its debit log
+        // must NOT be reported as an empty Response::Debits: the operator would
+        // see a silently-truncated budget view (spent credits invisible)
+        // indistinguishable from a ledger that genuinely holds nothing, hiding a
+        // durability fault behind a clean response. recent_debits has no cap
+        // gate but fans out over router agents (skipping
+        // budget_credits_per_hour == 0 cards), so the test seeds a card with a
+        // non-zero budget and swaps the budget field to the failing double — the
+        // only arm needing both a seeded card and an injected ledger.
+        let mut server = server_with(vec![stub_card_with_budget("spend", vec![], 10)], "");
+        server.budget = Arc::new(FailingBudgetReads);
+        let resp = server.op_respond(Request::RecentDebits { limit: 10 }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("budget:"),
+                    "a recent_debits read whose ledger fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected budget recent_debits read failure"),
+                    "the surfaced error must carry the ledger's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent_debits() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`covenant_peer_auth::PeerRegistry`] double whose read methods fail,
+    /// so [`Server::list_peers`] (via `list_summaries`) and [`Server::purge_peers`]
+    /// (via `purge_revoked_older_than`) reach their `peers: {e}` bail arms while
+    /// the other trait methods stay inert. The default `InMemoryPeerRegistry`
+    /// reads are infallible, so both arms are dead without this injection.
+    struct FailingPeerRegistryReads;
+
+    #[async_trait::async_trait]
+    impl covenant_peer_auth::PeerRegistry for FailingPeerRegistryReads {
+        async fn register(
+            &self,
+            _entry: covenant_peer_auth::PeerEntry,
+        ) -> Result<(), covenant_peer_auth::PeerError> {
+            Ok(())
+        }
+        async fn resolve(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<Option<AgentId>, covenant_peer_auth::PeerError> {
+            Ok(None)
+        }
+        async fn revoke(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<bool, covenant_peer_auth::PeerError> {
+            Ok(false)
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_peer_auth::PeerEntry>, covenant_peer_auth::PeerError> {
+            Ok(vec![])
+        }
+        async fn list_summaries(
+            &self,
+            _limit: usize,
+            _pubkey_prefix: Option<&str>,
+            _status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
+        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError>
+        {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers list_summaries read failure",
+            )))
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_peer_auth::PeerError> {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers purge read failure",
+            )))
+        }
+        async fn revoke_by_token_prefix(
+            &self,
+            _prefix: &str,
+            _limit: usize,
+        ) -> Result<covenant_peer_auth::RevokeOutcome, covenant_peer_auth::PeerError> {
+            Ok(covenant_peer_auth::RevokeOutcome::NotFound)
+        }
+        async fn find_unique_live_by_token_prefix(
+            &self,
+            _prefix: &str,
+        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError>
+        {
+            Ok(None)
+        }
+    }
+
+    /// A [`covenant_peer_auth::PeerRegistry`] double whose `register` WRITE
+    /// fails, so [`Server::rotate_operator_token`] reaches its
+    /// `register new operator token: {e}` bail arm (lib.rs:3442) while the
+    /// other trait methods stay inert. rotate_operator_token gates on
+    /// operator-identity + a home dir, then reads the OLD token from disk
+    /// (`read_operator_token_b58`, NOT the registry) before calling
+    /// `register(new_entry)`; no peers read precedes the write, so a
+    /// register-only-failing double reaches the bail. `op_respond` dispatches
+    /// directly as `self.identity.agent_id()` (no token auth), so swapping
+    /// `s.peers` does not disturb peer selection. Every existing rotate test
+    /// uses the real `InMemoryPeerRegistry`, so the write Err arm is dead
+    /// without this injection. (`revoke` later in the same handler is
+    /// intentionally WARN-only — swallowed, not a bail — so it stays Ok.)
+    struct FailingRegisterPeerRegistry;
+
+    #[async_trait::async_trait]
+    impl covenant_peer_auth::PeerRegistry for FailingRegisterPeerRegistry {
+        async fn register(
+            &self,
+            _entry: covenant_peer_auth::PeerEntry,
+        ) -> Result<(), covenant_peer_auth::PeerError> {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers register write failure",
+            )))
+        }
+        async fn resolve(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<Option<AgentId>, covenant_peer_auth::PeerError> {
+            Ok(None)
+        }
+        async fn revoke(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<bool, covenant_peer_auth::PeerError> {
+            Ok(false)
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_peer_auth::PeerEntry>, covenant_peer_auth::PeerError> {
+            Ok(vec![])
+        }
+        async fn list_summaries(
+            &self,
+            _limit: usize,
+            _pubkey_prefix: Option<&str>,
+            _status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
+        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError>
+        {
+            Ok((vec![], false))
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_peer_auth::PeerError> {
+            Ok(0)
+        }
+        async fn revoke_by_token_prefix(
+            &self,
+            _prefix: &str,
+            _limit: usize,
+        ) -> Result<covenant_peer_auth::RevokeOutcome, covenant_peer_auth::PeerError> {
+            Ok(covenant_peer_auth::RevokeOutcome::NotFound)
+        }
+        async fn find_unique_live_by_token_prefix(
+            &self,
+            _prefix: &str,
+        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError>
+        {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn peers_write_failure_register() {
+        // An operator-token rotation whose backing registry cannot persist the
+        // new entry must NOT be reported as Response::OperatorTokenRotated: the
+        // operator would believe the rotation landed (and the old token would
+        // be revoked on the next boot) when register() failed, hiding a
+        // durability fault behind a clean success.
+        // rotate_operator_token gates on operator-identity + a home dir, reads
+        // the old token from disk, then writes self.peers.register(new_entry);
+        // the double's override returns Err. server_with_operator_token supplies
+        // the home dir + on-disk operator.token + the operator identity; s.peers
+        // is swapped to the failing double (op_respond uses
+        // self.identity.agent_id(), so the swap does not affect peer selection).
+        let (mut s, _dir, _old_token, _operator) = server_with_operator_token().await;
+        s.peers = Arc::new(FailingRegisterPeerRegistry);
+        let resp = s.op_respond(Request::RotateOperatorToken).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("register new operator token:"),
+                    "a rotation whose register() fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers register write failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when register() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_peers_surfaces_error_when_peer_registry_list_summaries_fails() {
+        // A list_peers triage read whose peer registry cannot read its entries
+        // must NOT be reported as an empty Response::PeerList: the operator
+        // would see a silently-truncated peer view (registered/revoked entries
+        // invisible) indistinguishable from a registry that genuinely holds
+        // nothing, hiding a durability fault behind a clean response. list_peers
+        // skips its cap + scope gates for the operator, and op_respond IS the
+        // operator, so no grant is needed to reach the list_summaries bail arm.
+        let server = server_with_peers_dyn(Arc::new(FailingPeerRegistryReads));
+        let resp = server
+            .op_respond(Request::ListPeers {
+                limit: 10,
+                pubkey_prefix: None,
+                status_filter: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers:"),
+                    "a list_peers read whose registry fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers list_summaries read failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when list_summaries() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_peers_surfaces_error_when_peer_registry_purge_fails() {
+        // A purge_peers whose peer registry cannot drop its tombstones must NOT
+        // be reported as Response::PeersPurged { purged: 0 }: the operator would
+        // see a no-op purge (stale revocations retained) indistinguishable from a
+        // registry with nothing to purge, hiding a durability fault behind a
+        // clean response. purge_peers needs the peers.purge capability; the
+        // operator grants it to itself and the scope check passes (unscoped
+        // grant), so the purge reaches the failing registry's bail arm.
+        let server = server_with_peers_dyn(Arc::new(FailingPeerRegistryReads));
+        grant_action(&server, "peers.purge").await;
+        let resp = server
+            .op_respond(Request::PurgePeers { before_ms: 1 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers:"),
+                    "a purge_peers whose registry fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers purge read failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!(
+                "expected Response::Error when purge_revoked_older_than() fails, got {other:?}"
+            ),
+        }
+    }
+
+    /// Like [`FailingCapabilityStore`] but the fault is on the usage-snapshot
+    /// read path: only `usage_snapshot` fails, so [`Server::capability_usage`]
+    /// reaches its bail arm while the other trait methods stay inert.
+    struct FailingUsageSnapshotCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingUsageSnapshotCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Ok(())
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability usage_snapshot failure"),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn capability_usage_surfaces_error_when_capability_store_usage_snapshot_fails() {
+        // An operator capability-usage query whose backing store fails must NOT
+        // be reported as an empty Response::CapabilityUsage: the operator would
+        // see a silently truncated budget/expiry view (exhausted budgets hidden,
+        // revoked grants invisible) indistinguishable from a ledger that holds
+        // nothing, hiding a durability fault behind a clean response.
+        let server = server_with_capabilities_dyn(Arc::new(FailingUsageSnapshotCapabilityStore));
+        let resp = server.op_respond(Request::CapabilityUsage).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a capability_usage query whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability usage_snapshot failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when usage_snapshot() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
+    /// `purge_revoked_older_than` fails, for exercising the bail arm of
+    /// [`Server::purge_capabilities`]. Unlike the read-side doubles, this one
+    /// DELEGATES record/list_for_subject/is_revoked/consume_uses to a real
+    /// [`covenant_permissions::InMemoryCapabilityStore`] so the capabilities.purge
+    /// cap-gate and scope-gate (which read list_for_subject) still pass and
+    /// execution reaches purge before it fails.
+    struct FailingPurgeCapabilityStore {
+        inner: covenant_permissions::InMemoryCapabilityStore,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingPurgeCapabilityStore {
+        async fn record(
+            &self,
+            signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            self.inner.record(signed).await
+        }
+        async fn revoke(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.revoke(signature).await
+        }
+        async fn is_revoked(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.is_revoked(signature).await
+        }
+        async fn list_for_subject(
+            &self,
+            subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            self.inner.list_for_subject(subject_pubkey).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            self.inner.recent(limit).await
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability purge failure"),
+            ))
+        }
+        async fn consume_uses(
+            &self,
+            requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            self.inner.consume_uses(requests).await
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            self.inner.usage_snapshot().await
+        }
+    }
+
+    #[tokio::test]
+    async fn purge_capabilities_surfaces_error_when_capability_store_purge_fails() {
+        // A purge whose backing store fails must NOT be reported as
+        // Response::CapabilitiesPurged { purged: 0 } (indistinguishable from a
+        // successful purge that removed nothing): stale revoked capabilities
+        // would persist silently, defeating the purge the operator requested.
+        // The double delegates record/list_for_subject to a real store so the
+        // capabilities.purge cap-gate and scope-gate pass, then purge fails.
+        let server = server_with_capabilities_dyn(Arc::new(FailingPurgeCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+        }));
+        server
+            .op_respond(Request::GrantCapability {
+                action: "capabilities.purge".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await;
+        let resp = server
+            .op_respond(Request::PurgeCapabilities { before_ms: 0 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a purge whose store fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability purge failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when purge() fails, got {other:?}"),
+        }
+    }
+
+    /// Like [`FailingCapabilityStore`] but the fault is on the revoke read path:
+    /// only `list_for_subject` fails, so [`Server::revoke_capability`] reaches
+    /// its bail arm (after bs58-decoding a valid signature) while the other
+    /// trait methods stay inert.
+    struct FailingListForSubjectCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingListForSubjectCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Ok(())
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability list_for_subject failure"),
+            ))
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_capability_surfaces_error_when_capability_store_list_for_subject_fails() {
+        // A revocation whose store cannot read the peer's owned caps must NOT
+        // fall through to a clean CapabilityRevoked/reject: the operator would
+        // believe a revoke was attempted when the store could not even be read.
+        let server = server_with_capabilities_dyn(Arc::new(FailingListForSubjectCapabilityStore));
+        let resp = server
+            .op_respond(Request::RevokeCapability {
+                signature_b58: bs58::encode(&[1u8; 64]).into_string(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a revoke whose list_for_subject fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability list_for_subject failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => {
+                panic!("expected Response::Error when list_for_subject() fails, got {other:?}")
+            }
+        }
+    }
+
+    /// Revoke-path double: `list_for_subject` returns an empty owned set (so the
+    /// owned-cap find misses and [`Server::revoke_capability`] enters the
+    /// else-branch that checks `is_revoked`), and `is_revoked` fails — pinning
+    /// the is_revoked bail arm rather than the cross-peer 'revoke rejected' arm.
+    struct FailingIsRevokedCapabilityStore;
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingIsRevokedCapabilityStore {
+        async fn record(
+            &self,
+            _signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            Ok(())
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Ok(false)
+        }
+        async fn is_revoked(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability is_revoked failure"),
+            ))
+        }
+        async fn list_for_subject(
+            &self,
+            _subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            Ok(0)
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            Ok(covenant_permissions::BudgetConsumeOutcome::Consumed)
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_capability_surfaces_error_when_capability_store_is_revoked_fails() {
+        // When the signature is not among the peer's owned caps, revoke_capability
+        // checks is_revoked before issuing the cross-peer CapabilityRevokeRejected
+        // row. A store fault there must surface Response::Error carrying the cause,
+        // NOT fall through to the 'revoke rejected' message (which hides the fault
+        // behind a clean cross-peer rejection).
+        let server = server_with_capabilities_dyn(Arc::new(FailingIsRevokedCapabilityStore));
+        let resp = server
+            .op_respond(Request::RevokeCapability {
+                signature_b58: bs58::encode(&[1u8; 64]).into_string(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a revoke whose is_revoked fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability is_revoked failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+                assert!(
+                    !message.contains("revoke rejected"),
+                    "the is_revoked fault must not be masked by the cross-peer 'revoke rejected' arm, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when is_revoked() fails, got {other:?}"),
+        }
+    }
+
+    /// DELEGATING double for the revoke bail arm: record/list_for_subject forward
+    /// to a real store so a granted cap is found by [`Server::revoke_capability`]'s
+    /// owned-cap lookup, but `revoke` itself fails — pinning the bail arm reached
+    /// only when an owned cap matches the presented signature.
+    struct FailingRevokeCapabilityStore {
+        inner: covenant_permissions::InMemoryCapabilityStore,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingRevokeCapabilityStore {
+        async fn record(
+            &self,
+            signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            self.inner.record(signed).await
+        }
+        async fn revoke(
+            &self,
+            _signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability revoke failure"),
+            ))
+        }
+        async fn is_revoked(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.is_revoked(signature).await
+        }
+        async fn list_for_subject(
+            &self,
+            subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            self.inner.list_for_subject(subject_pubkey).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            self.inner.recent(limit).await
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            self.inner.purge_revoked_older_than(before_ms).await
+        }
+        async fn consume_uses(
+            &self,
+            requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            self.inner.consume_uses(requests).await
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            self.inner.usage_snapshot().await
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_capability_surfaces_error_when_capability_store_revoke_fails() {
+        // When the signature matches an owned cap, revoke_capability calls
+        // revoke(bytes). A store fault there must bail to Response::Error, not
+        // report CapabilityRevoked — otherwise the peer believes a grant was
+        // revoked that is still live.
+        let server = server_with_capabilities_dyn(Arc::new(FailingRevokeCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+        }));
+        let signature_b58 = match server
+            .op_respond(Request::GrantCapability {
+                action: "memory.write".into(),
+                scope: None,
+                expires_at: None,
+            })
+            .await
+        {
+            Response::CapabilityGranted { signature_b58, .. } => signature_b58,
+            other => panic!("grant should succeed, got {other:?}"),
+        };
+        let resp = server
+            .op_respond(Request::RevokeCapability { signature_b58 })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("permissions:"),
+                    "a revoke whose revoke() fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected capability revoke failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when revoke() fails, got {other:?}"),
+        }
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,
@@ -56085,7 +64214,10 @@ budget_credits_per_hour = {credits}
         let server = server_with_audit_and_budget(audit.clone(), budget);
 
         let count = server
-            .run_projection_tick_iteration(std::time::Duration::from_millis(100))
+            .run_projection_tick_iteration(
+                std::time::Duration::from_millis(100),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
             .await;
 
         assert_eq!(
@@ -56133,7 +64265,10 @@ budget_credits_per_hour = {credits}
         );
 
         let count = server
-            .run_projection_tick_iteration(std::time::Duration::from_millis(100))
+            .run_projection_tick_iteration(
+                std::time::Duration::from_millis(100),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
             .await;
 
         assert_eq!(
@@ -56149,16 +64284,175 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[tokio::test]
+    async fn server_projection_tick_iteration_skips_deprovisioned_agent_nocapacity() {
+        // An agent deprovisioned (or never provisioned) mid-flight has no
+        // budget bucket, so would_exceed returns BudgetError::NoCapacity. The
+        // tick's `Err(BudgetError::NoCapacity(_)) => continue` arm must SKIP
+        // the entry — not preempt it — leaving the intent to complete or fail
+        // on its own next debit. This is distinct from an EXHAUSTED agent
+        // (tokens_remaining == 0, which IS preempted): no-bucket means
+        // deprovisioned, not over-budget. The natural conflation is
+        // "no capacity == over budget == kill"; routing NoCapacity to the
+        // preempt path (Err(NoCapacity) => true) would terminate a
+        // deprovisioned agent's still-legitimate subprocess.
+        //
+        // Sentinel pid is a high nonexistent value (not 0) so a mutation that
+        // routes NoCapacity to preempt yields a clean ESRCH
+        // (no-such-process-group) -> BudgetPreempted { signal_sent: "none" }
+        // the assertions catch, rather than kill(0) signalling this test's
+        // own process group. Under correct behavior the pid is never read.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget);
+
+        // Deliberately NO set_capacity: the agent has no bucket.
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "deprovisioned".into(),
+                pid: 2_000_000,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let count = server
+            .run_projection_tick_iteration(
+                std::time::Duration::from_millis(100),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
+            .await;
+
+        assert_eq!(
+            count, 0,
+            "a deprovisioned (no-bucket) agent must be skipped, not preempted; got {count}",
+        );
+        let events = audit.recent(8).await.expect("audit recent must succeed");
+        assert!(
+            !events.iter().any(|e| matches!(
+                e.kind,
+                AuditKind::BudgetPreempted { .. } | AuditKind::BudgetPreemptFailed { .. }
+            )),
+            "skipping a no-bucket agent must emit no preempt audit row; got {events:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn server_projection_tick_iteration_continues_past_nocapacity_to_preempt_exhausted() {
+        // Loop-continuation: a NoCapacity skip must not abort the tick. Seed
+        // one deprovisioned (no-bucket) entry AND one exhausted entry in the
+        // same tick; the exhausted entry must still be preempted. A refactor
+        // that flipped the NoCapacity arm's `continue` to `break` (or
+        // `return`) would stop the iteration early and drop the exhausted
+        // agent's preempt whenever the deprovisioned entry is visited first.
+        // HashMap order is unspecified, so the assertions are order-
+        // independent: exactly one preempt (the exhausted intent), the
+        // no-bucket intent never produces a row.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget.clone());
+
+        let nocap_intent = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            nocap_intent,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "deprovisioned".into(),
+                pid: 2_000_000,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let exhausted_card_id = "burnsdown";
+        let exhausted_agent = agent_id_for_card_id(exhausted_card_id);
+        budget
+            .set_capacity(&exhausted_agent, 1)
+            .await
+            .expect("set_capacity must succeed");
+        budget
+            .try_debit(&exhausted_agent, 1, Uuid::new_v4())
+            .await
+            .expect("try_debit must drain bucket");
+        assert!(
+            budget
+                .would_exceed(&exhausted_agent, 1)
+                .await
+                .expect("would_exceed must succeed"),
+            "test precondition: exhausted agent bucket must be drained",
+        );
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let exhausted_pid = child.id().expect("child pid available before reap");
+        let exhausted_intent = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            exhausted_intent,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: exhausted_card_id.into(),
+                pid: exhausted_pid,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let (count, _exit) = tokio::join!(
+            server.run_projection_tick_iteration(
+                std::time::Duration::from_millis(250),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            ),
+            child.wait(),
+        );
+
+        assert_eq!(
+            count, 1,
+            "tick must preempt the exhausted agent and skip the no-bucket agent; got {count}",
+        );
+        let events = audit.recent(16).await.expect("audit recent must succeed");
+        assert!(
+            !events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::BudgetPreempted { intent_id, .. }
+                | AuditKind::BudgetPreemptFailed { intent_id, .. }
+                if *intent_id == nocap_intent
+            )),
+            "the no-bucket (deprovisioned) intent must never produce a preempt audit row; got {events:?}",
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::BudgetPreempted { intent_id, .. } if *intent_id == exhausted_intent
+            )),
+            "the exhausted intent must be preempted even when a no-bucket entry shares the tick; got {events:?}",
+        );
+    }
+
     #[test]
     fn projection_tick_config_from_values_uses_defaults_when_unset() {
-        let config = projection_tick_config_from_values(None, None).expect("defaults");
+        let config =
+            projection_tick_config_from_values(None, None, None, None, None).expect("defaults");
         assert_eq!(config.period_ms, 250);
         assert_eq!(config.grace_ms, 2_000);
+        assert_eq!(
+            config.policy,
+            covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            "absent COVENANT_BUDGET_PROJECTION_POLICY must default to NoExtrapolation so the \
+             tick stays byte-identical to the pre-projection exhaustion-only behavior",
+        );
     }
 
     #[test]
     fn projection_tick_config_from_values_rejects_zero_period() {
-        let err = projection_tick_config_from_values(Some("0"), None).unwrap_err();
+        let err =
+            projection_tick_config_from_values(Some("0"), None, None, None, None).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("COVENANT_BUDGET_PROJECTION_TICK_MS"),
@@ -56175,10 +64469,352 @@ budget_credits_per_hour = {credits}
         // Zero grace is acceptable: preempt_subprocess_pg interprets it
         // as immediate SIGKILL (no SIGTERM-then-wait). A refactor that
         // bailed on zero grace would surface here as a returned Err.
-        let config = projection_tick_config_from_values(Some("100"), Some("0"))
+        let config = projection_tick_config_from_values(Some("100"), Some("0"), None, None, None)
             .expect("zero grace must parse");
         assert_eq!(config.period_ms, 100);
         assert_eq!(config.grace_ms, 0);
+    }
+
+    #[test]
+    fn projection_tick_config_parses_linear_policy() {
+        use covenant_budget::BudgetProjectionPolicy;
+        // Explicit thresholds thread into the LinearExtrapolation variant
+        // verbatim.
+        let explicit =
+            projection_tick_config_from_values(None, None, Some("linear"), Some("5000"), Some("7"))
+                .expect("linear policy with explicit thresholds must parse");
+        assert_eq!(
+            explicit.policy,
+            BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms: 5_000,
+                min_debit_samples: 7,
+            },
+        );
+        // The linear_extrapolation alias with unset thresholds falls back
+        // to the conservative constants, not zero (zero would let a
+        // one-sample sub-millisecond spike extrapolate to a runaway).
+        let defaulted = projection_tick_config_from_values(
+            None,
+            None,
+            Some("linear_extrapolation"),
+            None,
+            None,
+        )
+        .expect("linear alias with default thresholds must parse");
+        assert_eq!(
+            defaulted.policy,
+            BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms: DEFAULT_PROJECTION_MIN_WINDOW_MS,
+                min_debit_samples: DEFAULT_PROJECTION_MIN_SAMPLES,
+            },
+        );
+        // Explicit "none" resolves to the conservative default.
+        let none = projection_tick_config_from_values(None, None, Some("none"), None, None)
+            .expect("none must parse");
+        assert_eq!(none.policy, BudgetProjectionPolicy::NoExtrapolation);
+    }
+
+    #[test]
+    fn projection_tick_config_rejects_unknown_policy() {
+        // A typo'd policy fails loudly rather than silently downgrading to
+        // NoExtrapolation, which would erase an operator's opt-in to linear
+        // preemption with no signal.
+        let err = projection_tick_config_from_values(None, None, Some("quadratic"), None, None)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("COVENANT_BUDGET_PROJECTION_POLICY"),
+            "rejection must name the offending env var: {err:?}",
+        );
+        assert!(
+            msg.contains("quadratic"),
+            "rejection must echo the bad value so an operator can spot the typo: {err:?}",
+        );
+    }
+
+    #[test]
+    fn projection_tick_config_rejects_non_integer_thresholds() {
+        // Non-integer window / sample gates are hard errors, never silent
+        // fallbacks to the defaults.
+        let window_err =
+            projection_tick_config_from_values(None, None, Some("linear"), Some("soon"), None)
+                .unwrap_err();
+        assert!(
+            window_err
+                .to_string()
+                .contains("COVENANT_BUDGET_PROJECTION_MIN_WINDOW_MS"),
+            "non-integer window must name its env var: {window_err:?}",
+        );
+        let samples_err =
+            projection_tick_config_from_values(None, None, Some("linear"), None, Some("many"))
+                .unwrap_err();
+        assert!(
+            samples_err
+                .to_string()
+                .contains("COVENANT_BUDGET_PROJECTION_MIN_SAMPLES"),
+            "non-integer samples must name its env var: {samples_err:?}",
+        );
+    }
+
+    #[test]
+    fn parse_projection_policy_pins_no_extrapolation_alias_and_trim_empty_normalization() {
+        use covenant_budget::BudgetProjectionPolicy;
+        // The routing arms (none/linear/linear_extrapolation/unrecognized/
+        // non-integer thresholds and the DEFAULT_* fallbacks) are pinned by
+        // the projection_tick_config_* tests above. This covers the two gaps
+        // in parse_projection_policy's input handling: the no_extrapolation
+        // alias and the `.map(str::trim).filter(|s| !s.is_empty())`
+        // normalization that runs before the match.
+
+        // no_extrapolation is a documented accepted spelling with no other
+        // coverage; dropping it from the NoExtrapolation arm would hard-error
+        // a daemon whose operator set COVENANT_BUDGET_PROJECTION_POLICY to it.
+        assert_eq!(
+            parse_projection_policy(Some("no_extrapolation"), None, None)
+                .expect("no_extrapolation is a documented spelling and must parse"),
+            BudgetProjectionPolicy::NoExtrapolation,
+        );
+
+        // An empty or whitespace-only value must normalize to the
+        // conservative default, not the Some(other) hard error — operators
+        // routinely export VAR= to mean "unset". The empty-filter after the
+        // trim is what folds these onto the None arm.
+        for blank in ["", "   ", "\t"] {
+            let policy = parse_projection_policy(Some(blank), None, None).unwrap_or_else(|e| {
+                panic!("an empty/whitespace policy {blank:?} must default, not error: {e}")
+            });
+            assert_eq!(
+                policy,
+                BudgetProjectionPolicy::NoExtrapolation,
+                "an empty/whitespace COVENANT_BUDGET_PROJECTION_POLICY must default to the \
+                 conservative policy; dropping the empty-filter routes {blank:?} to the typo bail",
+            );
+        }
+
+        // Surrounding whitespace is trimmed before matching, so a padded
+        // spelling still selects its policy; with thresholds unset the linear
+        // arm falls back to the conservative constants, not zero.
+        assert_eq!(
+            parse_projection_policy(Some("  linear  "), None, None)
+                .expect("a whitespace-padded linear spelling must trim and parse"),
+            BudgetProjectionPolicy::LinearExtrapolation {
+                min_observation_window_ms: DEFAULT_PROJECTION_MIN_WINDOW_MS,
+                min_debit_samples: DEFAULT_PROJECTION_MIN_SAMPLES,
+            },
+            "dropping str::trim would leave \"  linear  \" unmatched and hard-error instead of \
+             selecting LinearExtrapolation",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_tick_decision_exhausted_preempts_under_default_policy() {
+        // Empty-bucket hard guarantee: an exhausted agent is flagged
+        // regardless of policy. Mutation-proof: dropping the would_exceed
+        // leg from projection_decision makes this return false (the
+        // NoExtrapolation early-return) and fails the assert.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit, budget.clone());
+        let agent = agent_id_for_card_id("drained");
+        budget.set_capacity(&agent, 1).await.expect("set_capacity");
+        budget
+            .try_debit(&agent, 1, Uuid::new_v4())
+            .await
+            .expect("try_debit drains bucket");
+
+        let preempt = server
+            .projection_decision(
+                &agent,
+                epoch_ms(),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
+            .await
+            .expect("decision must succeed for a provisioned agent");
+        assert!(
+            preempt,
+            "exhausted bucket must preempt even under NoExtrapolation (policy-independent guarantee)",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_tick_decision_default_policy_skips_linear_projection() {
+        // Under the NoExtrapolation default a non-exhausted agent is never
+        // preempted, even when accrued debit already exceeds remaining: the
+        // default must NOT consult project_overshoot, whose post-completion
+        // arm (current_debit > remaining) would otherwise fire.
+        // Mutation-proof: removing the NoExtrapolation early-return routes
+        // through project_overshoot(90, .., 10) == true and fails here,
+        // catching a default-behavior regression.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit, budget.clone());
+        let agent = agent_id_for_card_id("healthy");
+        budget
+            .set_capacity(&agent, 100)
+            .await
+            .expect("set_capacity");
+        budget
+            .try_debit(&agent, 90, Uuid::new_v4())
+            .await
+            .expect("try_debit");
+
+        let preempt = server
+            .projection_decision(
+                &agent,
+                epoch_ms().saturating_sub(10_000),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
+            .await
+            .expect("decision must succeed");
+        assert!(
+            !preempt,
+            "NoExtrapolation must not preempt a non-exhausted agent (remaining=10) even though current_debit=90 > remaining",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_tick_decision_linear_preempts_on_projected_overshoot() {
+        // Under LinearExtrapolation a not-yet-exhausted agent whose
+        // projected total (2 * current_debit) exceeds remaining is flagged.
+        // capacity 100, debit 40 -> remaining 60, current_debit 40; 2*40=80
+        // > 60. would_exceed(agent,1) is false (remaining 60), so the
+        // preempt can ONLY come from the linear leg. Mutation-proof:
+        // neutering the LinearExtrapolation branch to Ok(false) fails this.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit, budget.clone());
+        let agent = agent_id_for_card_id("accelerating");
+        budget
+            .set_capacity(&agent, 100)
+            .await
+            .expect("set_capacity");
+        budget
+            .try_debit(&agent, 40, Uuid::new_v4())
+            .await
+            .expect("try_debit");
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 1,
+        };
+        let preempt = server
+            .projection_decision(&agent, epoch_ms().saturating_sub(10_000), policy)
+            .await
+            .expect("decision must succeed");
+        assert!(
+            preempt,
+            "linear policy must flag a non-exhausted agent whose 2x projected debit (80) exceeds remaining (60)",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_tick_decision_linear_below_threshold_does_not_preempt() {
+        // The same projected-overshoot agent stays unflagged when it has
+        // fewer debit samples than min_debit_samples: the conservative gate
+        // keeps a thin sample set off the extrapolation path. Pins the
+        // threshold gate so a dropped sample-count check can't slip a
+        // spurious early preempt through.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit, budget.clone());
+        let agent = agent_id_for_card_id("warmingup");
+        budget
+            .set_capacity(&agent, 100)
+            .await
+            .expect("set_capacity");
+        budget
+            .try_debit(&agent, 40, Uuid::new_v4())
+            .await
+            .expect("try_debit");
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 5,
+        };
+        let preempt = server
+            .projection_decision(&agent, epoch_ms().saturating_sub(10_000), policy)
+            .await
+            .expect("decision must succeed");
+        assert!(
+            !preempt,
+            "with only 1 debit sample below min_debit_samples=5 the linear policy must stay conservative",
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn projection_tick_iteration_linear_preempts_real_subprocess() {
+        // End-to-end proof the policy flows through the iteration loop and
+        // the linear leg drives a REAL preempt. The agent is NOT exhausted
+        // (capacity 100, debit 40 -> remaining 60), so would_exceed(agent,1)
+        // is false; the only path to a preempt is project_overshoot under
+        // LinearExtrapolation (2*40 > 60). A refactor that ignored the
+        // policy param or dropped the linear leg surfaces here as count==0.
+        use std::os::unix::process::CommandExt;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let server = server_with_audit_and_budget(audit.clone(), budget.clone());
+
+        let agent_card_id = "linearburn";
+        let agent = agent_id_for_card_id(agent_card_id);
+        budget
+            .set_capacity(&agent, 100)
+            .await
+            .expect("set_capacity");
+        budget
+            .try_debit(&agent, 40, Uuid::new_v4())
+            .await
+            .expect("try_debit");
+        assert!(
+            !budget.would_exceed(&agent, 1).await.expect("would_exceed"),
+            "test precondition: agent must NOT be exhausted so only the linear leg can preempt",
+        );
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: agent_card_id.into(),
+                pid,
+                started_at_ms: epoch_ms().saturating_sub(10_000),
+            },
+        );
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 1,
+        };
+        let (count, _exit) = tokio::join!(
+            server.run_projection_tick_iteration(std::time::Duration::from_millis(250), policy),
+            child.wait(),
+        );
+        assert_eq!(
+            count, 1,
+            "non-exhausted agent projected to overshoot under linear policy must preempt once; got {count}",
+        );
+
+        let events = audit.recent(16).await.expect("audit recent");
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::BudgetPreempted { intent_id: id, reason, .. }
+                    if *id == intent_id && reason.as_str() == "budget_overshoot"
+            )),
+            "linear preempt must emit a BudgetPreempted row tagged budget_overshoot; events: {events:?}",
+        );
     }
 
     #[cfg(unix)]
@@ -56232,6 +64868,7 @@ budget_credits_per_hour = {credits}
             ProjectionTickConfig {
                 period_ms: 50,
                 grace_ms: 100,
+                policy: covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
             },
         );
 
@@ -56325,7 +64962,10 @@ budget_credits_per_hour = {credits}
         );
 
         let (count, _exit) = tokio::join!(
-            server.run_projection_tick_iteration(std::time::Duration::from_millis(250)),
+            server.run_projection_tick_iteration(
+                std::time::Duration::from_millis(250),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            ),
             child.wait(),
         );
 
@@ -57332,6 +65972,263 @@ budget_credits_per_hour = {credits}
                 .count(),
             1,
             "release must be idempotent on decision_id"
+        );
+    }
+
+    #[tokio::test]
+    async fn pay_x402_enforces_destination_scope_and_audits_denied_provider() {
+        // A provider-scoped x402.outbound.pay grant is least-privilege egress:
+        // the agent may pay the granted destination class and nothing else. The
+        // scope gate runs before the dispatch-config check, so the denial is
+        // reachable and auditable on a daemon with no funding-key sidecar.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone()).with_x402_dispatch(x402::X402Config {
+            enabled: true,
+            signer_binary: std::path::PathBuf::from("/bin/true"),
+            signer_env: vec![],
+        });
+        grant_scoped_action(
+            &s,
+            "x402.outbound.pay",
+            serde_json::json!({ "version": 1, "provider": "xona" }),
+        )
+        .await;
+
+        // A destination outside the granted class is refused by the scope gate,
+        // not by the budget or signer further down the path.
+        let denied = s
+            .op_respond(Request::PayX402 {
+                provider: "evil-corp".into(),
+                endpoint: "https://evil.test/x".into(),
+                method: "POST".into(),
+                body: None,
+                network: "solana:mainnet".into(),
+                asset: "usdc-sol".into(),
+                per_call_cap: "100000".into(),
+                credits: 8,
+            })
+            .await;
+        match denied {
+            Response::Error { message } => assert!(
+                message.contains("capability scope"),
+                "an out-of-class destination must be refused by the scope gate: {message}"
+            ),
+            other => panic!("expected a scope-rejection Error, got: {other:?}"),
+        }
+
+        // The denial is recorded as CapabilityScopeRejected naming the action,
+        // so an operator reviewing an incident sees the blocked egress.
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { action, .. } if action == "x402.outbound.pay"
+            )),
+            "a scope-denied egress must emit CapabilityScopeRejected: {events:?}"
+        );
+
+        // Positive control: the granted provider ("xona") clears the scope gate
+        // and the dispatch fails further down (no budget capacity), proving the
+        // gate is not a blanket deny — the error must NOT be a scope rejection.
+        if let Response::Error { message } = s.op_respond(pay_x402_req()).await {
+            assert!(
+                !message.contains("capability scope"),
+                "the granted provider must clear the scope gate: {message}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn get_secret_enforces_name_scope_and_audits_access() {
+        // A name-scoped secret.access grant is least-privilege secret access:
+        // the agent reads the granted secret and nothing else. The scope gate
+        // runs before the not-configured guard, so a denial is reachable and
+        // auditable; a granted read returns the live value and records the
+        // access by name — never the value.
+        use std::collections::BTreeMap;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let mut secrets = BTreeMap::new();
+        secrets.insert("openai-api-key".to_string(), "sk-live-value".to_string());
+        let s = server_with_audit(audit.clone())
+            .with_secret_source(Arc::new(secret::MapSecretSource::new(secrets)));
+        let Response::CapabilityGranted {
+            signature_b58: grant_signature,
+            ..
+        } = s
+            .op_respond(Request::GrantCapability {
+                action: "secret.access".into(),
+                scope: Some(serde_json::json!({ "version": 1, "name": "openai-api-key" })),
+                expires_at: None,
+            })
+            .await
+        else {
+            panic!("granting name-scoped secret.access must succeed");
+        };
+
+        // A secret outside the granted name is refused by the scope gate, not
+        // by the broker backend further down the path.
+        let denied = s
+            .op_respond(Request::GetSecret {
+                name: "stripe-secret-key".into(),
+            })
+            .await;
+        match denied {
+            Response::Error { message } => assert!(
+                message.contains("capability scope"),
+                "an out-of-scope secret must be refused by the scope gate: {message}"
+            ),
+            other => panic!("expected a scope-rejection Error, got: {other:?}"),
+        }
+
+        // The denial is recorded as SecretAccessDenied naming the secret, so an
+        // operator reviewing an incident sees the blocked access by name.
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessDenied { secret_name, .. }
+                    if secret_name == "stripe-secret-key"
+            )),
+            "a scope-denied secret read must emit SecretAccessDenied naming it: {events:?}"
+        );
+
+        // Positive control: the granted secret clears the gate, the broker
+        // returns the live value, and the access is recorded as
+        // SecretAccessGranted naming the secret and the grant that authorized
+        // it — proving the gate is not a blanket deny and the release is joined
+        // to its authority on the chain.
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Secret { name, value } => {
+                assert_eq!(name, "openai-api-key");
+                assert_eq!(
+                    value, "sk-live-value",
+                    "the broker must return the live secret value to the holder"
+                );
+            }
+            other => panic!("the granted secret must be released: {other:?}"),
+        }
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessGranted { secret_name, signature_b58, .. }
+                    if secret_name == "openai-api-key" && signature_b58 == &grant_signature
+            )),
+            "a granted secret read must emit SecretAccessGranted naming the secret and the \
+             signature of the grant that authorized it: {events:?}"
+        );
+        // The value must never enter the audit chain — accountability records
+        // who read which secret, not the material itself.
+        assert!(
+            !events
+                .iter()
+                .any(|e| format!("{:?}", e.kind).contains("sk-live-value")),
+            "the secret value must never appear in any audit record: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_secret_rejects_when_capability_missing() {
+        // Failure mode: the broker returns a secret without a capability check.
+        // A peer with no secret.access grant is refused before any source read.
+        use std::collections::BTreeMap;
+        let mut secrets = BTreeMap::new();
+        secrets.insert("openai-api-key".to_string(), "sk-live-value".to_string());
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_secret_source(Arc::new(secret::MapSecretSource::new(secrets)));
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("requires capability"),
+                "a request without secret.access must be refused for the capability: {message}"
+            ),
+            other => panic!("expected a missing-capability Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_secret_rejects_when_not_configured() {
+        // With a valid grant but no secret source wired, the broker refuses the
+        // request as not-configured — it never fabricates or leaks a value.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_scoped_action(&s, "secret.access", serde_json::json!({})).await;
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "a daemon with no secret source must refuse with not-configured: {message}"
+            ),
+            other => panic!("expected a not-configured Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_secret_surfaces_error_when_backend_fails() {
+        // Fail-closed guard: SecretSource::get's Err arm is reserved for a
+        // backend that itself failed (a remote store unreachable) so the broker
+        // fails closed to the caller and the chain instead of leaking which
+        // names exist. The production MapSecretSource never fails, so the arm
+        // is dead unless a failing double exercises it — a regression that
+        // collapsed the Err into the Ok(None) name-denial would turn a
+        // secret-store outage into a silent refusal indistinguishable from a
+        // name that genuinely does not exist.
+        struct FailingSecretSource;
+
+        #[async_trait::async_trait]
+        impl secret::SecretSource for FailingSecretSource {
+            async fn get(&self, _name: &str) -> Result<Option<String>, secret::SecretError> {
+                Err(secret::SecretError(
+                    "injected secret backend failure".into(),
+                ))
+            }
+        }
+
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone()).with_secret_source(Arc::new(FailingSecretSource));
+        grant_scoped_action(&s, "secret.access", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("secret broker backend error"),
+                    "a failed secret backend must surface as a backend error: {message}"
+                );
+                assert!(
+                    message.contains("injected secret backend failure"),
+                    "the backend cause must reach the caller for triage: {message}"
+                );
+            }
+            other => panic!("expected a backend-error Error, got: {other:?}"),
+        }
+
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessDenied { secret_name, reason, .. }
+                    if secret_name == "openai-api-key"
+                        && reason.contains("injected secret backend failure")
+            )),
+            "a fail-closed backend refusal must record SecretAccessDenied naming the secret \
+             and the backend cause: {events:?}"
         );
     }
 

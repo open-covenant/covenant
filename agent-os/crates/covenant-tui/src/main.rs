@@ -102,6 +102,7 @@ fn audit_kind_label(kind: &covenant_audit::AuditKind) -> &'static str {
         CapabilityGranted { .. } => "capability.granted",
         CapabilityGrantRejected { .. } => "capability.grant_rejected",
         CapabilityScopeRejected { .. } => "capability.scope_rejected",
+        CapabilityRevoked { .. } => "capability.revoked",
         CapabilityRevokeRejected { .. } => "capability.revoke_rejected",
         MemoryRepairApplied { .. } => "memory.repair_applied",
         MemoryCompactionApplied { .. } => "memory.compaction_applied",
@@ -781,5 +782,29 @@ mod tests {
     fn truncate_home_display_keeps_zero_when_keep_is_zero() {
         let out = truncate_home_display("/anything", 0);
         assert_eq!(out, "…");
+    }
+
+    #[test]
+    fn truncate_home_display_returns_input_unchanged_when_exactly_at_budget() {
+        // The budget check is `char_count <= keep` (main.rs:42): a path that
+        // fills the column budget EXACTLY fits, so it is shown whole with no
+        // `…`. The within-budget test uses 13 chars against keep 32 (far
+        // under), so a `<=` -> `<` slip still returns it unchanged there while,
+        // at the exact boundary, it would fall to the truncation path with
+        // `skip = keep - keep = 0` and prepend a spurious `…` to the full
+        // string — falsely signaling a truncation that did not happen and
+        // overflowing the budget by one column. Pin the inclusive endpoint:
+        // char_count == keep returns the input verbatim.
+        let path = "/Users/op/cov";
+        assert_eq!(
+            path.chars().count(),
+            13,
+            "fixture-sanity: the path sits exactly on the budget"
+        );
+        assert_eq!(
+            truncate_home_display(path, 13),
+            path,
+            "a path that fills the budget exactly must be shown whole, with no leading ellipsis",
+        );
     }
 }

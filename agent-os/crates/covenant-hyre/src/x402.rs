@@ -26,10 +26,33 @@
 use covenant_x402::{PaymentRequirements, Signer};
 use serde::Deserialize;
 use serde_json::Value;
+use std::time::Duration;
 use tracing::debug;
 
 use crate::tools::PaidRequest;
 use crate::{HyreError, Result};
+
+/// Total per-request ceiling for the paid loop. The Hyre upstream and its
+/// x402 facilitator are untrusted, so a hung or never-completing response
+/// must not wedge the daemon worker forever. It is a safety ceiling, not
+/// an enforcement of the per-challenge `maxTimeoutSeconds`: the paid retry
+/// settles synchronously and Hyre advertises a 60s max, so the ceiling
+/// sits well above that to avoid aborting a legitimate settlement.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The reqwest client the daemon should drive [`execute_paid`] with —
+/// bounded so an unresponsive upstream cannot block a worker indefinitely.
+pub fn http_client() -> reqwest::Client {
+    http_client_with_timeout(REQUEST_TIMEOUT)
+}
+
+fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(timeout)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// One payment option from a Hyre 402 challenge.
 #[derive(Debug, Clone, Deserialize)]
@@ -112,7 +135,10 @@ pub fn select<'a>(
             && network_matches(&a.network, network)
             && a.atomic_amount()
                 .and_then(|s| s.parse::<u128>().ok())
-                .is_some_and(|n| n <= per_call_cap)
+                // A present "0" is a zero price, not a free call: a 402 that
+                // advertises a settleable resource never charges nothing, and
+                // to_requirements would otherwise sign that zero-price option.
+                .is_some_and(|n| n > 0 && n <= per_call_cap)
     })
 }
 
@@ -160,6 +186,7 @@ fn to_requirements(accept: &Accept, caip2_network: &str) -> Result<PaymentRequir
         scheme: accept.scheme.clone(),
         extra: Some(covenant_x402::PaymentExtra {
             fee_payer: Some(fee_payer.to_string()),
+            ..Default::default()
         }),
     })
 }
@@ -171,11 +198,23 @@ fn to_requirements(accept: &Accept, caip2_network: &str) -> Result<PaymentRequir
 /// by `signer` and the request is retried once with the `x-payment`
 /// header. Selection failures surface as [`HyreError::NotAllowed`] —
 /// the call is rejected before the signer runs, so no payment leaves
-/// the host for an out-of-policy option.
+/// the host for an out-of-policy option. A signer that cannot build the
+/// payment header surfaces as [`HyreError::Sign`], keeping a
+/// signing/custody failure distinct from a network or decode fault, and
+/// aborts the loop before the paid retry.
 pub async fn execute_paid(
     http: &reqwest::Client,
     signer: &dyn Signer,
     plan: &PaidRequest,
+) -> Result<PaidHttp> {
+    execute_paid_with_limits(http, signer, plan, crate::http::MAX_RESPONSE_BYTES).await
+}
+
+async fn execute_paid_with_limits(
+    http: &reqwest::Client,
+    signer: &dyn Signer,
+    plan: &PaidRequest,
+    max_bytes: usize,
 ) -> Result<PaidHttp> {
     let method = reqwest::Method::from_bytes(plan.method.as_bytes())
         .map_err(|_| HyreError::Execute(format!("invalid HTTP method: {:?}", plan.method)))?;
@@ -183,7 +222,7 @@ pub async fn execute_paid(
     let first = send(http, &method, &plan.url, plan.body.as_ref(), None).await?;
     let status = first.status();
     if status.is_success() {
-        let body = first.text().await?;
+        let body = crate::http::read_capped(first, max_bytes, HyreError::Execute).await?;
         return Ok(PaidHttp {
             status: status.as_u16(),
             body,
@@ -191,7 +230,9 @@ pub async fn execute_paid(
         });
     }
     if status.as_u16() != 402 {
-        let body = first.text().await.unwrap_or_default();
+        let body = crate::http::read_capped(first, max_bytes, HyreError::Execute)
+            .await
+            .unwrap_or_default();
         return Err(HyreError::Execute(format!(
             "{} returned {} (not 402): {}",
             plan.url,
@@ -200,7 +241,7 @@ pub async fn execute_paid(
         )));
     }
 
-    let challenge = first.text().await?;
+    let challenge = crate::http::read_capped(first, max_bytes, HyreError::Execute).await?;
     let accepts = parse_challenge(&challenge)?;
     let accept =
         select(&accepts, &plan.network, &plan.asset, plan.per_call_cap).ok_or_else(|| {
@@ -217,11 +258,11 @@ pub async fn execute_paid(
     let header = signer
         .build_payment(&requirements)
         .await
-        .map_err(|e| HyreError::Execute(e.to_string()))?;
+        .map_err(|e| HyreError::Sign(e.to_string()))?;
 
     let paid = send(http, &method, &plan.url, plan.body.as_ref(), Some(&header)).await?;
     let status = paid.status();
-    let body = paid.text().await?;
+    let body = crate::http::read_capped(paid, max_bytes, HyreError::Execute).await?;
     let paid_amount = if status.is_success() {
         Some(requirements.amount)
     } else {
@@ -354,6 +395,53 @@ mod tests {
     }
 
     #[test]
+    fn network_matches_is_lenient_across_short_and_caip2_spellings() {
+        // Hyre's 402 body and its discovery header disagree on the network
+        // spelling — the body says the short "solana" while the operator
+        // capability carries the CAIP-2 id — so network_matches accepts BOTH
+        // directions plus the exact case (x402.rs:145-147).
+        // select_matches_short_network_against_caip2_capability only exercises
+        // the body-short / want-CAIP-2 arm (x402.rs:146); the exact-equality
+        // arm (x402.rs:145) and the reverse body-CAIP-2 / want-short arm
+        // (x402.rs:147) are otherwise unpinned, so a regression dropping either
+        // would silently stop matching a legitimate option and the call would
+        // settle nothing. The negative cases pin the ':' delimiter: matching
+        // must be chain-id equality or a colon-delimited prefix, never a bare
+        // substring that would let a truncated or unrelated id pass.
+        let short = "solana";
+        let caip2 = crate::config::SOLANA_NETWORK;
+
+        assert!(network_matches(caip2, caip2), "identical CAIP-2 ids match");
+        assert!(network_matches(short, short), "identical short ids match");
+        assert!(
+            network_matches(short, caip2),
+            "a short body id matches a CAIP-2 operator capability"
+        );
+        assert!(
+            network_matches(caip2, short),
+            "a CAIP-2 body id matches a short operator capability"
+        );
+
+        let other = "ethereum:1";
+        assert!(
+            !network_matches(caip2, other),
+            "a solana option must not match an ethereum capability"
+        );
+        assert!(
+            !network_matches(other, caip2),
+            "an ethereum option must not match a solana capability"
+        );
+        assert!(
+            !network_matches("sol", caip2),
+            "a bare prefix without the ':' delimiter must not match a CAIP-2 id"
+        );
+        assert!(
+            !network_matches(caip2, "sol"),
+            "a CAIP-2 id must not match a bare prefix capability without the ':' delimiter"
+        );
+    }
+
+    #[test]
     fn select_rejects_over_cap_and_wrong_asset() {
         let accepts = parse_challenge(LIVE_DEFI_TVL_402).unwrap();
         assert!(
@@ -364,6 +452,77 @@ mod tests {
             select(&accepts, NETWORK, "OTHER_MINT", 10_000).is_none(),
             "wrong asset"
         );
+    }
+
+    #[test]
+    fn select_rejects_non_exact_scheme_and_unparseable_amount() {
+        // select() ANDs four guards before an option is signed. Two have no
+        // other coverage: the scheme must be "exact", and the amount must parse
+        // to u128. Corrupt each on a copy of the live option that otherwise
+        // matches network, asset, and cap, so only the guard under test can
+        // make select() return None.
+        let base = parse_challenge(LIVE_DEFI_TVL_402).expect("parse")[0].clone();
+        assert!(
+            select(std::slice::from_ref(&base), NETWORK, ASSET, 10_000).is_some(),
+            "the pinned live option must select before either corruption",
+        );
+
+        let mut non_exact = base.clone();
+        non_exact.scheme = "upto".into();
+        assert!(
+            select(std::slice::from_ref(&non_exact), NETWORK, ASSET, 10_000).is_none(),
+            "a non-exact scheme must never be selected even when network, asset, and cap all match — the Hyre profile only settles exact",
+        );
+
+        let mut bad_amount = base.clone();
+        bad_amount.amount = None;
+        bad_amount.max_amount_required = Some("not-a-number".into());
+        // If this guard ever lets a non-numeric amount through, to_requirements
+        // renders amount_usdc as unwrap_or(0)/1e6 == 0.0 USD while still signing
+        // the raw string, so select is the real guard against a garbage price.
+        assert!(
+            select(std::slice::from_ref(&bad_amount), NETWORK, ASSET, 10_000).is_none(),
+            "an unparseable amount must be filtered out before it can reach to_requirements",
+        );
+    }
+
+    #[test]
+    fn select_rejects_zero_amount_option() {
+        // select() is the price guard: it already drops missing, unparseable,
+        // and over-cap amounts. A present "0" was the remaining hole — it parses
+        // and is trivially <= any cap, so without the positive lower bound it
+        // reaches to_requirements and gets signed as a zero-price authorization,
+        // the same "signed for a zero price" outcome the missing-amount guard
+        // exists to prevent.
+        let mut zero = parse_challenge(LIVE_DEFI_TVL_402).expect("parse")[0].clone();
+        assert!(
+            select(std::slice::from_ref(&zero), NETWORK, ASSET, 10_000).is_some(),
+            "the pinned live option must select before its amount is zeroed",
+        );
+        zero.amount = Some("0".into());
+        zero.max_amount_required = None;
+        assert!(
+            select(std::slice::from_ref(&zero), NETWORK, ASSET, 10_000).is_none(),
+            "a zero-amount option must be filtered out before it can reach to_requirements",
+        );
+    }
+
+    #[test]
+    fn truncate_caps_long_bodies_with_an_ellipsis() {
+        // truncate bounds the upstream body inlined into a HyreError::Execute
+        // message. Short and exactly-200-char inputs pass through verbatim; only
+        // once it actually cuts does it append the ellipsis marker.
+        assert_eq!(truncate("short body"), "short body");
+        let exactly_200 = "a".repeat(200);
+        assert_eq!(
+            truncate(&exactly_200),
+            exactly_200,
+            "the 200th char is kept whole, no marker",
+        );
+        let cut = truncate(&"a".repeat(250));
+        assert_eq!(cut.chars().count(), 201, "200 kept chars plus the ellipsis");
+        assert!(cut.starts_with(&"a".repeat(200)));
+        assert!(cut.ends_with('…'));
     }
 
     #[test]
@@ -408,6 +567,144 @@ mod tests {
             matches!(to_requirements(&no_amount, NETWORK), Err(HyreError::Challenge(m)) if m.contains("accept missing amount")),
             "an option carrying neither amount nor maxAmountRequired must be rejected, not signed for a zero price",
         );
+    }
+
+    #[test]
+    fn to_requirements_forces_operator_caip2_network_and_normalises_output() {
+        // to_requirements is the last step before the signer: it turns a
+        // selected 402 option into the PaymentRequirements the funding key
+        // signs. Its headline contract is that the network is FORCED to the
+        // operator's CAIP-2 rail (the caip2_network arg), never the short
+        // "solana" the untrusted challenge body carries — so a tampered or
+        // quirky upstream cannot steer the signed payment onto a different
+        // chain id. The rejection test above only asserts the happy path is
+        // Ok and never inspects the returned fields, so the forcing and the
+        // field normalisation are unpinned: a regression emitting
+        // accept.network instead of caip2_network would hand the signer the
+        // upstream's "solana" and every existing test would stay green.
+        let base = parse_challenge(LIVE_DEFI_TVL_402).expect("parse")[0].clone();
+        assert_eq!(
+            base.network, "solana",
+            "the live option carries the short network spelling, distinct from the CAIP-2 rail",
+        );
+
+        let req = to_requirements(&base, NETWORK).expect("the pinned live option normalises");
+
+        assert_eq!(
+            req.network, NETWORK,
+            "network must be forced to the operator CAIP-2 rail passed in, not the challenge's short \"solana\"",
+        );
+        assert_eq!(
+            req.asset, ASSET,
+            "the asset mint is carried through verbatim"
+        );
+        assert_eq!(
+            req.pay_to,
+            crate::config::PAY_TO,
+            "payTo is the pinned Hyre payee"
+        );
+        assert_eq!(req.scheme, "exact", "the exact scheme is carried through");
+        assert_eq!(
+            req.amount, "10000",
+            "the exact atomic figure is carried through verbatim",
+        );
+        assert!(
+            (req.amount_usdc - 0.01).abs() < 1e-9,
+            "amount_usdc is the atomic amount over 1e6 (10000 -> 0.01 USDC), got {}",
+            req.amount_usdc,
+        );
+        assert_eq!(
+            req.extra.and_then(|e| e.fee_payer).as_deref(),
+            Some(crate::config::PAYAI_FEE_PAYER),
+            "the PayAI sponsor feePayer is carried into the signer input",
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_upstream_times_out_instead_of_hanging() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let err = execute_paid(
+            &http_client_with_timeout(Duration::from_millis(50)),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+        )
+        .await
+        .expect_err("must time out");
+        assert!(matches!(err, HyreError::Http(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_response_body_is_rejected_instead_of_buffered() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let err = execute_paid_with_limits(
+            &reqwest::Client::new(),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+            64,
+        )
+        .await
+        .expect_err("must reject an oversized body");
+        assert!(matches!(err, HyreError::Execute(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_challenge_body_is_rejected_before_parsing() {
+        // A 402 whose challenge body exceeds the cap must fail closed at the
+        // read boundary, before parse_challenge buffers an unbounded body.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let err = execute_paid_with_limits(
+            &reqwest::Client::new(),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+            64,
+        )
+        .await
+        .expect_err("must reject an oversized challenge body");
+        assert!(matches!(err, HyreError::Execute(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn oversized_paid_retry_body_is_rejected_after_payment() {
+        // The challenge parses, the loop signs and sends payment, then the
+        // paid retry floods the response. The cap must fail closed rather than
+        // buffer an unbounded body on a path where funds were already committed.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_body_string(LIVE_DEFI_TVL_402))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .and(header_exists("x-payment"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(8192)))
+            .mount(&server)
+            .await;
+        let err = execute_paid_with_limits(
+            &reqwest::Client::new(),
+            &MockSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+            4096,
+        )
+        .await
+        .expect_err("must reject an oversized paid-retry body");
+        assert!(matches!(err, HyreError::Execute(_)), "got {err:?}");
     }
 
     #[tokio::test]
@@ -560,6 +857,53 @@ mod tests {
         assert!(
             out.paid_amount.is_none(),
             "a rejected payment must not record a settled amount"
+        );
+    }
+
+    #[tokio::test]
+    async fn paid_signer_failure_surfaces_as_typed_sign_error() {
+        // The loop selects a policy-compliant option, normalises it, then asks
+        // the signer to build the x-payment header. A signer that cannot build
+        // the payment (funding key unavailable, bad blockhash, insufficient
+        // funds at sign time) must abort the call as a typed HyreError::Sign
+        // carrying the signer's message — never panic, and never fall through to
+        // the paid POST. Sign keeps a signing/custody failure distinct from the
+        // generic Execute used for HTTP, method, and body-decode faults. The 402
+        // mock expects exactly one request — the unpaid challenge fetch — so if
+        // the loop ever signed and issued the paid retry, the expectation would
+        // fail on server drop. A Sign result therefore proves the loop stopped
+        // at the signer before any payment left the host.
+        struct FailingSigner;
+        #[async_trait::async_trait]
+        impl Signer for FailingSigner {
+            async fn build_payment(
+                &self,
+                _requirements: &PaymentRequirements,
+            ) -> covenant_x402::Result<String> {
+                Err(covenant_x402::X402Error::Sign(
+                    "funding key unavailable".into(),
+                ))
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/defi/tvl"))
+            .respond_with(ResponseTemplate::new(402).set_body_string(LIVE_DEFI_TVL_402))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let err = execute_paid(
+            &reqwest::Client::new(),
+            &FailingSigner,
+            &plan(&format!("{}/defi/tvl", server.uri()), 10_000),
+        )
+        .await
+        .expect_err("a signer failure must abort the paid loop");
+        assert!(
+            matches!(err, HyreError::Sign(ref m) if m.contains("funding key unavailable")),
+            "got {err:?}",
         );
     }
 }

@@ -1,0 +1,5 @@
+{
+  "kind": "backfill_settlement_receipts",
+  "dry_run": true,
+  "scope_pubkey": "subjectpubkeyb58"
+}

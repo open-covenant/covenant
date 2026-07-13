@@ -77,11 +77,22 @@ for (const crate of required) {
   }
 }
 
+// Tracked standalone crates: deliberately outside the workspace (isolated
+// signer builds with their own lockfiles) but part of the documented crate
+// landscape. Additions here are reviewed code changes; each entry must still
+// exist as crates/<name>/Cargo.toml so the table cannot document phantoms.
+const STANDALONE_CRATES = new Set(["covenant-x402-signer", "covenant-metaplex-signer"]);
+
 const requiredSet = new Set(required);
 for (const token of tokens) {
-  if (token.startsWith("covenant-") && !requiredSet.has(token)) {
-    errors.push(`${token}: documented in the Crate Groups table but not a crates/covenant-* workspace member`);
+  if (!token.startsWith("covenant-") || requiredSet.has(token)) continue;
+  if (STANDALONE_CRATES.has(token)) {
+    if (!existsSync(join(agentOsRoot, "crates", token, "Cargo.toml"))) {
+      errors.push(`${token}: allowlisted standalone crate missing crates/${token}/Cargo.toml`);
+    }
+    continue;
   }
+  errors.push(`${token}: documented in the Crate Groups table but not a crates/covenant-* workspace member`);
 }
 
 if (errors.length > 0) {

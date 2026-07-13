@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-13T17:24:57.664Z",
+  "updatedAt": "2026-07-13T17:45:01.400Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12767,
+    "events": 12772,
     "tasks": 1496,
-    "integrated": 1497
+    "integrated": 1498
   },
   "throughput": {
-    "last24h": 4,
-    "last7d": 6,
-    "velocity": 0.9
+    "last24h": 5,
+    "last7d": 7,
+    "velocity": 1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-13",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-13",
-      "total": 1497
+      "total": 1498
     }
   ],
   "states": {
-    "integrated": 1489,
+    "integrated": 1490,
     "proposed": 1,
-    "blocked": 5,
-    "in_progress": 1
+    "blocked": 5
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "provenance-capability-rule-evaluation-trace",
-    "state": "in_progress",
-    "since": "2026-07-13T14:36:29.044Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-13T17:28:35.342Z",
+      "task": "provenance-capability-rule-evaluation-trace",
+      "note": "Committed as 0b3d546d (feat(audit): project capability-budget-exhaustion into provenance), pushed fast-forward to origin/loop/main-track (40"
+    },
     {
       "at": "2026-07-13T13:09:07.894Z",
       "task": "capabilities-doc-resource-kind-second-copy-guard",
@@ -315,11 +315,6 @@
       "at": "2026-07-01T18:00:25.512Z",
       "task": "status-budget-ledger-hard-preempt-is-implemented-tested-and",
       "note": "Committed 8d43c682: validate-daemon-subprocess-recover-before-tick.mjs + 1 validate.sh line. CI-safe (reads only committed main.rs). Verifie"
-    },
-    {
-      "at": "2026-07-01T17:56:39.358Z",
-      "task": "status-live-boundary-coverage-gvisor-ci-promotion-deferred-t",
-      "note": "Committed 284bef5d: validate-gvisor-live-test-target.mjs + 1 validate.sh line. CI-safe (reads only committed workflow + test source). status"
     }
   ]
 }

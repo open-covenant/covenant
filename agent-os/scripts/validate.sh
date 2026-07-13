@@ -94,6 +94,7 @@ run node ./scripts/validate-daemon-subprocess-recover-before-tick.mjs
 run node ./scripts/validate-budget-projection-env-doc.mjs
 run node ./scripts/validate-capabilities-doc-scope-namespaces.mjs
 run node ./scripts/validate-capabilities-doc-effective-status.mjs
+run node ./scripts/validate-capabilities-doc-duplicate-risk.mjs
 run node ./scripts/validate-ipc-v2-migration-doc-fixtures.mjs
 run_local ./scripts/validate-autonomy-status-gaps.mjs
 run node ./scripts/validate-chain-tx-test-line-refs.mjs

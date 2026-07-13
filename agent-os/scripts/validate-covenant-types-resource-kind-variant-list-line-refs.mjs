@@ -59,12 +59,98 @@ const docsCitation = {
 const errors = [];
 const fail = (message) => errors.push(message);
 
+// docs/capabilities.md carries a second copy of the ResourceKind slug list under
+// `chain.resource`. This block pins that copy to the variants parsed from the
+// enum body (zero hard-coding): the expected slug set is the parsed enum's
+// variant names lowercased (the enum is `#[serde(rename_all = "lowercase")]`),
+// so a sixth variant fails both docs/ipc-and-http-gateway.md (via the count
+// check below) and docs/capabilities.md (via the order check here).
+const CAPABILITIES_DOC_PATH = "docs/capabilities.md";
+
+function extractChainResourceSlugs(doc) {
+  if (doc == null) return { slugs: [], errors: [`${CAPABILITIES_DOC_PATH} must stay present`] };
+  const sentence = doc.match(/`resource` narrows receipt rows to\s+([^.\n]*?)\./);
+  if (sentence == null) {
+    return { slugs: [], errors: [`${CAPABILITIES_DOC_PATH} must keep the "\`resource\` narrows receipt rows to ..." sentence listing the ResourceKind slugs`] };
+  }
+  const slugs = [...sentence[1].matchAll(/`([a-z0-9_]+)`/g)].map((m) => m[1]);
+  if (slugs.length === 0) {
+    return { slugs: [], errors: [`${CAPABILITIES_DOC_PATH} chain.resource sentence must list the slugs in backticks`] };
+  }
+  return { slugs, errors: [] };
+}
+
+function compareChainResourceSlugs(docSlugs, expectedSlugs) {
+  const comparisonErrors = [];
+  const max = Math.max(docSlugs.length, expectedSlugs.length);
+  for (let index = 0; index < max; index += 1) {
+    if (docSlugs[index] !== expectedSlugs[index]) {
+      const docAt = docSlugs[index] ?? "(absent)";
+      const expectedAt = expectedSlugs[index] ?? "(absent)";
+      comparisonErrors.push(`${CAPABILITIES_DOC_PATH} chain.resource sentence lists slug ${index + 1} as "${docAt}" but the ResourceKind enum serializes "${expectedAt}" there; the published slug list drifted in set, order, or spelling`);
+      break;
+    }
+  }
+  return comparisonErrors;
+}
+
+function runSelfTest() {
+  const failures = [];
+  const baseExpected = ["compute", "memory", "tool", "message", "registration"];
+  const goodDoc = "- `resource` narrows receipt rows to `compute`, `memory`, `tool`, `message`, or `registration`.";
+
+  const good = extractChainResourceSlugs(goodDoc);
+  if (good.errors.length > 0 || good.slugs.join(",") !== baseExpected.join(",")) {
+    failures.push(`good capabilities.md fixture mis-extracted: ${good.errors.join("; ") || good.slugs.join(",")}`);
+  }
+  if (compareChainResourceSlugs(good.slugs, baseExpected).length > 0) {
+    failures.push("good capabilities.md slug set should match the ResourceKind variants");
+  }
+
+  const badMutations = [
+    ["sentence removed", (d) => d.replace("`resource` narrows receipt rows to", "`resource` filters rows to")],
+    ["omits a slug", (d) => d.replace("`tool`, ", "")],
+    ["adds a phantom slug", (d) => d.replace("`registration`.", "`registration`, or `pending`.")],
+    ["renames a slug", (d) => d.replace("`registration`", "`signup`")],
+    ["reordered", (d) => d.replace("`compute`, `memory`", "`memory`, `compute`")],
+  ];
+  for (const [label, mutate] of badMutations) {
+    const extracted = extractChainResourceSlugs(mutate(goodDoc));
+    if (extracted.errors.length === 0 && compareChainResourceSlugs(extracted.slugs, baseExpected).length === 0) {
+      failures.push(`bad capabilities.md fixture "${label}" should have been rejected but passed`);
+    }
+  }
+
+  // A sixth ResourceKind variant must propagate to the capabilities.md check:
+  // the doc still lists five while the enum now serializes six.
+  if (compareChainResourceSlugs(good.slugs, [...baseExpected, "pending"]).length === 0) {
+    failures.push("a sixth ResourceKind variant must make the capabilities.md slug-set check fail");
+  }
+
+  return failures;
+}
+
+const selfTestFailures = runSelfTest();
+if (selfTestFailures.length > 0) {
+  console.error("validate-covenant-types-resource-kind-variant-list-line-refs: self-test failed");
+  for (const failure of selfTestFailures) {
+    console.error(`- ${failure}`);
+  }
+  process.exit(1);
+}
+
 let docs;
+let capabilitiesDocs;
 let source;
 try {
   docs = read(docsPath);
 } catch (error) {
   fail(`cannot read ${docsPath}: ${error.message}`);
+}
+try {
+  capabilitiesDocs = read(CAPABILITIES_DOC_PATH);
+} catch (error) {
+  fail(`cannot read ${CAPABILITIES_DOC_PATH}: ${error.message}`);
 }
 try {
   source = read(sourcePath);
@@ -93,6 +179,7 @@ function scanBraceBalance(lines, openerLine) {
 
 let enumStart = null;
 let enumEnd = null;
+let declaredVariants = [];
 if (source) {
   const lines = source.split("\n");
   const openers = [];
@@ -114,7 +201,6 @@ if (source) {
       );
     } else {
       const variantRegex = /^\s*([A-Z]\w*)\s*[\{(,]?\s*(?:,)?\s*$/;
-      const declaredVariants = [];
       for (let index = enumStart; index < enumEnd; index += 1) {
         const text = lines[index];
         if (text.trim().startsWith("//") || text.trim().startsWith("#[")) {
@@ -148,6 +234,20 @@ if (docs) {
     fail(
       `${docsPath}: missing the ${docsCitation.label} ("${docsCitation.template}"); remediation: restore the docs sentence that records all five slugs in the documented order — "compute", "memory", "tool", "message", "registration"`,
     );
+  }
+}
+
+if (capabilitiesDocs != null) {
+  const chainExpected =
+    declaredVariants.length > 0
+      ? declaredVariants.map((entry) => entry.name.toLowerCase())
+      : expectedVariants.map((variant) => variant.slug);
+  const { slugs: chainSlugs, errors: chainErrors } = extractChainResourceSlugs(capabilitiesDocs);
+  for (const chainError of chainErrors) {
+    fail(chainError);
+  }
+  for (const chainError of compareChainResourceSlugs(chainSlugs, chainExpected)) {
+    fail(chainError);
   }
 }
 

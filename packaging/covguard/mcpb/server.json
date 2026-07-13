@@ -8,13 +8,13 @@
     "source": "github"
   },
   "websiteUrl": "https://opencovenant.org/guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/open-covenant/covenant/releases/download/covguard-v0.1.0/covenant-guard.mcpb",
-      "version": "0.1.0",
-      "fileSha256": "b08d89e97220a5bee918e22285e7a6f14ff15a3e11f887842521809891b8bb9d",
+      "identifier": "https://github.com/open-covenant/covenant/releases/download/covguard-v0.1.1/covenant-guard.mcpb",
+      "version": "0.1.1",
+      "fileSha256": "2af41d0875aa92b4d99a4d7cc86a6b18dc06d99affcc78777902dab0923dc104",
       "transport": {
         "type": "stdio"
       }

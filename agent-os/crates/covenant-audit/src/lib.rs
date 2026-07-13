@@ -235,6 +235,17 @@ pub enum AuditKind {
         action: String,
         reason: String,
     },
+    /// Logged when a peer held at least one action-matched capability but
+    /// every candidate's scope refused the concrete request, so the dispatch
+    /// was denied. `reason` is the same short scope diagnostic the caller
+    /// saw. Deliberately carries **no candidate-cap attribution**
+    /// (provenance-capability-rule-evaluation-trace decision): on a scope
+    /// reject there is no single "matched rule" — the peer may have held
+    /// several action-matched grants, all scope-insufficient — so one
+    /// `signature_b58` would mislead, a `Vec` would balloon audit volume,
+    /// and either would unfreeze the golden wire schema
+    /// (`audit-kinds.v1.json` / `provenance-records.v1.json`). Revisit only
+    /// via an explicit schema-version bump.
     CapabilityScopeRejected {
         agent_id: String,
         action: String,
@@ -1439,19 +1450,20 @@ pub struct PrivilegedAction {
     /// `Some` on rows that name an authorizing or affected capability.
     pub rule: Option<String>,
     /// How the action resolved: `authorized`, `denied`, `granted`,
-    /// `grant_rejected`, `revoked`, `revoke_noop`, `scope_rejected`, or
-    /// `revoke_rejected`.
+    /// `grant_rejected`, `revoked`, `revoke_noop`, `scope_rejected`,
+    /// `revoke_rejected`, or `budget_exhausted`.
     pub outcome: String,
 }
 
 /// Project one audit event into its privileged-action rows. A
 /// [`AuditKind::CapabilityCheck`] fans out to one `authorized` row per
 /// granted required action (each naming its approver and rule) plus one
-/// `denied` row per missing action; the single-row grant, revoke, and
-/// rejection kinds produce exactly one row. Every other kind — intent
-/// dispatch, Hermes tool calls, budget enforcement, peer/operator
-/// administration — has no authorizing rule and projects to an empty
-/// vec, so the provenance view stays scoped to capability provenance.
+/// `denied` row per missing action; the single-row grant, revoke,
+/// rejection, and use-budget-exhaustion kinds produce exactly one row.
+/// Every other kind — intent dispatch, Hermes tool calls, token-budget
+/// enforcement, peer/operator administration — has no authorizing rule
+/// and projects to an empty vec, so the provenance view stays scoped to
+/// capability provenance.
 pub fn project_privileged_actions(event: &AuditEvent) -> Vec<PrivilegedAction> {
     let row = |actor: String,
                action: String,
@@ -1553,6 +1565,24 @@ pub fn project_privileged_actions(event: &AuditEvent) -> Vec<PrivilegedAction> {
             Some(signature_b58.clone()),
             "revoke_rejected",
             "capability_revoke_rejected",
+        )],
+        // A budget-exhausted refusal is a capability deny with a *known*
+        // matched rule: the grant verified but its signed max_uses budget was
+        // spent. Project it so the provenance view answers "which rule ran
+        // out" rather than dropping the deny. The variant carries no subject
+        // display, so like `CapabilityRevokeRejected` the row is keyed by the
+        // authorizing signature with an empty actor.
+        AuditKind::CapabilityBudgetExhausted {
+            signature_b58,
+            action,
+            ..
+        } => vec![row(
+            String::new(),
+            action.clone(),
+            None,
+            Some(signature_b58.clone()),
+            "budget_exhausted",
+            "capability_budget_exhausted",
         )],
         _ => Vec::new(),
     }
@@ -1921,17 +1951,17 @@ mod tests {
 
     #[tokio::test]
     async fn jsonl_integrity_report_pins_root_hash_as_genesis_seeded_chain_fold() {
-        // verify_integrity returns root_hash_hex (lib.rs:1308) as the final
+        // verify_integrity returns root_hash_hex (lib.rs:1319) as the final
         // accumulator of the audit hash chain: it seeds previous_hash_hex from
-        // ZERO_CHAIN_HASH (lib.rs:1263), then folds each event line forward as
-        // previous = chain_hash(previous, sha256_hex(line)) (lib.rs:1264-1296).
+        // ZERO_CHAIN_HASH (lib.rs:1274), then folds each event line forward as
+        // previous = chain_hash(previous, sha256_hex(line)) (lib.rs:1275-1307).
         // That root is the audit-root subject release signing binds
-        // (lib.rs:2669), so its exact byte construction is load-bearing for any
+        // (lib.rs:2699), so its exact byte construction is load-bearing for any
         // independent verifier of the anchor.
         //
         // jsonl_integrity_report_accepts_untampered_chain pins root_hash_hex
         // only by length (== 64) plus report.valid, and valid is RELATIONAL: it
-        // holds whenever the write-path build_chain_entries (lib.rs:1014) agrees
+        // holds whenever the write-path build_chain_entries (lib.rs:1025) agrees
         // with the verify-path inline fold, so a mutation applied consistently
         // to BOTH paths survives it. chain_hash_pins_separator_and_sha256_-
         // composition pins the single LINK, but nothing recomputes the
@@ -1953,7 +1983,7 @@ mod tests {
         assert!(report.valid, "{report:?}");
 
         // Independent fold of the exact lines verify_integrity reads
-        // (read_event_lines filters empty lines identically, lib.rs:1039-1045).
+        // (read_event_lines filters empty lines identically, lib.rs:1050-1056).
         let raw = std::fs::read_to_string(&path).unwrap();
         let mut expected = ZERO_CHAIN_HASH.to_string();
         for line in raw.lines().filter(|l| !l.is_empty()) {
@@ -1977,11 +2007,11 @@ mod tests {
     #[tokio::test]
     async fn jsonl_integrity_report_detects_dangling_chain_anchor() {
         // verify_integrity flags a hash-chain sidecar that outruns the
-        // event log: `if anchors.len() > event_lines.len()` (lib.rs:1298)
+        // event log: `if anchors.len() > event_lines.len()` (lib.rs:1309)
         // reports the surplus as "<n> dangling chain anchor(s)" — the
         // specific diagnostic for an event log that lost trailing lines
         // (truncated or rolled back) while the append-only chain sidecar
-        // kept its anchors. The earlier `!=` parity check (lib.rs:1256)
+        // kept its anchors. The earlier `!=` parity check (lib.rs:1267)
         // also marks any count mismatch invalid, so line 827 is the
         // dangling-count diagnostic on top of that verdict, not the sole
         // gate. Every other integrity test runs equal event/anchor counts
@@ -2036,7 +2066,7 @@ mod tests {
     async fn jsonl_integrity_report_detects_missing_anchor_for_unanchored_event() {
         // verify_integrity flags a well-formed event line that has no backing
         // chain anchor: the `Ok(event)` branch's `None => "chain entry {index}
-        // missing"` arm (lib.rs:1280), reached only when the event log outruns
+        // missing"` arm (lib.rs:1291), reached only when the event log outruns
         // the append-only hash-chain sidecar (event_lines.len() >
         // anchors.len()). That skew is the signature of a forged event appended
         // without extending the chain, and the diagnostic must name the
@@ -2047,7 +2077,7 @@ mod tests {
         //
         // Mutation: narrowing line 977 to `None => {}` drops only this
         // per-index diagnostic. The `anchors.len() != event_lines.len()` parity
-        // check at lib.rs:1256 already flips `valid`, so asserting only
+        // check at lib.rs:1267 already flips `valid`, so asserting only
         // `!report.valid` would NOT catch the regression — the load-bearing
         // assertion is the specific "chain entry 1 missing" string.
         let dir = tempfile::tempdir().unwrap();
@@ -3669,6 +3699,47 @@ mod tests {
             assert!(
                 serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
                 "AuditKind::CapabilityScopeRejected wire form must reject a payload missing {required:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn audit_kind_capability_budget_exhausted_serde_pins_four_field_variant() {
+        // AuditKind::CapabilityBudgetExhausted records a deny whose matched
+        // grant verified but had already spent its signed max_uses budget —
+        // signature_b58 is the join key back to the spent grant and the one
+        // field QueryProvenance projects as the rule.
+        let kind = AuditKind::CapabilityBudgetExhausted {
+            signature_b58: "SpentSig".into(),
+            action: "tool.call.echo".into(),
+            max_uses: 5,
+            used: 5,
+        };
+
+        let wire = serde_json::to_value(&kind).unwrap();
+        let obj = wire
+            .as_object()
+            .expect("AuditKind serializes as a JSON object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["action", "max_uses", "signature_b58", "type", "used"]
+        );
+        assert_eq!(
+            obj.get("type"),
+            Some(&serde_json::json!("capability_budget_exhausted")),
+        );
+
+        let back: AuditKind = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(back, kind);
+
+        for required in ["signature_b58", "action", "max_uses", "used"] {
+            let mut missing = obj.clone();
+            missing.remove(required);
+            assert!(
+                serde_json::from_value::<AuditKind>(serde_json::Value::Object(missing)).is_err(),
+                "AuditKind::CapabilityBudgetExhausted wire form must reject a payload missing {required:?}",
             );
         }
     }
@@ -5419,12 +5490,55 @@ mod tests {
     }
 
     #[test]
+    fn capability_budget_exhausted_projects_the_spent_rule() {
+        let rows = project_privileged_actions(&dummy(AuditKind::CapabilityBudgetExhausted {
+            signature_b58: "SpentSig".into(),
+            action: "tool.call.echo".into(),
+            max_uses: 5,
+            used: 5,
+        }));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, "capability_budget_exhausted");
+        assert_eq!(rows[0].outcome, "budget_exhausted");
+        assert_eq!(
+            rows[0].rule.as_deref(),
+            Some("SpentSig"),
+            "a budget-exhausted deny is the one deny path with exactly one \
+             matched rule — the provenance view must name the spent grant",
+        );
+        assert_eq!(rows[0].action, "tool.call.echo");
+        assert!(
+            rows[0].approver.is_none(),
+            "exhaustion is refused by budget arithmetic, not by an approver",
+        );
+        assert!(
+            rows[0].actor.is_empty(),
+            "the variant carries no subject display; like a cross-peer revoke \
+             rejection the row is keyed by the authorizing signature",
+        );
+    }
+
+    #[test]
     fn non_capability_kinds_project_no_privileged_actions() {
         let rows = project_privileged_actions(&dummy(AuditKind::AuthenticationFailed {
             transport: "ipc".into(),
             reason: "bad token".into(),
         }));
         assert!(rows.is_empty(), "auth failures carry no authorizing rule");
+
+        let rows = project_privileged_actions(&dummy(AuditKind::BudgetExhausted {
+            agent_display: "research@agent".into(),
+            intent_id: Uuid::nil(),
+            intent_text: "summarize the logs".into(),
+            requested: 10,
+            tokens_remaining: 0,
+            refill_eta_ms: 60_000,
+        }));
+        assert!(
+            rows.is_empty(),
+            "token-budget exhaustion names no signed rule — only the \
+             capability use-budget variant projects into provenance",
+        );
     }
 
     #[test]

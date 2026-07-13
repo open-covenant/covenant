@@ -1,0 +1,15 @@
+{
+  "name": "covenant-bento-guard",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Node sidecar that runs Bento's protect() for the Covenant daemon.",
+  "engines": { "node": ">=18" },
+  "bin": { "bento-guard": "./bento-guard.mjs" },
+  "dependencies": {
+    "@bentoguard/sdk": "1.2.8",
+    "bs58": "6.0.0",
+    "@solana/web3.js": "1.95.0",
+    "tweetnacl": "1.0.3"
+  }
+}

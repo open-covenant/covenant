@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-13T12:43:47.905Z",
+  "updatedAt": "2026-07-13T13:03:51.659Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12741,
-    "tasks": 1494,
-    "integrated": 1494
+    "events": 12757,
+    "tasks": 1496,
+    "integrated": 1496
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 3,
-    "velocity": 0.4
+    "last24h": 5,
+    "last7d": 5,
+    "velocity": 0.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-13",
-      "count": 1
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-13",
-      "total": 1494
+      "total": 1496
     }
   ],
   "states": {
-    "integrated": 1486,
+    "integrated": 1488,
     "proposed": 2,
     "blocked": 6
   },
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-13T12:59:27.618Z",
+      "task": "capabilities-doc-effective-status-set-guard",
+      "note": "merged and pushed on loop/main-track as 64b55154; HEAD == origin/loop/main-track."
+    },
+    {
+      "at": "2026-07-13T12:51:22.292Z",
+      "task": "capabilities-doc-scope-namespace-grammar-guard",
+      "note": "merged and pushed on loop/main-track as fc3ee779; HEAD == origin/loop/main-track."
+    },
     {
       "at": "2026-07-13T12:39:35.152Z",
       "task": "in-source-line-ref-drift-reanchor",
@@ -305,16 +315,6 @@
       "at": "2026-07-01T17:51:28.605Z",
       "task": "status-runtime-execution-defer-gvisor-required-check-promoti",
       "note": "Committed 787562fa: agent-os/scripts/validate-gvisor-required-check-deferral.mjs (self-contained guard + always-on --self-test) + 1 validate"
-    },
-    {
-      "at": "2026-07-01T17:28:29.181Z",
-      "task": "multichain-33",
-      "note": "Committed 610c6f6d + pushed e292e36f..610c6f6d to origin/loop/main-track (all push-identity guards green, no attribution trailers). Surgical"
-    },
-    {
-      "at": "2026-07-01T14:59:48.566Z",
-      "task": "multichain-30",
-      "note": "Surgical commit e292e36f (5 files +865/-1: bond.rs, lib.rs, live_bond_verifier.rs, BondReceiptVerifier.sol, README) pushed to origin/loop/ma"
     }
   ]
 }

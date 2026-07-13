@@ -53,10 +53,10 @@ earned on Base or any other chain feed the same revenue funnel that buys `$CVNT`
 and fills the `BuyLockVault`; the multichain reach widens the fee base without
 adding a second token. This is real yield from real usage, not emissions.
 
-The first-party `agent-os/programs/stake` program is now being sunset — early exit
-is enabled, principal is withdrawable at any time regardless of the original lock,
-and locked `$CVNT` has been consolidated — as staking moves to a partner
-integration; the real-yield revenue model continues there.
+The first-party `agent-os/programs/stake` program has been sunset — early exit is
+enabled and principal is withdrawable at any time regardless of the original lock —
+and the current live staking program runs at
+[stake.opencovenant.org](https://stake.opencovenant.org).
 
 ### Planned (on-chain, escalation-gated)
 

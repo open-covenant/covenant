@@ -46,6 +46,15 @@ export function middleware(req: NextRequest) {
     }
   }
 
+  // Staking now lives in a standalone app at stake.<apex>; send legacy /stake links there.
+  if (path === "/stake" || path.startsWith("/stake/")) {
+    const apex = host.replace(/^www\./, "");
+    return NextResponse.redirect(
+      new URL(`${proto}://stake.${apex}${url.search}`),
+      308,
+    );
+  }
+
   if (path === "/docs" || path.startsWith("/docs/")) {
     const cleanPath = path.replace(/^\/docs/, "") || "/";
     const apex = host.replace(/^www\./, "");

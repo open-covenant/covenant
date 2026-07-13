@@ -207,9 +207,8 @@ export default function AboutPage() {
             revenue is shared automatically: part goes to people who stake $CVNT, part is used to
             buy the token on the open market and lock it away, and the rest funds the treasury. The
             more the network is used, the more value returns to holders and the more supply comes
-            off the market. The first-party staking program is being sunset — principal is
-            withdrawable at any time, regardless of lock — as staking moves to Covenant&apos;s partner
-            integration. You can manage positions on the{" "}
+            off the market. Stake to earn a share of that revenue, paid in SOL, with longer locks
+            earning more. You can stake on the{" "}
             <a href="/stake" className={linkClass}>
               stake page
             </a>

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-13T18:25:08.891Z",
+  "updatedAt": "2026-07-13T18:45:12.876Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12772,
-    "tasks": 1496,
-    "integrated": 1498
+    "events": 12779,
+    "tasks": 1497,
+    "integrated": 1499
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 7,
-    "velocity": 1
+    "last24h": 6,
+    "last7d": 8,
+    "velocity": 1.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-13",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-13",
-      "total": 1498
+      "total": 1499
     }
   ],
   "states": {
-    "integrated": 1490,
+    "integrated": 1491,
     "proposed": 1,
     "blocked": 5
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-13T18:40:27.426Z",
+      "task": "capabilities-doc-duplicate-risk-set-guard",
+      "note": "Merged and pushed on loop/main-track as aa59589d (ff 0b3d546d..aa59589d); HEAD == origin/loop/main-track; all identity guards ok."
+    },
     {
       "at": "2026-07-13T17:28:35.342Z",
       "task": "provenance-capability-rule-evaluation-trace",
@@ -310,11 +315,6 @@
       "at": "2026-07-01T18:25:30.638Z",
       "task": "status-ipc-and-http-gateway-adr-0010-2026-05-17-v2-streaming",
       "note": "Committed a4875fe0 + pushed 8d43c682..a4875fe0 on loop/main-track. Surgical 2-file slice (guard + 1 validate.sh line); CI-safe (reads only c"
-    },
-    {
-      "at": "2026-07-01T18:00:25.512Z",
-      "task": "status-budget-ledger-hard-preempt-is-implemented-tested-and",
-      "note": "Committed 8d43c682: validate-daemon-subprocess-recover-before-tick.mjs + 1 validate.sh line. CI-safe (reads only committed main.rs). Verifie"
     }
   ]
 }

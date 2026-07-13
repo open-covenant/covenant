@@ -898,7 +898,7 @@ mod tests {
     #[test]
     fn config_rejects_zero_sweep_or_accrual_interval() {
         // The keeper builds its sweep and accrual tickers straight from
-        // these fields via tokio::time::interval (lib.rs:289/279), which
+        // these fields via tokio::time::interval (lib.rs:289/299), which
         // panics on a zero period. validate() must reject 0 up front,
         // and per-field: the guard ORs the two operands, so a refactor
         // that dropped either side would let a zero through and crash the

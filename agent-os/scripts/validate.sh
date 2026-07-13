@@ -162,6 +162,7 @@ run node ./scripts/validate-ipc-http-doc-duplicate-safety.mjs
 run node ./scripts/validate-ipc-http-doc-provenance-outcome.mjs
 run node ./scripts/validate-ipc-http-doc-provenance-kinds.mjs
 run node ./scripts/validate-ipc-http-doc-stream-envelope.mjs
+run node ./scripts/validate-ipc-http-doc-agent-event.mjs
 run node ./scripts/validate-covenant-a2a-task-queue-entry-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-result-field-list-line-refs.mjs

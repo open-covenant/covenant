@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-13T18:45:12.876Z",
+  "updatedAt": "2026-07-13T19:05:16.610Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12779,
-    "tasks": 1497,
-    "integrated": 1499
+    "events": 12793,
+    "tasks": 1499,
+    "integrated": 1501
   },
   "throughput": {
-    "last24h": 6,
-    "last7d": 8,
-    "velocity": 1.1
+    "last24h": 8,
+    "last7d": 10,
+    "velocity": 1.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-13",
-      "count": 6
+      "count": 8
     }
   ],
   "cumulative": [
@@ -180,18 +180,18 @@
     },
     {
       "date": "07-13",
-      "total": 1499
+      "total": 1501
     }
   ],
   "states": {
-    "integrated": 1491,
+    "integrated": 1493,
     "proposed": 1,
     "blocked": 5
   },
   "areas": [
     {
       "name": "ipc",
-      "count": 141
+      "count": 142
     },
     {
       "name": "covenant",
@@ -199,7 +199,7 @@
     },
     {
       "name": "audit",
-      "count": 96
+      "count": 97
     },
     {
       "name": "live",
@@ -216,6 +216,16 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-13T18:55:23.488Z",
+      "task": "ipc-http-doc-duplicate-safety-set-guard",
+      "note": "Merged and pushed on loop/main-track as c66d8071; HEAD == origin/loop/main-track; all identity guards ok."
+    },
+    {
+      "at": "2026-07-13T18:51:40.663Z",
+      "task": "audit-integrity-doc-tool-call-outcome-set-guard",
+      "note": "Merged and pushed on loop/main-track as 9246451b; HEAD == origin/loop/main-track; all identity guards ok."
+    },
     {
       "at": "2026-07-13T18:40:27.426Z",
       "task": "capabilities-doc-duplicate-risk-set-guard",
@@ -305,16 +315,6 @@
       "at": "2026-07-02T16:44:33.888Z",
       "task": "status-local-settlement-receipts-backfill-mutator-landed-202",
       "note": "Committed 621b78e9 (test(covenant): cover settlement backfill-receipts plain-text dry-run render), single tracked file crates/covenantd/test"
-    },
-    {
-      "at": "2026-07-01T21:05:50.879Z",
-      "task": "status-local-daemon-and-cli-no-remaining-deferred-privileged",
-      "note": "Committed 47241a99 (9 files, +1110/-226) and pushed a4875fe0..47241a99 to origin/loop/main-track. Pre-push guards (current-git-identity, git"
-    },
-    {
-      "at": "2026-07-01T18:25:30.638Z",
-      "task": "status-ipc-and-http-gateway-adr-0010-2026-05-17-v2-streaming",
-      "note": "Committed a4875fe0 + pushed 8d43c682..a4875fe0 on loop/main-track. Surgical 2-file slice (guard + 1 validate.sh line); CI-safe (reads only c"
     }
   ]
 }

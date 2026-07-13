@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-13T12:22:55.539Z",
+  "updatedAt": "2026-07-13T12:43:47.905Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12738,
-    "tasks": 1493,
-    "integrated": 1493
+    "events": 12741,
+    "tasks": 1494,
+    "integrated": 1494
   },
   "throughput": {
-    "last24h": 2,
-    "last7d": 2,
-    "velocity": 0.3
+    "last24h": 3,
+    "last7d": 3,
+    "velocity": 0.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-13",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-13",
-      "total": 1493
+      "total": 1494
     }
   ],
   "states": {
-    "integrated": 1485,
-    "proposed": 1,
-    "blocked": 6,
-    "validation": 1
+    "integrated": 1486,
+    "proposed": 2,
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "in-source-line-ref-drift-reanchor",
-    "state": "validation",
-    "since": "2026-07-12T14:08:32.397Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-13T12:39:35.152Z",
+      "task": "in-source-line-ref-drift-reanchor",
+      "note": "merged and pushed on loop/main-track as 5c15cfc4 (rustfmt sweep 7c51acbb on top, then overseer-directed stake-keeper line-ref fix 55834d72);"
+    },
     {
       "at": "2026-07-12T13:31:13.205Z",
       "task": "workspace-paymentextra-struct-literal-drift",
@@ -315,11 +315,6 @@
       "at": "2026-07-01T14:59:48.566Z",
       "task": "multichain-30",
       "note": "Surgical commit e292e36f (5 files +865/-1: bond.rs, lib.rs, live_bond_verifier.rs, BondReceiptVerifier.sol, README) pushed to origin/loop/ma"
-    },
-    {
-      "at": "2026-07-01T13:43:34.155Z",
-      "task": "multichain-22",
-      "note": "Pushed 950a3824..731c17eb to origin/loop/main-track; all 4 pre-push guards ok. Off-chain gateway signer + golden tests only; ENS name/DNS, r"
     }
   ]
 }

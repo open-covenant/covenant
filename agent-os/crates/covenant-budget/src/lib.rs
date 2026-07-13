@@ -2307,12 +2307,12 @@ mod tests {
     #[test]
     fn refill_clamps_overflowing_grant_to_capacity_before_cast() {
         // The per-step grant is computed in u128 (add_u128 = elapsed *
-        // capacity / MS_PER_HOUR) then narrowed to u64 at lib.rs:348 via
+        // capacity / MS_PER_HOUR) then narrowed to u64 at lib.rs:349 via
         // `add_u128.min(bucket.capacity as u128) as u64`. The .min() must
         // run BEFORE the cast: a capacity near u64::MAX idle past an hour
         // drives add_u128 over u64::MAX, where an unclamped `as u64` wraps
         // and silently zeroes the grant. The downstream tokens.min(capacity)
-        // at lib.rs:352 cannot recover a grant already lost to the wrap.
+        // at lib.rs:353 cannot recover a grant already lost to the wrap.
         //
         // capacity 2^63, elapsed two hours -> add_u128 = 7_200_000 * 2^63 /
         // 3_600_000 = 2^64 exactly, which casts to 0. With the clamp add is
@@ -2328,7 +2328,7 @@ mod tests {
             b.tokens_remaining,
             1u64 << 63,
             "add_u128 == 2^64 must clamp to capacity before the u128->u64 \
-             cast; dropping the lib.rs:348 .min (or flipping it to .max) \
+             cast; dropping the lib.rs:349 .min (or flipping it to .max) \
              lets `as u64` wrap to 0, leaving a high-capacity bucket empty \
              after an hour-plus idle so every spend is denied"
         );
@@ -3010,7 +3010,7 @@ mod tests {
     #[tokio::test]
     async fn in_memory_try_debit_and_would_exceed_allow_spending_exactly_the_remaining_balance() {
         // Both spend gates use a STRICT `tokens_remaining < credits`
-        // comparison: try_debit (lib.rs:403) returns Exhausted only when
+        // comparison: try_debit (lib.rs:479) returns Exhausted only when
         // the balance is strictly short, and would_exceed (:427) reports
         // `tokens_remaining < credits`. The `<` is exclusive, so credits
         // EXACTLY equal to the remaining balance is allowed — an agent may
@@ -3064,7 +3064,7 @@ mod tests {
     async fn jsonl_try_debit_and_would_exceed_allow_spending_exactly_the_remaining_balance() {
         // JsonlLedger mirrors the in-memory spend gates with the same
         // strict `tokens_remaining < credits` comparison: try_debit
-        // (lib.rs:866) and would_exceed (:905). Pin the same exact-balance
+        // (lib.rs:952) and would_exceed (:905). Pin the same exact-balance
         // equality keep-arm on the persistent backend so a `<` -> `<=`
         // flip that slipped past the in-memory pin is still caught here.
         let dir = tempfile::tempdir().unwrap();
@@ -3256,8 +3256,8 @@ mod tests {
     #[tokio::test]
     async fn in_memory_compact_keeps_debit_stamped_exactly_at_cutoff() {
         // compact_older_than drops debits strictly older than the cutoff:
-        // retain(|d| d.at_ms >= before_ms) (lib.rs:463); the module doc
-        // (lib.rs:279) pins the contract as "drop events with at_ms <
+        // retain(|d| d.at_ms >= before_ms) (lib.rs:549); the module doc
+        // (lib.rs:323) pins the contract as "drop events with at_ms <
         // before_ms". So a debit stamped EXACTLY at before_ms is on the
         // keep side. in_memory_compact_drops_old_debits_only only probes
         // at_ms=50 vs cutoff 100 (strictly older); the at_ms == before_ms
@@ -3300,7 +3300,7 @@ mod tests {
     #[tokio::test]
     async fn jsonl_compact_keeps_debit_stamped_exactly_at_cutoff() {
         // JsonlLedger::compact_older_than mirrors the keep-arm: the Debit
-        // drop arm (d.at_ms < before_ms, lib.rs:981) drives the dropped
+        // drop arm (d.at_ms < before_ms, lib.rs:1077) drives the dropped
         // count and the in-memory retain (:1076) drops the matching rows.
         // Pin the exact-cutoff keep boundary on the persistent backend
         // with two debits straddling the cutoff so both the dropped count
@@ -3351,7 +3351,7 @@ mod tests {
     #[tokio::test]
     async fn jsonl_compact_clamps_persisted_balance_when_dropped_debits_exceed_capacity() {
         // compact_older_than folds dropped pre-cutoff debits into a synthetic
-        // bucket via saturating_sub (lib.rs:1073) and persists the result as a
+        // bucket via saturating_sub (lib.rs:1080) and persists the result as a
         // Snapshot that becomes the authoritative balance across every reopen.
         // When the dropped debits sum beyond the bucket (reachable via a
         // capacity lowered after debits, or a legacy log) a plain `-` underflows:
@@ -3415,7 +3415,7 @@ mod tests {
     #[tokio::test]
     async fn jsonl_open_replay_clamps_balance_when_persisted_debits_exceed_capacity() {
         // JsonlLedger::open replays each persisted Debit into the in-memory
-        // bucket with saturating_sub (lib.rs:837). A crafted or legacy ledger
+        // bucket with saturating_sub (lib.rs:844). A crafted or legacy ledger
         // can carry pre-recorded debits summing beyond capacity (try_debit
         // refuses them live, but a hand-written or capacity-lowered log can
         // hold them). A plain `-` underflows here: a debug panic during open,
@@ -4032,7 +4032,7 @@ mod tests {
 
     #[test]
     fn project_overshoot_linear_extrapolation_pins_threshold_equality_boundary_proceeds() {
-        // The short-circuit gate (lib.rs:150-153) is a strict less-than on
+        // The short-circuit gate (lib.rs:154-157) is a strict less-than on
         // BOTH legs:
         //
         //     if observation_window_ms < min_observation_window_ms

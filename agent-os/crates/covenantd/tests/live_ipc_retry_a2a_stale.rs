@@ -5,7 +5,7 @@
 //! The verb is covered today over the CLI (`live_cli_a2a_retry_stale_json.rs`)
 //! and HTTP (`live_http_a2a_retry_stale.rs`) but never over the raw Unix socket
 //! both are built on. This pins the `Response::A2AAutoRetried { report }` wire
-//! shape (covenant-ipc/src/lib.rs:891): the daemon echoes the requested policy
+//! shape (covenant-ipc/src/lib.rs:1084): the daemon echoes the requested policy
 //! and, with no in-flight leases, considers and requeues nothing.
 //!
 //! Hermetic — a clean store has nothing to scan, so the report is offline and

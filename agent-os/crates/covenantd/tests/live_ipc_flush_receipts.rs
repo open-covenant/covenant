@@ -8,9 +8,9 @@
 //! pins the non-operator denial, but the success path is never driven over the
 //! raw Unix socket all three are built on. This pins that wire contract: the
 //! operator clears the identity gate, the `chain.flush` capability gate
-//! (`flush_receipts`, covenantd/src/lib.rs:4986), and the
+//! (`flush_receipts`, covenantd/src/lib.rs:6604), and the
 //! `Response::ReceiptBatchFlushed { batch, receipts_updated }` variant
-//! (covenant-ipc/src/lib.rs:789) round-trips back through `write_frame`/`read_frame`.
+//! (covenant-ipc/src/lib.rs:967) round-trips back through `write_frame`/`read_frame`.
 //!
 //! Receipts are seeded through the public API: one `SubmitIntent` persists a
 //! memory record and settles credits for it, producing exactly one local

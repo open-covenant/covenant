@@ -3,7 +3,7 @@
 //! delegate holding a valid `memory.repair.apply` capability still
 //! cannot delete a memory record owned by another peer.
 //!
-//! `repair_memory` (lib.rs:14215-14251) checks the
+//! `repair_memory` (lib.rs:15224-15260) checks the
 //! `memory.repair.<mode>` capability first, THEN looks up the target
 //! record and refuses it with "memory repair rejected: record {id} is
 //! not visible to the authenticated peer" when

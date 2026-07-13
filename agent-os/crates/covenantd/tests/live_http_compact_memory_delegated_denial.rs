@@ -1,5 +1,5 @@
 //! Live HTTP delegated denial coverage for `POST /memory/compact`.
-//! `compact_memory` (lib.rs:14330) checks the `memory.compact.<mode>`
+//! `compact_memory` (lib.rs:15339) checks the `memory.compact.<mode>`
 //! capability FIRST (14340) and only past it the operator-identity gate
 //! (14348) `peer.pubkey != self.identity.agent_id().pubkey`, returning
 //! `Response::Error "memory compaction requires the operator identity"`

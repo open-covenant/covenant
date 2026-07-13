@@ -208,7 +208,7 @@ fn settlement_credits_pda(program_id: &Pubkey, owner: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"credits", owner.as_ref()], program_id)
 }
 
-// Seeds mirror agent-os/programs/settlement/src/lib.rs:547 exactly:
+// Seeds mirror agent-os/programs/settlement/src/lib.rs:815 exactly:
 //   [b"stake", agent.agent_key.as_ref(), owner.key().as_ref()]
 // A one-byte typo in either tag literal or a wrong slice (e.g. the
 // agent PDA bytes instead of agent_key) derives a deterministic-but-
@@ -224,7 +224,7 @@ fn settlement_stake_position_pda(
     Pubkey::find_program_address(&[b"stake", agent_key.as_ref(), owner.as_ref()], program_id)
 }
 
-// Field order MUST mirror agent-os/programs/settlement/src/lib.rs:877-882
+// Field order MUST mirror agent-os/programs/settlement/src/lib.rs:1280-1285
 // (agent_key, metadata_hash, capability_hash). Borsh serializes in
 // struct declaration order; following the alphabetical data_keys order
 // in packages/sdk/compatibility/instructions.v1.json (which is a sorted
@@ -243,7 +243,7 @@ fn serialize_register_agent_args(args: &RegisterAgentArgs) -> Vec<u8> {
     borsh::to_vec(args).expect("borsh serialization of fixed [u8;32] fields is infallible")
 }
 
-// Field order MUST mirror agent-os/programs/settlement/src/lib.rs:137
+// Field order MUST mirror agent-os/programs/settlement/src/lib.rs:156
 // (amount, lock_until). Borsh serializes in struct-declaration order;
 // a swap would silently make the on-chain program lock for amount
 // epochs and stake lock_until lamports — both numerically valid u64s,
@@ -258,7 +258,7 @@ fn serialize_stake_args(args: &StakeArgs) -> Vec<u8> {
     borsh::to_vec(args).expect("borsh serialization of two u64 fields is infallible")
 }
 
-// Mirrors agent-os/programs/settlement/src/lib.rs:91
+// Mirrors agent-os/programs/settlement/src/lib.rs:106
 // `buy_credits(ctx, amount_covnt: u64)`. The on-chain handler
 // reads a single u64 argument; a struct grow without an on-chain
 // mirror would silently truncate at deserialize-time on chain.
@@ -272,7 +272,7 @@ fn serialize_buy_credits_args(args: &BuyCreditsArgs) -> Vec<u8> {
 }
 
 // Account ordering and signer/writable flags mirror the on-chain
-// RegisterAgent struct at agent-os/programs/settlement/src/lib.rs:429-448:
+// RegisterAgent struct at agent-os/programs/settlement/src/lib.rs:684-703:
 //   config           — PDA, read-only
 //   agent            — PDA, writable, NOT signer (init-by-operator)
 //   operator         — signer, writable (fee payer)
@@ -315,7 +315,7 @@ const SPL_TOKEN_PROGRAM_ID: Pubkey =
     Pubkey::from_str_const("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
 // Account ordering and signer/writable flags mirror the on-chain
-// Stake struct at agent-os/programs/settlement/src/lib.rs:531-567:
+// Stake struct at agent-os/programs/settlement/src/lib.rs:799-837:
 //   config         — PDA, read-only
 //   agent          — PDA, writable, !signer
 //   position       — PDA, writable, !signer (#[account(init, ...)])
@@ -364,7 +364,7 @@ fn build_stake_instruction(
 }
 
 // Account ordering and signer/writable flags mirror the on-chain
-// BuyCredits struct at agent-os/programs/settlement/src/lib.rs:483-503:
+// BuyCredits struct at agent-os/programs/settlement/src/lib.rs:738-758:
 //   config        — PDA, read-only (has_one = treasury)
 //   credits       — PDA, writable, !signer (has_one = owner)
 //   owner         — signer, writable (fee payer + transfer authority)
@@ -9598,7 +9598,7 @@ mod tests {
 
         #[test]
         fn accounts_follow_on_chain_struct_order() {
-            // agent-os/programs/settlement/src/lib.rs:429-448 declares
+            // agent-os/programs/settlement/src/lib.rs:684-703 declares
             // RegisterAgent { config, agent, operator, system_program }.
             // The Instruction.accounts vector must match positionally.
             let program = fixed_program();
@@ -9738,7 +9738,7 @@ mod tests {
 
         #[test]
         fn accounts_follow_on_chain_struct_order_positionally() {
-            // agent-os/programs/settlement/src/lib.rs:531-567 declares
+            // agent-os/programs/settlement/src/lib.rs:799-837 declares
             // Stake { config, agent, position, owner, owner_covnt,
             // stake_vault, token_program, system_program }.
             let program = fixed_program();
@@ -9905,7 +9905,7 @@ mod tests {
 
         #[test]
         fn accounts_follow_on_chain_struct_order_positionally() {
-            // agent-os/programs/settlement/src/lib.rs:483-503 declares
+            // agent-os/programs/settlement/src/lib.rs:738-758 declares
             // BuyCredits { config, credits, owner, owner_covnt,
             // treasury, token_program }.
             let program = fixed_program();
@@ -11720,7 +11720,7 @@ mod tests {
     #[tokio::test]
     async fn read_signer_stream_capped_treats_an_exact_max_fill_as_an_exact_fit_not_overflow() {
         // read_signer_stream_capped reads through take(max + 1) and sets
-        // overflowed = buf.len() > max (main.rs:2544), so a signer stream of
+        // overflowed = buf.len() > max (main.rs:2642), so a signer stream of
         // exactly max bytes is an exact fit (overflowed false, buffer returned
         // whole) and only max + 1 is a truncated flood (overflowed true, buffer
         // clamped to max) — the discriminator the extra read byte exists to

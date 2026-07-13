@@ -4,7 +4,7 @@
 //!
 //! The handler gates in strict order — the `x402.outbound.pay` capability,
 //! then a configured + enabled x402 dispatch, then a valid HTTP method, and
-//! only then `per_call_cap.parse::<u128>()` (covenantd/src/lib.rs:5153). A
+//! only then `per_call_cap.parse::<u128>()` (covenantd/src/lib.rs:6811). A
 //! malformed cap returns `Response::Error { "invalid per_call_cap ..." }`
 //! *before* the subprocess signer is constructed or any network call is made.
 //! Every other `Request` variant is exercised over the socket; PayX402's only

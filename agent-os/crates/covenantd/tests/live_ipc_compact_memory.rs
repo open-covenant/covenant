@@ -7,7 +7,7 @@
 //! HTTP (`live_http_memory_compact_apply.rs`); the only socket coverage today is
 //! the delegate-denial gate (`live_memory_repair_compact_delegated_denial.rs`).
 //! This pins the `Response::MemoryCompacted` wire shape
-//! (covenant-ipc/src/lib.rs:780) and the operator apply path at the raw Unix
+//! (covenant-ipc/src/lib.rs:958) and the operator apply path at the raw Unix
 //! socket boundary the gateway and CLI are built on.
 //!
 //! The operator identity is created before spawn so the daemon loads the same

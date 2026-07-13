@@ -4,7 +4,7 @@
 //!
 //! The verb is covered today over the CLI (`live_cli_capabilities_purge_json.rs`)
 //! but never over the raw Unix socket it is built on. This pins that wire
-//! contract: `Response::CapabilitiesPurged { purged }` (covenant-ipc/src/lib.rs:860)
+//! contract: `Response::CapabilitiesPurged { purged }` (covenant-ipc/src/lib.rs:1053)
 //! reached through the `capabilities.purge` gate, and the `revoked_at < before_ms`
 //! tombstone selectivity.
 //!

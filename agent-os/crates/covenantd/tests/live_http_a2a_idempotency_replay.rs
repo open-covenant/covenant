@@ -1,7 +1,7 @@
 //! Live HTTP coverage for A2A receiver-side idempotency replay.
 //!
 //! covenant-a2a dedups idempotent tasks by result cache, not at enqueue:
-//! `send_task` (covenant-a2a/src/lib.rs:686) computes an idempotency cache
+//! `send_task` (covenant-a2a/src/lib.rs:689) computes an idempotency cache
 //! key (sender + recipient + task_kind-or-intent_text + key, but NOT
 //! task.id) and, on a cache hit, synthesizes the cached result re-stamped
 //! with the new task.id and pushes it straight onto the results queue

@@ -6,7 +6,7 @@
 //! `/budget/debits`) but never over the raw Unix socket the CLI and HTTP gateway
 //! are built on. This pins that wire contract — the operator-facing budget-burn
 //! aggregate (`Response::Debits { debits }`, covenant-ipc/src/lib.rs; handler
-//! `recent_debits`, covenantd/src/lib.rs:2629).
+//! `recent_debits`, covenantd/src/lib.rs:3579).
 //!
 //! Hermetic — a fresh tempdir router stages no budgeted agents, so the burn
 //! aggregate is empty and the response is offline and deterministic. The seeded

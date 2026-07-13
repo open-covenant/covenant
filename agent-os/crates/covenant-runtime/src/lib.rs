@@ -2441,7 +2441,7 @@ backend = "linux-gvisor"
     fn gvisor_oci_config_pins_memory_mb_byte_limit() {
         // oci_config projects resources.memory_mb into the OCI cgroup memory
         // ceiling at linux.resources.memory.limit, converting MiB -> bytes via
-        // saturating_mul(1024 * 1024) (lib.rs:1212-1216, 1261-1263). That limit
+        // saturating_mul(1024 * 1024) (lib.rs:1211-1215, 1261-1263). That limit
         // is the sandbox's memory-exhaustion guard: a unit slip (MiB -> KiB)
         // would cap a 64-MiB agent at 64 KiB and brick it, while dropping the
         // field removes the bound entirely. The restrictive-OCI-config test
@@ -4358,7 +4358,7 @@ cpu_ms_per_task = 5000
     #[test]
     fn truncate_stderr_keeps_a_buffer_sized_exactly_at_the_cap() {
         // truncate_stderr_for_diagnostics returns a buffer untouched when its
-        // length is <= MAX_LEN (lib.rs:286): equality is the keep-arm, so a
+        // length is <= MAX_LEN (lib.rs:287): equality is the keep-arm, so a
         // stderr sized exactly at the cap comes back verbatim with no
         // `...(truncated)` marker, and only MAX_LEN+1 is clipped. The sibling
         // test brackets this far from the boundary — a 13-byte buffer kept, an

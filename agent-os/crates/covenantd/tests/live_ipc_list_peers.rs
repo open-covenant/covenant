@@ -7,8 +7,8 @@
 //! (`live_http_peers_list_status_filter.rs`) but never over the raw Unix socket
 //! both are built on. This pins that wire contract — the `Response::PeerList`
 //! variant (`peers`, `operator_pubkey_b58`, `truncated`;
-//! covenant-ipc/src/lib.rs:930) and the redacted `PeerSummary`
-//! (covenant-peer-auth/src/lib.rs:140) the operator reads to triage peers.
+//! covenant-ipc/src/lib.rs:1133) and the redacted `PeerSummary`
+//! (covenant-peer-auth/src/lib.rs:158) the operator reads to triage peers.
 //!
 //! A fresh daemon registers exactly one peer at boot — the operator itself, via
 //! `bootstrap_operator_token` (covenantd/src/main.rs) — so the response is

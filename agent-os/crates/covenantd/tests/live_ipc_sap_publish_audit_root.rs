@@ -3,7 +3,7 @@
 //! `Response::SapPublishedAuditRoot { ledger_pda, signature }` frame plus the
 //! disabled-bridge and malformed-root-hash `Response::Error` frames.
 //!
-//! `sap_publish_audit_root` (covenantd/src/lib.rs:1337) anchors a Covenant
+//! `sap_publish_audit_root` (covenantd/src/lib.rs:1780) anchors a Covenant
 //! audit root through the SAP bridge: it calls `require_enabled`, pre-validates
 //! `root_hash_hex` (64 lowercase hex chars; covenant-sap-bridge attestation.rs:36)
 //! before any subprocess, stamps `recorded_at` server-side, drives the worker's
@@ -16,7 +16,7 @@
 //! emits `{"ledgerPda","signature"}` and the daemon must relay them into the
 //! snake_case response fields. The success test uses distinct sentinels so a
 //! field swap or a wrong camelCase key ships a silently wrong receipt and fails
-//! an assert. `main.rs:310` always wires the bridge, so the reachable
+//! an assert. `main.rs:372` always wires the bridge, so the reachable
 //! fail-closed path over the socket is `BridgeError::Disabled` ("synapse bridge
 //! is disabled"), not the unit-test-only "not wired" arm.
 //!
@@ -192,7 +192,7 @@ async fn live_ipc_sap_publish_audit_root_returns_published_receipt() {
 #[ignore = "live: spawns covenantd with the SAP bridge disabled + asserts Request::SapPublishAuditRoot flattens onto Response::Error"]
 async fn live_ipc_sap_publish_audit_root_rejects_disabled_bridge() {
     let home = tempfile::tempdir().expect("tempdir");
-    // No COVENANT_SAP_ENABLED: main.rs still wires the bridge (lib.rs:310), so
+    // No COVENANT_SAP_ENABLED: main.rs still wires the bridge (lib.rs:424), so
     // require_enabled is what rejects, not the unit-test-only "not wired" arm.
     let mut child = spawn_daemon(home.path(), &[]).await;
 

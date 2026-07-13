@@ -7,9 +7,9 @@
 //! The verb is covered today over the CLI (`live_cli_capabilities_revoke.rs`,
 //! `live_cli_capabilities_revoke_json.rs`) but never over the raw Unix socket
 //! both are built on. This pins that wire contract: `Response::CapabilityRevoked
-//! { signature_b58, removed }` (covenant-ipc/src/lib.rs:835) and the
+//! { signature_b58, removed }` (covenant-ipc/src/lib.rs:1013) and the
 //! already-revoked branch that reports `removed = false` on a repeat
-//! (covenantd/src/lib.rs:6498).
+//! (covenantd/src/lib.rs:16040).
 //!
 //! Seeded over the socket via `GrantCapability`; assertions key off the granted
 //! `signature_b58` only, so no identity derivation is needed (the operator

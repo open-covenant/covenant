@@ -6,10 +6,10 @@
 //! The verb is covered today over the CLI (`live_cli_audit_verify.rs`) and HTTP
 //! (`live_http_audit_verify.rs`) but never over the raw Unix socket both are
 //! built on. This pins that wire contract: the `Response::AuditIntegrity`
-//! variant (covenant-ipc/src/lib.rs:854) wrapping an `AuditIntegrityReport`
+//! variant (covenant-ipc/src/lib.rs:1044) wrapping an `AuditIntegrityReport`
 //! (`events`, `anchors`, `valid`, `root_hash_hex`, `failures`;
-//! covenant-audit/src/lib.rs:60), and the operator-identity gate in
-//! `verify_audit_integrity` (covenantd/src/lib.rs:3318) that admits the
+//! covenant-audit/src/lib.rs:62), and the operator-identity gate in
+//! `verify_audit_integrity` (covenantd/src/lib.rs:4377) that admits the
 //! daemon's own operator and would otherwise answer `Response::Error`.
 //!
 //! Audit state is seeded through the public API — a capability grant appends

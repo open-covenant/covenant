@@ -1,7 +1,7 @@
 //! Live HTTP coverage for `POST /capabilities/revoke` read-back.
 //!
 //! `revoke_capability` (http.rs:664 -> covenantd `revoke_capability`
-//! lib.rs:14996) is exercised over the gateway today only at the envelope
+//! lib.rs:16005) is exercised over the gateway today only at the envelope
 //! level: `live_http_gateway.rs:217-228` asserts `kind:
 //! "capability_revoked"` and `removed: true`, but never re-reads the ledger,
 //! so a daemon that acknowledges the revoke yet leaves the grant active would

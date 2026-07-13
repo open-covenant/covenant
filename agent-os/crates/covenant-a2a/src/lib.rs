@@ -2108,7 +2108,7 @@ mod tests {
                 Some(300_000),
                 "A whitespace-only idempotency key must collapse to \
                  MissingIdempotency (the key.trim().is_empty() \
-                 branch at line 353) so a sender that writes ' ' or \
+                 branch at line 363) so a sender that writes ' ' or \
                  '\\t' does not falsely satisfy the idempotency \
                  contract; a refactor that dropped the trim would \
                  let whitespace keys through and the receiver-side \
@@ -6221,7 +6221,7 @@ mod tests {
     #[tokio::test]
     async fn in_memory_task_queue_orders_leased_entries_by_lease_age_then_task_id() {
         // task_queue sorts leased entries by (leased_at_ms asc, task.id asc)
-        // at lib.rs:775. in_flight is a HashMap, so its .values() order is
+        // at lib.rs:778. in_flight is a HashMap, so its .values() order is
         // process-random; the task.id tie-break is the only thing that makes
         // a queue listing reproducible when several leases share a
         // millisecond. The binding-limit test pins only the queued head and
@@ -6266,7 +6266,7 @@ mod tests {
             expected,
             "leased entries must sort by lease age then task id: the 1_000ms \
              lease first, the three 2_000ms leases in ascending id order (the \
-             HashMap-order tie-break at lib.rs:778), then the 3_000ms lease",
+             HashMap-order tie-break at lib.rs:781), then the 3_000ms lease",
         );
         assert!(
             queue.iter().all(|e| e.state == A2ATaskQueueState::InFlight),
@@ -6277,8 +6277,8 @@ mod tests {
     #[tokio::test]
     async fn jsonl_task_queue_orders_leased_entries_by_lease_age_then_task_id() {
         // Parity with the in-memory backend: JsonlMailbox::task_queue
-        // (lib.rs:1318) delegates to MailboxState::task_queue (lib.rs:1054),
-        // whose own copy of the leased comparator lives at lib.rs:1073. Seed
+        // (lib.rs:1321) delegates to MailboxState::task_queue (lib.rs:1057),
+        // whose own copy of the leased comparator lives at lib.rs:1076. Seed
         // the event log with TaskLeased rows carrying a controlled
         // leased_at_ms so replay rebuilds the same three-way tie, then open
         // and read the queue back through the real deserialize + replay path.
@@ -6325,7 +6325,7 @@ mod tests {
             queue.iter().map(|e| e.task.id).collect::<Vec<_>>(),
             expected,
             "JsonlMailbox must order leased entries by lease age then task id \
-             after replay, matching the in-memory backend (lib.rs:1073)",
+             after replay, matching the in-memory backend (lib.rs:1076)",
         );
     }
 

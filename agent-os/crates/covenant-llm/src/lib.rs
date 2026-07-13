@@ -2162,7 +2162,7 @@ provider = "mock"
              fallback mock (pick_provider with no config and no \
              reachable Ollama, which carries the distinct \"covenant-\
              llm: no provider configured; using stub response\" \
-             breadcrumb at line 479-481) — operator dashboards that \
+             breadcrumb at line 688-690) — operator dashboards that \
              surface complete() output would lose the diagnostic that \
              tells them which mock path they landed on",
         );
@@ -2204,7 +2204,7 @@ provider = "mock"
              reads, covenant-memory search_similar produces near-zero \
              relevance for stored vectors, and the only signal an \
              operator gets is the empty-result UX; pick_embedder's \
-             auto-detect fallback at line 644 also hardcodes 768, so a \
+             auto-detect fallback at line 1122 also hardcodes 768, so a \
              divergence between the two hardcoded sites would split \
              memory geometry based on whether [embed] provider=\"mock\" \
              is present in secrets.toml vs the section being absent",

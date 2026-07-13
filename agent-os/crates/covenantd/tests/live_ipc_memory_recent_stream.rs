@@ -3,17 +3,17 @@
 //! `live_http_memory_sse.rs`.
 //!
 //! `Request::RecentMemory { prefer_stream: Some(true) }` is routed to
-//! `Server::stream_recent_memory` (lib.rs:5511) by the dispatch fork at
-//! lib.rs:2106. That orchestrator calls `self.recent_memory(...)` which
-//! gates on `memory.read` via `check_capabilities_any_of` (lib.rs:5417):
+//! `Server::stream_recent_memory` (lib.rs:6089) by the dispatch fork at
+//! lib.rs:2241. That orchestrator calls `self.recent_memory(...)` which
+//! gates on `memory.read` via `check_capabilities_any_of` (lib.rs:5995):
 //!
 //! - On `Response::Memories { records }` it registers a stream_tracker
 //!   entry and drives `stream_dispatch::emit_memory_stream`, writing a
 //!   `StreamBegin { response_kind: "memories" }` / `StreamChunk*` /
-//!   `StreamEnd` sequence directly to the socket writer (lib.rs:5528).
+//!   `StreamEnd` sequence directly to the socket writer (lib.rs:6106).
 //! - On any other variant — the `Response::Error` naming `memory.read`
 //!   the gate returns when the grant is absent — the orchestrator's
-//!   `other => return write_frame(writer, &other)` arm (lib.rs:5525)
+//!   `other => return write_frame(writer, &other)` arm (lib.rs:6103)
 //!   writes the failure as a v1-shape TERMINAL `Response` frame and
 //!   never opens a stream.
 //!

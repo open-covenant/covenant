@@ -6,7 +6,7 @@
 //! (`live_http_memory_repair_apply.rs`); the only socket coverage is the
 //! delegate-denial gate (`live_memory_repair_compact_delegated_denial.rs`). This
 //! pins the `Response::MemoryRepaired { outcome }` wire shape
-//! (covenant-ipc/src/lib.rs:777) and the dry-run/apply contract: a dry-run
+//! (covenant-ipc/src/lib.rs:955) and the dry-run/apply contract: a dry-run
 //! reports `would_change` without committing, an apply commits and the record
 //! stops surfacing.
 //!

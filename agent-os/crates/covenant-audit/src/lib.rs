@@ -1921,17 +1921,17 @@ mod tests {
 
     #[tokio::test]
     async fn jsonl_integrity_report_pins_root_hash_as_genesis_seeded_chain_fold() {
-        // verify_integrity returns root_hash_hex (lib.rs:837) as the final
+        // verify_integrity returns root_hash_hex (lib.rs:1308) as the final
         // accumulator of the audit hash chain: it seeds previous_hash_hex from
-        // ZERO_CHAIN_HASH (lib.rs:792), then folds each event line forward as
-        // previous = chain_hash(previous, sha256_hex(line)) (lib.rs:793-825).
+        // ZERO_CHAIN_HASH (lib.rs:1263), then folds each event line forward as
+        // previous = chain_hash(previous, sha256_hex(line)) (lib.rs:1264-1296).
         // That root is the audit-root subject release signing binds
-        // (lib.rs:1824), so its exact byte construction is load-bearing for any
+        // (lib.rs:2669), so its exact byte construction is load-bearing for any
         // independent verifier of the anchor.
         //
         // jsonl_integrity_report_accepts_untampered_chain pins root_hash_hex
         // only by length (== 64) plus report.valid, and valid is RELATIONAL: it
-        // holds whenever the write-path build_chain_entries (lib.rs:543) agrees
+        // holds whenever the write-path build_chain_entries (lib.rs:1014) agrees
         // with the verify-path inline fold, so a mutation applied consistently
         // to BOTH paths survives it. chain_hash_pins_separator_and_sha256_-
         // composition pins the single LINK, but nothing recomputes the
@@ -1953,7 +1953,7 @@ mod tests {
         assert!(report.valid, "{report:?}");
 
         // Independent fold of the exact lines verify_integrity reads
-        // (read_event_lines filters empty lines identically, lib.rs:568-574).
+        // (read_event_lines filters empty lines identically, lib.rs:1039-1045).
         let raw = std::fs::read_to_string(&path).unwrap();
         let mut expected = ZERO_CHAIN_HASH.to_string();
         for line in raw.lines().filter(|l| !l.is_empty()) {
@@ -1977,11 +1977,11 @@ mod tests {
     #[tokio::test]
     async fn jsonl_integrity_report_detects_dangling_chain_anchor() {
         // verify_integrity flags a hash-chain sidecar that outruns the
-        // event log: `if anchors.len() > event_lines.len()` (lib.rs:827)
+        // event log: `if anchors.len() > event_lines.len()` (lib.rs:1298)
         // reports the surplus as "<n> dangling chain anchor(s)" — the
         // specific diagnostic for an event log that lost trailing lines
         // (truncated or rolled back) while the append-only chain sidecar
-        // kept its anchors. The earlier `!=` parity check (lib.rs:785)
+        // kept its anchors. The earlier `!=` parity check (lib.rs:1256)
         // also marks any count mismatch invalid, so line 827 is the
         // dangling-count diagnostic on top of that verdict, not the sole
         // gate. Every other integrity test runs equal event/anchor counts
@@ -2036,7 +2036,7 @@ mod tests {
     async fn jsonl_integrity_report_detects_missing_anchor_for_unanchored_event() {
         // verify_integrity flags a well-formed event line that has no backing
         // chain anchor: the `Ok(event)` branch's `None => "chain entry {index}
-        // missing"` arm (lib.rs:977), reached only when the event log outruns
+        // missing"` arm (lib.rs:1280), reached only when the event log outruns
         // the append-only hash-chain sidecar (event_lines.len() >
         // anchors.len()). That skew is the signature of a forged event appended
         // without extending the chain, and the diagnostic must name the
@@ -2047,7 +2047,7 @@ mod tests {
         //
         // Mutation: narrowing line 977 to `None => {}` drops only this
         // per-index diagnostic. The `anchors.len() != event_lines.len()` parity
-        // check at lib.rs:953 already flips `valid`, so asserting only
+        // check at lib.rs:1256 already flips `valid`, so asserting only
         // `!report.valid` would NOT catch the regression — the load-bearing
         // assertion is the specific "chain entry 1 missing" string.
         let dir = tempfile::tempdir().unwrap();

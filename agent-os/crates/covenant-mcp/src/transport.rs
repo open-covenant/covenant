@@ -939,7 +939,7 @@ mod tests {
         // (below) both construct JsonRpcError values with
         // TRANSPORT_CLOSED_CODE and TRANSPORT_CLOSED_MESSAGE directly,
         // so neither test catches a refactor that changed the
-        // constants while the literal at line 253-257 stayed at -32099
+        // constants while the literal at line 331-335 stayed at -32099
         // / "transport closed" — the test fixtures and the matched
         // constant remain in lockstep through the constant, masking
         // the desync.
@@ -953,7 +953,7 @@ mod tests {
         assert_eq!(
             TRANSPORT_CLOSED_CODE, -32099,
             "TRANSPORT_CLOSED_CODE must remain -32099 — the literal \
-             value the reader's EOF path emits at line 253-257. A \
+             value the reader's EOF path emits at line 331-335. A \
              refactor that consolidated the sentinel into a different \
              value (e.g., -32098 under a 'cleaner sentinel range' \
              rationale, or -32603 under a 'use the JSON-RPC standard \
@@ -969,9 +969,9 @@ mod tests {
         assert_eq!(
             TRANSPORT_CLOSED_MESSAGE, "transport closed",
             "TRANSPORT_CLOSED_MESSAGE must remain the literal string \
-             'transport closed' the reader emits at line 255. The \
+             'transport closed' the reader emits at line 327. The \
              consume side uses AND (not OR) in the boundary \
-             conjunction at line 95, so a rename of the constant (e.g., \
+             conjunction at line 75, so a rename of the constant (e.g., \
              to 'closed' or 'transport_closed' for snake_case \
              consistency) against an emit-side literal of 'transport \
              closed' would always fail the conjunction and route every \

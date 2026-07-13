@@ -4,7 +4,7 @@
 //! signature }` frame plus the disabled-bridge and malformed-root-hash
 //! `Response::Error` frames.
 //!
-//! `sap_publish_attestation` (covenantd/src/lib.rs:1369) publishes a cross-party
+//! `sap_publish_attestation` (covenantd/src/lib.rs:1812) publishes a cross-party
 //! attestation through the SAP bridge: it calls `require_enabled`, pre-validates
 //! `root_hash_hex` (64 lowercase hex chars; covenant-sap-bridge attestation.rs:36)
 //! before any subprocess, drives the worker's `attest-agent` command (signed by
@@ -18,7 +18,7 @@
 //! response `agent_pda` is relayed from the worker's `agentPda`, NOT echoed from
 //! the request, so the success test uses a request `agent_pda` distinct from the
 //! worker sentinel to catch a handler that echoes the input instead of relaying
-//! the receipt. `main.rs:310` always wires the bridge, so the reachable
+//! the receipt. `main.rs:372` always wires the bridge, so the reachable
 //! fail-closed path over the socket is `BridgeError::Disabled` ("synapse bridge
 //! is disabled"), not the unit-test-only "not wired" arm.
 //!
@@ -208,7 +208,7 @@ async fn live_ipc_sap_publish_attestation_returns_published_receipt() {
 #[ignore = "live: spawns covenantd with the SAP bridge disabled + asserts Request::SapPublishAttestation flattens onto Response::Error"]
 async fn live_ipc_sap_publish_attestation_rejects_disabled_bridge() {
     let home = tempfile::tempdir().expect("tempdir");
-    // No COVENANT_SAP_ENABLED: main.rs still wires the bridge (lib.rs:310), so
+    // No COVENANT_SAP_ENABLED: main.rs still wires the bridge (lib.rs:424), so
     // require_enabled is what rejects, not the unit-test-only "not wired" arm.
     let mut child = spawn_daemon(home.path(), &[]).await;
 

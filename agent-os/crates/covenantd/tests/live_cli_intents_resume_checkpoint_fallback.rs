@@ -4,7 +4,7 @@
 //!
 //! `resume_intent` (covenantd/src/lib.rs) re-dispatches a budget-exhausted
 //! intent from its durable `BudgetExhausted` audit row. When the production
-//! daemon wires a pause-checkpoint store (main.rs:318) it first calls
+//! daemon wires a pause-checkpoint store (main.rs:370) it first calls
 //! `claim_resume`; that reads the in-memory map rebuilt at `open()`, so it
 //! returns `BudgetCheckpointError::NotFound` when the store lost the entry
 //! across a restart (truncated/missing `checkpoints.jsonl`). The `NotFound`

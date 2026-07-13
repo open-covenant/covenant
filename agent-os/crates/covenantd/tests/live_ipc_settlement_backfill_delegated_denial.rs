@@ -4,7 +4,7 @@
 //! refused by the operator-identity gate that sits behind the capability
 //! gate.
 //!
-//! `backfill_settlement_receipts` (lib.rs:14441) checks the
+//! `backfill_settlement_receipts` (lib.rs:15450) checks the
 //! `settlement.backfill.<mode>` capability FIRST (14456) and only past it
 //! the operator-identity gate (14467) `peer.pubkey !=
 //! self.identity.agent_id().pubkey`, returning `Response::Error
@@ -12,7 +12,7 @@
 //! capability fallback. The happy-path live test
 //! (`live_settlement_backfill.rs`) authenticates as the operator, so the
 //! operator-identity line never runs for a non-operator that holds the
-//! capability. `grant_capability` (lib.rs:5177) stores a `None` scope as
+//! capability. `grant_capability` (lib.rs:5877) stores a `None` scope as
 //! the empty object `{}` and records the capability subject as the
 //! authenticated peer, so a delegate can self-grant the capability and
 //! clear the first gate; an empty scope is unbounded and clears the

@@ -5,7 +5,7 @@
 //! The verb is covered today over the CLI (`live_cli_a2a_repair.rs`) and HTTP
 //! (`live_http_a2a_repair.rs`) but never over the raw Unix socket both are built
 //! on. This pins the `Response::A2ARepaired { outcome }` wire shape
-//! (covenant-ipc/src/lib.rs:888) reached through the `a2a.repair.requeue` gate:
+//! (covenant-ipc/src/lib.rs:1081) reached through the `a2a.repair.requeue` gate:
 //! a leased task is read back via `A2AQueue` for its real lease id, requeued,
 //! and the queue then reports it `Queued` at attempt 1 and hands it out again.
 //!

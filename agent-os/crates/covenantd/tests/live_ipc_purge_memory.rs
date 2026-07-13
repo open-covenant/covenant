@@ -5,7 +5,7 @@
 //! The verb is covered today over the CLI (`live_cli_memory_purge.rs`) and HTTP
 //! (`live_http_memory_purge.rs`) but never over the raw Unix socket both are
 //! built on. This pins that wire contract: `Response::MemoryPurged { purged }`
-//! (covenant-ipc/src/lib.rs:774) reached through the `memory.purge` gate, and
+//! (covenant-ipc/src/lib.rs:952) reached through the `memory.purge` gate, and
 //! the tier + strict-cutoff selectivity of the underlying purge.
 //!
 //! Two operator-owned working-tier records are written directly into the SQLite

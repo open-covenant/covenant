@@ -4,7 +4,7 @@
 //! through this daemon is refused by the unknown-task lookup gate
 //! BEFORE the respond capability gate.
 //!
-//! `post_a2a_result` (lib.rs:2683-2702) looks up the task's sender
+//! `post_a2a_result` (lib.rs:3059-3078) looks up the task's sender
 //! first, because the capability it must require is derived from the
 //! sender (`a2a.respond.<sender_display>`) and an unknown task has no
 //! sender. When `lookup_task_sender` returns `Ok(None)` it records an

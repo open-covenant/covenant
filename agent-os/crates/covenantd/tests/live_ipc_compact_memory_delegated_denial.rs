@@ -3,7 +3,7 @@
 //! delegate which SELF-GRANTS `memory.compact.dry_run` is still refused
 //! by the operator-identity gate that sits behind the capability gate.
 //!
-//! `compact_memory` (lib.rs:14330) checks the `memory.compact.<mode>`
+//! `compact_memory` (lib.rs:15339) checks the `memory.compact.<mode>`
 //! capability FIRST (14340) and only past it the operator-identity gate
 //! (14348) `peer.pubkey != self.identity.agent_id().pubkey`, returning
 //! `Response::Error "memory compaction requires the operator identity"`
@@ -11,11 +11,11 @@
 //! (`live_memory_repair_compact_delegated_denial.rs`) sends CompactMemory
 //! WITHOUT a grant, so it stops at the capability gate and never reaches
 //! the operator-identity line — its own Phase 2 comment says exactly that.
-//! `grant_capability` (lib.rs:5177) stores a `None` scope as the empty
+//! `grant_capability` (lib.rs:5877) stores a `None` scope as the empty
 //! object `{}`, and the capability subject is the authenticated peer, so a
 //! delegate can self-grant the capability and clear the first gate. An
 //! empty granted scope short-circuits the post-gate scope check to
-//! `Ok(true)` (permissions lib.rs:639), and the request carries a policy
+//! `Ok(true)` (permissions lib.rs:669), and the request carries a policy
 //! that enables one retention-deletion action so it passes
 //! `validate_compaction_request` (an empty/default policy is rejected by
 //! "policy must enable at least one compaction action" before the gate

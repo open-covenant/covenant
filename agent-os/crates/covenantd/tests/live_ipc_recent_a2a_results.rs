@@ -5,7 +5,7 @@
 //! The verb is covered today over HTTP (`live_http_a2a_results_recent.rs`, GET
 //! `/a2a/results/recent`) but never over the raw Unix socket both are built on.
 //! This pins that wire contract: `Response::A2AResults { results }`
-//! (covenant-ipc/src/lib.rs:878), and the queued/leased/posted handshake it
+//! (covenant-ipc/src/lib.rs:1071), and the queued/leased/posted handshake it
 //! depends on — `A2ATaskQueued`, `A2ATaskOpt`, `A2AResultPosted`.
 //!
 //! Seeded through the public API: the operator grants itself `a2a.send.<display>`

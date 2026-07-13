@@ -8,7 +8,7 @@
 //! over the socket (`live_peers_list_purge_delegated_denial.rs:164`), but the
 //! `Response::PeersPurged` success frame those analogs are built on is never
 //! exercised over the raw Unix socket. This pins that wire contract
-//! (covenant-ipc/src/lib.rs:894) at the boundary the in-process unit test
+//! (covenant-ipc/src/lib.rs:1087) at the boundary the in-process unit test
 //! cannot reach.
 //!
 //! Hermetic — a local JSONL registry seeded with one revoked guest, no network,

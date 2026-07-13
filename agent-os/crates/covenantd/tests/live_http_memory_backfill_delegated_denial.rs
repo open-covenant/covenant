@@ -1,5 +1,5 @@
 //! Live HTTP delegated denial coverage for `POST /memory/records/backfill`.
-//! `backfill_memory_records` (lib.rs:14569) checks the
+//! `backfill_memory_records` (lib.rs:15578) checks the
 //! `memory.backfill.<mode>` capability FIRST (14587) and only past it the
 //! operator-identity gate (14595) `peer.pubkey !=
 //! self.identity.agent_id().pubkey`, returning `Response::Error

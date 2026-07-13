@@ -4,7 +4,7 @@
 //! Recent-capability listing ships and is unit-tested in-process, but no test
 //! drives it over the HTTP gateway. That leaves the `LimitParams` query, the
 //! bearer-auth peer identity, the `subject == peer || granted_by == peer` row
-//! scoping (`recent_capabilities` at lib.rs:6449), the non-draining listing
+//! scoping (`recent_capabilities` at lib.rs:15764), the non-draining listing
 //! semantics, and the `Capabilities` wire variant (`kind: "capabilities"`, each
 //! row a `SignedCapability` with a `capability` object and a base58 `signature`)
 //! unexercised on the HTTP path.

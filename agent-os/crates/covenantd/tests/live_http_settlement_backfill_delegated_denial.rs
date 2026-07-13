@@ -1,5 +1,5 @@
 //! Live HTTP delegated denial coverage for `POST /settlement/receipts/backfill`.
-//! `backfill_settlement_receipts` (lib.rs:14441) checks the
+//! `backfill_settlement_receipts` (lib.rs:15450) checks the
 //! `settlement.backfill.<mode>` capability FIRST (14456) and only past it
 //! the operator-identity gate (14467) `peer.pubkey !=
 //! self.identity.agent_id().pubkey`, returning `Response::Error

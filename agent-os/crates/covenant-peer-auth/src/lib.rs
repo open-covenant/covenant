@@ -2194,20 +2194,20 @@ mod tests {
         // Cross-bind with the PeerSummary surface: a PeerSummary built
         // from the same token bytes must carry the SAME 6-char prefix.
         // PeerSummary is constructed publicly through public crates
-        // (the internal summary_from helper at line 320 is private),
+        // (the internal summary_from helper at line 347 is private),
         // so build one inline with the documented chars().take(6)
-        // shape to mirror token_b58_prefix at line 315-318.
+        // shape to mirror token_b58_prefix at line 342-345.
         let summary_prefix: String = full_b58.chars().take(6).collect();
         assert_eq!(
             prefix_in_debug,
             summary_prefix.as_str(),
             "PeerToken Debug prefix MUST equal PeerSummary::token_prefix \
-             for the same token bytes — the docstring at line 124 binds \
+             for the same token bytes — the docstring at line 151 binds \
              '6-char base58 prefix matching PeerToken::Debug redaction' \
              across both surfaces. If this assertion fires after a \
              refactor that diverged the two surfaces (e.g., changed the \
              Debug truncation length without updating token_b58_prefix \
-             at line 315), operator dashboards that join debug-log lines \
+             at line 342), operator dashboards that join debug-log lines \
              against `peers list` rows would silently mismatch on every \
              redaction cycle",
         );

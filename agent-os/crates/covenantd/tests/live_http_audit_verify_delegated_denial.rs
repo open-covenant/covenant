@@ -1,7 +1,7 @@
 //! Live HTTP delegated denial coverage for `GET /audit/verify`.
 //! `audit_verify` (http.rs:772) dispatches `Request::VerifyAuditIntegrity`
 //! with the Bearer-resolved delegate `AgentId`, so the operator-identity
-//! gate in `verify_audit_integrity` (lib.rs:3891) applies over HTTP: when
+//! gate in `verify_audit_integrity` (lib.rs:4376) applies over HTTP: when
 //! `peer.pubkey != self.identity.agent_id().pubkey` it returns
 //! `Response::Error "audit integrity verification requires the operator
 //! identity"` with NO capability fallback and no report. The IPC path is

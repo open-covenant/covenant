@@ -4,8 +4,8 @@
 //!
 //! The verb is covered today over HTTP (`live_http_a2a_compact.rs`) but never
 //! over the raw Unix socket both that route and the CLI are built on. This pins
-//! the `Response::A2ACompacted { dropped }` envelope (covenant-ipc/src/lib.rs:885)
-//! reached through the `a2a.compact` gate (covenantd/src/lib.rs:2651).
+//! the `Response::A2ACompacted { dropped }` envelope (covenant-ipc/src/lib.rs:1078)
+//! reached through the `a2a.compact` gate (covenantd/src/lib.rs:3601).
 //!
 //! One self-addressed task is driven through its whole lifecycle over the same
 //! socket — send, lease, respond, post, receive — so `posted == drained == 1`

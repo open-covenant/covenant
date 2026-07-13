@@ -5,7 +5,7 @@
 //! The verb is covered today over HTTP (`live_http_a2a_tasks_recent.rs`, GET
 //! `/a2a/tasks/recent`) but never over the raw Unix socket both are built on.
 //! This pins that wire contract: the `Response::A2ATasks { tasks }` variant
-//! (covenant-ipc/src/lib.rs:875) — a tasks-only envelope, distinct from the
+//! (covenant-ipc/src/lib.rs:1068) — a tasks-only envelope, distinct from the
 //! `A2AQueue` shape — and the both-sides `sender == peer || recipient == peer`
 //! row scoping in `recent_a2a_tasks`.
 //!

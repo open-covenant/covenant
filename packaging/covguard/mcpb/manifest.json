@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "covenant-guard",
   "display_name": "Covenant Guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Read-only MCP tools over covguard guarded runs: status, receipts, and signature verification.",
   "long_description": "Covenant Guard (covguard) runs a coding agent unattended with a hard spend cap, an OS sandbox, and a signed receipt. This MCP server exposes read-only tools over the local guard state: guard_status (latest run, spend against cap), guard_receipts (list runs), and guard_verify (re-check a receipt's ed25519 signature and SHA-256 event chain).",
   "author": { "name": "Covenant", "url": "https://opencovenant.org" },

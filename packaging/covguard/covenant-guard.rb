@@ -8,7 +8,7 @@
 class CovenantGuard < Formula
   desc "Run a coding agent unattended: capped spend, sandboxed, signed receipt"
   homepage "https://opencovenant.org"
-  version "0.1.0"
+  version "0.1.1"
   license "Apache-2.0"
 
   # Shipped as darwin-arm64 and linux-x86_64. Intel Macs and Linux arm64 build

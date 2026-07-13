@@ -19,12 +19,13 @@ the spend, and pull the plug, none of which the agent can reach around.
   the proxy stops forwarding and the guard kills the agent's process group.
   Overshoot is bounded to the one call in flight. This works in headless and
   interactive runs, and covers subscription/OAuth sessions that a built-in budget flag does not.
-- **OS sandbox, so a bad command can't wreck the machine.** On macOS the agent
-  runs under a generated Seatbelt profile: writes confined to the workspace,
-  the agent's own config files read-only (so it can't rewire the base URL or
-  disable the guard's hooks), key material unreadable, and all network egress
-  denied except the loopback proxy. This is what makes the cap unbypassable: there is no route to the API that skips the meter. (Linux via bubblewrap is
-  next.)
+- **OS sandbox, so a bad command can't wreck the machine.** The agent runs
+  under a Seatbelt profile on macOS or bubblewrap on Linux: writes confined to
+  the workspace, the agent's own config files read-only (so it can't rewire the
+  base URL or disable the guard's hooks), key material unreadable, and all
+  network egress denied except the loopback proxy. This is what makes the cap
+  unbypassable: there is no route to the API that skips the meter. (Linux needs
+  bubblewrap installed.)
 - **A signed receipt you can check after the fact.** Every event lands on a
   SHA-256 hash chain; on exit the guard writes a receipt carrying the spend
   against the cap, the files changed, the models and tokens, the chain root,

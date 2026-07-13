@@ -158,6 +158,7 @@ run node ./scripts/validate-covenant-a2a-struct-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-default-impl-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-result-error-fn-block-range-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-a2a-idempotency-field-list-line-refs.mjs
+run node ./scripts/validate-ipc-http-doc-duplicate-safety.mjs
 run node ./scripts/validate-covenant-a2a-task-queue-entry-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-field-list-line-refs.mjs
 run node ./scripts/validate-covenant-a2a-task-result-field-list-line-refs.mjs

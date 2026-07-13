@@ -25,7 +25,7 @@ The contract is enforced by an internal validator. The validator runs in two mod
 
 - A v2 fixture whose envelope carries a stable version key (e.g., `protocol_info` exposes `info.version`) must declare that field as `2`. The file suffix (`*.v2.json`) and the payload version must agree where a version slot exists.
 - The validator rejects such a fixture if its declared version field is not `2`. Whitespace variation around the colon is tolerated.
-- Envelope-shape wire frames that have no natural version slot (e.g., `StreamEnvelope` variants such as `stream_begin`, `stream_chunk`, `stream_end`, `stream_error`) are exempt: their v2 binding is the staging directory location, the `*.v2.json` file suffix, and the migration-note pairing rule below. Adding a synthetic version field to those frames would diverge from the wire bytes they pin.
+- Envelope-shape wire frames that have no natural version slot (the four `StreamEnvelope` variants `stream_begin`, `stream_chunk`, `stream_end`, `stream_error`) are exempt: their v2 binding is the staging directory location, the `*.v2.json` file suffix, and the migration-note pairing rule below. Adding a synthetic version field to those frames would diverge from the wire bytes they pin.
 
 ### Migration-note Pairing
 

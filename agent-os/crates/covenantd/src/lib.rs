@@ -55630,9 +55630,7 @@ required = {caps:?}
         )
         .await;
 
-        let resp = s
-            .respond(Request::FlushReceipts { limit: 1 }, &guest)
-            .await;
+        let resp = s.respond(Request::FlushReceipts { limit: 1 }, &guest).await;
         match resp {
             Response::Error { message } => assert!(
                 message.contains("operator identity"),
@@ -55654,6 +55652,132 @@ required = {caps:?}
                 "refusal must name the missing capability: {message}"
             ),
             other => panic!("expected capability rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_attestation_rejects_without_capability() {
+        let s = server_with(vec![], "");
+        let resp = s
+            .op_respond(Request::SignAttestation {
+                message_b58: bs58::encode(b"m").into_string(),
+                ts: epoch_ms(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("identity.attest"),
+                "refusal must name the missing capability: {message}"
+            ),
+            other => panic!("expected capability rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_attestation_rejects_stale_timestamp() {
+        let s = server_with(vec![], "");
+        grant_action(&s, "identity.attest").await;
+        let resp = s
+            .op_respond(Request::SignAttestation {
+                message_b58: bs58::encode(b"m").into_string(),
+                ts: 0,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("freshness window"),
+                "stale timestamp must be refused: {message}"
+            ),
+            other => panic!("expected freshness rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_attestation_bounds_message_length() {
+        let s = server_with(vec![], "");
+        grant_action(&s, "identity.attest").await;
+        // Empty input decodes to an empty vec (not a b58 error), so it must be
+        // caught by the length arm, same as the oversized payload.
+        for (message, ok) in [
+            (Vec::new(), false),
+            (vec![7u8; 4096], true),
+            (vec![7u8; 4097], false),
+        ] {
+            let resp = s
+                .op_respond(Request::SignAttestation {
+                    message_b58: bs58::encode(&message).into_string(),
+                    ts: epoch_ms(),
+                })
+                .await;
+            match resp {
+                Response::IdentityAttestation { .. } => {
+                    assert!(ok, "{} bytes must be refused", message.len())
+                }
+                Response::Error { message: err } => assert!(
+                    !ok && err.contains("1..=4096 bytes"),
+                    "{} bytes: unexpected refusal {err}",
+                    message.len()
+                ),
+                other => panic!("unexpected response {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_attestation_rejects_invalid_b58_message() {
+        let s = server_with(vec![], "");
+        grant_action(&s, "identity.attest").await;
+        let resp = s
+            .op_respond(Request::SignAttestation {
+                message_b58: "0OIl".into(),
+                ts: epoch_ms(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("message_b58 invalid"),
+                "non-base58 input must be refused: {message}"
+            ),
+            other => panic!("expected invalid-b58 rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_attestation_signs_domain_separated_message() {
+        let s = server_with(vec![], "");
+        grant_action(&s, "identity.attest").await;
+        let message = b"attest-payload-for-domain-check".to_vec();
+        let sent_ts = epoch_ms();
+        let resp = s
+            .op_respond(Request::SignAttestation {
+                message_b58: bs58::encode(&message).into_string(),
+                ts: sent_ts,
+            })
+            .await;
+        match resp {
+            Response::IdentityAttestation {
+                signature_b58,
+                pubkey_b58,
+                ts,
+            } => {
+                assert_eq!(ts, sent_ts);
+                assert_eq!(
+                    pubkey_b58,
+                    bs58::encode(s.identity.agent_id().pubkey).into_string()
+                );
+                let mut signed = b"covenant.identity.attest.v1\n".to_vec();
+                signed.extend_from_slice(&message);
+                covenant_identity::verify_b58(&pubkey_b58, &signed, &signature_b58)
+                    .expect("domain-prefixed message must verify");
+                // The raw message must NOT verify: the domain prefix is what
+                // keeps attestation signatures from doubling as capability
+                // signatures under the same identity key.
+                assert!(
+                    covenant_identity::verify_b58(&pubkey_b58, &message, &signature_b58).is_err(),
+                    "signature must not verify without the domain prefix"
+                );
+            }
+            other => panic!("expected attestation, got {other:?}"),
         }
     }
 

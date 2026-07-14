@@ -65836,6 +65836,23 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
+    async fn settle_spend_rejects_when_disabled() {
+        // Capability granted + spend_authz wired, but `enabled: false`.
+        // The operator may have temporarily disabled settlement; the
+        // daemon must honour that flag rather than recording a settlement.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_spend_authz(spend_authz::SpendAuthzConfig::default());
+        grant_action(&s, "wallet.spend.settle").await;
+        match s.op_respond(settle_spend_req()).await {
+            Response::Error { message } => assert!(
+                message.contains("disabled"),
+                "error must clearly say 'disabled' so the operator knows to flip the flag: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn settle_spend_records_receipt_and_audits() {
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let budget = Arc::new(covenant_budget::InMemoryLedger::new());
@@ -66406,6 +66423,69 @@ budget_credits_per_hour = {credits}
                 "a daemon with no secret source must refuse with not-configured: {message}"
             ),
             other => panic!("expected a not-configured Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sap_publish_agent_rejects_when_bridge_not_wired() {
+        // A daemon ships with no SAP bridge by default. Publishing an agent
+        // before the operator wires one in must refuse clearly rather than
+        // silently dropping the manifest or attempting an unconfigured publish.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        match s
+            .op_respond(Request::SapPublishAgent {
+                manifest_json: "{}".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("not wired"),
+                "a daemon with no SAP bridge must say it is 'not wired': {message}"
+            ),
+            other => panic!("expected a not-wired Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sap_publish_audit_root_rejects_when_bridge_not_wired() {
+        // Same fail-closed contract for audit-root anchoring: with no bridge
+        // the daemon refuses instead of fabricating a ledger PDA.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        match s
+            .op_respond(Request::SapPublishAuditRoot {
+                root_hash_hex: "deadbeef".into(),
+                release_target: "covenant".into(),
+                release_subject: "covenant".into(),
+                release_scope: "head".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("not wired"),
+                "a daemon with no SAP bridge must say it is 'not wired': {message}"
+            ),
+            other => panic!("expected a not-wired Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sap_publish_attestation_rejects_when_bridge_not_wired() {
+        // Same fail-closed contract for cross-party attestation publishing.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        match s
+            .op_respond(Request::SapPublishAttestation {
+                agent_pda: "AgentPda".into(),
+                root_hash_hex: "deadbeef".into(),
+                attestation_type: None,
+                expires_at_unix: None,
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("not wired"),
+                "a daemon with no SAP bridge must say it is 'not wired': {message}"
+            ),
+            other => panic!("expected a not-wired Error, got: {other:?}"),
         }
     }
 

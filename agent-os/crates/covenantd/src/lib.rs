@@ -55613,6 +55613,50 @@ required = {caps:?}
         }));
     }
 
+    #[tokio::test]
+    async fn flush_receipts_rejects_non_operator_even_with_capability() {
+        // Guest holding chain.flush must still be rejected on the
+        // operator-identity gate; the cap alone is not enough. Mirrors the
+        // memory-backfill operator-identity check.
+        let s = server_with(vec![], "");
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "chain.flush".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(Request::FlushReceipts { limit: 1 }, &guest)
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("operator identity"),
+                "flush must reject non-operator peers even when they hold the cap: {message}"
+            ),
+            other => panic!("expected operator-identity rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn flush_receipts_rejects_without_capability() {
+        // Operator without a chain.flush grant is refused at the capability
+        // gate; the operator identity alone is not enough.
+        let s = server_with(vec![], "");
+        let resp = s.op_respond(Request::FlushReceipts { limit: 1 }).await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("chain.flush"),
+                "refusal must name the missing capability: {message}"
+            ),
+            other => panic!("expected capability rejection, got {other:?}"),
+        }
+    }
+
     // The COVNT mint is environment-level; receipts carry no mint field, so a
     // mint-bound chain.receipts/chain.batches scope can only be enforced at the
     // gather stage. With COVNT_MINT unset in tests the gathered mint is "", which

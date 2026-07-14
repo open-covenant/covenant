@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-14T01:14:08.304Z",
+  "updatedAt": "2026-07-14T01:34:13.446Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12800,
+    "events": 12802,
     "tasks": 1500,
-    "integrated": 1501
+    "integrated": 1502
   },
   "throughput": {
-    "last24h": 8,
-    "last7d": 10,
-    "velocity": 1.4
+    "last24h": 9,
+    "last7d": 11,
+    "velocity": 1.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-14",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-14",
-      "total": 1501
+      "total": 1502
     }
   ],
   "states": {
-    "integrated": 1493,
+    "integrated": 1494,
     "proposed": 1,
-    "blocked": 5,
-    "validation": 1
+    "blocked": 5
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "nix-head-flake-channel",
-    "state": "validation",
-    "since": "2026-07-14T01:14:07.824Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-14T01:15:25.748Z",
+      "task": "nix-head-flake-channel",
+      "note": "Landed on loop/main-track as 7501450f (flake.nix +85, docs/source-install.md +38) and pushed to origin (1156b852..7501450f). Public surface "
+    },
     {
       "at": "2026-07-13T18:55:23.488Z",
       "task": "ipc-http-doc-duplicate-safety-set-guard",
@@ -315,11 +315,6 @@
       "at": "2026-07-02T16:58:15.546Z",
       "task": "status-mcp-tools-server-time-vendor-fixture-wired-adr-0009",
       "note": "Committed 0127b6b8 (feat(scripts): guard mcp-server-time vendor fixture against its recorded tree hash), 2 files (+228): new agent-os/script"
-    },
-    {
-      "at": "2026-07-02T16:44:33.888Z",
-      "task": "status-local-settlement-receipts-backfill-mutator-landed-202",
-      "note": "Committed 621b78e9 (test(covenant): cover settlement backfill-receipts plain-text dry-run render), single tracked file crates/covenantd/test"
     }
   ]
 }

@@ -65976,6 +65976,69 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
+    async fn reputation_read_denies_without_capability() {
+        // Escrow is wired and enabled, but reputation.read was never granted, so
+        // the privileged read must stop at the capability gate before any audit
+        // scan — standing must never leak to an un-granted peer.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: true });
+        match s
+            .op_respond(Request::GetReputation {
+                worker_pubkey: "0xWorker".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("reading reputation requires capability"),
+                "capability denial must name reputation.read: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reputation_read_rejects_when_escrow_not_configured() {
+        // reputation.read is granted but no escrow surface is wired, so the read
+        // must refuse with the not-configured contract rather than scanning an
+        // empty chain and returning a zero standing.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "reputation.read").await;
+        match s
+            .op_respond(Request::GetReputation {
+                worker_pubkey: "0xWorker".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reputation_read_rejects_when_escrow_disabled() {
+        // Escrow is wired but disabled in config; reputation must surface the
+        // disabled contract instead of computing a standing off a dormant surface.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: false });
+        grant_action(&s, "reputation.read").await;
+        match s
+            .op_respond(Request::GetReputation {
+                worker_pubkey: "0xWorker".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("escrow surface is disabled"),
+                "error must say 'disabled': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn pay_x402_enforces_destination_scope_and_audits_denied_provider() {
         // A provider-scoped x402.outbound.pay grant is least-privilege egress:
         // the agent may pay the granted destination class and nothing else. The

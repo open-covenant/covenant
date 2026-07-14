@@ -55501,6 +55501,52 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn search_memory_rejects_without_read_capability() {
+        let s = server_with(vec![], "");
+        let resp = s
+            .op_respond(Request::SearchMemory {
+                query: "note".into(),
+                tier: None,
+                limit: 10,
+                min_relevance: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(message.contains("memory search requires")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn search_memory_rejects_when_tier_outside_scope() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "memory.read".into(),
+            scope: Some(serde_json::json!({
+                "version": 1,
+                "tiers": ["working"],
+                "apply": false
+            })),
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::SearchMemory {
+                query: "note".into(),
+                tier: Some(MemoryTier::Episodic),
+                limit: 10,
+                min_relevance: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("memory search rejected by capability scope"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn recent_memory_v0_operator_sees_own_records() {
         let s = server_with(
             vec![stub_card("research", vec!["tool.web_search"])],

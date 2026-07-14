@@ -49135,6 +49135,79 @@ required = {caps:?}
         );
     }
 
+    /// The prefix-dispatched providers refuse before any network or signer
+    /// wiring when their state was never installed on the daemon. The
+    /// `tool.call.<name>` capability still has to be granted first, so these
+    /// pin the provider-disabled arm specifically — not the capability gate.
+    #[tokio::test]
+    async fn call_tool_rejects_hyre_when_provider_not_enabled() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.hyre.x".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "hyre.x".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("hyre provider is not enabled"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn call_tool_rejects_metaplex_when_profile_not_enabled() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.metaplex.x".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "metaplex.x".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("metaplex profile is not enabled"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn call_tool_rejects_sns_when_profile_not_enabled() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.sns.x".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "sns.x".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("sns profile is not enabled"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     /// Full Hyre path: capability gate → executor → 402-then-pay loop
     /// (against the live Hyre challenge shape) → budget debit +
     /// settlement receipt + audit event. The signer is a shell script

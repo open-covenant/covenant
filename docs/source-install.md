@@ -103,6 +103,44 @@ Under the service, the daemon reads its data directory from `COVENANT_HOME`, set
 
 This is a convenience channel for tracking `main`. It is not a registered tap, ships no bottles, verifies no signatures, and is not bound to a release artifact. For a build pinned to a specific commit or a signed release, use the source install above or see [RELEASES.md](../RELEASES.md).
 
+## Nix (Head Flake)
+
+A HEAD-only Nix flake lives at `flake.nix`. It builds the daemon and CLI from the working tree with `buildRustPackage` (dependencies vendored from `agent-os/Cargo.lock`), so it is a Nix-wrapped source build, not a tagged release. There is no pinned derivation hash, no binary cache, and no signature.
+
+Build from a clone of this repository:
+
+```bash
+nix build .#covenant
+```
+
+Or install into your profile:
+
+```bash
+nix profile install .#covenant
+```
+
+The flake targets `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, and `aarch64-darwin`, builds the same `covenantd` and `covenant` binaries as the source installer, and carries `pkg-config`/`openssl` build inputs for the CLI's openssl-sys dependency chain, so the build succeeds in the sealed Nix sandbox instead of relying on a system OpenSSL.
+
+Profile upgrades and rollbacks are real package operations on this channel:
+
+```bash
+nix profile upgrade covenant
+nix profile rollback
+```
+
+On NixOS, `nixosModules.covenant` runs `covenantd` as a systemd service with `COVENANT_HOME` pinned to the managed state directory (`/var/lib/covenant`):
+
+```nix
+{
+  imports = [ covenant.nixosModules.covenant ];
+  services.covenant.enable = true;
+}
+```
+
+For manual runs, `COVENANT_HOME` defaults to `~/.covenant`.
+
+This is a convenience channel for tracking the checkout. Publication of the flake, nixpkgs submission, derivation hash pinning, and cache signing remain operator-owned; for a signed release, see [RELEASES.md](../RELEASES.md).
+
 ## Validation
 
 Run the public guard:

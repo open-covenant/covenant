@@ -66039,6 +66039,82 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
+    async fn escrow_release_rejects_when_capability_missing() {
+        // Escrow is wired and enabled, but escrow.release.record was never
+        // granted, so the release must stop at the capability gate before it
+        // touches settlement or records anything off-chain.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: true });
+        match s
+            .op_respond(escrow_release_req(Uuid::from_u128(0x7a5c), "0xWorker"))
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("escrow.release.record"),
+                "error must name the missing capability: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_release_rejects_when_not_configured() {
+        // escrow.release.record is granted but no escrow surface is wired, so
+        // the release must refuse with the not-configured contract rather than
+        // recording against a missing settlement surface.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
+        grant_action(&s, "escrow.release.record").await;
+        match s
+            .op_respond(escrow_release_req(Uuid::from_u128(0x7a5c), "0xWorker"))
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("not configured"),
+                "error must say 'not configured': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_release_rejects_when_disabled() {
+        // Escrow is wired but disabled in config; release must surface the
+        // disabled contract instead of recording a release off a dormant surface.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: false });
+        grant_action(&s, "escrow.release.record").await;
+        match s
+            .op_respond(escrow_release_req(Uuid::from_u128(0x7a5c), "0xWorker"))
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("escrow surface is disabled"),
+                "error must say 'disabled': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn escrow_prove_rejects_when_disabled() {
+        // Escrow is wired but disabled; prove must surface the disabled contract
+        // rather than deriving a proof off a dormant surface.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_escrow(escrow::EscrowConfig { enabled: false });
+        grant_action(&s, "escrow.completion.prove").await;
+        match s
+            .op_respond(prove_completion_req(Uuid::from_u128(0x7a5c), "0xWorker"))
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("escrow surface is disabled"),
+                "error must say 'disabled': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn pay_x402_enforces_destination_scope_and_audits_denied_provider() {
         // A provider-scoped x402.outbound.pay grant is least-privilege egress:
         // the agent may pay the granted destination class and nothing else. The

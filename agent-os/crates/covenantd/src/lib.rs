@@ -56189,6 +56189,39 @@ required = {caps:?}
         }
     }
 
+    #[tokio::test]
+    async fn repair_a2a_task_rejects_queued_task_not_in_flight() {
+        let s = server_with(vec![], "");
+        let task = loopback_a2a_task_for(&s);
+        grant_action(&s, &format!("a2a.send.{}", task.recipient.display)).await;
+        grant_action(&s, "a2a.repair.requeue").await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        // The task is queued but never leased, so it is visible to the
+        // operator (loopback sender and recipient) yet still `Queued`. The
+        // visibility lookup admits it past the not-visible arm, but the
+        // in-flight gate refuses to repair a task no worker has picked up.
+        let resp = s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id: None,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "probe".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("not currently in flight"),
+                "queued task must be refused as not-in-flight: {message}"
+            ),
+            other => panic!("expected not-in-flight rejection, got {other:?}"),
+        }
+    }
+
     // The COVNT mint is environment-level; receipts carry no mint field, so a
     // mint-bound chain.receipts/chain.batches scope can only be enforced at the
     // gather stage. With COVNT_MINT unset in tests the gathered mint is "", which

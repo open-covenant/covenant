@@ -49268,6 +49268,55 @@ required = {caps:?}
         }
     }
 
+    #[tokio::test]
+    async fn metaplex_tool_rejects_unknown_or_disabled_tool() {
+        let s = server_with(vec![], "").with_metaplex(metaplex::MetaplexState::new(
+            covenant_metaplex::MetaplexConfig::default(),
+        ));
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.metaplex.nonexistent".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "metaplex.nonexistent".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("unknown or disabled metaplex tool"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sns_tool_rejects_unknown_or_disabled_tool() {
+        let s = server_with(vec![], "")
+            .with_sns(sns::SnsState::new(covenant_sns::SnsConfig::default()));
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.sns.nonexistent".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "sns.nonexistent".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("unknown or disabled sns tool"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     /// Full Hyre path: capability gate → executor → 402-then-pay loop
     /// (against the live Hyre challenge shape) → budget debit +
     /// settlement receipt + audit event. The signer is a shell script

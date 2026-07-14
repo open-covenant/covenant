@@ -54241,6 +54241,79 @@ required = {caps:?}
         }
     }
 
+    // The remaining operator-identity-gated privileged reads share one guard
+    // contract with verify_audit_integrity: a non-operator peer is refused
+    // before any audit/provenance/retry state is touched.
+
+    #[tokio::test]
+    async fn prove_audit_inclusion_rejects_non_operator() {
+        let s = server_with(vec![], "");
+        let foreign = AgentId::new("guest@local", [9u8; 32]);
+
+        let resp = s
+            .respond(
+                Request::ProveAuditInclusion {
+                    event_id: Uuid::nil(),
+                },
+                &foreign,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn query_provenance_rejects_non_operator() {
+        let s = server_with(vec![], "");
+        let foreign = AgentId::new("guest@local", [9u8; 32]);
+
+        let resp = s
+            .respond(
+                Request::QueryProvenance {
+                    since_ms: None,
+                    until_ms: None,
+                    actor: None,
+                    approver: None,
+                    rule: None,
+                    outcome: None,
+                    limit: 0,
+                },
+                &foreign,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_a2a_stale_rejects_non_operator() {
+        let s = server_with(vec![], "");
+        let foreign = AgentId::new("guest@local", [9u8; 32]);
+
+        let resp = s
+            .respond(
+                Request::RetryA2AStale {
+                    policy: covenant_a2a::A2AAutoRetryPolicy::default(),
+                },
+                &foreign,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     // -------- Per-peer filter on the other RecentX surfaces --------
 
     #[tokio::test]

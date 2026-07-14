@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-14T15:58:46.481Z",
+  "updatedAt": "2026-07-14T16:18:50.171Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12831,
-    "tasks": 1504,
+    "events": 12835,
+    "tasks": 1505,
     "integrated": 1506
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1498,
     "proposed": 1,
-    "blocked": 5
+    "blocked": 5,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "status-autonomous-workflow-project-review-signing-key-custod",
+    "state": "in_progress",
+    "since": "2026-07-14T16:01:05.670Z"
+  },
   "recent": [
     {
       "at": "2026-07-14T07:05:32.461Z",

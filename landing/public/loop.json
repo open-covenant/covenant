@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-14T06:15:52.765Z",
+  "updatedAt": "2026-07-14T06:35:56.506Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12819,
+    "events": 12823,
     "tasks": 1503,
-    "integrated": 1504
+    "integrated": 1505
   },
   "throughput": {
-    "last24h": 11,
-    "last7d": 13,
-    "velocity": 1.9
+    "last24h": 12,
+    "last7d": 14,
+    "velocity": 2
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-14",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-14",
-      "total": 1504
+      "total": 1505
     }
   ],
   "states": {
-    "integrated": 1496,
+    "integrated": 1497,
     "proposed": 1,
-    "blocked": 5,
-    "in_progress": 1
+    "blocked": 5
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "pay-x402-invalid-method-coverage",
-    "state": "in_progress",
-    "since": "2026-07-14T05:38:03.865Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-14T06:35:34.990Z",
+      "task": "pay-x402-invalid-method-coverage",
+      "note": "Landed fdea0d20 (lib.rs + README metrics sync); resolves overseer 3476/3477 drift note — count was dirty-tree, HEAD now 3477."
+    },
     {
       "at": "2026-07-14T05:30:37.794Z",
       "task": "escrow-release-denial-state-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-07-02T17:47:04.067Z",
       "task": "status-budget-ledger-projection-preempt-env-doc-contract",
       "note": "Committed 78ab0a99 (feat(scripts): bind the budget projection/preempt doc to the daemon source), 2 files +239 = new agent-os/scripts/validat"
-    },
-    {
-      "at": "2026-07-02T17:25:22.339Z",
-      "task": "status-runtime-execution-required-check-promotion-deferred-t",
-      "note": "Committed 2f1f7d2a (feat(scripts): bind the gvisor live-runner doc to its test and CI command), 2 files +209 = new agent-os/scripts/validate"
     }
   ]
 }

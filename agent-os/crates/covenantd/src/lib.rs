@@ -65616,6 +65616,39 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn pay_x402_rejects_invalid_per_call_cap() {
+        // Capability, scope, and dispatch config all admit the call, but the
+        // per-call cap is not a decimal u128 ("1e6" is scientific notation),
+        // so the daemon must refuse before quoting a cap it cannot enforce.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_x402_dispatch(x402::X402Config {
+                enabled: true,
+                signer_binary: std::path::PathBuf::from("/bin/true"),
+                signer_env: vec![],
+            });
+        grant_action(&s, "x402.outbound.pay").await;
+        let resp = s
+            .op_respond(Request::PayX402 {
+                provider: "xona".into(),
+                endpoint: "https://example.test/endpoint".into(),
+                method: "POST".into(),
+                body: None,
+                network: "solana:mainnet".into(),
+                asset: "usdc-sol".into(),
+                per_call_cap: "1e6".into(),
+                credits: 8,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("invalid per_call_cap"),
+                "error must say 'invalid per_call_cap': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
     fn authorize_spend_req() -> Request {
         Request::AuthorizeSpend {
             provider: "orbserv".into(),
@@ -65668,6 +65701,34 @@ budget_credits_per_hour = {credits}
             Response::Error { message } => assert!(
                 message.contains("disabled"),
                 "error must clearly say 'disabled' so the operator knows to flip the flag: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_spend_rejects_invalid_per_call_cap() {
+        // Capability granted and the surface enabled, but the per-call cap is
+        // not a decimal u128 ("1e6" is scientific notation) — the daemon must
+        // refuse rather than authorize against a cap it cannot compare.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_action(&s, "wallet.spend.authorize").await;
+        let resp = s
+            .op_respond(Request::AuthorizeSpend {
+                provider: "orbserv".into(),
+                network: "eip155:8453".into(),
+                asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+                amount: "80000".into(),
+                per_call_cap: "1e6".into(),
+                credits: 8,
+                destination: Some("0xPayee".into()),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("invalid per_call_cap"),
+                "error must say 'invalid per_call_cap': {message}"
             ),
             other => panic!("expected Error, got: {other:?}"),
         }

@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-14T05:15:41.041Z",
+  "updatedAt": "2026-07-14T05:35:44.870Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12812,
+    "events": 12816,
     "tasks": 1502,
-    "integrated": 1503
+    "integrated": 1504
   },
   "throughput": {
-    "last24h": 10,
-    "last7d": 12,
-    "velocity": 1.7
+    "last24h": 11,
+    "last7d": 13,
+    "velocity": 1.9
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-14",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-14",
-      "total": 1503
+      "total": 1504
     }
   ],
   "states": {
-    "integrated": 1495,
+    "integrated": 1496,
     "proposed": 1,
-    "blocked": 5,
-    "in_progress": 1
+    "blocked": 5
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "escrow-release-denial-state-coverage",
-    "state": "in_progress",
-    "since": "2026-07-14T05:07:55.405Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-14T05:30:37.794Z",
+      "task": "escrow-release-denial-state-coverage",
+      "note": "Landed 1e927890 + PUSHED to origin/loop/main-track. 4 inline tests covering record_escrow_release cap/not-configured/disabled + prove_comple"
+    },
     {
       "at": "2026-07-14T04:29:00.675Z",
       "task": "reputation-read-denial-state-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-07-02T17:25:22.339Z",
       "task": "status-runtime-execution-required-check-promotion-deferred-t",
       "note": "Committed 2f1f7d2a (feat(scripts): bind the gvisor live-runner doc to its test and CI command), 2 files +209 = new agent-os/scripts/validate"
-    },
-    {
-      "at": "2026-07-02T17:17:39.487Z",
-      "task": "status-memory-store-backfill-mutator-landed-2026-05-17-scope",
-      "note": "Committed f1e98e4e (test(covenant): cover memory backfill plain-text dry-run render), 1 file +42/-2 = only agent-os/crates/covenantd/tests/l"
     }
   ]
 }

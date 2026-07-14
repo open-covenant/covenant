@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-14T00:54:04.615Z",
+  "updatedAt": "2026-07-14T01:14:08.304Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12797,
+    "events": 12800,
     "tasks": 1500,
     "integrated": 1501
   },
@@ -187,7 +187,7 @@
     "integrated": 1493,
     "proposed": 1,
     "blocked": 5,
-    "in_progress": 1
+    "validation": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "nix-head-flake-channel",
-    "state": "in_progress",
-    "since": "2026-07-14T00:46:00.323Z"
+    "state": "validation",
+    "since": "2026-07-14T01:14:07.824Z"
   },
   "recent": [
     {

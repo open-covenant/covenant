@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   sign-release-subject:
-    name: sign release subject manifest
+    name: sign release evidence
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -62,6 +62,12 @@ jobs:
             --pattern '*.tar.gz' \
             --pattern 'checksums.txt'
           ls -la
+
+      - name: Verify artifact checksums
+        working-directory: out
+        run: |
+          set -euo pipefail
+          sha256sum --ignore-missing --check checksums.txt
 
       - name: Generate release subject manifest
         env:
@@ -111,6 +117,9 @@ jobs:
                 commit,
                 artifacts,
               },
+              validation: [
+                { command: "sha256sum --ignore-missing --check checksums.txt", status: "passed" },
+              ],
             };
 
             writeFileSync("out/release-subject.json", JSON.stringify(subject, null, 2) + "\n");
@@ -118,12 +127,58 @@ jobs:
           '
           cat out/release-subject.json
 
+      - name: Fetch release evidence from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          path: evidence-main
+          persist-credentials: false
+          sparse-checkout: |
+            docs/provenance/release-scopes
+            docs/provenance/audit-reports
+
+      - name: Stage release evidence
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          SCOPE_SRC="evidence-main/docs/provenance/release-scopes/${TAG}.json"
+          REPORT_SRC="evidence-main/docs/provenance/audit-reports/${TAG}.json"
+          if [ ! -f "${SCOPE_SRC}" ]; then
+            echo "::error::docs/provenance/release-scopes/${TAG}.json is missing on main, so release-scope signing and audit-root signing are blocked. Generate the manifest with the release-scope tooling and commit it to main before pushing the tag (see docs/provenance/release-scopes/README.md)."
+            exit 1
+          fi
+          if [ ! -f "${REPORT_SRC}" ]; then
+            echo "::error::docs/provenance/audit-reports/${TAG}.json is missing on main, so audit-root signing is blocked. Capture 'covenant audit verify --json' output for this release and commit it to main before pushing the tag (see docs/provenance/audit-reports/README.md)."
+            exit 1
+          fi
+          cp "${SCOPE_SRC}" out/release-scope.json
+          cp "${REPORT_SRC}" out/audit-report.json
+
+      - name: Generate audit-root attestation
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+          COMMIT: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node agent-os/scripts/provenance.mjs audit-root write \
+            --report out/audit-report.json \
+            --release "${TAG}" \
+            --release-subject out/release-subject.json \
+            --release-scope out/release-scope.json \
+            --repository "${GITHUB_REPOSITORY}" \
+            --commit "${COMMIT}" \
+            --validation "sha256sum --ignore-missing --check checksums.txt=passed" \
+            --out out/audit-root.json
+          node agent-os/scripts/provenance.mjs audit-root verify --file out/audit-root.json
+          cat out/audit-root.json
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
         with:
           cosign-release: v2.4.1
 
-      - name: Sign release subject (keyless OIDC)
+      - name: Sign release evidence (keyless OIDC)
         working-directory: out
         env:
           COSIGN_EXPERIMENTAL: "1"
@@ -133,9 +188,17 @@ jobs:
             --output-signature release-subject.json.sig \
             --output-certificate release-subject.json.pem \
             release-subject.json
-          ls -la release-subject.json release-subject.json.sig release-subject.json.pem
+          cosign sign-blob --yes \
+            --output-signature release-scope.json.sig \
+            --output-certificate release-scope.json.pem \
+            release-scope.json
+          cosign sign-blob --yes \
+            --output-signature audit-root.json.sig \
+            --output-certificate audit-root.json.pem \
+            audit-root.json
+          ls -la release-subject.json* release-scope.json* audit-root.json*
 
-      - name: Upload signed release subject to release
+      - name: Upload signed release evidence to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.name }}
@@ -146,4 +209,10 @@ jobs:
             --clobber \
             out/release-subject.json \
             out/release-subject.json.sig \
-            out/release-subject.json.pem
+            out/release-subject.json.pem \
+            out/release-scope.json \
+            out/release-scope.json.sig \
+            out/release-scope.json.pem \
+            out/audit-root.json \
+            out/audit-root.json.sig \
+            out/audit-root.json.pem

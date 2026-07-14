@@ -55781,6 +55781,56 @@ required = {caps:?}
         }
     }
 
+    #[tokio::test]
+    async fn enroll_peer_rejects_invalid_display() {
+        let s = server_with(vec![], "");
+        // A display that already carries '@' skips the bare-label normalization
+        // to `<label>@peer`, so a malformed shape reaches validate_agent_id_display
+        // and is refused — enrollment can never write a capability row the store
+        // cannot deserialize.
+        let resp = s
+            .op_respond(Request::EnrollPeer {
+                display: "a@b@c".into(),
+                actions: vec![],
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("display must be a valid agent id"),
+                "malformed display must be refused: {message}"
+            ),
+            other => panic!("expected display rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn repair_a2a_task_rejects_unknown_task_id() {
+        let s = server_with(vec![], "");
+        grant_action(&s, "a2a.repair.requeue").await;
+        // The capability gate passes, but an empty mailbox has no entry matching
+        // a fresh task id, so the visibility lookup refuses the repair rather
+        // than acting on a task the peer cannot see.
+        let resp = s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: Uuid::new_v4(),
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id: None,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "probe".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("not visible to the authenticated peer"),
+                "unknown task must be refused: {message}"
+            ),
+            other => panic!("expected not-visible rejection, got {other:?}"),
+        }
+    }
+
     // The COVNT mint is environment-level; receipts carry no mint field, so a
     // mint-bound chain.receipts/chain.batches scope can only be enforced at the
     // gather stage. With COVNT_MINT unset in tests the gathered mint is "", which

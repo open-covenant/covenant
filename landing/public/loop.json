@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-14T06:35:56.506Z",
+  "updatedAt": "2026-07-14T06:56:00.300Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12823,
-    "tasks": 1503,
+    "events": 12826,
+    "tasks": 1504,
     "integrated": 1505
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1497,
     "proposed": 1,
-    "blocked": 5
+    "blocked": 5,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "extend-sign-release-artifacts-to-sign-scope-and-audit-root",
+    "state": "in_progress",
+    "since": "2026-07-14T06:46:03.046Z"
+  },
   "recent": [
     {
       "at": "2026-07-14T06:35:34.990Z",

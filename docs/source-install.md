@@ -75,6 +75,34 @@ node agent-os/scripts/source-install-rollback.mjs --prefix /tmp/covenant --apply
 
 Rollback verifies every backup digest before copying files back into place. Applied rollback writes local evidence under `share/covenant/rollback-reports/`. This is local source-install rollback, not package-manager rollback, signed release rollback, or public upgrade policy.
 
+## Homebrew (Head Formula)
+
+A HEAD-only Homebrew formula lives at `Formula/covenant.rb`. It builds the daemon and CLI from the `main` branch of this repository, so it is a Homebrew-wrapped source build, not a tagged release. There is no bottle, no checksum, and no signature: Homebrew clones the repo at HEAD and compiles locally.
+
+Install from a clone of this repository:
+
+```bash
+brew install --HEAD --formula Formula/covenant.rb
+```
+
+The formula builds `covenantd` and `covenant` with the same locked release profile as the source installer (`cargo build -p covenantd -p covenant --locked --release` from `agent-os/`) and links both binaries into the Homebrew prefix. It declares a build dependency on Homebrew's `rust`.
+
+Run the formula test:
+
+```bash
+brew test covenant
+```
+
+Run the daemon as a launchd service:
+
+```bash
+brew services start covenant
+```
+
+Under the service, the daemon reads its data directory from `COVENANT_HOME`, set to the Homebrew `var/covenant` directory. For manual runs, `COVENANT_HOME` defaults to `~/.covenant`.
+
+This is a convenience channel for tracking `main`. It is not a registered tap, ships no bottles, verifies no signatures, and is not bound to a release artifact. For a build pinned to a specific commit or a signed release, use the source install above or see [RELEASES.md](../RELEASES.md).
+
 ## Validation
 
 Run the public guard:

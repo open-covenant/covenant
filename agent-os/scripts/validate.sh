@@ -97,6 +97,7 @@ run node ./scripts/validate-capabilities-doc-effective-status.mjs
 run node ./scripts/validate-capabilities-doc-duplicate-risk.mjs
 run node ./scripts/validate-ipc-v2-migration-doc-fixtures.mjs
 run_local ./scripts/validate-autonomy-status-gaps.mjs
+run_local ./scripts/validate-release-provenance-readiness.mjs
 run node ./scripts/validate-chain-tx-test-line-refs.mjs
 run node ./scripts/validate-receipt-list-line-refs.mjs
 run node ./scripts/validate-receipt-onchain-fallback-line-refs.mjs

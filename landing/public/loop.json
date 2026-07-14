@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-14T16:18:50.171Z",
+  "updatedAt": "2026-07-14T16:38:53.997Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12835,
+    "events": 12840,
     "tasks": 1505,
-    "integrated": 1506
+    "integrated": 1507
   },
   "throughput": {
-    "last24h": 9,
-    "last7d": 15,
-    "velocity": 2.1
+    "last24h": 10,
+    "last7d": 16,
+    "velocity": 2.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-14",
-      "count": 5
+      "count": 6
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-14",
-      "total": 1506
+      "total": 1507
     }
   ],
   "states": {
-    "integrated": 1498,
+    "integrated": 1499,
     "proposed": 1,
-    "blocked": 5,
-    "in_progress": 1
+    "blocked": 5
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "status-autonomous-workflow-project-review-signing-key-custod",
-    "state": "in_progress",
-    "since": "2026-07-14T16:01:05.670Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-14T16:23:31.087Z",
+      "task": "status-autonomous-workflow-project-review-signing-key-custod",
+      "note": "Committed 47aa932a (validator registration) atop readiness-gate and rotation-doc commits on loop/main-track"
+    },
     {
       "at": "2026-07-14T07:05:32.461Z",
       "task": "extend-sign-release-artifacts-to-sign-scope-and-audit-root",
@@ -315,11 +315,6 @@
       "at": "2026-07-02T18:54:27.650Z",
       "task": "identity-base64url-noncanonical-trailing-bits-coverage",
       "note": "Committed 5fd301b9 (single-file surgical, +21 test-only) and pushed to origin/loop/main-track. Pins the base64url acc!=0 canonical-encoding "
-    },
-    {
-      "at": "2026-07-02T18:45:43.734Z",
-      "task": "capability-consume-uses-duplicate-signature-dedup-coverage",
-      "note": "Committed 7ad33e85 (single-file surgical, +111 test-only) and pushed to origin/loop/main-track (78ab0a99..7ad33e85). All push identity guard"
     }
   ]
 }

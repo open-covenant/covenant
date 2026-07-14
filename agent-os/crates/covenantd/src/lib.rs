@@ -18445,6 +18445,28 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn memory_purge_rejects_without_capability() {
+        // No memory.purge capability granted — the daemon must refuse the
+        // destructive purge rather than deleting records it was never
+        // authorised to touch. Sibling to memory_repair / memory_compaction
+        // denial; the scope and store-failure arms are covered separately.
+        let s = server_with(vec![], "");
+        let resp = s
+            .op_respond(Request::PurgeMemory {
+                tier: Some(MemoryTier::Working),
+                before_ms: 0,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("memory.purge"),
+                "error must name the required capability: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn memory_purge_accepts_matching_scope() {
         let s = server_with(vec![], "");
         let id = Uuid::new_v4();

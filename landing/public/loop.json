@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-14T04:15:30.340Z",
+  "updatedAt": "2026-07-14T04:35:33.828Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12802,
-    "tasks": 1500,
-    "integrated": 1502
+    "events": 12809,
+    "tasks": 1501,
+    "integrated": 1503
   },
   "throughput": {
-    "last24h": 9,
-    "last7d": 11,
-    "velocity": 1.6
+    "last24h": 10,
+    "last7d": 12,
+    "velocity": 1.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-14",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-14",
-      "total": 1502
+      "total": 1503
     }
   ],
   "states": {
-    "integrated": 1494,
+    "integrated": 1495,
     "proposed": 1,
     "blocked": 5
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-14T04:29:00.675Z",
+      "task": "reputation-read-denial-state-coverage",
+      "note": "Committing test coverage + metrics bump to loop/main-track."
+    },
     {
       "at": "2026-07-14T01:15:25.748Z",
       "task": "nix-head-flake-channel",
@@ -310,11 +315,6 @@
       "at": "2026-07-02T17:17:39.487Z",
       "task": "status-memory-store-backfill-mutator-landed-2026-05-17-scope",
       "note": "Committed f1e98e4e (test(covenant): cover memory backfill plain-text dry-run render), 1 file +42/-2 = only agent-os/crates/covenantd/tests/l"
-    },
-    {
-      "at": "2026-07-02T16:58:15.546Z",
-      "task": "status-mcp-tools-server-time-vendor-fixture-wired-adr-0009",
-      "note": "Committed 0127b6b8 (feat(scripts): guard mcp-server-time vendor fixture against its recorded tree hash), 2 files (+228): new agent-os/script"
     }
   ]
 }

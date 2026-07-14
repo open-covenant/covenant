@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-14T05:35:44.870Z",
+  "updatedAt": "2026-07-14T05:55:48.647Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12816,
-    "tasks": 1502,
+    "events": 12819,
+    "tasks": 1503,
     "integrated": 1504
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1496,
     "proposed": 1,
-    "blocked": 5
+    "blocked": 5,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "pay-x402-invalid-method-coverage",
+    "state": "in_progress",
+    "since": "2026-07-14T05:38:03.865Z"
+  },
   "recent": [
     {
       "at": "2026-07-14T05:30:37.794Z",

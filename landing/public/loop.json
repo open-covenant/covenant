@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-14T04:55:37.423Z",
+  "updatedAt": "2026-07-14T05:15:41.041Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12809,
-    "tasks": 1501,
+    "events": 12812,
+    "tasks": 1502,
     "integrated": 1503
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1495,
     "proposed": 1,
-    "blocked": 5
+    "blocked": 5,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "escrow-release-denial-state-coverage",
+    "state": "in_progress",
+    "since": "2026-07-14T05:07:55.405Z"
+  },
   "recent": [
     {
       "at": "2026-07-14T04:29:00.675Z",

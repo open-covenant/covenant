@@ -19168,6 +19168,63 @@ required = {caps:?}
         assert!(rollback_checkpoint_files(dir.path()).is_empty());
     }
 
+    #[tokio::test]
+    async fn settlement_backfill_rejects_non_operator_even_with_capability() {
+        let s = server_with(vec![], "");
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        s.respond(
+            Request::GrantCapability {
+                action: "settlement.backfill.dry_run".into(),
+                scope: None,
+                expires_at: None,
+            },
+            &guest,
+        )
+        .await;
+
+        let resp = s
+            .respond(
+                Request::BackfillSettlementReceipts {
+                    dry_run: true,
+                    scope_pubkey: None,
+                },
+                &guest,
+            )
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("operator identity"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_rejects_without_home_directory() {
+        let s = server_with(vec![], "");
+        s.op_respond(Request::GrantCapability {
+            action: "settlement.backfill.apply".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+
+        let resp = s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: false,
+                scope_pubkey: None,
+            })
+            .await;
+
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("no home directory configured"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     /// Seed one operator-owned memory record (no `metadata.receipt_id`) and
     /// one operator-paid legacy receipt (no `memory_record_id`) so the
     /// planner pairs them on owner==payer pubkey. Returns the memory id

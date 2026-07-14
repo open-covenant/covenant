@@ -49208,6 +49208,66 @@ required = {caps:?}
         }
     }
 
+    #[tokio::test]
+    async fn hyre_tool_rejects_without_x402_sidecar() {
+        let cfg = covenant_hyre::HyreConfig {
+            enabled: true,
+            base_url: "http://localhost:1".into(),
+            ..Default::default()
+        };
+        let catalog = covenant_hyre::HyreCatalog::from_vendored(&cfg).unwrap();
+        let s = server_with(vec![], "").with_hyre(hyre::HyreState::new(catalog, cfg));
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.hyre.defi.tvl".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "hyre.defi.tvl".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("funding-key sidecar"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn hyre_tool_rejects_unknown_tool_name() {
+        let cfg = covenant_hyre::HyreConfig {
+            enabled: true,
+            base_url: "http://localhost:1".into(),
+            ..Default::default()
+        };
+        let catalog = covenant_hyre::HyreCatalog::from_vendored(&cfg).unwrap();
+        let s = server_with(vec![], "")
+            .with_x402_dispatch(x402::X402Config::default())
+            .with_hyre(hyre::HyreState::new(catalog, cfg));
+        s.op_respond(Request::GrantCapability {
+            action: "tool.call.hyre.nonexistent".into(),
+            scope: None,
+            expires_at: None,
+        })
+        .await;
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "hyre.nonexistent".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("unknown hyre tool"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     /// Full Hyre path: capability gate → executor → 402-then-pay loop
     /// (against the live Hyre challenge shape) → budget debit +
     /// settlement receipt + audit event. The signer is a shell script

@@ -66512,6 +66512,43 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    #[tokio::test]
+    async fn settle_spend_is_idempotent_on_duplicate_decision() {
+        // A retried settlement (its success response was lost in transit) must
+        // rejoin the original receipt rather than writing a second SpendSettled
+        // row or debiting again. The handler surfaces the module's
+        // `settled_receipt_for` idempotency check as the same `SpendSettled`
+        // receipt_id on every replay — the spend-side mirror of the escrow
+        // release idempotency pinned in the end-to-end loop.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = server_with_audit_and_budget(audit.clone(), budget)
+            .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_action(&s, "wallet.spend.settle").await;
+
+        let first = match s.op_respond(settle_spend_req()).await {
+            Response::SpendSettled { receipt_id, .. } => receipt_id,
+            other => panic!("expected SpendSettled, got: {other:?}"),
+        };
+        let second = match s.op_respond(settle_spend_req()).await {
+            Response::SpendSettled { receipt_id, .. } => receipt_id,
+            other => panic!("expected SpendSettled on replay, got: {other:?}"),
+        };
+        assert_eq!(first, second, "replay must rejoin the original receipt id");
+
+        let settled = audit
+            .recent(16)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(&e.kind, covenant_audit::AuditKind::SpendSettled { .. }))
+            .count();
+        assert_eq!(
+            settled, 1,
+            "a replayed settlement must not write a second SpendSettled row"
+        );
+    }
+
     fn prove_completion_req(job_id: Uuid, worker_address: &str) -> Request {
         Request::ProveCompletion {
             escrow_id: "escrow_xyz".into(),

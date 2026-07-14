@@ -65582,6 +65582,40 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn pay_x402_rejects_invalid_http_method() {
+        // Capability, scope, and dispatch config all admit the call, but the
+        // requested HTTP method is not a valid method token (a space is not a
+        // token char), so the daemon must refuse before handing an unusable
+        // method to the funding-key sidecar.
+        let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
+            .with_x402_dispatch(x402::X402Config {
+                enabled: true,
+                signer_binary: std::path::PathBuf::from("/bin/true"),
+                signer_env: vec![],
+            });
+        grant_action(&s, "x402.outbound.pay").await;
+        let resp = s
+            .op_respond(Request::PayX402 {
+                provider: "xona".into(),
+                endpoint: "https://example.test/endpoint".into(),
+                method: "NOT A METHOD".into(),
+                body: None,
+                network: "solana:mainnet".into(),
+                asset: "usdc-sol".into(),
+                per_call_cap: "100000".into(),
+                credits: 8,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("invalid HTTP method"),
+                "error must say 'invalid HTTP method': {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+    }
+
     fn authorize_spend_req() -> Request {
         Request::AuthorizeSpend {
             provider: "orbserv".into(),

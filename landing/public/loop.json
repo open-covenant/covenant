@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-16T20:49:02.407Z",
+  "updatedAt": "2026-07-16T21:09:06.243Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12853,
+    "events": 12858,
     "tasks": 1508,
-    "integrated": 1508
+    "integrated": 1509
   },
   "throughput": {
-    "last24h": 1,
-    "last7d": 17,
-    "velocity": 2.4
+    "last24h": 2,
+    "last7d": 18,
+    "velocity": 2.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-16",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-16",
-      "total": 1508
+      "total": 1509
     }
   ],
   "states": {
-    "integrated": 1500,
+    "integrated": 1501,
     "proposed": 1,
-    "blocked": 6,
-    "in_progress": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "covenantd-budget-ledger-read-failure-arms",
-    "state": "in_progress",
-    "since": "2026-07-16T14:25:06.449Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-16T20:55:01.437Z",
+      "task": "covenantd-budget-ledger-read-failure-arms",
+      "note": "landed as 506d5aeb; overseer 2026-07-16T20:00Z reviewed range 09612f49..0fe3a97e CLEAN; syncing stale record"
+    },
     {
       "at": "2026-07-16T05:25:18.482Z",
       "task": "release-scope-review-signature-wiring",
@@ -315,11 +315,6 @@
       "at": "2026-07-02T23:53:07.935Z",
       "task": "metrics-guard-tracked-files-only",
       "note": "Committed as 58cd0463 (metrics.mjs + README.md together per task contract). Push follows with the session batch."
-    },
-    {
-      "at": "2026-07-02T23:46:59.267Z",
-      "task": "runtime-truncate-stderr-multibyte-boundary-coverage",
-      "note": "Committed as 4ede6c2a (1 file, +93): two tests pinning the is_char_boundary advance in truncate_stderr_for_diagnostics across 2-byte and 3-b"
     }
   ]
 }

@@ -64341,6 +64341,262 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    /// A minimal `acedata.*`-named [`covenant_mcp::Tool`] whose success result
+    /// carries the two-block shape `covenant_acedata::acedata_tools` emits (a
+    /// data block plus a provenance block), so a test can drive
+    /// [`Server::acedata_tool_call`]'s accounting wrap end to end without the
+    /// real API client. With `provenance: false` the second block is omitted,
+    /// exercising the path where nothing may be audited or billed.
+    struct FakeAceDataTool {
+        provenance: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_mcp::Tool for FakeAceDataTool {
+        fn name(&self) -> &str {
+            "acedata.image.generate"
+        }
+        fn description(&self) -> &str {
+            "acedata test double"
+        }
+        async fn call(
+            &self,
+            _arguments: serde_json::Value,
+        ) -> Result<covenant_mcp::ToolCallResult, covenant_mcp::ToolError> {
+            let mut content = vec![covenant_mcp::Content::json(
+                serde_json::json!({ "data": [{ "image_url": "https://cdn/x.png" }] }),
+            )];
+            if self.provenance {
+                content.push(covenant_mcp::Content::json(serde_json::json!({
+                    "provenance": {
+                        "provider": "acedata",
+                        "tool": "acedata.image.generate",
+                        "model": "flux-pro",
+                        "prompt_sha256": "a".repeat(64),
+                        "output_sha256": "b".repeat(64),
+                        "assets": ["https://cdn/x.png"],
+                        "task_id": "t-1"
+                    }
+                })));
+            }
+            Ok(covenant_mcp::ToolCallResult::ok(content))
+        }
+    }
+
+    fn server_with_acedata_tool(
+        settlement: Arc<dyn covenant_settlement::Settlement>,
+        provenance: bool,
+    ) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            settlement,
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![Arc::new(FakeAceDataTool {
+                provenance,
+            })])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
+    #[tokio::test]
+    async fn acedata_tool_call_records_provenance_audit_and_zero_cost_receipt() {
+        // acedata_tool_call is the sole writer binding an AceData generation
+        // into the audit and settlement ledgers (lib.rs:4760-4799): a
+        // successful provenance-bearing result must record the
+        // AceDataGeneration row verbatim from the provenance block and a
+        // zero-cost ResourceKind::Tool receipt against the caller — cost is 0
+        // until AceData returns per-call cost, but the receipt still binds
+        // who generated and when for the ledger view.
+        let server = server_with_acedata_tool(Arc::new(InMemorySettlement::new()), true);
+        grant_action(&server, "tool.call.acedata.image.generate").await;
+        match server
+            .op_respond(Request::CallTool {
+                name: "acedata.image.generate".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await
+        {
+            Response::ToolResult { is_error, content } => {
+                assert!(!is_error);
+                assert_eq!(
+                    content.len(),
+                    2,
+                    "the data and provenance blocks must pass through untouched"
+                );
+            }
+            other => panic!("expected Response::ToolResult, got {other:?}"),
+        }
+        let events = server.audit.recent(16).await.unwrap();
+        let generation = events
+            .iter()
+            .find(|e| matches!(e.kind, AuditKind::AceDataGeneration { .. }))
+            .expect("AceDataGeneration audit row present");
+        match &generation.kind {
+            AuditKind::AceDataGeneration {
+                agent_id,
+                tool,
+                model,
+                prompt_sha256,
+                output_sha256,
+                assets,
+                task_id,
+            } => {
+                assert_eq!(agent_id, "tool:acedata.image.generate");
+                assert_eq!(tool, "acedata.image.generate");
+                assert_eq!(model, "flux-pro");
+                assert_eq!(prompt_sha256, &"a".repeat(64));
+                assert_eq!(output_sha256, &"b".repeat(64));
+                assert_eq!(assets, &vec!["https://cdn/x.png".to_string()]);
+                assert_eq!(task_id.as_deref(), Some("t-1"));
+            }
+            other => panic!("unexpected audit kind: {other:?}"),
+        }
+        let receipts = server.settlement.recent(16).await.unwrap();
+        assert_eq!(receipts.len(), 1, "exactly one receipt per generation");
+        assert!(matches!(receipts[0].resource, ResourceKind::Tool));
+        assert_eq!(
+            receipts[0].credits_consumed, 0,
+            "cost stays 0 until AceData returns per-call cost",
+        );
+        assert_eq!(receipts[0].payer, server.identity.agent_id());
+        assert_eq!(receipts[0].memory_record_id, None);
+    }
+
+    #[tokio::test]
+    async fn acedata_tool_call_survives_settlement_record_failure() {
+        // lib.rs:4796-4798: the receipt write is warn-and-continue — a
+        // settlement outage must neither fail the tool call nor suppress the
+        // AceDataGeneration provenance row recorded just before it.
+        let server = server_with_acedata_tool(Arc::new(FailingRecordSettlement), true);
+        grant_action(&server, "tool.call.acedata.image.generate").await;
+        match server
+            .op_respond(Request::CallTool {
+                name: "acedata.image.generate".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await
+        {
+            Response::ToolResult { is_error, .. } => assert!(!is_error),
+            other => panic!("a failed receipt write must not fail the tool call, got {other:?}"),
+        }
+        let events = server.audit.recent(16).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::AceDataGeneration { .. })),
+            "the provenance row must persist when only the receipt write fails",
+        );
+    }
+
+    #[tokio::test]
+    async fn acedata_tool_call_without_provenance_records_no_receipt() {
+        // The whole accounting block is gated on extract_acedata_provenance
+        // (lib.rs:4760): a result the provider never attested must pass
+        // through with no AceDataGeneration row and no settlement receipt —
+        // otherwise the ledger would bill generations that carry no
+        // provenance to verify them against.
+        let server = server_with_acedata_tool(Arc::new(InMemorySettlement::new()), false);
+        grant_action(&server, "tool.call.acedata.image.generate").await;
+        match server
+            .op_respond(Request::CallTool {
+                name: "acedata.image.generate".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await
+        {
+            Response::ToolResult { is_error, .. } => assert!(!is_error),
+            other => panic!("expected Response::ToolResult, got {other:?}"),
+        }
+        let events = server.audit.recent(16).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::AceDataGeneration { .. })),
+            "no provenance row may be minted for a result the provider never attested",
+        );
+        let receipts = server.settlement.recent(16).await.unwrap();
+        assert!(
+            receipts.is_empty(),
+            "no receipt may be recorded without provenance: {receipts:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn acedata_tool_call_surfaces_error_for_unknown_tool() {
+        // The acedata.* branch carries its own tools.call Err passthrough
+        // (lib.rs:4806-4808), separate from the generic path's — a granted
+        // but unregistered acedata tool must surface "tool: {e}" rather than
+        // an empty success.
+        let server = server_with_acedata_tool(Arc::new(InMemorySettlement::new()), true);
+        grant_action(&server, "tool.call.acedata.missing").await;
+        match server
+            .op_respond(Request::CallTool {
+                name: "acedata.missing".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(message.contains("tool:"), "{message}");
+                assert!(message.contains("acedata.missing"), "{message}");
+            }
+            other => panic!("expected Response::Error for unknown tool, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn acedata_tool_call_rejects_model_outside_capability_allowlist() {
+        // lib.rs:4722: with an AceDataConfig present the call's model
+        // resolves via model_for (flux-pro for image.generate); a
+        // {"models": [...]} scope that excludes it must reject the call
+        // before the tool runs, record a CapabilityScopeRejected audit row,
+        // and record no receipt.
+        let server = server_with_acedata_tool(Arc::new(InMemorySettlement::new()), true)
+            .with_acedata(covenant_acedata::AceDataConfig::default());
+        grant_scoped_action(
+            &server,
+            "tool.call.acedata.image.generate",
+            serde_json::json!({ "version": 1, "models": ["chirp-v4"] }),
+        )
+        .await;
+        match server
+            .op_respond(Request::CallTool {
+                name: "acedata.image.generate".into(),
+                arguments: serde_json::json!({}),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("rejected by capability scope"),
+                    "{message}"
+                );
+                assert!(message.contains("flux-pro"), "{message}");
+            }
+            other => panic!("expected scope rejection, got {other:?}"),
+        }
+        let events = server.audit.recent(16).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::CapabilityScopeRejected { .. })),
+            "the rejection must land in the audit trail",
+        );
+        let receipts = server.settlement.recent(16).await.unwrap();
+        assert!(
+            receipts.is_empty(),
+            "no receipt may be recorded for a rejected call: {receipts:?}",
+        );
+    }
+
     /// A [`covenant_budget::BudgetLedger`] double whose read methods fail, so
     /// [`Server::verify_recent`] (via `recent_debits_all`) and
     /// [`Server::recent_debits`] (via `recent_debits`) reach their `budget: {e}`

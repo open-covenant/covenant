@@ -66041,6 +66041,116 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) that delegates
+    /// every method to a real [`InMemoryCapabilityStore`] except `consume_uses`,
+    /// which fails. Authorization (record/list_for_subject/is_revoked) still
+    /// resolves against the inner store, so a matched budgeted grant reaches the
+    /// usage-budget gate — and the gate's store fault is observable as a denial.
+    struct FailingConsumeCapabilityStore {
+        inner: covenant_permissions::InMemoryCapabilityStore,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingConsumeCapabilityStore {
+        async fn record(
+            &self,
+            signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            self.inner.record(signed).await
+        }
+        async fn revoke(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.revoke(signature).await
+        }
+        async fn is_revoked(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.is_revoked(signature).await
+        }
+        async fn list_for_subject(
+            &self,
+            subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            self.inner.list_for_subject(subject_pubkey).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            self.inner.recent(limit).await
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            self.inner.purge_revoked_older_than(before_ms).await
+        }
+        async fn consume_uses(
+            &self,
+            _requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            Err(covenant_permissions::PermissionError::Io(
+                std::io::Error::other("injected capability consume_uses failure"),
+            ))
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            self.inner.usage_snapshot().await
+        }
+    }
+
+    #[tokio::test]
+    async fn budgeted_action_denied_when_usage_ledger_consume_fails() {
+        // A budgeted memory.write grant authorizes the dispatch against a healthy
+        // store, so when the usage-budget store faults mid-check the only cause
+        // of denial is the consume fault. check_capabilities must refuse the
+        // invocation rather than authorize an unmetered use of a budgeted grant —
+        // the fail-closed contract every existing budget test leaves dead (they
+        // exercise consume_uses at the store/query layer, never through an
+        // enforced op against a faulting ledger).
+        let server = server_with_capabilities_dyn(Arc::new(FailingConsumeCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+        }));
+        let me = server.identity.agent_id();
+        let budgeted = sign_capability(
+            covenant_types::Capability {
+                subject: me.clone(),
+                action: "memory.write".into(),
+                scope: serde_json::json!({ "version": 1, "max_uses": 3 }),
+                granted_by: me.clone(),
+                expires_at: None,
+            },
+            server.identity.signing_key(),
+        );
+        server.capabilities.record(budgeted).await.unwrap();
+
+        match server
+            .op_respond(Request::SubmitIntent {
+                text: "echo while the usage ledger is down".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.starts_with("to send a task"),
+                "a usage-ledger fault must deny the budgeted action, got: {message}",
+            ),
+            other => panic!("a faulting usage ledger must fail closed, got {other:?}"),
+        }
+    }
+
     fn server_with_audit_and_budget(
         audit: Arc<covenant_audit::InMemoryAuditLog>,
         budget: Arc<covenant_budget::InMemoryLedger>,

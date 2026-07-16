@@ -57744,6 +57744,393 @@ required = {caps:?}
         }
     }
 
+    // DELEGATING double for the post_a2a_result durability arm: every method
+    // forwards to a real InMemoryMailbox so the seeded task's sender lookup,
+    // respond grant, and scope check all pass, but `send_result` itself
+    // fails — the last step of the handler, reachable only through the full
+    // grant-and-scope path FailingLookupTaskSenderMailbox stops short of.
+    struct FailingSendResultDelegatingMailbox {
+        inner: covenant_a2a::InMemoryMailbox,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingSendResultDelegatingMailbox {
+        async fn send_task(
+            &self,
+            task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            self.inner.send_task(task).await
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            self.inner.recv_task().await
+        }
+        async fn try_recv_task_for(
+            &self,
+            recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            self.inner.try_recv_task_for(recipient).await
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox send_result write failure",
+            )))
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            self.inner.recv_result().await
+        }
+        async fn try_recv_result_for(
+            &self,
+            peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            self.inner.try_recv_result_for(peer).await
+        }
+        async fn recent_tasks(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            self.inner.recent_tasks(limit).await
+        }
+        async fn task_queue(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            self.inner.task_queue(limit).await
+        }
+        async fn repair_task(
+            &self,
+            request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            self.inner.repair_task(request).await
+        }
+        async fn recent_results(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            self.inner.recent_results(limit).await
+        }
+        async fn lookup_task_sender(
+            &self,
+            task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            self.inner.lookup_task_sender(task_id).await
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            self.inner.compact().await
+        }
+    }
+
+    #[tokio::test]
+    async fn post_a2a_result_surfaces_error_when_mailbox_send_result_fails() {
+        // A result post whose mailbox cannot durably store the result must
+        // NOT be reported as Response::A2AResultPosted: the responder would
+        // believe the result is delivered while it was dropped, and the
+        // sender polls forever for a result that never lands. The seeded
+        // task's sender lookup, respond grant, and scope check all pass
+        // against the healthy inner store, so the only cause of the error
+        // is the send_result fault.
+        let server = server_with_mailbox_dyn(Arc::new(FailingSendResultDelegatingMailbox {
+            inner: covenant_a2a::InMemoryMailbox::new(),
+        }));
+        let task = loopback_a2a_task_for(&server);
+        server.mailbox.send_task(task.clone()).await.unwrap();
+        grant_action(&server, &format!("a2a.respond.{}", task.sender.display)).await;
+        let result =
+            covenant_a2a::A2ATaskResult::ok(task.id, vec![covenant_mcp::Content::text("done")]);
+        match server.op_respond(Request::PostA2AResult { result }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a result post whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox send_result write failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when send_result() fails, got {other:?}"),
+        }
+    }
+
+    // A Mailbox whose task_queue read succeeds (empty) so a2a_queue reaches
+    // its SECOND read, which fails. FailingMailboxReads can never reach the
+    // recent_results arm inside a2a_queue — its task_queue read bails first —
+    // so that arm is dead without a task_queue-healthy double. Every other
+    // method stays benign.
+    struct FailingRecentResultsMailbox;
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingRecentResultsMailbox {
+        async fn send_task(
+            &self,
+            _task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_task_for(
+            &self,
+            _recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_result_for(
+            &self,
+            _peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn recent_tasks(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn task_queue(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn recent_results(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox recent_results queue read failure",
+            )))
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_queue_surfaces_error_when_mailbox_recent_results_read_fails() {
+        // The queue dashboard reads task_queue first and recent_results
+        // second; a fault in the second read must bail to Response::Error,
+        // not serve a queue view with a silently empty results block — the
+        // operator would read "no results" from a store that cannot say.
+        // A2AQueue applies no capability gate and op_respond IS the
+        // operator, so the bail arm is reached with no grant.
+        let server = server_with_mailbox_dyn(Arc::new(FailingRecentResultsMailbox));
+        let resp = server
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a queue read whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox recent_results queue read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when recent_results() fails, got {other:?}"),
+        }
+    }
+
+    // DELEGATING double for the repair_task fault arms: seeding, leasing,
+    // visibility, the InFlight state check, and eligibility all resolve
+    // against the real inner store, but the repair write itself fails —
+    // serving both the operator repair bail and the auto-retry sweep's
+    // skip accounting.
+    struct FailingRepairDelegatingMailbox {
+        inner: covenant_a2a::InMemoryMailbox,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingRepairDelegatingMailbox {
+        async fn send_task(
+            &self,
+            task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            self.inner.send_task(task).await
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            self.inner.recv_task().await
+        }
+        async fn try_recv_task_for(
+            &self,
+            recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            self.inner.try_recv_task_for(recipient).await
+        }
+        async fn send_result(
+            &self,
+            result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            self.inner.send_result(result).await
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            self.inner.recv_result().await
+        }
+        async fn try_recv_result_for(
+            &self,
+            peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            self.inner.try_recv_result_for(peer).await
+        }
+        async fn recent_tasks(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            self.inner.recent_tasks(limit).await
+        }
+        async fn task_queue(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            self.inner.task_queue(limit).await
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox repair_task write failure",
+            )))
+        }
+        async fn recent_results(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            self.inner.recent_results(limit).await
+        }
+        async fn lookup_task_sender(
+            &self,
+            task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            self.inner.lookup_task_sender(task_id).await
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            self.inner.compact().await
+        }
+    }
+
+    #[tokio::test]
+    async fn repair_a2a_task_surfaces_error_when_mailbox_repair_fails() {
+        // An operator repair whose mailbox cannot apply the requeue must
+        // bail to Response::Error, not report Response::A2ARepaired: the
+        // operator would believe a stuck task was requeued while the lease
+        // is still wedged. Seeding, leasing, visibility, the InFlight state
+        // check, and the unscoped grant all pass against the healthy inner
+        // store, so the only cause of the error is the repair fault.
+        let server = server_with_mailbox_dyn(Arc::new(FailingRepairDelegatingMailbox {
+            inner: covenant_a2a::InMemoryMailbox::new(),
+        }));
+        grant_action(&server, "a2a.repair.requeue").await;
+        let task = loopback_a2a_task_for(&server);
+        server.mailbox.send_task(task.clone()).await.unwrap();
+        let _ = server.op_respond(Request::TryRecvA2ATask).await;
+        let resp = server
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id: None,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "requeue while the mailbox is down".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a repair whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox repair_task write failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when repair_task() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_a2a_stale_reports_missing_lease_skip_when_mailbox_repair_fails() {
+        // When a stale lease passes every eligibility and scope check but
+        // the requeue write itself fails, the sweep must account for the
+        // task as skipped (reported under the MissingLease reason), never
+        // as requeued and never by bailing the whole report — the operator
+        // sizing retry policy from the report must see the task was NOT
+        // requeued. Against a healthy mailbox this exact seeding requeues
+        // (the safe-idempotent auto-retry test proves it), so the empty
+        // requeued list plus the skip row pin the repair fault.
+        let server = server_with_mailbox_dyn(Arc::new(FailingRepairDelegatingMailbox {
+            inner: covenant_a2a::InMemoryMailbox::new(),
+        }));
+        grant_action(&server, "a2a.repair.requeue").await;
+        let mut task = loopback_a2a_task_for(&server);
+        task.idempotency = Some(covenant_a2a::A2AIdempotency::new(
+            covenant_a2a::A2ADuplicateSafety::Idempotent,
+            "stale-task",
+        ));
+        server.mailbox.send_task(task.clone()).await.unwrap();
+        let _ = server.op_respond(Request::TryRecvA2ATask).await;
+        let report = match server
+            .op_respond(Request::RetryA2AStale {
+                policy: covenant_a2a::A2AAutoRetryPolicy {
+                    enabled: true,
+                    min_lease_age_ms: 0,
+                    max_attempts: 3,
+                    max_requeues: 10,
+                    scan_limit: 10,
+                },
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => report,
+            other => panic!("expected A2AAutoRetried when repair_task() fails, got {other:?}"),
+        };
+        assert_eq!(report.considered, 1);
+        assert!(
+            report.requeued.is_empty(),
+            "a failed requeue write must not be reported as requeued",
+        );
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].task_id, task.id);
+        assert_eq!(
+            report.skipped[0].reason,
+            covenant_a2a::A2AAutoRetrySkipReason::MissingLease
+        );
+    }
+
     #[tokio::test]
     async fn recent_a2a_results_scrubs_when_lookup_returns_other_peer() {
         let s = server_with(vec![], "");

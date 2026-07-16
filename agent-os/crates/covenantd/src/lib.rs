@@ -63920,6 +63920,85 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`MemoryStore`] double whose `put` WRITE fails, so
+    /// [`Server::dispatch_intent_run`]'s memory-write branch reaches its
+    /// warn-and-continue arm (lib.rs:5380). The receipt write is gated on the
+    /// put succeeding, so a failed write must degrade softly — the intent
+    /// still succeeds — without charging `memory_write_credits` for a record
+    /// that never persisted. Every existing dispatch test constructs the
+    /// Server with an infallible-by-construction store, so the write Err arm
+    /// is dead without this injection.
+    struct FailingPutMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingPutMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory put failure",
+            )))
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(None)
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_intent_skips_settlement_receipt_when_memory_write_fails() {
+        // The memory-write branch records the ResourceKind::Memory receipt
+        // (charging memory_write_credits) only in the put-Ok arm
+        // (lib.rs:5380-5402); a failed write must not fail the intent AND
+        // must not charge the peer for a record that never persisted.
+        let server = server_with_memory_dyn(Arc::new(FailingPutMemoryStore));
+        grant_action(&server, "memory.write").await;
+        match server
+            .op_respond(Request::SubmitIntent {
+                text: "echo without a durable memory".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::IntentResult { status, .. } => assert_eq!(status, "ok"),
+            other => panic!("a failed memory write must not fail the intent, got {other:?}"),
+        }
+        let receipts = server.settlement.recent(16).await.unwrap();
+        assert!(
+            receipts.is_empty(),
+            "no settlement receipt may be recorded for a memory write that failed: {receipts:?}",
+        );
+    }
+
     /// A [`Settlement`] double whose `recent` read fails, so
     /// [`Server::recent_receipts`] and [`Server::receipt_batches`] reach their
     /// `settlement: {e}` bail arm while the other trait methods stay inert. The
@@ -64201,6 +64280,65 @@ budget_credits_per_hour = {credits}
                 panic!("expected Response::Error when mark_batch_confirmed() fails, got {other:?}")
             }
         }
+    }
+
+    /// A [`Settlement`] double whose `record` WRITE fails, so
+    /// [`Server::dispatch_intent_run`]'s receipt write reaches its
+    /// warn-and-continue arm (lib.rs:5399). The receipt write runs after the
+    /// memory record lands; a settlement outage must neither fail the intent
+    /// nor roll back the durable memory write. No existing settlement double
+    /// fails `record()` (`FailingSettlement` fails only `recent()`), so the
+    /// arm is dead without this injection.
+    struct FailingRecordSettlement;
+
+    #[async_trait::async_trait]
+    impl covenant_settlement::Settlement for FailingRecordSettlement {
+        async fn record(
+            &self,
+            _receipt: SettlementReceipt,
+        ) -> Result<(), covenant_settlement::SettlementError> {
+            Err(covenant_settlement::SettlementError::Io(
+                std::io::Error::other("injected settlement record write failure"),
+            ))
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<SettlementReceipt>, covenant_settlement::SettlementError> {
+            Ok(Vec::new())
+        }
+        async fn mark_batch_confirmed(
+            &self,
+            _receipt_ids: &[Uuid],
+            _confirmation: ChainConfirmation,
+        ) -> Result<u64, covenant_settlement::SettlementError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_intent_survives_settlement_record_failure() {
+        // lib.rs:5399: the receipt write is warn-and-continue — a settlement
+        // outage must not fail the intent, and the memory record written just
+        // before it must stay durable rather than be rolled back.
+        let server = server_with_settlement_dyn(Arc::new(FailingRecordSettlement));
+        grant_action(&server, "memory.write").await;
+        match server
+            .op_respond(Request::SubmitIntent {
+                text: "echo while settlement is down".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::IntentResult { status, .. } => assert_eq!(status, "ok"),
+            other => panic!("a failed receipt write must not fail the intent, got {other:?}"),
+        }
+        let records = server.memory.recent(None, 16).await.unwrap();
+        assert_eq!(
+            records.len(),
+            1,
+            "the memory record must persist when only the receipt write fails",
+        );
     }
 
     /// A [`covenant_budget::BudgetLedger`] double whose read methods fail, so

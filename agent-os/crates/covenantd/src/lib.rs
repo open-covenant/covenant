@@ -64690,6 +64690,69 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn verify_recent_surfaces_error_when_audit_log_recent_fails() {
+        // verify_recent samples the audit trail via self.audit.recent before
+        // any check runs; a failing read must surface rather than let the
+        // reconciliation walk run against a truncated audit view, which would
+        // report clean checks over evidence it never saw.
+        let server = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("audit:"), "{message}");
+                assert!(
+                    message.contains("injected audit write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}"
+                );
+            }
+            other => panic!("expected Response::Error when audit recent() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_recent_surfaces_error_when_settlement_store_recent_fails() {
+        // verify_recent samples receipts via self.settlement.recent before any
+        // check runs; a failing read must surface rather than let the
+        // reconciliation walk treat missing receipts as genuinely absent,
+        // which would misreport dispatch/settlement joins as orphaned.
+        let server = server_with_settlement_dyn(Arc::new(FailingSettlement));
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("settlement:"), "{message}");
+                assert!(
+                    message.contains("injected settlement recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}"
+                );
+            }
+            other => {
+                panic!("expected Response::Error when settlement recent() fails, got {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_recent_surfaces_error_when_capability_store_recent_fails() {
+        // verify_recent samples the capability ledger via
+        // self.capabilities.recent before any check runs; a failing read must
+        // surface under the "capabilities:" prefix this fetch owns (distinct
+        // from recent_capabilities' "permissions:") rather than let the
+        // capability checks run against an empty ledger.
+        let server = server_with_capabilities_dyn(Arc::new(FailingRecentCapabilityStore));
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("capabilities:"), "{message}");
+                assert!(
+                    message.contains("injected capability recent read failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}"
+                );
+            }
+            other => {
+                panic!("expected Response::Error when capability recent() fails, got {other:?}")
+            }
+        }
+    }
+
     #[tokio::test]
     async fn recent_debits_surfaces_error_when_budget_ledger_recent_debits_fails() {
         // A recent_debits fan-out whose budget ledger cannot read its debit log

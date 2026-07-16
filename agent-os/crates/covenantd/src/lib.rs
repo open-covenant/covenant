@@ -57464,6 +57464,103 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn retry_a2a_stale_surfaces_error_when_mailbox_task_queue_read_fails() {
+        // A stale-retry scan whose mailbox cannot read the task queue must NOT
+        // be reported as a clean Response::A2AAutoRetried over zero entries:
+        // the operator would believe the sweep ran and found nothing while a
+        // durability fault hid every stale lease. The default policy is
+        // disabled, which skips the a2a.repair.requeue capability gate but
+        // still runs the scan, so the task_queue bail arm is reached with no
+        // grant; op_respond IS the operator, so the identity gate passes.
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        let resp = server
+            .op_respond(Request::RetryA2AStale {
+                policy: covenant_a2a::A2AAutoRetryPolicy::default(),
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a stale-retry scan whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox task_queue read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when task_queue() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn repair_a2a_task_surfaces_error_when_mailbox_task_queue_read_fails() {
+        // An a2a repair whose mailbox cannot read the task queue must surface
+        // the read failure, not fall through to an unknown-task verdict: both
+        // outcomes are Response::Error, so the assertion pins the injected
+        // cause — a fail-open mutant that treats the failed read as an empty
+        // queue reports the task as not visible instead. The bail sits before
+        // the visibility lookup, so no task seeding is needed; only the
+        // a2a.repair.requeue grant clears the capability gate
+        // (server_with_mailbox_dyn keeps the real capability store).
+        let server = server_with_mailbox_dyn(Arc::new(FailingMailboxReads));
+        grant_action(&server, "a2a.repair.requeue").await;
+        let resp = server
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: Uuid::new_v4(),
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id: None,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "repair while the mailbox is down".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "an a2a repair whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox task_queue read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when task_queue() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_a2a_task_surfaces_error_when_mailbox_enqueue_fails() {
+        // A local a2a send whose mailbox enqueue fails must NOT be reported as
+        // Response::A2ATaskQueued: the sender would believe the task is
+        // durably queued while it was dropped. The loopback task clears the
+        // send capability gate exactly as the round-trip test does, so the
+        // only cause of the error is the enqueue fault. (The cross-host
+        // admission path has its own send_task site and test; this pins the
+        // local SendA2ATask arm.)
+        let server = server_with_mailbox_dyn(Arc::new(EnqueueFailingMailbox));
+        let task = loopback_a2a_task_for(&server);
+        grant_action(&server, &format!("a2a.send.{}", task.recipient.display)).await;
+        let resp = server.op_respond(Request::SendA2ATask { task }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "an a2a send whose mailbox enqueue fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox enqueue (send_task) write failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when send_task() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn recent_a2a_tasks_visible_when_peer_is_sender() {
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();

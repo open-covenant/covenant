@@ -62527,6 +62527,74 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dispatch_intent_succeeds_when_audit_record_fails() {
+        // IntentDispatched is a routine (non-must-record) kind: it persists
+        // through record_peer_event, whose write-failure arm warns and
+        // continues (lib.rs:2351). An audit outage must degrade to a lost
+        // trail row — the intent still succeeds and the memory write and
+        // settlement receipt still land — unlike the must-record kinds
+        // above, which bail. Every existing dispatch test runs against an
+        // infallible audit log, so the soft arm's caller-level contract is
+        // otherwise unpinned.
+        let server = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        grant_action(&server, "memory.write").await;
+        match server
+            .op_respond(Request::SubmitIntent {
+                text: "echo while the audit log is down".into(),
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::IntentResult { status, .. } => assert_eq!(status, "ok"),
+            other => panic!("an audit outage must not fail a routine intent, got {other:?}"),
+        }
+        let records = server.memory.recent(None, 16).await.unwrap();
+        assert_eq!(
+            records.len(),
+            1,
+            "the memory write must land even when its audit row cannot persist",
+        );
+        let receipts = server.settlement.recent(16).await.unwrap();
+        assert!(
+            !receipts.is_empty(),
+            "the settlement receipt must land even when its audit row cannot persist",
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a2a_auto_retry_scheduler_survives_audit_record_failure() {
+        // A2AAutoRetrySchedulerScan is the sole kind persisted through
+        // record_daemon_event, whose write-failure arm warns and continues
+        // (lib.rs:2411). The scan row is observability, not an enforcement
+        // action: a pass whose row cannot persist must still return its
+        // report rather than wedge the retry scheduler. Every existing
+        // scheduler test runs against an infallible audit log, so the
+        // daemon-issuer soft arm is dead without this injection.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        grant_action(&s, "a2a.repair.requeue").await;
+        match s
+            .run_a2a_auto_retry_scheduler_once(covenant_a2a::A2AAutoRetryPolicy {
+                enabled: true,
+                min_lease_age_ms: 0,
+                max_attempts: 3,
+                max_requeues: 1,
+                scan_limit: 10,
+            })
+            .await
+        {
+            Response::A2AAutoRetried { report } => {
+                assert_eq!(
+                    report.considered, 0,
+                    "an empty queue scans clean even when the scan row cannot persist",
+                );
+            }
+            other => panic!("an audit outage must not fail the scheduler scan, got {other:?}"),
+        }
+    }
+
     /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) whose
     /// `record` fails, for exercising the bail arm of
     /// [`Server::grant_capability`] when the capability row cannot persist.

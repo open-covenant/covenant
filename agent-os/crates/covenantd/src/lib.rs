@@ -66334,6 +66334,472 @@ budget_credits_per_hour = {credits}
         );
     }
 
+    /// A [`covenant_budget::BudgetLedger`] double whose `would_exceed` read
+    /// fails, so [`Server::run_projection_tick_iteration`] reaches its
+    /// generic-Err warn-skip arm (lib.rs:1984) via [`Server::projection_decision`]'s
+    /// `would_exceed` propagation (lib.rs:2039). No existing double fails
+    /// would_exceed (FailingBudgetReads fails only the recent_debits reads),
+    /// so the arm is dead without this injection.
+    struct FailingWouldExceedBudget;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingWouldExceedBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget would_exceed read failure",
+            )))
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    /// Like [`FailingWouldExceedBudget`] but the failure sits on
+    /// `debit_rate_since`, so [`Server::projection_decision`]'s linear-leg
+    /// rate read (lib.rs:2050) surfaces the Err. `would_exceed` stays Ok(false)
+    /// so the decision gets past the exhaustion leg; under NoExtrapolation the
+    /// rate signal is never consulted and the same double must return Ok(false).
+    struct FailingRateSignalBudget;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingRateSignalBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget debit_rate_since read failure",
+            )))
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    /// Like [`FailingWouldExceedBudget`] but the failure sits on
+    /// `tokens_remaining`, reaching two distinct dead arms: the linear-leg
+    /// remaining read in [`Server::projection_decision`] (lib.rs:2052, after a
+    /// SUCCESSFUL rate-signal read) and the post-debit warn-and-continue arm
+    /// in [`Server::dispatch_intent_run`] (lib.rs:5227) — the latter needs
+    /// try_debit Ok + tokens_remaining Err simultaneously, a combination no
+    /// existing double provides.
+    struct FailingTokenReadBudget;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingTokenReadBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget tokens_remaining read failure",
+            )))
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    /// Like [`FailingWouldExceedBudget`] but the failure sits on
+    /// `set_capacity`, so [`Server::register_agent_budgets`]'s map_err arm
+    /// (lib.rs:1863) builds a live [`BudgetSeedError`] naming the card whose
+    /// seed failed. budget_seed_error_display_message_and_source_delegation_pin
+    /// covers the Display shape by direct construction only; without this
+    /// injection the production wrap (agent attribution + halt) is dead.
+    struct FailingSetCapacityBudget;
+
+    #[async_trait::async_trait]
+    impl covenant_budget::BudgetLedger for FailingSetCapacityBudget {
+        async fn set_capacity(
+            &self,
+            _agent: &AgentId,
+            _credits_per_hour: u64,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Err(covenant_budget::BudgetError::Io(std::io::Error::other(
+                "injected budget set_capacity write failure",
+            )))
+        }
+        async fn try_debit(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+            _paired_receipt: Uuid,
+        ) -> Result<(), covenant_budget::BudgetError> {
+            Ok(())
+        }
+        async fn would_exceed(
+            &self,
+            _agent: &AgentId,
+            _credits: u64,
+        ) -> Result<bool, covenant_budget::BudgetError> {
+            Ok(false)
+        }
+        async fn tokens_remaining(
+            &self,
+            _agent: &AgentId,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+        async fn recent_debits(
+            &self,
+            _agent: &AgentId,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn recent_debits_all(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_budget::BudgetDebit>, covenant_budget::BudgetError> {
+            Ok(vec![])
+        }
+        async fn debit_rate_since(
+            &self,
+            _agent: &AgentId,
+            _since_ms: u64,
+            _now_ms: u64,
+        ) -> Result<covenant_budget::DebitRateSignal, covenant_budget::BudgetError> {
+            Ok(covenant_budget::DebitRateSignal {
+                current_debit: 0,
+                observation_window_ms: 0,
+                observed_debit_samples: 0,
+            })
+        }
+        async fn compact_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_budget::BudgetError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn projection_tick_skips_entry_when_budget_lookup_fails() {
+        // A budget backend outage during the tick must SKIP the entry until
+        // the next tick (lib.rs:1984 warn-and-continue), not preempt it: the
+        // in-flight subprocess is healthy, only the ledger is unreadable.
+        // Routing the generic Err to the preempt path would kill legitimate
+        // work on every ledger hiccup. Setup mirrors the NoCapacity skip test
+        // (sentinel pid 2_000_000: under correct behavior the pid is never
+        // read; a mutation routing Err to preempt yields ESRCH ->
+        // BudgetPreempted { signal_sent: "none" } which the audit assert
+        // catches).
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let mut server = server_with_audit_and_budget(
+            audit.clone(),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        );
+        server.budget = Arc::new(FailingWouldExceedBudget);
+
+        let intent_id = Uuid::new_v4();
+        server.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "lookupfails".into(),
+                pid: 2_000_000,
+                started_at_ms: epoch_ms(),
+            },
+        );
+
+        let count = server
+            .run_projection_tick_iteration(
+                std::time::Duration::from_millis(100),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
+            .await;
+
+        assert_eq!(
+            count, 0,
+            "a budget lookup failure must skip the entry, not preempt it; got {count}",
+        );
+        let events = audit.recent(8).await.expect("audit recent must succeed");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::BudgetPreempted { .. })),
+            "a lookup-failure skip must not emit BudgetPreempted; got {events:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_decision_surfaces_rate_signal_read_failure() {
+        // The linear leg's debit_rate_since read (lib.rs:2050) propagates its
+        // Err to the tick's skip arm rather than silently deciding from a
+        // half-read signal. Under NoExtrapolation the same double must return
+        // Ok(false): the default never consults the rate signal, so a failure
+        // confined to it cannot affect the default policy.
+        let server = server_with_budget(Arc::new(FailingRateSignalBudget));
+        let agent = agent_id_for_card_id("ratefail");
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 1,
+        };
+        let err = server
+            .projection_decision(&agent, epoch_ms().saturating_sub(10_000), policy)
+            .await
+            .expect_err(
+                "a failed rate-signal read must surface, not decide from a half-read signal",
+            );
+        assert!(
+            err.to_string()
+                .contains("injected budget debit_rate_since read failure"),
+            "the surfaced error must carry the ledger's cause for triage, got: {err}",
+        );
+
+        let preempt = server
+            .projection_decision(
+                &agent,
+                epoch_ms().saturating_sub(10_000),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            )
+            .await
+            .expect("NoExtrapolation never reads the rate signal, so the same double must succeed");
+        assert!(
+            !preempt,
+            "would_exceed is Ok(false), so the default policy must not preempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn projection_decision_surfaces_tokens_remaining_read_failure() {
+        // The linear leg reads the rate signal (Ok on this double) BEFORE
+        // tokens_remaining (lib.rs:2052), so the Err surfacing here proves the
+        // second read's propagation specifically — a swallowed remaining-read
+        // failure would extrapolate against a stale or default remaining.
+        let server = server_with_budget(Arc::new(FailingTokenReadBudget));
+        let agent = agent_id_for_card_id("tokenreadfails");
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 1,
+        };
+        let err = server
+            .projection_decision(&agent, epoch_ms().saturating_sub(10_000), policy)
+            .await
+            .expect_err("a failed tokens_remaining read must surface, not extrapolate blind");
+        assert!(
+            err.to_string()
+                .contains("injected budget tokens_remaining read failure"),
+            "the surfaced error must carry the ledger's cause for triage, got: {err}",
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_survives_token_read_failure_after_debit() {
+        // The debit landed; only the post-debit tokens_remaining read for the
+        // pause checkpoint failed (lib.rs:5227 warn-and-continue, defaulting
+        // to 0). Failing the intent here would charge the peer (the debit is
+        // not rolled back) and return an error for work the runner completed —
+        // the read failure must degrade softly to the runner's result. Setup
+        // mirrors budget_write_failure_try_debit with the budget swapped to
+        // the token-read-failing double (try_debit Ok, no
+        // register_agent_budgets needed).
+        let mut s = server_with(
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
+            "mocked summary",
+        );
+        s.budget = Arc::new(FailingTokenReadBudget);
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        let resp = s
+            .op_respond(Request::SubmitIntent {
+                text: "find recent papers on agent memory".into(),
+                prefer_stream: None,
+            })
+            .await;
+        match resp {
+            Response::IntentResult { text, .. } => assert_eq!(text, "mocked summary"),
+            other => panic!(
+                "a tokens_remaining read failure after a successful debit must not fail the dispatch, got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn register_agent_budgets_names_failing_agent_on_seed_error() {
+        // The seed loop's map_err arm (lib.rs:1863) must attribute the
+        // failure to the card whose set_capacity failed and halt — the
+        // Display-shape test constructs BudgetSeedError directly, so without
+        // this the live wrap (agent_id from card.id, source preserved) is
+        // never exercised.
+        let mut s = server_with(
+            vec![stub_card_with_budget(
+                "research",
+                vec!["tool.web_search"],
+                10,
+            )],
+            "mocked summary",
+        );
+        s.budget = Arc::new(FailingSetCapacityBudget);
+        let err = s
+            .register_agent_budgets()
+            .await
+            .expect_err("a set_capacity failure must halt seeding, not report a clean boot");
+        assert_eq!(
+            err.agent_id, "research",
+            "the seed error must name the card whose bucket failed to seed",
+        );
+        assert!(
+            err.to_string()
+                .contains("injected budget set_capacity write failure"),
+            "the surfaced error must carry the ledger's cause for triage, got: {err}",
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn projection_tick_iteration_linear_preempts_real_subprocess() {

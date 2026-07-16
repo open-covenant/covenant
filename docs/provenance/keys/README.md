@@ -23,9 +23,9 @@ The first pin restricts to GitHub Actions OIDC. The second pin restricts to work
 | `covenant.provenance.release.v1` release subject manifests | Every release tag push | [.github/workflows/sign-release-artifacts.yml](../../../.github/workflows/sign-release-artifacts.yml) |
 | `covenant.release-scope.v1` release-scope manifests | Every release publication | [.github/workflows/sign-release-artifacts.yml](../../../.github/workflows/sign-release-artifacts.yml) |
 | `covenant.audit-root-attestation.v1` audit-root attestations | Every release publication | [.github/workflows/sign-release-artifacts.yml](../../../.github/workflows/sign-release-artifacts.yml) |
-| `covenant.autonomy-review-signature.v1` review artifacts for release-scope tasks | Release tag push (follow-up workflow) | _planned_ |
+| `covenant.autonomy-review-signature.v1` review artifacts for release-scope tasks | Release publication (release-scope-tagged tasks only) | [.github/workflows/sign-release-artifacts.yml](../../../.github/workflows/sign-release-artifacts.yml) |
 
-Routine autonomy review artifacts produced outside a named release scope stay unsigned. Their durable evidence is the `covenant.autonomy-review-artifact.v1` envelope plus the transition event chain — no signature.
+Routine autonomy review artifacts produced outside a named release scope stay unsigned. Their durable evidence is the `covenant.autonomy-review-artifact.v1` envelope plus the transition event chain — no signature. Release-scope payloads are staged from [docs/provenance/review-artifacts/](../review-artifacts/README.md), one `<tag>/` directory per release.
 
 ## Verification
 

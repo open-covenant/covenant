@@ -136,8 +136,10 @@ jobs:
           sparse-checkout: |
             docs/provenance/release-scopes
             docs/provenance/audit-reports
+            docs/provenance/review-artifacts
 
       - name: Stage release evidence
+        id: stage
         env:
           TAG: ${{ steps.tag.outputs.name }}
         run: |
@@ -154,6 +156,32 @@ jobs:
           fi
           cp "${SCOPE_SRC}" out/release-scope.json
           cp "${REPORT_SRC}" out/audit-report.json
+          REVIEWS_SRC="evidence-main/docs/provenance/review-artifacts/${TAG}"
+          mkdir -p out/review-artifacts
+          REVIEW_COUNT=0
+          if [ -d "${REVIEWS_SRC}" ]; then
+            for f in "${REVIEWS_SRC}"/*; do
+              [ -e "$f" ] || continue
+              base=$(basename "$f")
+              case "$base" in
+                *.review.v1.json) ;;
+                *)
+                  echo "::error::unexpected file in docs/provenance/review-artifacts/${TAG}/: ${base} — only <task-id>.review.v1.json payloads may be staged for signing (see docs/provenance/review-artifacts/README.md)"
+                  exit 1
+                  ;;
+              esac
+              if ! jq -e '(.schema == "covenant.autonomy-review-signature.v1") or (.signing.schema == "covenant.autonomy-review-signature.v1")' "$f" > /dev/null; then
+                echo "::error::${base} does not carry the covenant.autonomy-review-signature.v1 schema marker, so it is not a release-scope review payload"
+                exit 1
+              fi
+              cp "$f" "out/review-artifacts/${base}"
+              REVIEW_COUNT=$((REVIEW_COUNT + 1))
+            done
+          fi
+          if [ "${REVIEW_COUNT}" -eq 0 ]; then
+            echo "::notice::no covenant.autonomy-review-signature.v1 payloads staged for ${TAG}; this release ships without signed review artifacts (only release-scope-tagged review artifacts are signed)"
+          fi
+          echo "review_artifact_count=${REVIEW_COUNT}" >> "$GITHUB_OUTPUT"
 
       - name: Generate audit-root attestation
         env:
@@ -196,12 +224,21 @@ jobs:
             --output-signature audit-root.json.sig \
             --output-certificate audit-root.json.pem \
             audit-root.json
+          for f in review-artifacts/*.review.v1.json; do
+            [ -e "$f" ] || continue
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
           ls -la release-subject.json* release-scope.json* audit-root.json*
+          ls -la review-artifacts/
 
       - name: Upload signed release evidence to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.name }}
+          REVIEW_COUNT: ${{ steps.stage.outputs.review_artifact_count }}
         run: |
           set -euo pipefail
           gh release upload "${TAG}" \
@@ -216,3 +253,12 @@ jobs:
             out/audit-root.json \
             out/audit-root.json.sig \
             out/audit-root.json.pem
+          if compgen -G "out/review-artifacts/*.review.v1.json" > /dev/null; then
+            gh release upload "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber \
+              out/review-artifacts/*.review.v1.json \
+              out/review-artifacts/*.review.v1.json.sig \
+              out/review-artifacts/*.review.v1.json.pem
+          fi
+          echo "signed review artifacts for ${TAG}: ${REVIEW_COUNT}" >> "$GITHUB_STEP_SUMMARY"

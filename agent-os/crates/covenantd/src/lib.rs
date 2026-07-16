@@ -57812,6 +57812,180 @@ required = {caps:?}
         }
     }
 
+    // DELEGATING double for the result-join drop arms: every method forwards
+    // to a real InMemoryMailbox so a seeded task and result are found by the
+    // recent_a2a_results / a2a_queue reads, but `lookup_task_sender` itself
+    // fails. The seeded task is operator-sent, so against a healthy mailbox
+    // its result row IS visible — the only cause of absence is the lookup
+    // fault.
+    struct FailingLookupDelegatingMailbox {
+        inner: covenant_a2a::InMemoryMailbox,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingLookupDelegatingMailbox {
+        async fn send_task(
+            &self,
+            task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            self.inner.send_task(task).await
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            self.inner.recv_task().await
+        }
+        async fn try_recv_task_for(
+            &self,
+            recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            self.inner.try_recv_task_for(recipient).await
+        }
+        async fn send_result(
+            &self,
+            result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            self.inner.send_result(result).await
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            self.inner.recv_result().await
+        }
+        async fn try_recv_result_for(
+            &self,
+            peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            self.inner.try_recv_result_for(peer).await
+        }
+        async fn recent_tasks(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            self.inner.recent_tasks(limit).await
+        }
+        async fn task_queue(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            self.inner.task_queue(limit).await
+        }
+        async fn repair_task(
+            &self,
+            request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            self.inner.repair_task(request).await
+        }
+        async fn recent_results(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            self.inner.recent_results(limit).await
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox lookup_task_sender join failure",
+            )))
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            self.inner.compact().await
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_a2a_results_drops_row_when_lookup_task_sender_fails() {
+        // The recent_a2a_results join resolves each row's original sender via
+        // Mailbox::lookup_task_sender; an Err there must DROP the row and
+        // warn, never push it — the operator dashboard prefers a missing row
+        // over a leaked one — and never bail the whole read. The row would be
+        // visible against a healthy mailbox (the operator sent the task), so
+        // absence pins the lookup fault: a fail-open mutant that pushes on
+        // Err leaks the row, and a bail mutant loses the A2AResults variant.
+        // Both blanket read doubles return Ok(vec![]) for recent_results, so
+        // this arm is dead without a delegating double.
+        let server = server_with_mailbox_dyn(Arc::new(FailingLookupDelegatingMailbox {
+            inner: covenant_a2a::InMemoryMailbox::new(),
+        }));
+        let me = server.identity.agent_id();
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: me.clone(),
+            recipient: AgentId::new("bob@local", [8u8; 32]),
+            intent_text: "operator-task".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        server.mailbox.send_task(task.clone()).await.unwrap();
+        let result = covenant_a2a::A2ATaskResult::ok(
+            task.id,
+            vec![covenant_mcp::Content::text("operator-result")],
+        );
+        server.mailbox.send_result(result).await.unwrap();
+
+        match server
+            .op_respond(Request::RecentA2AResults { limit: 100 })
+            .await
+        {
+            Response::A2AResults { results } => assert!(
+                results.is_empty(),
+                "a result row whose sender lookup fails must drop, not leak: {results:?}",
+            ),
+            other => panic!("expected a drop-not-bail A2AResults, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_queue_drops_result_row_when_lookup_task_sender_fails() {
+        // a2a_queue joins its results block through the same
+        // Mailbox::lookup_task_sender resolution, with its own drop-and-warn
+        // arm. The seeded task rides the same response — task_queue delegates
+        // to the healthy inner store and the operator sent it — so the tasks
+        // block proves the handler ran past both reads while the results
+        // block pins the drop: a fail-open mutant that pushes on Err leaks
+        // the row here too, and a bail mutant loses the A2AQueue variant.
+        let server = server_with_mailbox_dyn(Arc::new(FailingLookupDelegatingMailbox {
+            inner: covenant_a2a::InMemoryMailbox::new(),
+        }));
+        let me = server.identity.agent_id();
+        let task = covenant_a2a::A2ATask {
+            id: Uuid::new_v4(),
+            sender: me.clone(),
+            recipient: AgentId::new("bob@local", [8u8; 32]),
+            intent_text: "operator-task".into(),
+            task_kind: None,
+            parent: None,
+            deadline_ms: None,
+            idempotency: None,
+        };
+        server.mailbox.send_task(task.clone()).await.unwrap();
+        let result = covenant_a2a::A2ATaskResult::ok(
+            task.id,
+            vec![covenant_mcp::Content::text("operator-result")],
+        );
+        server.mailbox.send_result(result).await.unwrap();
+
+        let resp = server
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await;
+        match resp {
+            Response::A2AQueue { tasks, results } => {
+                assert_eq!(tasks.len(), 1, "the seeded queued task must stay visible");
+                assert_eq!(tasks[0].task.id, task.id);
+                assert!(
+                    results.is_empty(),
+                    "a result row whose sender lookup fails must drop, not leak: {results:?}",
+                );
+            }
+            other => panic!("expected a drop-not-bail A2AQueue, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn ignore_check_returns_matched_pattern() {
         let ignore = IgnoreSet::parse("**/*.pem\n");

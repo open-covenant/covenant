@@ -18380,6 +18380,78 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn memory_repair_rejects_unknown_record_id() {
+        // The capability gate passes, but no record with the fresh id exists,
+        // so the lookup's Ok(None) arm refuses the repair before any scope
+        // evaluation or store write can act on a phantom record.
+        let s = server_with(vec![], "");
+        grant_action(&s, "memory.repair.dry_run").await;
+        let id = Uuid::new_v4();
+        let resp = s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: None,
+                    },
+                    reason: "probe".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("not found") && message.contains(&id.to_string()),
+                "unknown record must be refused: {message}"
+            ),
+            other => panic!("expected not-found rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_repair_rejects_record_owned_by_other_peer() {
+        // The record exists but is owned by a different pubkey than the
+        // authenticated operator, so the ownership check's foreign-owner arm
+        // refuses the repair — a repair grant must never reach records the
+        // peer cannot see.
+        let s = server_with(vec![], "");
+        grant_action(&s, "memory.repair.dry_run").await;
+        let id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: AgentId::new("owner@local", [1u8; 32]),
+                text: "foreign record".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: epoch_ms(),
+                parent: None,
+            })
+            .await
+            .unwrap();
+        let resp = s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command: MemoryRepairCommand::DetachParent {
+                        id,
+                        expected_parent: None,
+                    },
+                    reason: "probe".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => assert!(
+                message.contains("not visible") && message.contains(&id.to_string()),
+                "foreign-owned record must be refused: {message}"
+            ),
+            other => panic!("expected not-visible rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn a2a_repair_requeue_and_force_error_are_mutually_isolated_and_audited() {
         // `a2a.repair.requeue` and `a2a.repair.force_error` are distinct,
         // deny-by-default grants: holding one must never authorize the other.

@@ -63478,6 +63478,198 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`MemoryStore`] double whose `recent` READ returns one record that
+    /// carries a parent reference while every `get` fails, so `verify_recent`'s
+    /// Check 2 parent resolution reaches its `memory: {e}` bail arm on the
+    /// outer parent fetch. Every existing verify test resolves parents through
+    /// an infallible store, so the outer parent-fetch read Err arm is dead
+    /// without this injection.
+    struct ParentedFailingGetMemoryStore {
+        child: MemoryRecord,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for ParentedFailingGetMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected parent fetch failure",
+            )))
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(vec![self.child.clone()])
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_surfaces_parent_fetch_read_failure() {
+        // verify_recent's Check 2 resolves each recent record's parent through
+        // self.memory.get(parent); a store that cannot READ the parent must
+        // surface the error rather than silently treating the parent as stale
+        // (Ok(None) -> memory_stale_parent drift), which would hide a read
+        // fault behind a "missing parent" finding. The child carries a
+        // non-nil, non-self parent so the loop reaches get(parent); recent()
+        // returns only the child, so Check 1 has no get() to make first.
+        let child = MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: AgentId::new("guest@local", [9u8; 32]),
+            text: "child with unresolvable parent".into(),
+            embedding: vec![1.0],
+            metadata: serde_json::json!({}),
+            created_at: epoch_ms(),
+            parent: Some(Uuid::new_v4()),
+        };
+        let server = server_with_memory_dyn(Arc::new(ParentedFailingGetMemoryStore { child }));
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("memory:"), "{message}");
+                assert!(
+                    message.contains("injected parent fetch failure"),
+                    "the surfaced error must carry the store's cause, got: {message}"
+                );
+            }
+            other => panic!("expected Response::Error when get() fails, got {other:?}"),
+        }
+    }
+
+    /// A [`MemoryStore`] double that resolves exactly one parent record (so
+    /// `verify_recent`'s Check 2 enters the parent-chain walk) and then fails
+    /// the next `get`, so the walk's `memory: {e}` bail arm fires on the
+    /// second hop. The direct parent resolves (Ok(Some)) carrying its own
+    /// parent, advancing the walk to a read that fails. Every existing verify
+    /// test resolves the full chain through an infallible store, so the
+    /// chain-walk read Err arm is dead without this injection.
+    struct ParentedChainFailingGetMemoryStore {
+        child: MemoryRecord,
+        parent: MemoryRecord,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for ParentedChainFailingGetMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            if id == self.parent.id {
+                Ok(Some(self.parent.clone()))
+            } else {
+                Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                    "injected parent chain read failure",
+                )))
+            }
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(vec![self.child.clone()])
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_surfaces_parent_chain_walk_read_failure() {
+        // After the direct parent resolves, Check 2 walks the chain via
+        // self.memory.get(next). A store that resolves the first hop but
+        // fails the second must surface the read error rather than breaking
+        // the loop as if the chain simply ended (Ok(None) -> break), which
+        // would hide a read fault behind a silently-truncated chain. Both
+        // records stamp created_at = 0 so the created_before_parent drift
+        // guard (which needs both non-zero) stays quiet and the walk runs.
+        let parent_id = Uuid::new_v4();
+        let child = MemoryRecord {
+            id: Uuid::new_v4(),
+            tier: MemoryTier::Working,
+            owner: AgentId::new("guest@local", [9u8; 32]),
+            text: "child whose grandparent read fails".into(),
+            embedding: vec![1.0],
+            metadata: serde_json::json!({}),
+            created_at: 0,
+            parent: Some(parent_id),
+        };
+        let parent = MemoryRecord {
+            id: parent_id,
+            tier: MemoryTier::Working,
+            owner: AgentId::new("guest@local", [9u8; 32]),
+            text: "parent pointing at an unreadable grandparent".into(),
+            embedding: vec![1.0],
+            metadata: serde_json::json!({}),
+            created_at: 0,
+            parent: Some(Uuid::new_v4()),
+        };
+        let server = server_with_memory_dyn(Arc::new(ParentedChainFailingGetMemoryStore {
+            child,
+            parent,
+        }));
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("memory:"), "{message}");
+                assert!(
+                    message.contains("injected parent chain read failure"),
+                    "the surfaced error must carry the store's cause, got: {message}"
+                );
+            }
+            other => panic!("expected Response::Error when get() fails, got {other:?}"),
+        }
+    }
+
     /// A [`MemoryStore`] double whose `backfill_receipt_correlation` WRITE
     /// fails, so [`Server::backfill_memory_records`] reaches its `memory: {e}`
     /// bail arm. `backfill_receipt_correlation` has a DEFAULT trait impl (a

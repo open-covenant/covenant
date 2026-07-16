@@ -63388,6 +63388,96 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`MemoryStore`] double whose `get` READ fails, so
+    /// [`Server::repair_memory`] reaches its `memory: {e}` bail arm on the
+    /// record fetch. The fetch runs after the capability gate but before the
+    /// ownership and scope checks, so no seeding is needed and the peer must
+    /// see the read error rather than a not-found or scope refusal. Every
+    /// existing repair double's `get` is infallible-by-construction
+    /// (`memory_write_failure_repair` fails only `repair()`), so the read
+    /// Err arm is dead without this injection.
+    struct FailingGetMemoryStore;
+
+    #[async_trait::async_trait]
+    impl covenant_memory::MemoryStore for FailingGetMemoryStore {
+        async fn put(&self, _record: MemoryRecord) -> Result<(), covenant_memory::MemoryError> {
+            Ok(())
+        }
+        async fn get(
+            &self,
+            _id: Uuid,
+        ) -> Result<Option<MemoryRecord>, covenant_memory::MemoryError> {
+            Err(covenant_memory::MemoryError::Io(std::io::Error::other(
+                "injected memory get failure",
+            )))
+        }
+        async fn all(&self) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn recent(
+            &self,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _id: Uuid) -> Result<bool, covenant_memory::MemoryError> {
+            Ok(false)
+        }
+        async fn search_similar(
+            &self,
+            _query_embedding: Vec<f32>,
+            _tier: Option<MemoryTier>,
+            _limit: usize,
+            _min_relevance: Option<f32>,
+        ) -> Result<Vec<MemoryRecord>, covenant_memory::MemoryError> {
+            Ok(Vec::new())
+        }
+        async fn purge_older_than(
+            &self,
+            _tier: Option<MemoryTier>,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_memory::MemoryError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_repair_surfaces_record_read_failure() {
+        // A repair whose backing store cannot READ the target record must
+        // surface the store error, not silently read as missing: the operator
+        // would confuse a transient I/O fault with a genuine not-found and
+        // retry blind. repair_memory gates on operator-identity + the
+        // memory.repair.<action> capability, then reads the record for an
+        // ownership check; the double's get() returns Err, so no record is
+        // seeded and the read fault is hit before ownership or scope run.
+        let server = server_with_memory_dyn(Arc::new(FailingGetMemoryStore));
+        grant_action(&server, "memory.repair.dry_run").await;
+
+        let resp = server
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    command: MemoryRepairCommand::DetachParent {
+                        id: Uuid::new_v4(),
+                        expected_parent: Some(Uuid::new_v4()),
+                    },
+                    reason: "verified stale parent".into(),
+                },
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(message.contains("memory:"), "{message}");
+                assert!(
+                    message.contains("injected memory get failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}"
+                );
+            }
+            other => panic!("expected Response::Error when get() fails, got {other:?}"),
+        }
+    }
+
     /// A [`MemoryStore`] double whose `backfill_receipt_correlation` WRITE
     /// fails, so [`Server::backfill_memory_records`] reaches its `memory: {e}`
     /// bail arm. `backfill_receipt_correlation` has a DEFAULT trait impl (a

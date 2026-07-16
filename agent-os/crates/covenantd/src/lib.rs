@@ -63670,6 +63670,157 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn verify_surfaces_repair_audit_backfill_resolution_read_failure() {
+        use covenant_audit::{AuditEvent, AuditKind};
+
+        // The MemoryRepairApplied backfill_provenance reconciliation resolves
+        // the audited memory_id through self.memory.get; a store that cannot
+        // READ the record must surface the error rather than treating the row
+        // as reconciled (Ok(None) -> silent skip). recent() is empty under
+        // FailingGetMemoryStore, so Check 2 never reaches get() and this audit
+        // arm owns the first failing read.
+        let server = server_with_memory_dyn(Arc::new(FailingGetMemoryStore));
+        server
+            .audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: server.identity.agent_id(),
+                kind: AuditKind::MemoryRepairApplied {
+                    memory_id: Uuid::new_v4(),
+                    action: "backfill_provenance".into(),
+                    mode: "apply".into(),
+                    changed: true,
+                    reason: "test".into(),
+                },
+            })
+            .await
+            .unwrap();
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("memory:"), "{message}");
+                assert!(
+                    message.contains("injected memory get failure"),
+                    "the surfaced error must carry the store's cause, got: {message}"
+                );
+            }
+            other => panic!("expected Response::Error when get() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_surfaces_repair_audit_detach_resolution_read_failure() {
+        use covenant_audit::{AuditEvent, AuditKind};
+
+        // Same read-fault surface as the backfill arm above, but for the
+        // detach_parent reconciliation: its get() must bail with the store's
+        // cause rather than reading the absent record as a legitimate later
+        // deletion.
+        let server = server_with_memory_dyn(Arc::new(FailingGetMemoryStore));
+        server
+            .audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: server.identity.agent_id(),
+                kind: AuditKind::MemoryRepairApplied {
+                    memory_id: Uuid::new_v4(),
+                    action: "detach_parent".into(),
+                    mode: "apply".into(),
+                    changed: true,
+                    reason: "test".into(),
+                },
+            })
+            .await
+            .unwrap();
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("memory:"), "{message}");
+                assert!(
+                    message.contains("injected memory get failure"),
+                    "the surfaced error must carry the store's cause, got: {message}"
+                );
+            }
+            other => panic!("expected Response::Error when get() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_surfaces_compaction_audit_stale_marked_resolution_read_failure() {
+        use covenant_audit::{AuditEvent, AuditKind};
+
+        // The MemoryCompactionApplied stale_marked reconciliation resolves each
+        // audited id through self.memory.get; a failing read must surface
+        // rather than letting the walk treat the record as deleted and stay
+        // silent about the fault.
+        let server = server_with_memory_dyn(Arc::new(FailingGetMemoryStore));
+        server
+            .audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: server.identity.agent_id(),
+                kind: AuditKind::MemoryCompactionApplied {
+                    mode: "apply".into(),
+                    changed: true,
+                    reason: "test".into(),
+                    deleted: Vec::new(),
+                    stale_marked: vec![Uuid::new_v4()],
+                    parents_detached: Vec::new(),
+                },
+            })
+            .await
+            .unwrap();
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("memory:"), "{message}");
+                assert!(
+                    message.contains("injected memory get failure"),
+                    "the surfaced error must carry the store's cause, got: {message}"
+                );
+            }
+            other => panic!("expected Response::Error when get() fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_surfaces_compaction_audit_parents_detached_resolution_read_failure() {
+        use covenant_audit::{AuditEvent, AuditKind};
+
+        // Same read-fault surface as the stale_marked arm above, but for the
+        // parents_detached reconciliation; stale_marked stays empty so this
+        // arm's get() is the first failing read the compaction walk makes.
+        let server = server_with_memory_dyn(Arc::new(FailingGetMemoryStore));
+        server
+            .audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: server.identity.agent_id(),
+                kind: AuditKind::MemoryCompactionApplied {
+                    mode: "apply".into(),
+                    changed: true,
+                    reason: "test".into(),
+                    deleted: Vec::new(),
+                    stale_marked: Vec::new(),
+                    parents_detached: vec![Uuid::new_v4()],
+                },
+            })
+            .await
+            .unwrap();
+        match server.op_respond(Request::Verify { window: 100 }).await {
+            Response::Error { message } => {
+                assert!(message.contains("memory:"), "{message}");
+                assert!(
+                    message.contains("injected memory get failure"),
+                    "the surfaced error must carry the store's cause, got: {message}"
+                );
+            }
+            other => panic!("expected Response::Error when get() fails, got {other:?}"),
+        }
+    }
+
     /// A [`MemoryStore`] double whose `backfill_receipt_correlation` WRITE
     /// fails, so [`Server::backfill_memory_records`] reaches its `memory: {e}`
     /// bail arm. `backfill_receipt_correlation` has a DEFAULT trait impl (a

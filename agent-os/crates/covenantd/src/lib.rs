@@ -57560,6 +57560,136 @@ required = {caps:?}
         }
     }
 
+    // A Mailbox whose try_recv pair fails with a distinct injected cause per
+    // method. TryRecvA2ATask/TryRecvA2AResult apply no capability gate, so a
+    // poll reaches each `Err(e) => Response::Error { "a2a: {e}" }` bail arm
+    // directly — both arms are dead under every existing double (all return
+    // Ok(None) for the try_recv pair). Every other method stays benign so the
+    // double pins the poll bails, not a blanket read failure.
+    struct FailingTryRecvMailbox;
+
+    #[async_trait::async_trait]
+    impl covenant_a2a::Mailbox for FailingTryRecvMailbox {
+        async fn send_task(
+            &self,
+            _task: covenant_a2a::A2ATask,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_task(&self) -> Result<covenant_a2a::A2ATask, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_task_for(
+            &self,
+            _recipient: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox try_recv_task_for read failure",
+            )))
+        }
+        async fn send_result(
+            &self,
+            _result: covenant_a2a::A2ATaskResult,
+        ) -> Result<(), covenant_a2a::A2AError> {
+            Ok(())
+        }
+        async fn recv_result(&self) -> Result<covenant_a2a::A2ATaskResult, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn try_recv_result_for(
+            &self,
+            _peer: &AgentId,
+        ) -> Result<Option<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Io(std::io::Error::other(
+                "injected mailbox try_recv_result_for read failure",
+            )))
+        }
+        async fn recent_tasks(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATask>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn task_queue(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskQueueEntry>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn repair_task(
+            &self,
+            _request: covenant_a2a::A2ARepairRequest,
+        ) -> Result<covenant_a2a::A2ARepairOutcome, covenant_a2a::A2AError> {
+            Err(covenant_a2a::A2AError::Closed)
+        }
+        async fn recent_results(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_a2a::A2ATaskResult>, covenant_a2a::A2AError> {
+            Ok(vec![])
+        }
+        async fn lookup_task_sender(
+            &self,
+            _task_id: Uuid,
+        ) -> Result<Option<AgentId>, covenant_a2a::A2AError> {
+            Ok(None)
+        }
+        async fn compact(&self) -> Result<u64, covenant_a2a::A2AError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn try_recv_a2a_task_surfaces_error_when_mailbox_read_fails() {
+        // A task poll whose mailbox cannot read the recipient's inbox must
+        // NOT be reported as a clean Response::A2ATaskOpt { task: None }: the
+        // polling agent would treat a durability fault as "no work yet" and
+        // spin on an unreadable inbox forever. try_recv_a2a_task applies no
+        // capability gate and op_respond IS the operator, so the bail arm is
+        // reached with no grant — it is dead under every existing double (all
+        // return Ok(None) for the try_recv pair).
+        let server = server_with_mailbox_dyn(Arc::new(FailingTryRecvMailbox));
+        match server.op_respond(Request::TryRecvA2ATask).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a task poll whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox try_recv_task_for read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when the task poll fails, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn try_recv_a2a_result_surfaces_error_when_mailbox_read_fails() {
+        // A result poll whose mailbox cannot read the peer's posted results
+        // must NOT be reported as a clean Response::A2AResultOpt
+        // { result: None }: the sender would treat a durability fault as
+        // "still running" and wait forever on a result it can never observe.
+        // try_recv_a2a_result applies no capability gate and op_respond IS
+        // the operator, so the bail arm is reached with no grant — it is dead
+        // under every existing double (all return Ok(None) for the try_recv
+        // pair).
+        let server = server_with_mailbox_dyn(Arc::new(FailingTryRecvMailbox));
+        match server.op_respond(Request::TryRecvA2AResult).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a:"),
+                    "a result poll whose mailbox fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected mailbox try_recv_result_for read failure"),
+                    "the surfaced error must carry the mailbox's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when the result poll fails, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn recent_a2a_tasks_visible_when_peer_is_sender() {
         let s = server_with(vec![], "");

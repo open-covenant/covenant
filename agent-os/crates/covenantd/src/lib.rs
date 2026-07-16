@@ -54604,6 +54604,206 @@ required = {caps:?}
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audit_integrity_read_failure_surfaces_error() {
+        // lib.rs:4382: a legitimate operator asking for the integrity report
+        // while the audit store cannot be read must get the store's cause,
+        // not a panic or a fabricated clean report.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        match s.op_respond(Request::VerifyAuditIntegrity).await {
+            Response::Error { message } => {
+                assert!(
+                    message.starts_with("audit:")
+                        && message.contains("injected audit write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when the audit read fails, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prove_audit_inclusion_read_failure_surfaces_error() {
+        // lib.rs:4401: the trait-default prove_inclusion re-reads the whole
+        // log via recent(), so a failing store must surface as Response::Error
+        // rather than an empty proof the operator could mistake for
+        // "event not found".
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        match s
+            .op_respond(Request::ProveAuditInclusion {
+                event_id: Uuid::nil(),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.starts_with("audit:")
+                        && message.contains("injected audit write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when the audit read fails, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn query_provenance_integrity_read_failure_surfaces_error() {
+        // lib.rs:4438: provenance answers travel with an integrity verdict;
+        // if the verdict itself cannot be computed the query must bail rather
+        // than return actions read from a possibly-tampered log.
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        match s
+            .op_respond(Request::QueryProvenance {
+                since_ms: None,
+                until_ms: None,
+                actor: None,
+                approver: None,
+                rule: None,
+                outcome: None,
+                limit: 8,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.starts_with("audit:")
+                        && message.contains("injected audit write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when the audit read fails, got {other:?}"),
+        }
+    }
+
+    /// An [`AuditLog`](covenant_audit::AuditLog) whose reads fail only past
+    /// the integrity check: `verify_integrity` succeeds with a synthetic
+    /// empty-chain report while `recent` fails, so
+    /// [`Server::query_provenance`] reaches its second bail arm
+    /// (lib.rs:4446) — unreachable via `FailingAuditLog`, whose
+    /// `verify_integrity` fails first.
+    struct FailingRecentAuditLog;
+
+    #[async_trait::async_trait]
+    impl covenant_audit::AuditLog for FailingRecentAuditLog {
+        async fn record(
+            &self,
+            _event: covenant_audit::AuditEvent,
+        ) -> Result<(), covenant_audit::AuditError> {
+            Ok(())
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_audit::AuditEvent>, covenant_audit::AuditError> {
+            Err(covenant_audit::AuditError::Io(std::io::Error::other(
+                "injected audit recent read failure",
+            )))
+        }
+        async fn purge_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_audit::AuditError> {
+            Ok(0)
+        }
+        async fn verify_integrity(
+            &self,
+        ) -> Result<covenant_audit::AuditIntegrityReport, covenant_audit::AuditError> {
+            Ok(covenant_audit::AuditIntegrityReport {
+                events: 0,
+                anchors: 0,
+                valid: true,
+                root_hash_hex: "0".repeat(64),
+                failures: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn query_provenance_recent_read_failure_surfaces_error() {
+        // lib.rs:4446: the integrity verdict and the event read are separate
+        // store calls; a read that fails after a clean verdict must still
+        // bail rather than answer with a verified-but-empty action set.
+        let s = server_with_audit_dyn(Arc::new(FailingRecentAuditLog));
+        match s
+            .op_respond(Request::QueryProvenance {
+                since_ms: None,
+                until_ms: None,
+                actor: None,
+                approver: None,
+                rule: None,
+                outcome: None,
+                limit: 8,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.starts_with("audit:")
+                        && message.contains("injected audit recent read failure"),
+                    "the surfaced error must carry the recent-read cause, proving the second bail arm fired, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when the audit read fails, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resume_intent_returns_error_when_audit_read_fails() {
+        // lib.rs:5461: resume scans recent audit for the BudgetExhausted row;
+        // a failed read must surface as its own error, not masquerade as the
+        // no-matching-row refusal (which would tell the operator to re-submit
+        // when the log may hold a perfectly resumable row).
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        match s
+            .op_respond(Request::ResumeIntent {
+                intent_id: Uuid::new_v4(),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("resume: audit read failed"),
+                    "a failed audit read must be distinguishable from no-row-matches, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when the audit read fails, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recent_audit_surfaces_read_failure_as_error() {
+        // lib.rs:4244: recent_audit reads the whole feed via self.audit.recent
+        // and surfaces a failed read as Response::Error. Unlike the
+        // integrity/inclusion/provenance verbs this path has no capability
+        // gate, so every peer reaches the read — the Err arm is dead only
+        // because every existing recent_audit test runs against an infallible
+        // log. A read failure must NOT masquerade as an empty AuditEvents the
+        // operator could mistake for "no activity".
+        let s = server_with_audit_dyn(Arc::new(FailingAuditLog));
+        match s
+            .op_respond(Request::RecentAudit {
+                limit: 10,
+                since_ms: None,
+                prefer_stream: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.starts_with("audit:")
+                        && message.contains("injected audit write failure"),
+                    "the surfaced error must carry the store's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when the audit read fails, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn retry_a2a_stale_rejects_non_operator() {
         let s = server_with(vec![], "");

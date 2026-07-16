@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-16T14:07:44.891Z",
+  "updatedAt": "2026-07-16T14:27:48.636Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12849,
-    "tasks": 1507,
+    "events": 12853,
+    "tasks": 1508,
     "integrated": 1508
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1500,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "covenantd-budget-ledger-read-failure-arms",
+    "state": "in_progress",
+    "since": "2026-07-16T14:25:06.449Z"
+  },
   "recent": [
     {
       "at": "2026-07-16T05:25:18.482Z",

@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-17T12:14:19.918Z",
+  "updatedAt": "2026-07-17T12:34:23.790Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12858,
-    "tasks": 1508,
+    "events": 12862,
+    "tasks": 1509,
     "integrated": 1509
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1501,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "daemon-ipc-core-resume-success-live-fixture",
+    "state": "in_progress",
+    "since": "2026-07-17T12:33:12.302Z"
+  },
   "recent": [
     {
       "at": "2026-07-16T20:55:01.437Z",

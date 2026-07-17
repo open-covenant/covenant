@@ -1,0 +1,25 @@
+[package]
+name = "covenant-vantara"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Vantara provenance connector for Covenant — reads the content-free job feed, verifies node proofs, and mints content-free attestations anchored to on-chain settlement."
+
+[dependencies]
+covenant-mcp = { path = "../covenant-mcp" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+bs58 = { workspace = true }
+base64 = "0.22"
+ed25519-dalek = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"

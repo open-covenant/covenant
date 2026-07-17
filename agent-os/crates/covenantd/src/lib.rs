@@ -51558,6 +51558,76 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_respond_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // a2a.respond scope can only enter the store out-of-band. The
+        // respond-side scope gate surfaces it as Err and must fail closed:
+        // deny, audit, and leave the result unposted — never fall through
+        // to the blanket-allow an empty scope gets.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone());
+        let task = dummy_a2a_task_for(&s);
+        grant_scoped_action(
+            &s,
+            &format!("a2a.send.{}", task.recipient.display),
+            serde_json::json!({}),
+        )
+        .await;
+        match s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await
+        {
+            Response::A2ATaskQueued { .. } => {}
+            other => panic!("send must queue before respond: {other:?}"),
+        }
+
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: format!("a2a.respond.{}", task.sender.display),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let result =
+            covenant_a2a::A2ATaskResult::ok(task.id, vec![covenant_mcp::Content::text("done")]);
+        match s.op_respond(Request::PostA2AResult { result }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a respond rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let expected_agent = format!("a2a-respond:{}", task.id);
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == &expected_agent
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        let drained = s.op_respond(Request::TryRecvA2AResult).await;
+        assert!(
+            matches!(drained, Response::A2AResultOpt { result: None }),
+            "a scope-rejected respond must not post its result: {drained:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a2a_recent_returns_queued_tasks_without_consuming() {
         let s = server_with(vec![], "");
         // Per-peer recv requires the queued tasks to be addressed to
@@ -51914,6 +51984,93 @@ required = {caps:?}
                 assert!(message.contains("a2a.repair.requeue"));
                 assert!(message.contains("requires capability"));
             }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_repair_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // a2a.repair scope can only enter the store out-of-band. The repair
+        // scope gate surfaces it as Err and must fail closed: deny and audit
+        // before any queue mutation — never fall through to the
+        // blanket-allow an empty scope gets.
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = server_with_audit(audit.clone());
+        let task = loopback_a2a_task_for(&s);
+        grant_scoped_action(
+            &s,
+            &format!("a2a.send.{}", task.recipient.display),
+            serde_json::json!({}),
+        )
+        .await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "a2a.repair.requeue".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id: None,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "worker crashed".into(),
+                },
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a repair rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let expected_agent = format!("a2a-repair:{}", task.id);
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == &expected_agent
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => assert!(
+                tasks.iter().any(|entry| entry.task.id == task.id
+                    && entry.state == covenant_a2a::A2ATaskQueueState::InFlight),
+                "a scope-rejected repair must leave the task in flight: {tasks:?}"
+            ),
             other => panic!("unexpected: {other:?}"),
         }
     }

@@ -120,6 +120,25 @@ The reproducible driver is in `examples/magicblock/verify.mjs`; the ER instructi
 themselves (`consume_credits`, `provenance_root`, `slash_for_actions`) live in
 `agent-os/programs/settlement/src/lib.rs`.
 
+## Use it
+
+Beyond checking Covenant's own claims, these are capabilities any MagicBlock
+builder or agent can consume directly:
+
+- **[`@covenant-org/verified-er`](../packages/verified-er)** — pick a verified
+  ER and check provenance roots. Read-only, one dependency.
+- **[`@covenant-org/er-guard`](../packages/er-guard)** — session-reliability
+  keeper: cooperatively undelegates your accounts on idle, max-lifetime, or a
+  validator stall, and documents what dlp 3.1.0's permissionless
+  `RequestUndelegation` actually requires from your program.
+- **Trust MCP** (`https://mcp.opencovenant.org/mcp`) — zero-install for any MCP
+  agent: `covenant_verified_ers`, `covenant_verify_enclave` (live DCAP check),
+  `covenant_er_provenance`.
+- **Paid enclave verification** —
+  `GET https://covenant-x402-seller.onrender.com/x402/er/enclave/{validator}`
+  (x402, USDC on Solana): a fresh Covenant-signed DCAP verification, optionally
+  binding an agent and its provenance root into the quote challenge.
+
 ## Try it
 
 [`examples/magicblock`](../examples/magicblock) is a read-only mainnet demo that

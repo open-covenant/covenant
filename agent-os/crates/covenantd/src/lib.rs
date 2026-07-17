@@ -66330,6 +66330,148 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    /// A [`covenant_peer_auth::PeerRegistry`] double whose two prefix-scoped
+    /// read paths fail — `revoke_by_token_prefix` and
+    /// `find_unique_live_by_token_prefix` — so [`Server::revoke_peer`] reaches
+    /// its two `peers: {e}` bail arms (lib.rs:4176 and 4190) while the other
+    /// trait methods stay inert. revoke_peer skips its empty-prefix,
+    /// match-limit, and capability-scope gates on the operator path
+    /// (`op_respond` dispatches as the operator identity, so `peer.pubkey ==
+    /// operator_pubkey` bypasses every gate), so no grant is needed to reach
+    /// the registry read. `force: false` drives the find_unique_live peek;
+    /// `force: true` skips it and drives revoke_by_token_prefix directly.
+    /// Every existing peers failure double returns Ok for both prefix methods,
+    /// so both bail arms are dead without this injection.
+    struct FailingRevokePeerRegistry;
+
+    #[async_trait::async_trait]
+    impl covenant_peer_auth::PeerRegistry for FailingRevokePeerRegistry {
+        async fn register(
+            &self,
+            _entry: covenant_peer_auth::PeerEntry,
+        ) -> Result<(), covenant_peer_auth::PeerError> {
+            Ok(())
+        }
+        async fn resolve(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<Option<AgentId>, covenant_peer_auth::PeerError> {
+            Ok(None)
+        }
+        async fn revoke(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<bool, covenant_peer_auth::PeerError> {
+            Ok(false)
+        }
+        async fn recent(
+            &self,
+            _limit: usize,
+        ) -> Result<Vec<covenant_peer_auth::PeerEntry>, covenant_peer_auth::PeerError> {
+            Ok(vec![])
+        }
+        async fn list_summaries(
+            &self,
+            _limit: usize,
+            _pubkey_prefix: Option<&str>,
+            _status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
+        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError>
+        {
+            Ok((vec![], false))
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            _before_ms: u64,
+        ) -> Result<u64, covenant_peer_auth::PeerError> {
+            Ok(0)
+        }
+        async fn revoke_by_token_prefix(
+            &self,
+            _prefix: &str,
+            _limit: usize,
+        ) -> Result<covenant_peer_auth::RevokeOutcome, covenant_peer_auth::PeerError> {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers revoke_by_token_prefix read failure",
+            )))
+        }
+        async fn find_unique_live_by_token_prefix(
+            &self,
+            _prefix: &str,
+        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError>
+        {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers find_unique_live_by_token_prefix read failure",
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_peer_surfaces_error_when_peer_registry_revoke_by_prefix_fails() {
+        // A peer revoke whose backing registry cannot tombstone by token prefix
+        // must NOT be reported as Response::PeerRevoked: the operator would
+        // believe a live peer was revoked (and rely on its token being dead)
+        // when the registry faulted, hiding a durability fault behind a clean
+        // response. `force: true` skips the find_unique_live self-revoke peek
+        // so the call reaches revoke_by_token_prefix directly; op_respond
+        // dispatches as the operator identity, so no grant reaches the bail.
+        let server = server_with_peers_dyn(Arc::new(FailingRevokePeerRegistry));
+        let resp = server
+            .op_respond(Request::RevokePeer {
+                token_prefix: "abc123".into(),
+                force: true,
+                match_limit: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers:"),
+                    "a revoke whose registry fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers revoke_by_token_prefix read failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!(
+                "expected Response::Error when revoke_by_token_prefix() fails, got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn revoke_peer_surfaces_error_when_peer_registry_find_unique_live_fails() {
+        // A peer revoke whose registry cannot run the self-revoke peek must NOT
+        // fall through to a tombstone (which could revoke the operator's own
+        // live token) nor report a clean outcome: the operator would lose auth
+        // with no signal that the registry faulted. `force: false` drives the
+        // find_unique_live_by_token_prefix peek; op_respond dispatches as the
+        // operator identity, so no grant reaches the bail.
+        let server = server_with_peers_dyn(Arc::new(FailingRevokePeerRegistry));
+        let resp = server
+            .op_respond(Request::RevokePeer {
+                token_prefix: "abc123".into(),
+                force: false,
+                match_limit: None,
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers:"),
+                    "a revoke whose registry peek fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers find_unique_live_by_token_prefix read failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!(
+                "expected Response::Error when find_unique_live_by_token_prefix() fails, got {other:?}"
+            ),
+        }
+    }
+
     /// Like [`FailingCapabilityStore`] but the fault is on the usage-snapshot
     /// read path: only `usage_snapshot` fails, so [`Server::capability_usage`]
     /// reaches its bail arm while the other trait methods stay inert.

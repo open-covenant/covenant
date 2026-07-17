@@ -51628,6 +51628,77 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn a2a_respond_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The respond capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the send burns two list reads and the respond check a third, so
+        // the fourth read — the respond scope gate — errs and the respond
+        // must fail closed: deny and audit rather than post the result
+        // under a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingNthListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_from: 4,
+        }));
+        let task = dummy_a2a_task_for(&s);
+        grant_scoped_action(
+            &s,
+            &format!("a2a.send.{}", task.recipient.display),
+            serde_json::json!({}),
+        )
+        .await;
+        grant_scoped_action(
+            &s,
+            &format!("a2a.respond.{}", task.sender.display),
+            serde_json::json!({}),
+        )
+        .await;
+        match s
+            .op_respond(Request::SendA2ATask { task: task.clone() })
+            .await
+        {
+            Response::A2ATaskQueued { .. } => {}
+            other => panic!("send must queue before respond: {other:?}"),
+        }
+
+        let result =
+            covenant_a2a::A2ATaskResult::ok(task.id, vec![covenant_mcp::Content::text("done")]);
+        match s.op_respond(Request::PostA2AResult { result }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a respond rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not post: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let expected_agent = format!("a2a-respond:{}", task.id);
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == &expected_agent
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        let drained = s.op_respond(Request::TryRecvA2AResult).await;
+        assert!(
+            matches!(drained, Response::A2AResultOpt { result: None }),
+            "a fail-closed respond must not post its result: {drained:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a2a_recent_returns_queued_tasks_without_consuming() {
         let s = server_with(vec![], "");
         // Per-peer recv requires the queued tasks to be addressed to
@@ -52070,6 +52141,88 @@ required = {caps:?}
                 tasks.iter().any(|entry| entry.task.id == task.id
                     && entry.state == covenant_a2a::A2ATaskQueueState::InFlight),
                 "a scope-rejected repair must leave the task in flight: {tasks:?}"
+            ),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a2a_repair_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The repair capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the send burns two list reads and the repair check a third, so
+        // the fourth read — the repair scope gate — errs and the repair
+        // must fail closed: deny and audit before any queue mutation.
+        let s = server_with_capabilities_dyn(Arc::new(FailingNthListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_from: 4,
+        }));
+        let task = loopback_a2a_task_for(&s);
+        grant_scoped_action(
+            &s,
+            &format!("a2a.send.{}", task.recipient.display),
+            serde_json::json!({}),
+        )
+        .await;
+        grant_scoped_action(&s, "a2a.repair.requeue", serde_json::json!({})).await;
+        s.op_respond(Request::SendA2ATask { task: task.clone() })
+            .await;
+        let _ = s.op_respond(Request::TryRecvA2ATask).await;
+
+        match s
+            .op_respond(Request::RepairA2ATask {
+                request: covenant_a2a::A2ARepairRequest {
+                    task_id: task.id,
+                    command: covenant_a2a::A2ARepairCommand::Requeue {
+                        lease_id: None,
+                        duplicate_risk: covenant_a2a::A2ADuplicateRisk::Idempotent,
+                    },
+                    reason: "worker crashed".into(),
+                },
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("a2a repair rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not repair: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let expected_agent = format!("a2a-repair:{}", task.id);
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == &expected_agent
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        match s
+            .op_respond(Request::A2AQueue {
+                limit: 10,
+                min_lease_age_ms: None,
+                deadline_within_ms: None,
+                state_filter: None,
+            })
+            .await
+        {
+            Response::A2AQueue { tasks, .. } => assert!(
+                tasks.iter().any(|entry| entry.task.id == task.id
+                    && entry.state == covenant_a2a::A2ATaskQueueState::InFlight),
+                "a fail-closed repair must leave the task in flight: {tasks:?}"
             ),
             other => panic!("unexpected: {other:?}"),
         }
@@ -70524,6 +70677,87 @@ budget_credits_per_hour = {credits}
                 .list_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
                 >= 1
+            {
+                return Err(covenant_permissions::PermissionError::Io(
+                    std::io::Error::other("injected capability list failure"),
+                ));
+            }
+            self.inner.list_for_subject(subject_pubkey).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            self.inner.recent(limit).await
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            self.inner.purge_revoked_older_than(before_ms).await
+        }
+        async fn consume_uses(
+            &self,
+            requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            self.inner.consume_uses(requests).await
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            self.inner.usage_snapshot().await
+        }
+    }
+
+    /// Like [`FailingSecondListCapabilityStore`], but fails every
+    /// `list_for_subject` read from the 1-based `fail_from` call onward.
+    /// Routes burn different numbers of list reads before their scope
+    /// gate — a2a respond and repair sit behind a queued send (two reads)
+    /// plus their own capability check (a third), so their scope gate is
+    /// the fourth read.
+    struct FailingNthListCapabilityStore {
+        inner: covenant_permissions::InMemoryCapabilityStore,
+        list_calls: std::sync::atomic::AtomicUsize,
+        fail_from: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingNthListCapabilityStore {
+        async fn record(
+            &self,
+            signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            self.inner.record(signed).await
+        }
+        async fn revoke(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.revoke(signature).await
+        }
+        async fn is_revoked(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.is_revoked(signature).await
+        }
+        async fn list_for_subject(
+            &self,
+            subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            if self
+                .list_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1
+                >= self.fail_from
             {
                 return Err(covenant_permissions::PermissionError::Io(
                     std::io::Error::other("injected capability list failure"),

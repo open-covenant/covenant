@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-17T22:36:24.529Z",
+  "updatedAt": "2026-07-17T22:56:28.509Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12863,
-    "tasks": 1509,
-    "integrated": 1509
+    "events": 12868,
+    "tasks": 1510,
+    "integrated": 1510
   },
   "throughput": {
-    "last24h": 0,
-    "last7d": 18,
-    "velocity": 2.6
+    "last24h": 1,
+    "last7d": 19,
+    "velocity": 2.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-17",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-17",
-      "total": 1509
+      "total": 1510
     }
   ],
   "states": {
-    "integrated": 1501,
-    "proposed": 1,
-    "blocked": 6,
-    "self_review": 1
+    "integrated": 1502,
+    "proposed": 2,
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "daemon-ipc-core-resume-success-live-fixture",
-    "state": "self_review",
-    "since": "2026-07-17T22:29:44.484Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-17T22:40:53.832Z",
+      "task": "daemon-ipc-core-resume-success-live-fixture",
+      "note": "Fixture committed as 58175eb1 (+ metrics 11035b4b, tests 3564 live 471). Proves the full pause->resume promise live: exhaustion mints pause_"
+    },
     {
       "at": "2026-07-16T20:55:01.437Z",
       "task": "covenantd-budget-ledger-read-failure-arms",
@@ -315,11 +315,6 @@
       "at": "2026-07-02T23:54:30.031Z",
       "task": "identity-binding-recovery-byte-above-range-coverage",
       "note": "Committed as 55056f88 (1 file, +28). Metrics unchanged post-commit (tracked working-tree content already counted), README stays exact."
-    },
-    {
-      "at": "2026-07-02T23:53:07.935Z",
-      "task": "metrics-guard-tracked-files-only",
-      "note": "Committed as 58cd0463 (metrics.mjs + README.md together per task contract). Push follows with the session batch."
     }
   ]
 }

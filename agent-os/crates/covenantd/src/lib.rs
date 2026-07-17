@@ -54462,6 +54462,309 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn purge_peers_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // peers.purge scope can only enter the store out-of-band. The purge
+        // scope gate surfaces it as Err and must fail closed: deny and
+        // audit before any registry mutation — never fall through to the
+        // blanket-allow an empty scope gets.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "peers.purge".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s.op_respond(Request::PurgePeers { before_ms: 1 }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers purge rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "peers:purge"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_peers_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The purge capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the purge must fail
+        // closed — deny and audit — rather than mutate the registry under
+        // a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "peers.purge", serde_json::json!({})).await;
+
+        match s.op_respond(Request::PurgePeers { before_ms: 1 }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers purge rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not purge: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "peers:purge"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_peers_denies_when_grant_scope_is_malformed() {
+        // The operator identity bypasses the peers.list gates, so the
+        // scope arms are only reachable for a delegated peer. A malformed
+        // peers.list scope can only enter the store out-of-band; the list
+        // scope gate surfaces it as Err and must fail closed: deny and
+        // audit rather than enumerate registry rows under a grant that no
+        // longer validates.
+        let s = server_with(vec![], "");
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: guest.clone(),
+            action: "peers.list".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator,
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s
+            .respond(
+                Request::ListPeers {
+                    limit: 10,
+                    pubkey_prefix: None,
+                    status_filter: None,
+                },
+                &guest,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers list rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "peers:list"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_peers_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The list capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the list must fail
+        // closed — deny and audit — rather than enumerate registry rows
+        // under a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        grant_scoped_action_to(&s, &guest, "peers.list", serde_json::json!({})).await;
+
+        let resp = s
+            .respond(
+                Request::ListPeers {
+                    limit: 10,
+                    pubkey_prefix: None,
+                    status_filter: None,
+                },
+                &guest,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peers list rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not list: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "peers:list"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_peer_denies_when_grant_scope_is_malformed() {
+        // The operator identity bypasses the peers.revoke gates, so the
+        // scope arms are only reachable for a delegated peer. A malformed
+        // peers.revoke scope can only enter the store out-of-band; the
+        // revoke scope gate surfaces it as Err and must fail closed: deny
+        // and audit before any registry mutation.
+        let s = server_with(vec![], "");
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: guest.clone(),
+            action: "peers.revoke".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator,
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        let resp = s
+            .respond(
+                Request::RevokePeer {
+                    token_prefix: "abcdef".into(),
+                    force: false,
+                    match_limit: None,
+                },
+                &guest,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peer revoke rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "peers:revoke"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_peer_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The revoke capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the revoke must fail
+        // closed — deny and audit — rather than tombstone a registry row
+        // under a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let guest = AgentId::new("guest@local", [9u8; 32]);
+        grant_scoped_action_to(&s, &guest, "peers.revoke", serde_json::json!({})).await;
+
+        let resp = s
+            .respond(
+                Request::RevokePeer {
+                    token_prefix: "abcdef".into(),
+                    force: false,
+                    match_limit: None,
+                },
+                &guest,
+            )
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("peer revoke rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not revoke: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "peers:revoke"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn revoke_rejects_when_peer_is_not_subject() {
         let s = server_with(vec![], "");
         // Operator (= s.identity) grants themselves a cap. The capability's

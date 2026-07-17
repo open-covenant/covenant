@@ -12,9 +12,11 @@ import {StreamableHTTPServerTransport} from '@modelcontextprotocol/sdk/server/st
 import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
 import {z} from 'zod';
 import express from 'express';
+import {Connection} from '@solana/web3.js';
 import {getReputation, type Reputation} from './reputation.js';
 import {getPassport} from './passport.js';
 import {verifyAttestation, type Attestation} from './verify.js';
+import {listVerifiedErs, verifyEnclaveLive, verifyProvenance} from './er.js';
 
 const RPC_URL = process.env.COVENANT_SOLANA_MAINNET_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
 const RPC_TIMEOUT = Number(process.env.RPC_TIMEOUT_MS ?? 9000);
@@ -41,7 +43,9 @@ function buildServer(): McpServer {
         'Covenant Guard exposes on-chain trust facts for agents. Use covenant_reputation before ' +
         'transacting with or trusting a Solana wallet, covenant_agent_passport to check an agent asset\'s ' +
         'registered identity and attestation, and covenant_verify to check a Covenant-signed receipt or ' +
-        'attestation. All tools are read-only and take no credentials.',
+        'attestation. For MagicBlock ephemeral rollups: covenant_verified_ers to pick a verified ER to ' +
+        'run on, covenant_verify_enclave for a live TDX check of one, and covenant_er_provenance to check ' +
+        'an agent\'s on-chain action record. All tools are read-only and take no credentials.',
     },
   );
 
@@ -115,6 +119,90 @@ function buildServer(): McpServer {
         ? `PASS · signature valid\nsubject ${v.subject}\nsigner ${v.signer}`
         : `FAIL · ${v.reason}`;
       return {content: [{type: 'text', text}], isError: !v.ok, structuredContent: v as unknown as Record<string, unknown>};
+    },
+  );
+
+  server.registerTool(
+    'covenant_verified_ers',
+    {
+      title: 'Verified ephemeral rollups',
+      description:
+        'Which MagicBlock ephemeral rollups are Covenant-verified right now. Queries the Magic Router ' +
+        'for the live ER set and resolves each validator against the Covenant registry in the Solana ' +
+        'Attestation Service — a registry monitor DCAP-verifies each TDX enclave and keeps expiring ' +
+        'attestations fresh. Use to pick where an agent should run.',
+      inputSchema: {},
+      annotations: {readOnlyHint: true, openWorldHint: true},
+    },
+    async () => {
+      const ers = await listVerifiedErs(new Connection(RPC_URL, 'confirmed'));
+      const lines = ers.map((r) =>
+        `${r.covenant.verified ? 'verified  ' : 'unverified'}  ${r.fqdn}  ${r.identity}` +
+        (r.covenant.verified ? `  [TCB ${r.covenant.status}, expires ${new Date((r.covenant.expiry ?? 0) * 1000).toISOString()}]` : `  (${r.covenant.reason})`));
+      const picked = ers.find((r) => r.covenant.verified);
+      const text = lines.join('\n') + '\n' + (picked ? `pick -> ${picked.fqdn}` : 'no Covenant-verified ER right now');
+      return {content: [{type: 'text', text}], structuredContent: {routes: ers, picked: picked ?? null} as unknown as Record<string, unknown>};
+    },
+  );
+
+  server.registerTool(
+    'covenant_verify_enclave',
+    {
+      title: 'Verify ER enclave (live)',
+      description:
+        'Live TDX check of a MagicBlock ER: pulls a quote against a fresh challenge from the validator\'s ' +
+        'router-listed endpoint, DCAP-verifies it against the Intel PCCS, and rejects stale or replayed ' +
+        'quotes. Stronger than the registry read — this talks to the enclave now. Takes the validator ' +
+        'identity from covenant_verified_ers.',
+      inputSchema: {validator: z.string().describe('ER validator identity (base58, from the Magic Router)')},
+      annotations: {readOnlyHint: true, openWorldHint: true},
+    },
+    async ({validator}) => {
+      if (!SOLANA_ADDRESS.test(validator)) {
+        return {content: [{type: 'text', text: 'not a valid validator identity'}], isError: true};
+      }
+      try {
+        const v = await verifyEnclaveLive(validator);
+        const text =
+          `PASS · genuine Intel TDX enclave\n` +
+          `validator ${v.validator} · ${v.endpoint}\n` +
+          `TCB ${v.status} · mr_td ${v.mrTd.slice(0, 32)}…\n` +
+          `verified live at ${new Date(v.verifiedAt * 1000).toISOString()}`;
+        return {content: [{type: 'text', text}], structuredContent: v as unknown as Record<string, unknown>};
+      } catch (e) {
+        return {content: [{type: 'text', text: `FAIL · ${e instanceof Error ? e.message : 'verification failed'}`}], isError: true};
+      }
+    },
+  );
+
+  server.registerTool(
+    'covenant_er_provenance',
+    {
+      title: 'Verify agent provenance root',
+      description:
+        'Check that an agent\'s on-chain action record is the hash-chain of the receipts you hold. Every ' +
+        'metered action folds sha256(root || receipt_hash) into the provenance_root on the agent\'s ' +
+        'credit account (updated gaslessly in the ER, committed to L1). Recomputes the fold from your ' +
+        'receipt hashes and compares against the chain — alter, add, or drop one action and it diverges.',
+      inputSchema: {
+        credits_account: z.string().describe("The agent's credit account (base58)"),
+        receipt_hashes: z.array(z.string()).max(10_000).describe('32-byte receipt hashes (hex), in action order'),
+      },
+      annotations: {readOnlyHint: true, openWorldHint: true, idempotentHint: true},
+    },
+    async ({credits_account, receipt_hashes}) => {
+      if (!SOLANA_ADDRESS.test(credits_account)) {
+        return {content: [{type: 'text', text: 'not a valid account address'}], isError: true};
+      }
+      try {
+        const r = await verifyProvenance(new Connection(RPC_URL, 'confirmed'), credits_account, receipt_hashes);
+        const text = r.match
+          ? `MATCH · the on-chain root is the hash-chain of these ${r.actions} actions\nroot ${r.onChain}`
+          : `MISMATCH · recomputed ${r.recomputed}\non-chain ${r.onChain}`;
+        return {content: [{type: 'text', text}], isError: !r.match, structuredContent: r as unknown as Record<string, unknown>};
+      } catch (e) {
+        return {content: [{type: 'text', text: e instanceof Error ? e.message : 'verification failed'}], isError: true};
+      }
     },
   );
 

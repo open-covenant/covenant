@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {"covenant-trust-mcp": "dist/server.js"},
+  "bin": {
+    "covenant-trust-mcp": "dist/server.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
@@ -11,6 +13,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.26.0",
+    "@phala/dcap-qvl-web": "0.2.7",
     "@solana/web3.js": "1.98.0",
     "bs58": "6.0.0",
     "express": "5.1.0",

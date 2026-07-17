@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-17T22:56:28.509Z",
+  "updatedAt": "2026-07-17T23:16:32.297Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12868,
+    "events": 12871,
     "tasks": 1510,
     "integrated": 1510
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1502,
-    "proposed": 2,
-    "blocked": 6
+    "proposed": 1,
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-projection-linear-preempt-live-coverage",
+    "state": "in_progress",
+    "since": "2026-07-17T23:13:19.498Z"
+  },
   "recent": [
     {
       "at": "2026-07-17T22:40:53.832Z",

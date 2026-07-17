@@ -6,6 +6,12 @@ Covenant is moving toward an open operating layer for governed autonomous softwa
 
 The foundation is a local control plane for autonomous engineering systems: daemon, CLI, TUI, IPC/HTTP gateway, identity, capabilities, audit, memory, A2A, MCP, budget, local receipts, provenance envelopes, autonomous workflow records, and live validation paths.
 
+## Multi-Chain Trust Reach
+
+Covenant's identity, reputation, provenance, and bond receipts project onto other chains as signed statements, without moving `$CVNT` off Solana. Live today on Base mainnet: ERC-8004 agent registration, a deployed bond-receipt verifier and a registered EAS reputation schema, EAS off-chain attestations for audit roots and reputation, and an ENS CCIP-Read gateway (`opencovenant.eth`, `*.agents.opencovenant.eth`) that resolves to the canonical Solana identity — each verifiable with a plain `ecrecover`, no bridge. `$CVNT` stays a single Solana mint, and every per-call fee and bond is chain-local USDC; multi-chain reach only widens the fee base that funds Solana buy-and-lock staking, enforced by a build-time quarantine guard.
+
+Not yet production: on-chain reputation scores (the schema is registered but writes stay gated), funded USDC bonds and live slashing (the verifier is deployed but unfunded), the Base x402 seller and Base outbound-pay path (built, not wired into the default daemon), and trust-minimized cross-chain enforcement (slashing a Solana bond from an EVM-proven event). See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
+
 ## Now: Harden the Local Control Plane
 
 The current priority is making the local daemon and CLI reliable under real engineering use.

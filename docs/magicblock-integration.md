@@ -27,8 +27,8 @@ MagicBlock ER  ── runs agent work (gasless, optionally private/TEE)
    │          account's provenance_root, gaslessly, committed to L1 on undelegate
    ├─ bond  → register_agent + stake (CVNT); slash_for_actions burns the bond
    │          with the reason read from the on-chain provenance_root
-   └─ trust → verified-ER attestation (SAS) keyed to the validator identity;
-              enclave (TDX/DCAP) verification is a planned addition
+   └─ trust → verified-ER attestation (SAS) keyed to the validator identity,
+              kept fresh by a monitor that DCAP-verifies the TDX enclave
 ```
 
 Per-action state (counters, provenance roots) lives in the ER, where it is hot and
@@ -37,30 +37,28 @@ non-custodial. Custody, staking, slashing, and treasury stay on L1.
 ## 1. Discover a Covenant-verified ER
 
 The Magic Router returns a set of ERs, each identified by a validator pubkey.
-Covenant publishes a verified-ER attestation through the Solana Attestation
-Service, keyed to that validator identity. An agent picking where to run resolves
-it in one account read. No router change, no indexer.
+Covenant continuously DCAP-verifies the TDX enclave behind each ER that serves
+quotes and keeps a verified-ER attestation fresh in the Solana Attestation
+Service, keyed to that validator identity ([`services/er-registry`](../services/er-registry)).
+An agent picking where to run resolves it in one account read. No router change,
+no indexer.
 
 ```js
-import { deriveCredentialPda, deriveSchemaPda, deriveAttestationPda,
-  fetchMaybeAttestation, fetchSchema, deserializeAttestationData } from "sas-lib";
+import { Connection } from "@solana/web3.js";
+import { pickVerifiedEr } from "@covenant-org/verified-er";
 
-const ISSUER = "AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjzqRb"; // Covenant credential authority
-const [credential] = await deriveCredentialPda({ authority: ISSUER, name: "covenant" });
-const [schema]     = await deriveSchemaPda({ credential, name: "er-verified", version: 1 });
-
-// validator = an ER identity from the router's getRoutes
-const [attestation] = await deriveAttestationPda({ credential, schema, nonce: validator });
-const acct = await fetchMaybeAttestation(rpc, attestation);
-
-const verified = acct.exists &&
-  deserializeAttestationData(await fetchSchema(rpc, schema), acct.data.data).verified;
+const { picked, routes } = await pickVerifiedEr(new Connection(RPC));
+// picked.fqdn      -> the verified ER endpoint to send transactions to
+// picked.covenant  -> { status: "UpToDate", mrTd, verifiedAt, expiry, ... }
 ```
 
 The attestation carries the enclave's DCAP result (TCB status, `mr_td`) and is
-signed by the Covenant issuer. A reader trusts it by checking the signer is an
-authorized signer of the credential. Validator identities do not rotate, so the
-key is stable.
+signed by an authorized signer of the Covenant credential. Attestations expire
+72 hours after verification and are renewed by the registry monitor — if an
+enclave stops verifying, its attestation lapses and resolvers fail closed to
+unverified. Validator identities do not rotate, so the key is stable. The
+resolver is [`@covenant-org/verified-er`](../packages/verified-er) (read-only,
+one dependency); any SAS client works too.
 
 ## 2. Meter work into an on-chain provenance root
 
@@ -89,14 +87,19 @@ slash_for_actions(amount)                                   // reason = on-chain
 via the seed-bound credit account (`[b"credits", operator]`). There is no
 caller-supplied reason to forge; the penalty is tied to the on-chain record.
 
-## 4. Verify the enclave (planned)
+## 4. Verify the enclave
 
-Enclave-level verification is a planned addition, not yet in the tree: a
-`covenant-tee` crate would pull a TDX quote from a MagicBlock Private ER, verify it
-with Intel DCAP against the Phala PCCS, and bind an agent plus its provenance root
-into the 64-byte quote challenge — a signed Covenant attestation tying the agent's
+The registry monitor's verification path is in the tree
+([`services/er-registry/tee.mjs`](../services/er-registry/tee.mjs)): pull a TDX
+quote from the ER against a fresh 64-byte challenge, DCAP-verify it against the
+Intel PCCS, enforce `report_data == challenge` so a stale or replayed quote
+fails, and require TCB `UpToDate`. The result is what lands in the on-chain
+attestation of section 1.
+
+Still ahead: a `covenant-tee` crate that binds an agent plus its provenance root
+into the quote challenge — a signed Covenant attestation tying the agent's
 record to the enclave it ran in. The reference deployment below exercises the ER
-metering and slashing loop; enclave attestation is not part of it yet.
+metering and slashing loop; agent-bound enclave attestation is not part of it yet.
 
 ## Reference deployment
 

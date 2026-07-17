@@ -1,0 +1,16 @@
+{
+  "name": "@covenant/er-registry",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Covenant verified-ER registry monitor: DCAP-verifies MagicBlock ER enclaves and keeps their SAS attestations fresh.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "monitor": "node monitor.mjs"
+  },
+  "dependencies": {
+    "@phala/dcap-qvl-web": "^0.2.7",
+    "@solana/kit": "^7.0.0",
+    "sas-lib": "^1.0.10"
+  }
+}

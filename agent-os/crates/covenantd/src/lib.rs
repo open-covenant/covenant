@@ -66472,6 +66472,174 @@ budget_credits_per_hour = {credits}
         }
     }
 
+    #[tokio::test]
+    async fn enroll_peer_surfaces_error_when_peer_registry_register_fails() {
+        // An enrollment whose registry cannot persist the minted token must NOT
+        // be reported as a clean success: the operator would hand the partner a
+        // token that resolves to nothing while believing the grant landed.
+        // enroll_peer validates display + action scopes before its first
+        // registry touch, so a register-only fault reaches the bail with no
+        // earlier read to mask it.
+        let s = server_with_peers_dyn(Arc::new(FailingRegisterPeerRegistry));
+        let resp = s
+            .op_respond(Request::EnrollPeer {
+                display: "guest".into(),
+                actions: vec![],
+            })
+            .await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("enroll: register peer:"),
+                    "an enrollment whose register() fails must surface the error, got: {message}",
+                );
+                assert!(
+                    message.contains("injected peers register write failure"),
+                    "the surfaced error must carry the registry's cause for triage, got: {message}",
+                );
+            }
+            other => panic!("expected Response::Error when register() fails, got {other:?}"),
+        }
+    }
+
+    /// Delegates every method to a real
+    /// [`covenant_peer_auth::InMemoryPeerRegistry`] except `resolve` and
+    /// `revoke`, which fail. Each test exercises exactly one fault:
+    /// authenticate's only registry touch is `resolve` (fail-closed deny) and
+    /// rotate_operator_token's only fallible touch after register + disk write
+    /// is `revoke` (soft-degrade), so the second faulting method is inert in
+    /// each. Asserts read through `inner` directly because `resolve` on the
+    /// swapped handle fails by construction.
+    struct FailingResolveRevokePeerRegistry {
+        inner: covenant_peer_auth::InMemoryPeerRegistry,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_peer_auth::PeerRegistry for FailingResolveRevokePeerRegistry {
+        async fn register(
+            &self,
+            entry: covenant_peer_auth::PeerEntry,
+        ) -> Result<(), covenant_peer_auth::PeerError> {
+            self.inner.register(entry).await
+        }
+        async fn resolve(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<Option<AgentId>, covenant_peer_auth::PeerError> {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers resolve read failure",
+            )))
+        }
+        async fn revoke(
+            &self,
+            _token: &covenant_peer_auth::PeerToken,
+        ) -> Result<bool, covenant_peer_auth::PeerError> {
+            Err(covenant_peer_auth::PeerError::Io(std::io::Error::other(
+                "injected peers revoke failure",
+            )))
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<Vec<covenant_peer_auth::PeerEntry>, covenant_peer_auth::PeerError> {
+            self.inner.recent(limit).await
+        }
+        async fn list_summaries(
+            &self,
+            limit: usize,
+            pubkey_prefix: Option<&str>,
+            status_filter: Option<covenant_peer_auth::PeerStatusFilter>,
+        ) -> Result<(Vec<covenant_peer_auth::PeerSummary>, bool), covenant_peer_auth::PeerError>
+        {
+            self.inner
+                .list_summaries(limit, pubkey_prefix, status_filter)
+                .await
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            before_ms: u64,
+        ) -> Result<u64, covenant_peer_auth::PeerError> {
+            self.inner.purge_revoked_older_than(before_ms).await
+        }
+        async fn revoke_by_token_prefix(
+            &self,
+            prefix: &str,
+            limit: usize,
+        ) -> Result<covenant_peer_auth::RevokeOutcome, covenant_peer_auth::PeerError> {
+            self.inner.revoke_by_token_prefix(prefix, limit).await
+        }
+        async fn find_unique_live_by_token_prefix(
+            &self,
+            prefix: &str,
+        ) -> Result<Option<covenant_peer_auth::PeerSummary>, covenant_peer_auth::PeerError>
+        {
+            self.inner.find_unique_live_by_token_prefix(prefix).await
+        }
+    }
+
+    #[tokio::test]
+    async fn rotate_succeeds_when_peer_registry_revoke_fails() {
+        // Soft-degrade arm: once the new token is registered and on disk, a
+        // revoke fault on the OLD token must not fail the rotation — the
+        // operator's next boot reads the new token from disk and authenticates
+        // fine; bailing here would report a completed rotation as failed. Every
+        // existing rotate test uses the infallible InMemoryPeerRegistry, so the
+        // warn-and-continue arm is dead without this injection.
+        let (mut s, _dir, _old_token, operator) = server_with_operator_token().await;
+        let reg = Arc::new(FailingResolveRevokePeerRegistry {
+            inner: covenant_peer_auth::InMemoryPeerRegistry::new(),
+        });
+        s.peers = reg.clone();
+        match s.op_respond(Request::RotateOperatorToken).await {
+            Response::OperatorTokenRotated { token_b58 } => {
+                let new_token = PeerToken::from_b58(&token_b58).expect("rotated token is b58");
+                assert_eq!(
+                    reg.inner.resolve(&new_token).await.unwrap(),
+                    Some(operator),
+                    "the rotated token must be registered even when the old-token revoke fails",
+                );
+            }
+            other => panic!("a revoke-only registry fault must not fail rotation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticate_denies_when_peer_registry_resolve_fails() {
+        // Fail-closed arm: a registry outage during authenticate must deny, not
+        // crash the connection — and the wire response stays the generic
+        // AuthenticationFailed so a storage fault is not distinguishable from a
+        // bad credential by the caller. The token IS registered (in inner), so
+        // the only cause of denial is the resolve fault; against a healthy
+        // registry this request authenticates.
+        let reg = Arc::new(FailingResolveRevokePeerRegistry {
+            inner: covenant_peer_auth::InMemoryPeerRegistry::new(),
+        });
+        let s = server_with_peers_dyn(reg.clone());
+        let token = PeerToken::generate();
+        reg.inner
+            .register(PeerEntry {
+                token,
+                agent_id: AgentId::new("guest@local", [7u8; 32]),
+                registered_at: epoch_ms(),
+            })
+            .await
+            .unwrap();
+        match s
+            .respond(
+                Request::Authenticate {
+                    token_b58: token.to_b58(),
+                },
+                &AgentId::new("wire@local", [9u8; 32]),
+            )
+            .await
+        {
+            Response::AuthenticationFailed { reason } => {
+                assert_eq!(reason, "unknown or revoked token");
+            }
+            other => panic!("a resolve fault must deny authentication, got {other:?}"),
+        }
+    }
+
     /// Like [`FailingCapabilityStore`] but the fault is on the usage-snapshot
     /// read path: only `usage_snapshot` fails, so [`Server::capability_usage`]
     /// reaches its bail arm while the other trait methods stay inert.

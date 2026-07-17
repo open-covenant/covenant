@@ -70119,6 +70119,235 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
+    async fn get_secret_denies_when_name_unknown() {
+        // The Ok(None) arm: the source is healthy but holds nothing under the
+        // requested name. The broker must deny — distinctly from a backend
+        // outage — and record the refusal by name, so an operator can tell a
+        // probe for a nonexistent secret from a secret-store failure.
+        use std::collections::BTreeMap;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let mut secrets = BTreeMap::new();
+        secrets.insert("openai-api-key".to_string(), "sk-live-value".to_string());
+        let s = server_with_audit(audit.clone())
+            .with_secret_source(Arc::new(secret::MapSecretSource::new(secrets)));
+        grant_scoped_action(&s, "secret.access", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::GetSecret {
+                name: "stripe-secret-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => assert!(
+                message.contains("no secret is registered under that name"),
+                "an unknown name under a blanket grant must be denied as unregistered: {message}"
+            ),
+            other => panic!("expected an unknown-name Error, got: {other:?}"),
+        }
+
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessDenied { secret_name, reason, .. }
+                    if secret_name == "stripe-secret-key"
+                        && reason.contains("no secret is registered under that name")
+            )),
+            "an unknown-name refusal must record SecretAccessDenied naming the secret: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_secret_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // secret.access scope can only enter the store out-of-band — a JSONL
+        // edit, an import tool, a grant written before validation existed. The
+        // scope gate surfaces such a scope as Err and the broker must fail
+        // closed: deny and audit, never fall through to the blanket-allow
+        // reading an empty scope gets.
+        use std::collections::BTreeMap;
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let mut secrets = BTreeMap::new();
+        secrets.insert("openai-api-key".to_string(), "sk-live-value".to_string());
+        let s = server_with_audit(audit.clone())
+            .with_secret_source(Arc::new(secret::MapSecretSource::new(secrets)));
+
+        // Sign and record the grant directly, mirroring grant_capability but
+        // skipping its validate_scope guard — the out-of-band shape the
+        // dispatch-time gate exists to catch. Version 2 is unsupported, so
+        // secret_access_scope_allows rejects the scope as invalid.
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "secret.access".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessDenied { secret_name, reason, .. }
+                    if secret_name == "openai-api-key"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record SecretAccessDenied with the cause: {events:?}"
+        );
+    }
+
+    /// A [`CapabilityStore`](covenant_permissions::CapabilityStore) that
+    /// delegates to a real [`InMemoryCapabilityStore`] but fails every
+    /// `list_for_subject` read after the first. The first read serves the
+    /// capability check, which admits the grant; the second is the secret
+    /// broker's scope gate, so the gate observes a store that degraded
+    /// mid-request.
+    struct FailingSecondListCapabilityStore {
+        inner: covenant_permissions::InMemoryCapabilityStore,
+        list_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_permissions::CapabilityStore for FailingSecondListCapabilityStore {
+        async fn record(
+            &self,
+            signed: covenant_permissions::SignedCapability,
+        ) -> Result<(), covenant_permissions::PermissionError> {
+            self.inner.record(signed).await
+        }
+        async fn revoke(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.revoke(signature).await
+        }
+        async fn is_revoked(
+            &self,
+            signature: [u8; 64],
+        ) -> Result<bool, covenant_permissions::PermissionError> {
+            self.inner.is_revoked(signature).await
+        }
+        async fn list_for_subject(
+            &self,
+            subject_pubkey: [u8; 32],
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            if self
+                .list_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                >= 1
+            {
+                return Err(covenant_permissions::PermissionError::Io(
+                    std::io::Error::other("injected capability list failure"),
+                ));
+            }
+            self.inner.list_for_subject(subject_pubkey).await
+        }
+        async fn recent(
+            &self,
+            limit: usize,
+        ) -> Result<
+            Vec<covenant_permissions::SignedCapability>,
+            covenant_permissions::PermissionError,
+        > {
+            self.inner.recent(limit).await
+        }
+        async fn purge_revoked_older_than(
+            &self,
+            before_ms: u64,
+        ) -> Result<u64, covenant_permissions::PermissionError> {
+            self.inner.purge_revoked_older_than(before_ms).await
+        }
+        async fn consume_uses(
+            &self,
+            requests: &[covenant_permissions::BudgetConsumeRequest],
+        ) -> Result<covenant_permissions::BudgetConsumeOutcome, covenant_permissions::PermissionError>
+        {
+            self.inner.consume_uses(requests).await
+        }
+        async fn usage_snapshot(
+            &self,
+        ) -> Result<Vec<covenant_permissions::CapabilityUsage>, covenant_permissions::PermissionError>
+        {
+            self.inner.usage_snapshot().await
+        }
+    }
+
+    #[tokio::test]
+    async fn get_secret_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the broker. The exposed
+        // arm is a store that fails BETWEEN the check and the scope gate: the
+        // second list_for_subject read errs and the broker must fail closed —
+        // deny and audit — rather than release the secret under a grant it
+        // can no longer read.
+        use std::collections::BTreeMap;
+        let mut secrets = BTreeMap::new();
+        secrets.insert("openai-api-key".to_string(), "sk-live-value".to_string());
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }))
+        .with_secret_source(Arc::new(secret::MapSecretSource::new(secrets)));
+        grant_scoped_action(&s, "secret.access", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::GetSecret {
+                name: "openai-api-key".into(),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("secret access rejected"),
+                    "a store failure at the scope gate must deny, not release: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::SecretAccessDenied { secret_name, reason, .. }
+                    if secret_name == "openai-api-key"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record SecretAccessDenied with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn write_frame_error_writes_generic_message_for_frame_too_large() {
         // Client-distinguishability guard: handle() used to close the
         // connection on FrameTooLarge with no payload, so the client

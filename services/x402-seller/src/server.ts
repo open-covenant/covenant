@@ -37,6 +37,7 @@ import { zauthProvider } from "@zauthx402/sdk/middleware";
 import { getPassport } from "./passport.js";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
 import { getReputation } from "./reputation.js";
+import { verifyErEnclave, ErEnclaveError } from "./er-enclave.js";
 
 const PORT = Number(process.env.PORT ?? 10000);
 const PAY_TO = process.env.COVENANT_TREASURY ?? "8xbXHAhiVe2BrYDq4qpTA5SSYJG9XNjNN6jcrudhTKCM";
@@ -69,7 +70,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({
     ok: true,
     service: "covenant-x402-seller",
-    resources: ["/x402/passport/:asset", "/x402/attest", "/x402/payai/reputation/:wallet"],
+    resources: ["/x402/passport/:asset", "/x402/attest", "/x402/payai/reputation/:wallet", "/x402/er/enclave/:validator"],
   });
 });
 
@@ -86,9 +87,10 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
       `${base}/x402/passport/{asset}`,
       `${base}/x402/attest`,
       `${base}/x402/payai/reputation/{wallet}`,
+      `${base}/x402/er/enclave/{validator}`,
     ],
     instructions:
-      "Covenant Trust x402 seller. Pay USDC on Solana to verify an agent's on-chain identity passport (GET /x402/passport/<mpl-core-asset>), obtain a Covenant-signed attestation over a claim (POST /x402/attest), or read a wallet's PayAI settlement-grounded reputation (GET /x402/payai/reputation/<wallet>).",
+      "Covenant Trust x402 seller. Pay USDC on Solana to verify an agent's on-chain identity passport (GET /x402/passport/<mpl-core-asset>), obtain a Covenant-signed attestation over a claim (POST /x402/attest), read a wallet's PayAI settlement-grounded reputation (GET /x402/payai/reputation/<wallet>), or get a Covenant-signed live TDX verification of a MagicBlock ephemeral rollup (GET /x402/er/enclave/<validator>, optional ?agent=<pubkey>&provenance_root=<hex> to bind an agent's record into the quote challenge).",
     // Pin this key to verify /x402/attest responses without trusting this server.
     attestation: attestor
       ? {
@@ -185,6 +187,23 @@ const routes: RoutesConfig = {
       },
     }),
   ),
+  "GET /x402/er/enclave/:validator": gate(
+    "10000",
+    "Live TDX verification of a MagicBlock ephemeral rollup: a fresh quote from the validator's router-listed endpoint, DCAP-verified against the Intel PCCS, Covenant-signed. Optionally binds an agent and its provenance root into the quote challenge.",
+    declareDiscoveryExtension({
+      pathParams: { validator: "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo" },
+      pathParamsSchema: {
+        properties: { validator: { type: "string", description: "ER validator identity from the Magic Router (base58)" } },
+        required: ["validator"],
+      },
+      output: {
+        example: {
+          enclave: { validator: "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo", tee: "intel-tdx", status: "UpToDate", mr_td: "…" },
+          attestation: { alg: "ed25519", signature_b58: "…", pubkey_b58: "…" },
+        },
+      },
+    }),
+  ),
 };
 
 app.use(
@@ -244,8 +263,44 @@ app.get("/x402/payai/reputation/:wallet", async (req: Request, res: Response) =>
   }
 });
 
+// Paid — a live TDX check of a MagicBlock ER, wrapped in the same published
+// attestation key. Returning >= 400 cancels settlement, so an open validator,
+// a bad binding, or an upstream failure is never charged.
+app.get("/x402/er/enclave/:validator", async (req: Request, res: Response) => {
+  if (!attestor) {
+    res.status(503).json({ error: "attestation signer not configured" });
+    return;
+  }
+  const validator = req.params.validator;
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(validator)) {
+    res.status(400).json({ error: "validator must be a base58 identity from the Magic Router" });
+    return;
+  }
+  const agent = typeof req.query.agent === "string" ? req.query.agent : undefined;
+  const provenanceRoot = typeof req.query.provenance_root === "string" ? req.query.provenance_root : undefined;
+  if ((agent === undefined) !== (provenanceRoot === undefined)) {
+    res.status(400).json({ error: "agent and provenance_root bind together — pass both or neither" });
+    return;
+  }
+  if (agent && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(agent)) {
+    res.status(400).json({ error: "agent must be a base58 Solana address" });
+    return;
+  }
+  try {
+    const enclave = await verifyErEnclave(validator, { agent, provenanceRoot });
+    const attestation = attestor.attest(validator, enclave, Math.floor(Date.now() / 1000));
+    res.json({ enclave, attestation });
+  } catch (e) {
+    if (e instanceof ErEnclaveError) {
+      res.status(e.status).json({ error: e.message });
+      return;
+    }
+    res.status(502).json({ error: "enclave verification upstream unavailable" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(
-    `covenant-x402-seller on :${PORT} — paid /x402/passport/:asset + /x402/attest + /x402/payai/reputation/:wallet, payTo ${PAY_TO}, facilitator ${FACILITATOR_URL}`,
+    `covenant-x402-seller on :${PORT} — paid /x402/passport/:asset + /x402/attest + /x402/payai/reputation/:wallet + /x402/er/enclave/:validator, payTo ${PAY_TO}, facilitator ${FACILITATOR_URL}`,
   );
 });

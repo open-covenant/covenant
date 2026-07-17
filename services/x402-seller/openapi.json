@@ -4,19 +4,38 @@
     "title": "Covenant Trust",
     "version": "1.0.0",
     "description": "Verify another agent before you transact with it. On-chain identity passports, Covenant-signed attestations, and PayAI settlement-grounded reputation, priced per call in USDC over x402 on Solana.",
-    "contact": { "url": "https://opencovenant.org" },
-    "license": { "name": "Apache-2.0" },
+    "contact": {
+      "url": "https://opencovenant.org"
+    },
+    "license": {
+      "name": "Apache-2.0"
+    },
     "x-guidance": "Use /x402/passport/{asset} to confirm a counterparty agent's on-chain identity (MPL Core asset + 014 Registry binding + Covenant attestation) before delegating work or paying it, /x402/attest to obtain a Covenant-signed, independently-verifiable statement over a claim, and /x402/payai/reputation/{wallet} to read a wallet's reputation computed from its on-chain PayAI settlements."
   },
-  "servers": [{ "url": "https://x402-seller.opencovenant.org" }],
+  "servers": [
+    {
+      "url": "https://x402-seller.opencovenant.org"
+    }
+  ],
   "paths": {
     "/.well-known/x402": {
       "get": {
         "operationId": "discovery",
         "summary": "Fetch x402 discovery: resources and the attestation public key.",
-        "tags": ["meta"],
+        "tags": [
+          "meta"
+        ],
         "responses": {
-          "200": { "description": "Discovery document", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Discovery" } } } }
+          "200": {
+            "description": "Discovery document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -24,23 +43,44 @@
       "get": {
         "operationId": "getPassport",
         "summary": "Verify an agent's on-chain identity passport.",
-        "tags": ["trust"],
+        "tags": [
+          "trust"
+        ],
         "parameters": [
           {
             "in": "path",
             "name": "asset",
             "required": true,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "The agent's MPL Core asset address (base58).",
             "example": "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH"
           }
         ],
         "responses": {
-          "200": { "description": "Passport", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Passport" } } } },
-          "400": { "description": "Not a valid Solana address" },
-          "402": { "description": "Payment Required" },
-          "404": { "description": "Not an MPL Core asset" },
-          "502": { "description": "Chain/DAS upstream unavailable" }
+          "200": {
+            "description": "Passport",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Passport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid Solana address"
+          },
+          "402": {
+            "description": "Payment Required"
+          },
+          "404": {
+            "description": "Not an MPL Core asset"
+          },
+          "502": {
+            "description": "Chain/DAS upstream unavailable"
+          }
         }
       }
     },
@@ -48,28 +88,60 @@
       "post": {
         "operationId": "attest",
         "summary": "Create a Covenant-signed attestation over a claim.",
-        "tags": ["trust"],
+        "tags": [
+          "trust"
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["subject", "claim"],
+                "required": [
+                  "subject",
+                  "claim"
+                ],
                 "properties": {
-                  "subject": { "type": "string", "maxLength": 256, "description": "What the claim is about." },
-                  "claim": { "description": "Arbitrary JSON statement to be signed." }
+                  "subject": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "description": "What the claim is about."
+                  },
+                  "claim": {
+                    "description": "Arbitrary JSON statement to be signed."
+                  }
                 }
               },
-              "example": { "subject": "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH", "claim": { "delivered": true, "task": "build-report" } }
+              "example": {
+                "subject": "9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH",
+                "claim": {
+                  "delivered": true,
+                  "task": "build-report"
+                }
+              }
             }
           }
         },
         "responses": {
-          "200": { "description": "Signed attestation", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Attestation" } } } },
-          "400": { "description": "Invalid body" },
-          "402": { "description": "Payment Required" },
-          "503": { "description": "Signer not configured" }
+          "200": {
+            "description": "Signed attestation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attestation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body"
+          },
+          "402": {
+            "description": "Payment Required"
+          },
+          "503": {
+            "description": "Signer not configured"
+          }
         }
       }
     },
@@ -77,23 +149,119 @@
       "get": {
         "operationId": "getPayaiReputation",
         "summary": "Read a wallet's PayAI settlement-grounded reputation.",
-        "tags": ["trust"],
+        "tags": [
+          "trust"
+        ],
         "parameters": [
           {
             "in": "path",
             "name": "wallet",
             "required": true,
-            "schema": { "type": "string" },
+            "schema": {
+              "type": "string"
+            },
             "description": "The agent's Solana wallet (owner) address (base58).",
             "example": "CvX23FNQsNQww8ALR3EWgQv2Wt5yM7VvU4HRigGBMMJu"
           }
         ],
         "responses": {
-          "200": { "description": "Reputation plus a Covenant-signed attestation over it", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReputationResult" } } } },
-          "400": { "description": "Not a valid Solana address" },
-          "402": { "description": "Payment Required" },
-          "502": { "description": "Chain/RPC upstream unavailable" },
-          "503": { "description": "Signer not configured" }
+          "200": {
+            "description": "Reputation plus a Covenant-signed attestation over it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReputationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a valid Solana address"
+          },
+          "402": {
+            "description": "Payment Required"
+          },
+          "502": {
+            "description": "Chain/RPC upstream unavailable"
+          },
+          "503": {
+            "description": "Signer not configured"
+          }
+        }
+      }
+    },
+    "/x402/er/enclave/{validator}": {
+      "get": {
+        "operationId": "verifyErEnclave",
+        "summary": "Live TDX verification of a MagicBlock ephemeral rollup, Covenant-signed.",
+        "description": "Pulls a fresh quote from the validator's Magic-Router-listed endpoint against a random 64-byte challenge, DCAP-verifies it against the Intel PCCS, rejects stale or replayed quotes, and returns the result wrapped in a Covenant-signed attestation (the key published at /.well-known/x402). Optionally binds an agent and its provenance root into the quote challenge, proving that agent's on-chain record came from this genuine enclave. Paid via x402 (USDC on Solana); open non-TEE validators and bad requests return >= 400 and are never charged.",
+        "tags": [
+          "trust",
+          "magicblock"
+        ],
+        "parameters": [
+          {
+            "name": "validator",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ER validator identity from the Magic Router (base58).",
+            "example": "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo"
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Agent address to bind into the quote challenge (base58). Requires provenance_root."
+          },
+          {
+            "name": "provenance_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The agent's 32-byte provenance root (hex). Requires agent."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Enclave verified; DCAP result plus Covenant-signed attestation.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "enclave": {
+                    "validator": "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo",
+                    "endpoint": "https://mainnet-tee.magicblock.app/",
+                    "tee": "intel-tdx",
+                    "status": "UpToDate",
+                    "mr_td": "feb7486608382c1f\u2026",
+                    "subject": null,
+                    "verified_at": 1784548000
+                  },
+                  "attestation": {
+                    "alg": "ed25519",
+                    "pubkey_b58": "\u2026",
+                    "signature_b58": "\u2026"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad validator, agent, or provenance_root. Not charged."
+          },
+          "402": {
+            "description": "Payment required (x402 challenge)."
+          },
+          "404": {
+            "description": "Validator not on the router, or serves no enclave quote. Not charged."
+          }
         }
       }
     }
@@ -102,96 +270,229 @@
     "schemas": {
       "Passport": {
         "type": "object",
-        "required": ["asset", "registry", "attestation"],
+        "required": [
+          "asset",
+          "registry",
+          "attestation"
+        ],
         "properties": {
           "asset": {
             "type": "object",
             "properties": {
-              "id": { "type": "string" },
-              "name": { "type": "string" },
-              "owner": { "type": "string" },
-              "authority": { "type": "string" },
-              "inCovenantCollection": { "type": "boolean" },
-              "collection": { "type": ["string", "null"] },
-              "burnt": { "type": "boolean" }
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "authority": {
+                "type": "string"
+              },
+              "inCovenantCollection": {
+                "type": "boolean"
+              },
+              "collection": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "burnt": {
+                "type": "boolean"
+              }
             }
           },
           "registry": {
             "type": "object",
             "properties": {
-              "pda": { "type": "string" },
-              "registered": { "type": "boolean" },
-              "identityPlugin": { "type": "boolean" },
-              "registrationUri": { "type": ["string", "null"] }
+              "pda": {
+                "type": "string"
+              },
+              "registered": {
+                "type": "boolean"
+              },
+              "identityPlugin": {
+                "type": "boolean"
+              },
+              "registrationUri": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             }
           },
           "attestation": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "properties": {
-              "authority": { "type": ["string", "null"] },
-              "covenantAuthored": { "type": "boolean" }
+              "authority": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "covenantAuthored": {
+                "type": "boolean"
+              }
             }
           }
         }
       },
       "Attestation": {
         "type": "object",
-        "required": ["alg", "domain", "canonicalization", "payload", "digest_sha256_hex", "pubkey_b58", "signature_b58"],
+        "required": [
+          "alg",
+          "domain",
+          "canonicalization",
+          "payload",
+          "digest_sha256_hex",
+          "pubkey_b58",
+          "signature_b58"
+        ],
         "description": "Independently verifiable: digest = sha256(canonical(payload)) lowercase hex, where canonical is JSON with recursively-sorted keys and no insignificant whitespace (UTF-8); message = domain + \"\\n\" + digest; ed25519-verify base58-decoded signature_b58 over the UTF-8 message against pubkey_b58. Pin the expected pubkey from GET /.well-known/x402 (attestation.publicKey).",
         "properties": {
-          "alg": { "type": "string", "description": "Signature algorithm — \"ed25519\"." },
-          "domain": { "type": "string", "description": "Domain prefix bound into the signed message." },
-          "canonicalization": { "type": "string" },
+          "alg": {
+            "type": "string",
+            "description": "Signature algorithm \u2014 \"ed25519\"."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Domain prefix bound into the signed message."
+          },
+          "canonicalization": {
+            "type": "string"
+          },
           "payload": {
             "type": "object",
             "properties": {
-              "subject": { "type": "string" },
+              "subject": {
+                "type": "string"
+              },
               "claim": {},
-              "ts": { "type": "integer" }
+              "ts": {
+                "type": "integer"
+              }
             }
           },
-          "digest_sha256_hex": { "type": "string" },
-          "pubkey_b58": { "type": "string", "description": "Signer pubkey; must match attestation.publicKey from /.well-known/x402." },
-          "signature_b58": { "type": "string" }
+          "digest_sha256_hex": {
+            "type": "string"
+          },
+          "pubkey_b58": {
+            "type": "string",
+            "description": "Signer pubkey; must match attestation.publicKey from /.well-known/x402."
+          },
+          "signature_b58": {
+            "type": "string"
+          }
         }
       },
       "ReputationResult": {
         "type": "object",
-        "required": ["reputation", "attestation"],
+        "required": [
+          "reputation",
+          "attestation"
+        ],
         "description": "A wallet's reputation computed from on-chain PayAI settlements, plus a Covenant-signed attestation over it (same key and verify recipe as /x402/attest). Recompute over the same settlements to reproduce the numbers; nothing is self-reported.",
         "properties": {
           "reputation": {
             "type": "object",
-            "required": ["wallet", "settled_jobs", "distinct_counterparties", "volume_micro_usdc", "tier", "score", "source_fee_payer"],
+            "required": [
+              "wallet",
+              "settled_jobs",
+              "distinct_counterparties",
+              "volume_micro_usdc",
+              "tier",
+              "score",
+              "source_fee_payer"
+            ],
             "properties": {
-              "wallet": { "type": "string", "description": "Solana wallet (owner) the reputation is for." },
-              "settled_jobs": { "type": "integer", "description": "Inbound settlements from other wallets (self-payments excluded)." },
-              "distinct_counterparties": { "type": "integer", "description": "Distinct payer wallets." },
-              "volume_micro_usdc": { "type": "integer", "description": "Lifetime inbound USDC in atomic units (6 decimals)." },
-              "tier": { "type": "string", "enum": ["bronze", "silver", "gold", "platinum"] },
-              "score": { "type": "integer", "description": "0-1000 composite of jobs, distinct counterparties, and volume." },
-              "source_fee_payer": { "type": "string", "description": "PayAI facilitator fee-payer the settlements were read from." }
+              "wallet": {
+                "type": "string",
+                "description": "Solana wallet (owner) the reputation is for."
+              },
+              "settled_jobs": {
+                "type": "integer",
+                "description": "Inbound settlements from other wallets (self-payments excluded)."
+              },
+              "distinct_counterparties": {
+                "type": "integer",
+                "description": "Distinct payer wallets."
+              },
+              "volume_micro_usdc": {
+                "type": "integer",
+                "description": "Lifetime inbound USDC in atomic units (6 decimals)."
+              },
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "bronze",
+                  "silver",
+                  "gold",
+                  "platinum"
+                ]
+              },
+              "score": {
+                "type": "integer",
+                "description": "0-1000 composite of jobs, distinct counterparties, and volume."
+              },
+              "source_fee_payer": {
+                "type": "string",
+                "description": "PayAI facilitator fee-payer the settlements were read from."
+              }
             }
           },
-          "attestation": { "$ref": "#/components/schemas/Attestation" }
+          "attestation": {
+            "$ref": "#/components/schemas/Attestation"
+          }
         }
       },
       "Discovery": {
         "type": "object",
-        "required": ["version", "resources"],
+        "required": [
+          "version",
+          "resources"
+        ],
         "properties": {
-          "version": { "type": "integer" },
-          "resources": { "type": "array", "items": { "type": "string" } },
-          "instructions": { "type": "string" },
+          "version": {
+            "type": "integer"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "instructions": {
+            "type": "string"
+          },
           "attestation": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "description": "Pin attestation.publicKey to verify /x402/attest responses offline.",
             "properties": {
-              "algorithm": { "type": "string" },
-              "publicKey": { "type": "string" },
-              "domain": { "type": "string" },
-              "canonicalization": { "type": "string" },
-              "verify": { "type": "string" }
+              "algorithm": {
+                "type": "string"
+              },
+              "publicKey": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string"
+              },
+              "canonicalization": {
+                "type": "string"
+              },
+              "verify": {
+                "type": "string"
+              }
             }
           }
         }

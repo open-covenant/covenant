@@ -110,12 +110,12 @@ export default function MultichainPage() {
 
       <h2>Payments: chain-local USDC, never the token</h2>
       <p>
-        Covenant runs x402 paid endpoints on Solana mainnet and now on Base too,
-        returning real USDC payment challenges per call. Per-call value is
-        chain-local USDC, signed through an EIP-3009 authorization so an agent
-        needs only USDC, not the gas token and not $CVNT. The Base endpoint
-        settles gaslessly through Coinbase&apos;s x402 facilitator; the token
-        boundary holds either way, $CVNT never crosses.
+        Covenant runs x402 paid endpoints on Solana mainnet, returning real USDC
+        payment challenges per call. The same rail extends to Base:{" "}
+        <code>covenant-x402</code> signs EIP-3009 USDC authorizations so an agent
+        needs only USDC, not the gas token and not $CVNT, settling gaslessly
+        through Coinbase&apos;s x402 facilitator. The Base seller is built and not
+        yet deployed; the token boundary holds either way, $CVNT never crosses.
       </p>
 
       <h2>A name that resolves to the identity</h2>
@@ -139,7 +139,7 @@ export default function MultichainPage() {
         the trust root.
       </p>
 
-      <h2>Verify it yourself</h2>
+      <h2>Verifiable on Base mainnet</h2>
       <p>Address sheet, Base mainnet (chain 8453):</p>
       <pre>
         <code>{`issuer identity (attestor)   0x186953d5b4A290f8f53b8377cb38EDA75D664211

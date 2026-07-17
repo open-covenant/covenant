@@ -66,6 +66,11 @@ const TILES = [
     body: "Trust boundaries, threat model, defaults, and operator responsibilities.",
   },
   {
+    href: "/multichain",
+    title: "Multi-chain trust",
+    body: "How identity, reputation, and bond receipts project onto Base as signed data any EVM verifies with one ecrecover, while $CVNT stays Solana-only.",
+  },
+  {
     href: "/provenance",
     title: "Provenance",
     body: "Commit-scoped envelopes for autonomy tasks, changed file evidence, and validation records.",
@@ -136,7 +141,12 @@ export default function DocsIndexPage() {
         manifest-level requirements, trusted-local fail-closed behavior,
         daemon-selectable Linux gVisor configuration, runtime-level gVisor
         runner work, live Linux sandbox coverage, and a documented Linux runner
-        setup. Distributed settlement, installers, additional-language SDK
+        setup. Covenant&apos;s trust layer is live on Base mainnet (ERC-8004
+        identity, a bond-receipt verifier, an EAS reputation schema, and ENS
+        CCIP-Read resolution), projecting Solana-canonical records as signed data
+        any EVM contract verifies with one <code>ecrecover</code> while $CVNT
+        stays a single Solana mint. Distributed settlement, cross-chain
+        enforcement, installers, additional-language SDK
         publication (Python and Rust-crate), release-scope and audit-root
         signing, and transparency publication are
         tracked on <a href="https://opencovenant.org/roadmap">the roadmap</a>.

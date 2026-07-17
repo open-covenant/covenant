@@ -51,6 +51,11 @@ const FAQ: { id: string; q: string; a: string }[] = [
     a: "No. Covenant runs fully locally and records settlement receipts to a local ledger by default. The Solana settlement program is live on mainnet, but the daemon anchors receipts locally by default; chain fields stay empty unless the on-chain flush is configured.",
   },
   {
+    id: "multi-chain",
+    q: "Does Covenant work across chains?",
+    a: "Yes. $CVNT is a single Solana mint that never bridges, but Covenant's trust layer projects onto Base mainnet: the foundation agent is registered under ERC-8004, a bond-receipt verifier and an EAS reputation schema are deployed, and agents resolve through an ENS CCIP-Read gateway, each as a signed statement any EVM contract verifies with one ecrecover. Per-call fees and bonds are always chain-local USDC. On-chain reputation writes and funded bonds are registered but not yet exercised.",
+  },
+  {
     id: "eight-primitives",
     q: "What are the eight primitives?",
     a: "Intent, runtime, memory, identity, permissions, comms, compositor, and settlement. Each one is a host-level service that agents and people share, defined term by term in the glossary.",

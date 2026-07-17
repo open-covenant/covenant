@@ -55,6 +55,7 @@ const MILESTONES: Milestone[] = [
       "Mid-task save and resume when an agent reaches its resource budget",
       "On-chain agent identity and audit-root attestation on Solana mainnet, verifiable via the Covenant Verified check (Metaplex MPL Core)",
       "Settlement program live on Solana mainnet: $CVNT-to-credits, staking, slashing, and on-chain receipt anchoring transact on-chain; the daemon-driven per-intent settlement lifecycle is not yet production",
+      "Multi-chain trust on Base mainnet: the agent is registered under ERC-8004, with a deployed bond-receipt verifier, an EAS reputation schema, and ENS name resolution, all pointing back to the canonical Solana identity and verifiable with one ecrecover; on-chain reputation writes and funded bonds are not yet exercised, and $CVNT never leaves Solana",
       "TypeScript SDK on npm (@covenant-org/sdk): signed settlement, staking, and receipt-anchor instructions built from the on-chain program IDLs",
       "Apache 2.0 core",
     ],
@@ -105,6 +106,7 @@ const MILESTONES: Milestone[] = [
       "Multi-device memory synchronization for a single identity",
       "Agent migration across hosts",
       "Trust flows for cross-organization marketplace transactions",
+      "Cross-chain enforcement: slash a Solana bond from an EVM-proven event, with an objective fault definition and a challenge window",
     ],
   },
   {

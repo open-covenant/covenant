@@ -132,8 +132,11 @@ const SECTIONS: Section[] = [
         hundred tests, including over four hundred fifty that exercise real process, model, and
         network boundaries. Production-grade isolation for untrusted code and networked multi-peer
         operation are on the roadmap, not the changelog; the Solana settlement program is live on
-        mainnet, while its daemon-driven per-intent lifecycle is not yet production. The line between
-        done, experimental, and
+        mainnet, while its daemon-driven per-intent lifecycle is not yet production. The trust layer
+        also reaches Base mainnet: an agent&apos;s identity, reputation, and bond receipts are
+        published there as signed statements any contract can check in one step, without ever moving
+        $CVNT off Solana; the parts not exercised yet, like on-chain reputation writes and funded
+        bonds, we mark as such. The line between done, experimental, and
         planned is documented in BUILT.md and throughout the docs. If a claim is not true yet, we do
         not make it.
       </p>

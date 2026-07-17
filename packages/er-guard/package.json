@@ -1,0 +1,21 @@
+{
+  "name": "@covenant-org/er-guard",
+  "version": "0.1.0",
+  "description": "Session-reliability keeper for MagicBlock ephemeral rollups: watches delegated accounts and brings them home on idle, max-lifetime, or validator stall.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "guard.mjs",
+  "bin": { "er-guard": "cli.mjs" },
+  "files": ["guard.mjs", "cli.mjs", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-covenant/covenant",
+    "directory": "packages/er-guard"
+  },
+  "homepage": "https://github.com/open-covenant/covenant/blob/main/docs/magicblock-integration.md",
+  "keywords": ["solana", "magicblock", "ephemeral-rollup", "delegation", "keeper", "covenant"],
+  "dependencies": {
+    "@magicblock-labs/ephemeral-rollups-sdk": "^0.16.0",
+    "@solana/web3.js": "^1.98.0"
+  }
+}

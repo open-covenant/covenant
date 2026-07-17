@@ -54374,6 +54374,181 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn purge_audit_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // audit.purge scope can only enter the store out-of-band. The purge
+        // scope gate surfaces it as Err and must fail closed: deny and
+        // audit before any log truncation — never fall through to the
+        // blanket-allow an empty scope gets.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "audit.purge".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s.op_respond(Request::PurgeAudit { before_ms: 1 }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("audit purge rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "audit:purge"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_audit_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The purge capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the purge must fail
+        // closed — deny and audit — rather than truncate the log under a
+        // grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "audit.purge", serde_json::json!({})).await;
+
+        match s.op_respond(Request::PurgeAudit { before_ms: 1 }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("audit purge rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not purge: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "audit:purge"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_capabilities_enforces_scope_at_dispatch_only() {
+        // capabilities.* sits deliberately outside every grant-time scope
+        // namespace (docs/capabilities.md: "enforced only at dispatch"):
+        // ScopeNamespace::from_action returns None, validate_scope passes
+        // the scope through unchanged, and capabilities_purge_scope_allows
+        // can never yield the invalid-scope Err — only its before_ms
+        // cutoff binds. Pin the divergence from the versioned namespaces
+        // (contrast purge_audit_denies_when_grant_scope_is_malformed): a
+        // scope audit.purge rejects as unsupported version 2 is preserved
+        // as signed metadata here, the purge proceeds under the
+        // absent-cutoff blanket allow, and no scope rejection is recorded.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "capabilities.purge".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::PurgeCapabilities { before_ms: 1 })
+            .await
+        {
+            Response::CapabilitiesPurged { purged } => {
+                assert_eq!(purged, 0, "fresh store has no revoked grants to reap");
+            }
+            other => panic!("expected CapabilitiesPurged, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            !events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, .. }
+                    if agent_id == "capabilities:purge"
+            )),
+            "dispatch-only enforcement must not record a scope rejection: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_capabilities_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The purge capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the purge must fail
+        // closed — deny and audit — rather than reap tombstones under a
+        // grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "capabilities.purge", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::PurgeCapabilities { before_ms: 1 })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("capabilities purge rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not purge: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "capabilities:purge"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn compact_a2a_rejects_without_capability() {
         let s = server_with(vec![], "");
         let resp = s.op_respond(Request::CompactA2A).await;

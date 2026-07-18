@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-18T21:01:20.341Z",
+  "updatedAt": "2026-07-18T21:21:23.934Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12896,
-    "tasks": 1512,
+    "events": 12900,
+    "tasks": 1513,
     "integrated": 1513
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1505,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "projection-preempt-persist-before-kill",
+    "state": "in_progress",
+    "since": "2026-07-18T21:05:55.564Z"
+  },
   "recent": [
     {
       "at": "2026-07-18T20:58:12.526Z",

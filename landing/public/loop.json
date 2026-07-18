@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-18T20:41:12.816Z",
+  "updatedAt": "2026-07-18T21:01:20.341Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12893,
+    "events": 12896,
     "tasks": 1512,
-    "integrated": 1512
+    "integrated": 1513
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 21,
-    "velocity": 3
+    "last24h": 4,
+    "last7d": 22,
+    "velocity": 3.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-18",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-18",
-      "total": 1512
+      "total": 1513
     }
   ],
   "states": {
-    "integrated": 1504,
+    "integrated": 1505,
     "proposed": 1,
-    "blocked": 6,
-    "cross_review": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "shutdown-quiescence-checkpoint-ordering",
-    "state": "cross_review",
-    "since": "2026-07-18T19:40:10.835Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-18T20:58:12.526Z",
+      "task": "shutdown-quiescence-checkpoint-ordering",
+      "note": "integrated as 6d4aa259 (covenant-budget pause_voided + strict replay), 7cb20300 (covenantd completion void + dual-sweep both select arms + g"
+    },
     {
       "at": "2026-07-18T14:46:16.718Z",
       "task": "budget-projection-preempt-pause-checkpoint",
@@ -315,11 +315,6 @@
       "at": "2026-07-13T12:39:35.152Z",
       "task": "in-source-line-ref-drift-reanchor",
       "note": "merged and pushed on loop/main-track as 5c15cfc4 (rustfmt sweep 7c51acbb on top, then overseer-directed stake-keeper line-ref fix 55834d72);"
-    },
-    {
-      "at": "2026-07-12T13:31:13.205Z",
-      "task": "workspace-paymentextra-struct-literal-drift",
-      "note": "fix merged on loop/main-track; struct-literal drift gate verified by CI run 29193474452 (rustfmt fix c5ac873a follow-up included)"
     }
   ]
 }

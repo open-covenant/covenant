@@ -19134,6 +19134,60 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn settlement_backfill_rejects_scope_before_ms_bound_and_audits() {
+        // backfill_receipts repairs every legacy row, so the gate probes the
+        // scope with before_ms = u64::MAX: a recency-bounded grant can never
+        // authorize the full-window repair. The denial takes the plain
+        // scope-rejection arm — not the invalid-scope arm — and must audit
+        // without reaching the store rewrite.
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "settlement.backfill.dry_run",
+            serde_json::json!({ "version": 1, "before_ms": 1 }),
+        )
+        .await;
+
+        match s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement backfill rejected by capability scope"),
+                    "a bounded grant must deny the unbounded repair: {message}"
+                );
+                assert!(
+                    message.contains("mode or before_ms bound does not match capability scope"),
+                    "the denial must carry the scope-mismatch cause: {message}"
+                );
+            }
+            other => panic!("expected a scope-rejection Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "settlement-backfill"
+                        && action == "settlement.backfill.dry_run"
+                        && reason.contains("before_ms bound does not match")
+            )),
+            "a bounded-scope refusal must record CapabilityScopeRejected: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::SettlementReceiptBackfillApplied { .. })),
+            "a scope-rejected backfill must not reach the store rewrite: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn memory_backfill_denies_when_grant_scope_is_malformed() {
         // grant_capability validates scopes at grant time, so a malformed
         // memory.backfill scope can only enter the store out-of-band. The
@@ -19242,6 +19296,61 @@ required = {caps:?}
                 .iter()
                 .any(|e| matches!(e.kind, AuditKind::MemoryRecordBackfillApplied { .. })),
             "a fail-closed backfill must not reach the correlation planner: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_rejects_scope_before_ms_bound_and_audits() {
+        // memory_receipt_backfill_correlations runs against every row the
+        // store returns, so the gate probes the scope with before_ms =
+        // u64::MAX: a recency-bounded grant can never authorize the
+        // full-window repair. The denial takes the plain scope-rejection
+        // arm — not the invalid-scope arm — and must audit without reaching
+        // the correlation planner.
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "memory.backfill.dry_run",
+            serde_json::json!({ "version": 1, "before_ms": 1 }),
+        )
+        .await;
+
+        match s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory backfill rejected by capability scope"),
+                    "a bounded grant must deny the unbounded repair: {message}"
+                );
+                assert!(
+                    message.contains("mode or before_ms bound does not match capability scope"),
+                    "the denial must carry the scope-mismatch cause: {message}"
+                );
+            }
+            other => panic!("expected a scope-rejection Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory-backfill"
+                        && action == "memory.backfill.dry_run"
+                        && reason.contains("before_ms bound does not match")
+            )),
+            "a bounded-scope refusal must record CapabilityScopeRejected: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::MemoryRecordBackfillApplied { .. })),
+            "a scope-rejected backfill must not reach the correlation planner: {events:?}"
         );
     }
 
@@ -55412,6 +55521,51 @@ required = {caps:?}
                     if agent_id == "capabilities:purge"
             )),
             "dispatch-only enforcement must not record a scope rejection: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_capabilities_rejects_scope_cutoff_exceeded_and_audits() {
+        // capabilities.* scopes skip grant-time validation, so the before_ms
+        // cutoff is the one bound capabilities_purge_scope_allows enforces —
+        // and only at dispatch. A purge past the granted cutoff must take
+        // the plain scope-rejection arm (not the invalid-scope arm) and
+        // audit the cutoff cause.
+        let s = server_with(vec![], "");
+        grant_scoped_action(
+            &s,
+            "capabilities.purge",
+            serde_json::json!({ "version": 1, "before_ms": 5 }),
+        )
+        .await;
+
+        match s
+            .op_respond(Request::PurgeCapabilities { before_ms: 100 })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("capabilities purge rejected by capability scope"),
+                    "a purge past the granted cutoff must deny: {message}"
+                );
+                assert!(
+                    message.contains("before_ms 100 exceeds capability scope"),
+                    "the denial must carry the cutoff cause: {message}"
+                );
+            }
+            other => panic!("expected a scope-rejection Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "capabilities:purge"
+                        && action == "capabilities.purge"
+                        && reason == "before_ms 100 exceeds capability scope"
+            )),
+            "a cutoff-exceeded refusal must record CapabilityScopeRejected: {events:?}"
         );
     }
 

@@ -18750,6 +18750,502 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn memory_repair_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // memory.repair scope can only enter the store out-of-band. The
+        // repair-side scope gate surfaces it as Err and must fail closed:
+        // deny, audit, and leave the record intact — never fall through to
+        // the blanket-allow an empty scope gets. Apply mode makes the proof
+        // real: a fell-through repair would delete the record.
+        let s = server_with(vec![], "");
+        let id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "stale working memory".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "memory.repair.apply".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::Apply,
+                    command: MemoryRepairCommand::DeleteRecord { id },
+                    reason: "prune stale record".into(),
+                },
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory repair rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == &format!("memory-repair:delete_record:{id}")
+                        && action == "memory.repair.apply"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        assert!(
+            s.memory.get(id).await.unwrap().is_some(),
+            "a scope-rejected repair must not delete the record"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_repair_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the record lookup in between reads the memory store, not the
+        // capability store, so the second list_for_subject read is the
+        // gate's — it errs and the repair must fail closed rather than
+        // delete the record under a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "stale working memory".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        grant_scoped_action(&s, "memory.repair.apply", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::RepairMemory {
+                request: covenant_memory::MemoryRepairRequest {
+                    mode: MemoryRepairMode::Apply,
+                    command: MemoryRepairCommand::DeleteRecord { id },
+                    reason: "prune stale record".into(),
+                },
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory repair rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not repair: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == &format!("memory-repair:delete_record:{id}")
+                        && action == "memory.repair.apply"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        assert!(
+            s.memory.get(id).await.unwrap().is_some(),
+            "a fail-closed repair must not delete the record"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_compaction_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // memory.compact scope can only enter the store out-of-band. The
+        // compaction-side scope gate surfaces it as Err and must fail
+        // closed: deny, audit, and never reach the compaction planner.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "memory.compact.dry_run".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::CompactMemory {
+                request: MemoryCompactionRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    policy: covenant_types::MemoryCompactionPolicy {
+                        detach_stale_parents: true,
+                        ..covenant_types::MemoryCompactionPolicy::default()
+                    },
+                    reason: "routine compaction".into(),
+                },
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory compaction rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory-compact"
+                        && action == "memory.compact.dry_run"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::MemoryCompactionApplied { .. })),
+            "a scope-rejected compaction must not reach the planner: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_compaction_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the operator-identity check in between reads no store, so the
+        // second list_for_subject read is the gate's — it errs and the
+        // compaction must fail closed rather than run under a grant it can
+        // no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "memory.compact.dry_run", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::CompactMemory {
+                request: MemoryCompactionRequest {
+                    mode: MemoryRepairMode::DryRun,
+                    policy: covenant_types::MemoryCompactionPolicy {
+                        detach_stale_parents: true,
+                        ..covenant_types::MemoryCompactionPolicy::default()
+                    },
+                    reason: "routine compaction".into(),
+                },
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory compaction rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not compact: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory-compact"
+                        && action == "memory.compact.dry_run"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::MemoryCompactionApplied { .. })),
+            "a fail-closed compaction must not reach the planner: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // settlement.backfill scope can only enter the store out-of-band.
+        // The backfill-side scope gate surfaces it as Err and must fail
+        // closed: deny, audit, and never reach the store rewrite. The gate
+        // precedes the home-directory check, so a fell-through gate would
+        // surface the distinct no-home error instead.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "settlement.backfill.dry_run".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement backfill rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "settlement-backfill"
+                        && action == "settlement.backfill.dry_run"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::SettlementReceiptBackfillApplied { .. })),
+            "a scope-rejected backfill must not reach the store rewrite: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn settlement_backfill_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the operator-identity check in between reads no store, so the
+        // second list_for_subject read is the gate's — it errs and the
+        // backfill must fail closed rather than rewrite receipts under a
+        // grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "settlement.backfill.dry_run", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::BackfillSettlementReceipts {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("settlement backfill rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not backfill: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "settlement-backfill"
+                        && action == "settlement.backfill.dry_run"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::SettlementReceiptBackfillApplied { .. })),
+            "a fail-closed backfill must not reach the store rewrite: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // memory.backfill scope can only enter the store out-of-band. The
+        // backfill-side scope gate surfaces it as Err and must fail closed:
+        // deny, audit, and never reach the correlation planner.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "memory.backfill.dry_run".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory backfill rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory-backfill"
+                        && action == "memory.backfill.dry_run"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::MemoryRecordBackfillApplied { .. })),
+            "a scope-rejected backfill must not reach the correlation planner: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_backfill_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the operator-identity check in between reads no store, so the
+        // second list_for_subject read is the gate's — it errs and the
+        // backfill must fail closed rather than rewrite metadata under a
+        // grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "memory.backfill.dry_run", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::BackfillMemoryRecords {
+                dry_run: true,
+                scope_pubkey: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory backfill rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not backfill: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory-backfill"
+                        && action == "memory.backfill.dry_run"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e.kind, AuditKind::MemoryRecordBackfillApplied { .. })),
+            "a fail-closed backfill must not reach the correlation planner: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn memory_repair_rejects_scope_record_mismatch_and_audits() {
         let s = server_with(vec![], "");
         let id = Uuid::new_v4();

@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-18T19:20:57.608Z",
+  "updatedAt": "2026-07-18T19:41:01.311Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12891,
+    "events": 12893,
     "tasks": 1512,
     "integrated": 1512
   },
@@ -187,7 +187,7 @@
     "integrated": 1504,
     "proposed": 1,
     "blocked": 6,
-    "in_progress": 1
+    "cross_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "shutdown-quiescence-checkpoint-ordering",
-    "state": "in_progress",
-    "since": "2026-07-18T18:32:46.988Z"
+    "state": "cross_review",
+    "since": "2026-07-18T19:40:10.835Z"
   },
   "recent": [
     {

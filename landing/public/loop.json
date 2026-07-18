@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-18T12:19:06.496Z",
+  "updatedAt": "2026-07-18T12:39:13.035Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12876,
-    "tasks": 1510,
+    "events": 12880,
+    "tasks": 1511,
     "integrated": 1511
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1503,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "budget-projection-preempt-pause-checkpoint",
+    "state": "in_progress",
+    "since": "2026-07-18T12:22:41.353Z"
+  },
   "recent": [
     {
       "at": "2026-07-17T23:25:45.696Z",

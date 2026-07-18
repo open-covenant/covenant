@@ -18612,6 +18612,144 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn memory_purge_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // memory.purge scope can only enter the store out-of-band. The
+        // purge-side scope gate surfaces it as Err and must fail closed:
+        // deny, audit, and delete nothing — never fall through to the
+        // blanket-allow an empty scope gets.
+        let s = server_with(vec![], "");
+        let id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "expired working memory".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "memory.purge".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::PurgeMemory {
+                tier: Some(MemoryTier::Working),
+                before_ms: 100,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory purge rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory:purge"
+                        && action == "memory.purge"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        assert!(
+            s.memory.get(id).await.unwrap().is_some(),
+            "a scope-rejected purge must not delete records"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_purge_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the purge must fail
+        // closed — deny and audit — rather than delete records under a
+        // grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let id = Uuid::new_v4();
+        s.memory
+            .put(MemoryRecord {
+                id,
+                tier: MemoryTier::Working,
+                owner: s.identity.agent_id(),
+                text: "expired working memory".into(),
+                embedding: vec![1.0],
+                metadata: serde_json::json!({}),
+                created_at: 10,
+                parent: None,
+            })
+            .await
+            .unwrap();
+        grant_scoped_action(&s, "memory.purge", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::PurgeMemory {
+                tier: Some(MemoryTier::Working),
+                before_ms: 100,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory purge rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not purge: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory:purge"
+                        && action == "memory.purge"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        assert!(
+            s.memory.get(id).await.unwrap().is_some(),
+            "a fail-closed purge must not delete records"
+        );
+    }
+
+    #[tokio::test]
     async fn memory_repair_rejects_scope_record_mismatch_and_audits() {
         let s = server_with(vec![], "");
         let id = Uuid::new_v4();
@@ -57199,6 +57337,110 @@ required = {caps:?}
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn search_memory_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // memory.read scope can only enter the store out-of-band. The
+        // search-side scope gate surfaces it as Err and must fail closed:
+        // deny and audit — never fall through to the blanket-allow an
+        // empty scope gets.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "memory.read".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::SearchMemory {
+                query: "note".into(),
+                tier: None,
+                limit: 10,
+                min_relevance: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory search rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory:search"
+                        && action == "memory.read"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_memory_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the search must fail
+        // closed — deny and audit — rather than serve records under a
+        // grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "memory.read", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::SearchMemory {
+                query: "note".into(),
+                tier: None,
+                limit: 10,
+                min_relevance: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("memory search rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not serve: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "memory:search"
+                        && action == "memory.read"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
     }
 
     #[tokio::test]

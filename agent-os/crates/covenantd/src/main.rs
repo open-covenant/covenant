@@ -622,7 +622,7 @@ async fn main() -> Result<()> {
         UnixListener::bind(&sock_path).with_context(|| format!("bind {}", sock_path.display()))?;
     info!(path = %sock_path.display(), "covenantd listening");
 
-    tokio::select! {
+    let serve_result = tokio::select! {
         _ = shutdown_signal() => {
             info!("shutdown requested");
             // Tell the HTTP server to stop accepting new connections and
@@ -631,13 +631,29 @@ async fn main() -> Result<()> {
             // is still — unless it already exited on its own, in which
             // case the send error is correct to ignore.
             let _ = shutdown_tx.send(());
+            // First sweep at the signal instant: a supervisor with a
+            // short kill grace (docker stop defaults to 10s) can SIGKILL
+            // while the drain below burns its deadline against a pinned
+            // connection — an SSE events subscriber alone holds it open —
+            // and checkpoints not yet on disk die with the process.
+            // Re-sweeping after the drain is safe: save_pause skips rows
+            // already persisted, and an intent that completes during the
+            // drain voids its early row.
             let saved = server.save_shutdown_budget_checkpoints().await;
             info!(saved, "shutdown budget checkpoints saved");
+            Ok(())
         }
         res = server.serve(listener) => {
-            res?;
+            // The serve loop ending on its own — error or clean return —
+            // is also a shutdown. Signal the HTTP server so the drain
+            // below resolves immediately instead of burning the full
+            // drain deadline against a healthy listener, and hold the
+            // error until after the drain + checkpoint sweep + cleanup
+            // below have run; the old `res?` here skipped all of them.
+            let _ = shutdown_tx.send(());
+            res
         }
-    }
+    };
 
     // Drain HTTP under a bounded deadline so a stuck in-flight request
     // can't wedge the supervisor's SIGTERM→SIGKILL window (systemd
@@ -649,6 +665,19 @@ async fn main() -> Result<()> {
             "http drain exceeded deadline; aborting outstanding requests"
         );
     }
+    // Re-sweep for quiescence: the signal-instant sweep persisted what
+    // was active at T+0; this one picks up pauses staged by work that
+    // was still dispatching while connections drained. Rows persisted
+    // early are skipped as already paused, and an intent that completed
+    // during the drain has voided its early row, so replay sees settled
+    // work as settled rather than claimable. Dispatches on detached
+    // tasks — unix-socket connection handlers, the hermes async-outcome
+    // spawn, axum connections outliving the drain abort — are not
+    // awaited, so one finishing after this sweep can still strand a
+    // voidable row; that residual window is milliseconds and is recorded
+    // in docs/budget-pause-checkpoints.md as a known gap.
+    let saved = server.save_shutdown_budget_checkpoints().await;
+    info!(saved, "budget checkpoints re-swept after drain");
     if let Some(handle) = a2a_retry_scheduler_handle {
         handle.abort();
     }
@@ -665,6 +694,7 @@ async fn main() -> Result<()> {
     if sock_path.exists() {
         let _ = std::fs::remove_file(&sock_path);
     }
+    serve_result?;
     Ok(())
 }
 

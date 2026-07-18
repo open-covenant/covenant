@@ -2532,25 +2532,62 @@ impl Server {
             .insert(checkpoint.intent_id, checkpoint);
     }
 
-    async fn clear_active_budget_checkpoint(&self, intent_id: Uuid) {
-        self.active_budget_pauses.lock().await.remove(&intent_id);
+    async fn clear_active_budget_checkpoint(
+        &self,
+        intent_id: Uuid,
+    ) -> Option<BudgetPauseCheckpoint> {
+        self.active_budget_pauses.lock().await.remove(&intent_id)
+    }
+
+    /// After a dispatch completes successfully, tombstone any pause
+    /// checkpoint the shutdown sweep (or a projection-preempt snapshot)
+    /// persisted for this intent: the work is settled, so resuming the
+    /// persisted row would re-execute it. `NotFound` means nothing was
+    /// persisted — the common case — and is a no-op that appends no
+    /// event. Run errors must NOT void: an error leaves the persisted
+    /// row as the claimable resume point (the projection-preempt
+    /// guarantee).
+    async fn void_persisted_budget_checkpoint(&self, checkpoint: &BudgetPauseCheckpoint) {
+        let Some(store) = &self.budget_checkpoints else {
+            return;
+        };
+        match store
+            .void_pause(checkpoint.intent_id, &checkpoint.agent, epoch_ms())
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    intent_id = %checkpoint.intent_id,
+                    "voided persisted budget pause checkpoint for completed intent"
+                );
+            }
+            Err(BudgetCheckpointError::NotFound(_)) => {}
+            Err(e @ BudgetCheckpointError::AlreadyResumed(_)) => warn!(
+                intent_id = %checkpoint.intent_id,
+                error = %e,
+                "completed intent's checkpoint was already claimed for resume; settled work is re-executing"
+            ),
+            Err(e) => warn!(error = %e, "budget pause checkpoint void failed"),
+        }
     }
 
     pub async fn save_shutdown_budget_checkpoints(&self) -> usize {
         let Some(store) = &self.budget_checkpoints else {
             return 0;
         };
-        let checkpoints: Vec<BudgetPauseCheckpoint> = self
-            .active_budget_pauses
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect();
-
+        // Hold the active-pause map lock across the persist loop: a
+        // dispatch completing mid-sweep must either clear its row before
+        // it is read here (row never persisted) or block until the row is
+        // durably in the store (its void then tombstones it). Releasing
+        // the lock between snapshot and saves re-opens the window where a
+        // completion voids a not-yet-persisted row and the sweep then
+        // persists it stale — the exact double-execution the void exists
+        // to prevent. save_pause only takes store-internal locks, never
+        // this map, so holding it across the awaits cannot deadlock.
+        let active = self.active_budget_pauses.lock().await;
         let mut saved = 0usize;
-        for checkpoint in checkpoints {
-            match store.save_pause(checkpoint).await {
+        for checkpoint in active.values() {
+            match store.save_pause(checkpoint.clone()).await {
                 Ok(()) => saved += 1,
                 Err(BudgetCheckpointError::AlreadyPaused(_)) => {}
                 Err(e) => warn!(error = %e, "shutdown budget checkpoint save failed"),
@@ -5410,9 +5447,17 @@ impl Server {
                 parent: None,
             };
             let run_result = self.runner.run(card, &intent).await;
-            self.clear_active_budget_checkpoint(intent_id).await;
+            let cleared_pause = self.clear_active_budget_checkpoint(intent_id).await;
             match run_result {
                 Ok(result) => {
+                    // Success settles the work this pause row captured; a
+                    // persisted copy (shutdown sweep or preempt snapshot)
+                    // must not survive as a claimable resume, or the next
+                    // boot re-executes settled work. Errors skip this arm
+                    // entirely, so failed runs stay resumable.
+                    if let Some(checkpoint) = &cleared_pause {
+                        self.void_persisted_budget_checkpoint(checkpoint).await;
+                    }
                     // Stash captured workspace files on the async outcome (no-op
                     // for the synchronous path, which has no outcome entry) so
                     // the UI can show a file tree / preview.
@@ -67125,6 +67170,217 @@ budget_credits_per_hour = {credits}
             }
             other => panic!("a failing runner must bail to Response::Error, got {other:?}"),
         }
+    }
+
+    /// A [`Runner`] double that parks inside `run` until the test releases
+    /// it, so shutdown work (the checkpoint sweep) can be interleaved with
+    /// a genuinely in-flight dispatch on the REAL `dispatch_intent` path:
+    /// the budget staging at `remember_active_budget_checkpoint`, the
+    /// sweep's persist under the map lock, and the completion clear+void
+    /// all execute exactly as production orders them. `entered` gains a
+    /// permit once the runner is inside `run` (staging already done);
+    /// `release` is the test's gate for letting the run finish.
+    struct GatedRunner {
+        inner: MockRunner,
+        entered: Arc<tokio::sync::Semaphore>,
+        release: Arc<tokio::sync::Semaphore>,
+        succeed: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Runner for GatedRunner {
+        async fn run(
+            &self,
+            card: &AgentCard,
+            intent: &Intent,
+        ) -> Result<AgentResult, covenant_runtime::RunnerError> {
+            self.entered.add_permits(1);
+            self.release
+                .acquire()
+                .await
+                .expect("test holds the release semaphore open")
+                .forget();
+            if self.succeed {
+                self.inner.run(card, intent).await
+            } else {
+                Err(covenant_runtime::RunnerError::Io(std::io::Error::other(
+                    "injected gated runner failure",
+                )))
+            }
+        }
+    }
+
+    /// Builds a budget-enforcing Server around a [`GatedRunner`] plus the
+    /// JSONL checkpoint store, seeded and granted so `op_respond` drives
+    /// the full dispatch path. Returns the TempDir so the store's backing
+    /// file outlives the test body.
+    async fn gated_budget_server(
+        succeed: bool,
+    ) -> (
+        Arc<Server>,
+        Arc<JsonlPauseCheckpointStore>,
+        AgentId,
+        Arc<tokio::sync::Semaphore>,
+        Arc<tokio::sync::Semaphore>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints = Arc::new(
+            JsonlPauseCheckpointStore::open(dir.path().join("checkpoints.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let card = stub_card_with_budget("research", vec!["tool.web_search"], 10);
+        let agent = agent_id_for_card(&card);
+        let entered = Arc::new(tokio::sync::Semaphore::new(0));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let runner = GatedRunner {
+            inner: MockRunner::new("gated summary"),
+            entered: entered.clone(),
+            release: release.clone(),
+            succeed,
+        };
+        let s = Arc::new(
+            Server::new(
+                Arc::new(Router::from_cards(vec![card])),
+                Arc::new(runner),
+                Arc::new(InMemoryStore::new()),
+                Arc::new(InMemorySettlement::new()),
+                Arc::new(covenant_audit::InMemoryAuditLog::new()),
+                Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+                Arc::new(covenant_llm::MockEmbedder::new(64)),
+                Arc::new(LocalIdentity::generate("user@local")),
+                Arc::new(IgnoreSet::default()),
+                Arc::new(ToolRegistry::default()),
+                Arc::new(covenant_a2a::InMemoryMailbox::new()),
+                Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+                Arc::new(covenant_budget::InMemoryLedger::new()),
+            )
+            .with_budget_checkpoints(checkpoints.clone()),
+        );
+        s.register_agent_budgets().await.unwrap();
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+        (s, checkpoints, agent, entered, release, dir)
+    }
+
+    #[tokio::test]
+    async fn dispatch_completion_voids_checkpoint_swept_mid_flight() {
+        // Drives the exact double-execution window the shutdown ordering
+        // exists to close: the sweep persists the pause row of a dispatch
+        // that is still inside the runner (as it does for work in flight
+        // when SIGTERM lands), and the dispatch then completes
+        // successfully during the HTTP drain. The completion must
+        // tombstone the persisted row — a surviving row is claimed by the
+        // resume fallback on the next boot and the settled work runs
+        // twice, debiting the budget again for output that already
+        // shipped.
+        //
+        // Untested interleaving: the runner stays parked until the sweep
+        // returns, so completion never contends with the persist loop
+        // mid-iteration — save_shutdown_budget_checkpoints' map-lock
+        // hold is load-bearing (snapshot-then-release would let a
+        // completion void a not-yet-persisted row the sweep then
+        // persists stale) but this test passes either way. Exercising it
+        // needs a store hook that parks inside save_pause while a
+        // completion races the void; recorded as a coverage gap.
+        let (s, checkpoints, agent, entered, release, _dir) = gated_budget_server(true).await;
+
+        let dispatch = tokio::spawn({
+            let s = s.clone();
+            async move {
+                s.op_respond(Request::SubmitIntent {
+                    text: "find recent papers".into(),
+                    prefer_stream: None,
+                })
+                .await
+            }
+        });
+        entered.acquire().await.expect("entered semaphore").forget();
+        let intent_id = {
+            let staged = s.active_budget_pauses.lock().await;
+            *staged
+                .keys()
+                .next()
+                .expect("dispatch must stage its pause row before the runner starts")
+        };
+        assert_eq!(
+            s.save_shutdown_budget_checkpoints().await,
+            1,
+            "the sweep must persist the in-flight dispatch's row"
+        );
+        assert!(
+            checkpoints.active_pause(intent_id, &agent).await.is_some(),
+            "the swept row must be claimable while the dispatch is in flight"
+        );
+
+        release.add_permits(1);
+        let resp = dispatch.await.expect("dispatch task");
+        assert!(
+            !matches!(resp, Response::Error { .. }),
+            "gated dispatch must complete successfully, got {resp:?}"
+        );
+        assert!(
+            checkpoints.active_pause(intent_id, &agent).await.is_none(),
+            "successful completion must void the swept row; a surviving row would be re-executed by the resume fallback on the next boot"
+        );
+        assert!(
+            s.active_budget_pauses.lock().await.is_empty(),
+            "completion must also clear the staged in-memory row"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_error_keeps_swept_checkpoint_claimable() {
+        // The complement guard: voiding exists ONLY for successful
+        // completions. A run that fails after the sweep persisted its row
+        // must leave that row claimable — it is the intent's resume point
+        // (the projection-preempt guarantee). A regression that voids on
+        // the error arm makes every killed or crashed in-flight intent
+        // unresumable, silently dropping paused work at shutdown.
+        let (s, checkpoints, agent, entered, release, _dir) = gated_budget_server(false).await;
+
+        let dispatch = tokio::spawn({
+            let s = s.clone();
+            async move {
+                s.op_respond(Request::SubmitIntent {
+                    text: "find recent papers".into(),
+                    prefer_stream: None,
+                })
+                .await
+            }
+        });
+        entered.acquire().await.expect("entered semaphore").forget();
+        let intent_id = {
+            let staged = s.active_budget_pauses.lock().await;
+            *staged
+                .keys()
+                .next()
+                .expect("dispatch must stage its pause row before the runner starts")
+        };
+        assert_eq!(
+            s.save_shutdown_budget_checkpoints().await,
+            1,
+            "the sweep must persist the in-flight dispatch's row"
+        );
+
+        release.add_permits(1);
+        match dispatch.await.expect("dispatch task") {
+            Response::Error { message } => assert!(
+                message.contains("injected gated runner failure"),
+                "the bail must surface the runner cause, got {message:?}"
+            ),
+            other => panic!("failed gated dispatch must bail to Response::Error, got {other:?}"),
+        }
+        let claimed = checkpoints
+            .claim_resume(intent_id, &agent, epoch_ms())
+            .await
+            .expect("a failed run's swept row must stay claimable for the resume fallback");
+        assert_eq!(claimed.intent_id, intent_id);
+        assert!(
+            s.active_budget_pauses.lock().await.is_empty(),
+            "the staged in-memory row is cleared on both arms"
+        );
     }
 
     #[tokio::test]

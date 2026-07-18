@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-18T22:01:31.890Z",
+  "updatedAt": "2026-07-18T22:21:35.719Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12901,
+    "events": 12905,
     "tasks": 1513,
-    "integrated": 1513
+    "integrated": 1514
   },
   "throughput": {
-    "last24h": 4,
-    "last7d": 22,
-    "velocity": 3.1
+    "last24h": 5,
+    "last7d": 23,
+    "velocity": 3.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-18",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-18",
-      "total": 1513
+      "total": 1514
     }
   ],
   "states": {
-    "integrated": 1505,
+    "integrated": 1506,
     "proposed": 1,
-    "blocked": 6,
-    "self_review": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "projection-preempt-persist-before-kill",
-    "state": "self_review",
-    "since": "2026-07-18T21:54:45.947Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-18T22:04:16.617Z",
+      "task": "projection-preempt-persist-before-kill",
+      "note": "Pushed commit c6cd98de to origin/loop/main-track (731d08eb..c6cd98de). All gates green: build, fmt, focused tests incl. new discriminating p"
+    },
     {
       "at": "2026-07-18T20:58:12.526Z",
       "task": "shutdown-quiescence-checkpoint-ordering",
@@ -315,11 +315,6 @@
       "at": "2026-07-13T12:51:22.292Z",
       "task": "capabilities-doc-scope-namespace-grammar-guard",
       "note": "merged and pushed on loop/main-track as fc3ee779; HEAD == origin/loop/main-track."
-    },
-    {
-      "at": "2026-07-13T12:39:35.152Z",
-      "task": "in-source-line-ref-drift-reanchor",
-      "note": "merged and pushed on loop/main-track as 5c15cfc4 (rustfmt sweep 7c51acbb on top, then overseer-directed stake-keeper line-ref fix 55834d72);"
     }
   ]
 }

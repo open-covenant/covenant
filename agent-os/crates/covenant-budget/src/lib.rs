@@ -250,6 +250,11 @@ enum BudgetCheckpointEvent {
         agent: AgentId,
         resumed_at_ms: u64,
     },
+    PauseVoided {
+        intent_id: Uuid,
+        agent: AgentId,
+        voided_at_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -635,6 +640,20 @@ impl JsonlPauseCheckpointStore {
                     }
                     state.resumed_at_ms = Some(resumed_at_ms);
                 }
+                BudgetCheckpointEvent::PauseVoided {
+                    intent_id,
+                    agent,
+                    voided_at_ms: _,
+                } => {
+                    let key = checkpoint_key(intent_id, &agent);
+                    let state = checkpoints
+                        .get(&key)
+                        .ok_or(BudgetCheckpointError::NotFound(intent_id))?;
+                    if state.resumed_at_ms.is_some() {
+                        return Err(BudgetCheckpointError::AlreadyResumed(intent_id));
+                    }
+                    checkpoints.remove(&key);
+                }
             }
         }
 
@@ -714,6 +733,40 @@ impl JsonlPauseCheckpointStore {
         if let Some(state) = checkpoints.get_mut(&key) {
             state.resumed_at_ms = Some(resumed_at_ms);
         }
+        Ok(checkpoint)
+    }
+
+    /// Tombstones an unclaimed pause checkpoint after the work it captured
+    /// completed successfully, so a later resume cannot re-execute settled
+    /// work. Voiding a claimed checkpoint fails with `AlreadyResumed`;
+    /// voiding an unknown key fails with `NotFound`. The tombstone removes
+    /// the key entirely, so a legitimate future pause for the same
+    /// (intent, agent) pair can be saved again.
+    pub async fn void_pause(
+        &self,
+        intent_id: Uuid,
+        agent: &AgentId,
+        voided_at_ms: u64,
+    ) -> Result<BudgetPauseCheckpoint, BudgetCheckpointError> {
+        let _g = self.file_lock.lock().await;
+        let key = checkpoint_key(intent_id, agent);
+        let checkpoint = {
+            let checkpoints = self.checkpoints.lock().await;
+            let state = checkpoints
+                .get(&key)
+                .ok_or(BudgetCheckpointError::NotFound(intent_id))?;
+            if state.resumed_at_ms.is_some() {
+                return Err(BudgetCheckpointError::AlreadyResumed(intent_id));
+            }
+            state.checkpoint.clone()
+        };
+        self.append(&BudgetCheckpointEvent::PauseVoided {
+            intent_id,
+            agent: agent.clone(),
+            voided_at_ms,
+        })
+        .await?;
+        self.checkpoints.lock().await.remove(&key);
         Ok(checkpoint)
     }
 
@@ -3861,6 +3914,175 @@ mod tests {
             result,
             Err(BudgetCheckpointError::AlreadyResumed(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_void_tombstones_row_and_allows_repause() {
+        // void_pause is the completion-side tombstone for the shutdown
+        // ordering: a swept row whose work then settles must stop being
+        // claimable, or the resume fallback re-executes settled work on
+        // the next boot. The tombstone must REMOVE the key rather than
+        // blacklist it — a later, genuinely new pause for the same
+        // (intent, agent) pair is legal and must save cleanly — and the
+        // whole save→void→save sequence must survive replay across reopen.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.jsonl");
+        let a = agent("a@local");
+        let intent_id = Uuid::from_u128(21);
+        let saved = checkpoint(&a, intent_id);
+        {
+            let store = JsonlPauseCheckpointStore::open(path.clone()).await.unwrap();
+            store.save_pause(saved.clone()).await.unwrap();
+            let voided = store.void_pause(intent_id, &a, 3_000).await.unwrap();
+            assert_eq!(voided, saved, "void must return the tombstoned row");
+            assert!(
+                store.active_pause(intent_id, &a).await.is_none(),
+                "a voided row must no longer be claimable"
+            );
+            let err = store.claim_resume(intent_id, &a, 3_500).await.unwrap_err();
+            assert!(
+                matches!(err, BudgetCheckpointError::NotFound(_)),
+                "claiming a voided row must fail NotFound, got {err:?}"
+            );
+            store
+                .save_pause(saved.clone())
+                .await
+                .expect("a fresh pause for a voided key must save cleanly");
+        }
+        let store = JsonlPauseCheckpointStore::open(path).await.unwrap();
+        assert_eq!(
+            store.active_pause(intent_id, &a).await,
+            Some(saved),
+            "replay must reconstruct save→void→save as one active row"
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_void_rejects_unknown_and_claimed_rows() {
+        // The runtime guards mirror replay strictness. Voiding a key that
+        // was never persisted must be NotFound WITHOUT appending an event
+        // (the dispatch completion path voids unconditionally on success,
+        // and the nothing-was-persisted common case must not grow the
+        // log), and voiding an already-claimed row must fail
+        // AlreadyResumed — the resume side owns that row now, and a void
+        // would silently erase the single-use claim audit trail.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.jsonl");
+        let a = agent("a@local");
+        let intent_id = Uuid::from_u128(22);
+        let store = JsonlPauseCheckpointStore::open(path.clone()).await.unwrap();
+        let err = store.void_pause(intent_id, &a, 1_000).await.unwrap_err();
+        assert!(
+            matches!(err, BudgetCheckpointError::NotFound(_)),
+            "voiding an unknown key must fail NotFound, got {err:?}"
+        );
+
+        store.save_pause(checkpoint(&a, intent_id)).await.unwrap();
+        store.claim_resume(intent_id, &a, 2_000).await.unwrap();
+        let err = store.void_pause(intent_id, &a, 3_000).await.unwrap_err();
+        assert!(
+            matches!(err, BudgetCheckpointError::AlreadyResumed(_)),
+            "voiding a claimed row must fail AlreadyResumed, got {err:?}"
+        );
+        drop(store);
+        // The failed voids must not have appended tombstones: reopen
+        // replays save+claim only, and the claimed row stays consumed.
+        let store = JsonlPauseCheckpointStore::open(path).await.unwrap();
+        assert!(store.active_pause(intent_id, &a).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_replay_rejects_orphan_void() {
+        // A pause_voided row with no live PauseSaved ancestor means the
+        // log was truncated, hand-edited, or written by a buggy writer;
+        // tolerating it would let a corrupted store replay clean while
+        // silently dropping the ordering the tombstone encodes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.jsonl");
+        let a = agent("a@local");
+        let voided = BudgetCheckpointEvent::PauseVoided {
+            intent_id: Uuid::from_u128(23),
+            agent: a,
+            voided_at_ms: 1_000,
+        };
+        let line = serde_json::to_string(&voided).unwrap();
+        tokio::fs::write(&path, format!("{line}\n")).await.unwrap();
+        let err = JsonlPauseCheckpointStore::open(path)
+            .await
+            .err()
+            .expect("an orphan pause_voided row must abort replay");
+        assert!(
+            matches!(err, BudgetCheckpointError::NotFound(_)),
+            "an orphan void must surface as NotFound, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_checkpoint_replay_rejects_void_after_claim() {
+        // Claim and void are mutually exclusive terminal verbs for one
+        // saved row: the writer only appends pause_voided for rows that
+        // are still unclaimed. A log carrying save→claim→void was written
+        // by a buggy or forged writer, and replay must refuse it rather
+        // than guess which terminal state wins.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.jsonl");
+        let a = agent("a@local");
+        let intent_id = Uuid::from_u128(24);
+        let lines = [
+            serde_json::to_string(&BudgetCheckpointEvent::PauseSaved {
+                checkpoint: checkpoint(&a, intent_id),
+            })
+            .unwrap(),
+            serde_json::to_string(&BudgetCheckpointEvent::ResumeClaimed {
+                intent_id,
+                agent: a.clone(),
+                resumed_at_ms: 2_000,
+            })
+            .unwrap(),
+            serde_json::to_string(&BudgetCheckpointEvent::PauseVoided {
+                intent_id,
+                agent: a,
+                voided_at_ms: 3_000,
+            })
+            .unwrap(),
+        ]
+        .join("\n");
+        tokio::fs::write(&path, format!("{lines}\n")).await.unwrap();
+        let err = JsonlPauseCheckpointStore::open(path)
+            .await
+            .err()
+            .expect("a void after a claim must abort replay");
+        assert!(
+            matches!(err, BudgetCheckpointError::AlreadyResumed(_)),
+            "a post-claim void must surface as AlreadyResumed, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_voided_wire_form_round_trips() {
+        // The JSONL discriminator is the compatibility contract: replay
+        // joins pause_voided tombstones against PauseSaved rows by the
+        // same (intent_id, agent) key the sibling events use. A slug or
+        // field rename strands every prior tombstone at replay — voided
+        // rows resurrect as claimable and settled work re-executes.
+        let a = agent("a@local");
+        let event = BudgetCheckpointEvent::PauseVoided {
+            intent_id: Uuid::from_u128(25),
+            agent: a,
+            voided_at_ms: 4_000,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "pause_voided");
+        let obj = value.as_object().unwrap();
+        assert_eq!(
+            obj.len(),
+            4,
+            "wire form must be exactly the three variant fields plus the 'type' discriminator, got {obj:?}"
+        );
+        assert!(value["intent_id"].is_string());
+        assert_eq!(value["voided_at_ms"], 4_000);
+        let back: BudgetCheckpointEvent = serde_json::from_value(value).unwrap();
+        assert_eq!(back, event);
     }
 
     #[tokio::test]

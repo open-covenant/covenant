@@ -27,6 +27,7 @@ members = [
     "crates/covenant-x402-signer-evm",
     "crates/covenant-hyre",
     "crates/covenant-zauth",
+    "crates/covenant-circuit",
     "crates/covenant-metaplex",
     "crates/covenant-sns",
     "crates/covenant-acedata",

@@ -11,6 +11,12 @@ repository.workspace = true
 name = "covenantd"
 path = "src/main.rs"
 
+[features]
+# Registers the Circuit tools with an in-process funding payer that settles in
+# $CVNT (or CIRC). Pulls the solana dep tree via covenant-circuit/solana, so it
+# stays off the default daemon build and behind this feature.
+circuit = ["dep:covenant-circuit", "covenant-circuit/solana"]
+
 [dependencies]
 covenant-types = { path = "../covenant-types" }
 covenant-ipc = { path = "../covenant-ipc" }
@@ -29,13 +35,14 @@ covenant-runtime = { path = "../covenant-runtime" }
 covenant-sap-bridge = { path = "../covenant-sap-bridge" }
 covenant-settlement = { path = "../covenant-settlement" }
 # Default features only — the solana signer + its dep tree stay out of
-# the daemon build until the funding-key path lands behind its own
-# feature in a separate change.
+# the daemon's default build; the on-chain funding payer is pulled only by
+# the `circuit` feature (covenant-circuit/solana), never by default.
 covenant-x402 = { path = "../covenant-x402" }
 covenant-hyre = { path = "../covenant-hyre" }
 covenant-metaplex = { path = "../covenant-metaplex" }
 covenant-sns = { path = "../covenant-sns" }
 covenant-acedata = { path = "../covenant-acedata" }
+covenant-circuit = { path = "../covenant-circuit", optional = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }

@@ -217,6 +217,15 @@ async fn main() -> Result<()> {
         }
         None => None,
     };
+    #[cfg(feature = "circuit")]
+    if let Some(circuit_tools) = circuit_from_env() {
+        if circuit_tools.is_empty() {
+            tracing::warn!("circuit enabled but its allowlist registered no tools");
+        } else {
+            info!(count = circuit_tools.len(), "circuit provider enabled");
+            tools_vec.extend(circuit_tools);
+        }
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -960,6 +969,119 @@ fn acedata_from_env() -> Option<(
             }
         },
     }
+}
+
+/// Build the Circuit tool set from the environment: an in-process funding payer that settles
+/// paid Circuit calls in $CVNT (or CIRC) on Solana, bound by a spend capability (per-call
+/// cap, treasury pin, host allowlist, cumulative budget). The daemon holds the funding key
+/// only when built with the `circuit` feature and `COVENANT_CIRCUIT_ENABLED` is set; the
+/// solana dep tree is pulled by that feature alone. Returns `None` when disabled or
+/// misconfigured. Registered `circuit.*` tools route through [`Server::circuit_tool_call`],
+/// which records the settlement receipt and audit row.
+///
+/// Env:
+///   COVENANT_CIRCUIT_ENABLED    (required) `1`/`true`/`yes` to turn it on
+///   COVENANT_CIRCUIT_KEYPAIR    (required) funder keypair path, holding the pay token + SOL
+///   COVENANT_CIRCUIT_PAY_TOKEN  (optional) mint to settle in; unset = CIRC (the 402 default)
+///   COVENANT_CIRCUIT_RPC        (optional) Solana RPC URL, default mainnet-beta
+///   COVENANT_CIRCUIT_TREASURY   (optional) pin the 402 recipient to this pubkey
+///   COVENANT_CIRCUIT_PER_CALL   (optional) per-call spend cap, raw base units
+///   COVENANT_CIRCUIT_BUDGET     (optional) cumulative budget, raw base units
+///   COVENANT_CIRCUIT_HOSTS      (optional) comma allowlist, default the two Circuit hosts
+///   COVENANT_CIRCUIT_ALLOW      (optional) comma tool allowlist; unset = all
+///                               (note: the inference gateway quotes CIRC only, so restrict
+///                               to the data tools when paying in $CVNT)
+#[cfg(feature = "circuit")]
+fn circuit_from_env() -> Option<Vec<Arc<dyn covenant_mcp::Tool>>> {
+    use covenant_circuit::CircPayer as _;
+
+    let enabled = std::env::var("COVENANT_CIRCUIT_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+
+    let keypair = match std::env::var("COVENANT_CIRCUIT_KEYPAIR") {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            tracing::warn!(
+                "COVENANT_CIRCUIT_ENABLED set but COVENANT_CIRCUIT_KEYPAIR is missing; \
+                 circuit disabled"
+            );
+            return None;
+        }
+    };
+    let rpc = std::env::var("COVENANT_CIRCUIT_RPC")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let payer = match covenant_circuit::SolanaCircPayer::from_keypair_file(&keypair, rpc.as_deref())
+    {
+        Ok(p) => Arc::new(p),
+        Err(e) => {
+            tracing::warn!(error = %e, "circuit funder keypair load failed; circuit disabled");
+            return None;
+        }
+    };
+    let funder = payer.address().unwrap_or("?").to_string();
+
+    let mut cap = covenant_circuit::CircuitCapability::new();
+    match std::env::var("COVENANT_CIRCUIT_HOSTS") {
+        Ok(list) if !list.trim().is_empty() => {
+            for h in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                cap = cap.allow_host(h);
+            }
+        }
+        _ => {
+            cap = cap
+                .allow_host("inference.circuitllm.xyz")
+                .allow_host("api.circuitllm.xyz");
+        }
+    }
+    if let Ok(t) = std::env::var("COVENANT_CIRCUIT_TREASURY") {
+        if !t.trim().is_empty() {
+            cap = cap.allow_recipient(t.trim());
+        }
+    }
+    if let Ok(v) = std::env::var("COVENANT_CIRCUIT_PER_CALL") {
+        if let Ok(n) = v.trim().parse::<u64>() {
+            cap = cap.per_call(n);
+        }
+    }
+    if let Ok(v) = std::env::var("COVENANT_CIRCUIT_BUDGET") {
+        if let Ok(n) = v.trim().parse::<u64>() {
+            cap = cap.budget(n);
+        }
+    }
+
+    let ledger = Arc::new(covenant_circuit::SpendLedger::new());
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("http client");
+    let mut engine = covenant_circuit::X402::new(http, payer, cap, ledger);
+    if let Ok(mint) = std::env::var("COVENANT_CIRCUIT_PAY_TOKEN") {
+        if !mint.trim().is_empty() {
+            engine = engine.with_pay_mint(mint.trim().to_string());
+        }
+    }
+    let inference = Arc::new(covenant_circuit::Inference::from_x402(engine.clone()));
+    let data = Arc::new(covenant_circuit::DataClient::from_x402(engine));
+
+    let allow = std::env::var("COVENANT_CIRCUIT_ALLOW").ok().map(|list| {
+        list.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+    });
+    let cfg = covenant_circuit::CircuitConfig {
+        enabled: true,
+        allow,
+        ..Default::default()
+    };
+    let tools = covenant_circuit::circuit_tools(inference, data, &cfg);
+    info!(count = tools.len(), funder = %funder, "circuit provider ready");
+    Some(tools)
 }
 
 /// Build the Hyre provider config from env, or None when the operator

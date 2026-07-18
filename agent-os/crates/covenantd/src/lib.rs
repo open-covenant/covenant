@@ -4623,6 +4623,9 @@ impl Server {
         if name.starts_with("acedata.") {
             return self.acedata_tool_call(name, arguments, peer).await;
         }
+        if name.starts_with("circuit.") {
+            return self.circuit_tool_call(name, arguments, peer).await;
+        }
 
         // Validate arguments against the tool's published input schema before
         // invoking it. Back-compatible: only object schemas that declare
@@ -4795,6 +4798,78 @@ impl Server {
                         };
                         if let Err(e) = self.settlement.record(receipt).await {
                             warn!(error = %e, "acedata settlement record failed");
+                        }
+                    }
+                }
+                Response::ToolResult {
+                    content: r.content,
+                    is_error: r.is_error,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Execute a Circuit tool, adding settlement governance on top of the
+    /// generic `tool.call.<name>` capability already enforced by
+    /// [`Self::call_tool`]. Circuit self-settles the CIRC (Token-2022)
+    /// payment inside the tool call and reports it in a `circuit` provenance
+    /// block; the spend gate itself lives in the crate's capability layer,
+    /// before the transfer. On a paid call this records a
+    /// [`AuditKind::ExternalPaymentSettled`] row and a [`SettlementReceipt`]
+    /// carrying the real on-chain signature. Free endpoints report no
+    /// `paymentTx`, so no receipt or audit row is written.
+    async fn circuit_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
+        match self.tools.call(&name, arguments).await {
+            Ok(r) => {
+                if !r.is_error {
+                    if let Some(prov) = extract_circuit_provenance(&r.content) {
+                        if let Some(sig) = prov.payment_tx.clone() {
+                            let now = epoch_ms();
+                            let receipt_id = Uuid::new_v4();
+                            let receipt = SettlementReceipt {
+                                id: receipt_id,
+                                payer: peer.clone(),
+                                resource: ResourceKind::Tool,
+                                memory_record_id: None,
+                                credits_consumed: 0,
+                                settled_at: now,
+                                chain: Some("solana".into()),
+                                cluster: Some("mainnet".into()),
+                                batch_id: None,
+                                merkle_root: None,
+                                tx_sig: Some(sig.clone()),
+                                slot: None,
+                                confirmed_at: Some(now),
+                                onchain_sig: Some(sig),
+                            };
+                            if let Err(e) = self.settlement.record(receipt).await {
+                                warn!(error = %e, "circuit settlement record failed");
+                            }
+                            let event = AuditEvent {
+                                id: Uuid::new_v4(),
+                                timestamp_ms: now,
+                                issuer: peer.clone(),
+                                kind: AuditKind::ExternalPaymentSettled {
+                                    provider: "circuit".into(),
+                                    endpoint: prov.endpoint.unwrap_or_else(|| name.clone()),
+                                    network: "solana".into(),
+                                    asset: prov.token.unwrap_or_else(|| "CIRC".into()),
+                                    amount: prov
+                                        .spent_raw
+                                        .map(|n| n.to_string())
+                                        .unwrap_or_default(),
+                                    receipt_id,
+                                },
+                            };
+                            self.record_peer_event(peer, event).await;
                         }
                     }
                 }
@@ -16226,6 +16301,38 @@ fn extract_acedata_provenance(
     None
 }
 
+/// The `circuit` settlement block `covenant_circuit::circuit_tools` appends
+/// to every tool result. `payment_tx`/`spent_raw` are `None` for free
+/// Circuit endpoints that returned without a CIRC transfer.
+struct CircuitProvenance {
+    endpoint: Option<String>,
+    payment_tx: Option<String>,
+    spent_raw: Option<u64>,
+    token: Option<String>,
+}
+
+/// Lift the `circuit` block out of a Circuit tool result's content, where
+/// the crate placed it as a `{ "circuit": { ... } }` JSON block. Returns
+/// `None` when no block carries it — the daemon then records no settlement.
+fn extract_circuit_provenance(content: &[covenant_mcp::Content]) -> Option<CircuitProvenance> {
+    for block in content {
+        if let covenant_mcp::Content::Json { value } = block {
+            if let Some(c) = value.get("circuit") {
+                return Some(CircuitProvenance {
+                    endpoint: c.get("endpoint").and_then(|v| v.as_str()).map(String::from),
+                    payment_tx: c
+                        .get("paymentTx")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    spent_raw: c.get("spentRaw").and_then(serde_json::Value::as_u64),
+                    token: c.get("token").and_then(|v| v.as_str()).map(String::from),
+                });
+            }
+        }
+    }
+    None
+}
+
 fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
     matches!(
         kind,
@@ -16504,6 +16611,166 @@ mod tests {
     fn extract_acedata_provenance_none_without_block() {
         let content = vec![covenant_mcp::Content::text("no provenance here")];
         assert!(extract_acedata_provenance(&content).is_none());
+    }
+
+    #[test]
+    fn extract_circuit_provenance_reads_paid_block() {
+        let content = vec![
+            covenant_mcp::Content::json(serde_json::json!({ "content": "hi" })),
+            covenant_mcp::Content::json(serde_json::json!({ "circuit": {
+                "endpoint": "circuit.inference",
+                "paymentTx": "5".repeat(88),
+                "spentRaw": 12000u64,
+                "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
+            }})),
+        ];
+        let prov = extract_circuit_provenance(&content).expect("circuit block present");
+        assert_eq!(prov.endpoint.as_deref(), Some("circuit.inference"));
+        assert_eq!(prov.payment_tx.as_deref(), Some("5".repeat(88).as_str()));
+        assert_eq!(prov.spent_raw, Some(12000));
+    }
+
+    #[test]
+    fn extract_circuit_provenance_free_block_has_no_payment() {
+        let content = vec![covenant_mcp::Content::json(
+            serde_json::json!({ "circuit": {
+                "endpoint": "circuit.data.query",
+                "paymentTx": serde_json::Value::Null,
+                "spentRaw": serde_json::Value::Null,
+                "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
+            }}),
+        )];
+        let prov = extract_circuit_provenance(&content).expect("circuit block present");
+        assert!(prov.payment_tx.is_none());
+        assert!(prov.spent_raw.is_none());
+    }
+
+    struct FakeCircuitTool {
+        name: &'static str,
+        block: serde_json::Value,
+    }
+
+    #[async_trait::async_trait]
+    impl covenant_mcp::Tool for FakeCircuitTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "fake circuit tool for governance tests"
+        }
+        async fn call(
+            &self,
+            _args: serde_json::Value,
+        ) -> Result<covenant_mcp::ToolCallResult, covenant_mcp::ToolError> {
+            Ok(covenant_mcp::ToolCallResult::ok(vec![
+                covenant_mcp::Content::json(serde_json::json!({ "content": "ok" })),
+                covenant_mcp::Content::json(self.block.clone()),
+            ]))
+        }
+    }
+
+    fn server_with_tool(tool: Arc<dyn covenant_mcp::Tool>) -> Server {
+        Server::new(
+            Arc::new(Router::from_cards(vec![])),
+            Arc::new(MockRunner::new("")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::from_tools(vec![tool])),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+    }
+
+    #[tokio::test]
+    async fn circuit_paid_call_records_settlement_and_audit() {
+        let sig = "5".repeat(88);
+        let s = server_with_tool(Arc::new(FakeCircuitTool {
+            name: "circuit.inference",
+            block: serde_json::json!({ "circuit": {
+                "endpoint": "circuit.inference",
+                "paymentTx": sig,
+                "spentRaw": 12000u64,
+                "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
+            }}),
+        }));
+        grant_action(&s, "tool.call.circuit.inference").await;
+
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "circuit.inference".into(),
+                arguments: serde_json::json!({ "prompt": "hi" }),
+            })
+            .await;
+        assert!(matches!(
+            resp,
+            Response::ToolResult {
+                is_error: false,
+                ..
+            }
+        ));
+
+        let receipts = s.settlement.recent(10).await.unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].tx_sig.as_deref(), Some("5".repeat(88).as_str()));
+        assert_eq!(receipts[0].chain.as_deref(), Some("solana"));
+
+        let events = s.audit.recent(50).await.unwrap();
+        let paid = events
+            .iter()
+            .find_map(|e| match &e.kind {
+                AuditKind::ExternalPaymentSettled {
+                    provider,
+                    asset,
+                    amount,
+                    receipt_id,
+                    ..
+                } => Some((provider.clone(), asset.clone(), amount.clone(), *receipt_id)),
+                _ => None,
+            })
+            .expect("ExternalPaymentSettled event present");
+        assert_eq!(paid.0, "circuit");
+        assert_eq!(paid.2, "12000");
+        assert_eq!(paid.3, receipts[0].id);
+    }
+
+    #[tokio::test]
+    async fn circuit_free_call_records_no_settlement() {
+        let s = server_with_tool(Arc::new(FakeCircuitTool {
+            name: "circuit.data.query",
+            block: serde_json::json!({ "circuit": {
+                "endpoint": "circuit.data.query",
+                "paymentTx": serde_json::Value::Null,
+                "spentRaw": serde_json::Value::Null,
+                "token": "8fQgfsRnRkKSeNUhevT7wp8mhNvMSJdLn1fJi4oVpump",
+            }}),
+        }));
+        grant_action(&s, "tool.call.circuit.data.query").await;
+
+        let resp = s
+            .op_respond(Request::CallTool {
+                name: "circuit.data.query".into(),
+                arguments: serde_json::json!({ "path": "/api/quote" }),
+            })
+            .await;
+        assert!(matches!(
+            resp,
+            Response::ToolResult {
+                is_error: false,
+                ..
+            }
+        ));
+
+        assert!(s.settlement.recent(10).await.unwrap().is_empty());
+        let events = s.audit.recent(50).await.unwrap();
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e.kind, AuditKind::ExternalPaymentSettled { .. })));
     }
 
     fn stub_card(id: &str, capabilities: Vec<&str>) -> AgentCard {

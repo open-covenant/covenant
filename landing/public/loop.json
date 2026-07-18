@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-18T14:39:35.703Z",
+  "updatedAt": "2026-07-18T14:59:40.926Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12884,
+    "events": 12887,
     "tasks": 1511,
-    "integrated": 1511
+    "integrated": 1512
   },
   "throughput": {
-    "last24h": 2,
-    "last7d": 20,
-    "velocity": 2.9
+    "last24h": 3,
+    "last7d": 21,
+    "velocity": 3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-18",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-18",
-      "total": 1511
+      "total": 1512
     }
   ],
   "states": {
-    "integrated": 1503,
+    "integrated": 1504,
     "proposed": 1,
-    "blocked": 6,
-    "repair": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -217,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-18T14:46:16.718Z",
+      "task": "budget-projection-preempt-pause-checkpoint",
+      "note": "Pushed 0c4c692e..07156cde (feat 699e8175 + metrics 0c4c692e + fix 07156cde). Projection-attributed preempts now persist resumable checkpoint"
+    },
     {
       "at": "2026-07-17T23:25:45.696Z",
       "task": "budget-projection-linear-preempt-live-coverage",
@@ -311,11 +315,6 @@
       "at": "2026-07-12T13:31:13.205Z",
       "task": "workspace-paymentextra-struct-literal-drift",
       "note": "fix merged on loop/main-track; struct-literal drift gate verified by CI run 29193474452 (rustfmt fix c5ac873a follow-up included)"
-    },
-    {
-      "at": "2026-07-12T13:31:10.476Z",
-      "task": "ci-toolchain-pin-and-clean-clone-gate",
-      "note": "merged on loop/main-track (toolchain pin + clean-clone gate live in CI config); CI green 29193474452"
     }
   ]
 }

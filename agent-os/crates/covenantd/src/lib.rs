@@ -57710,6 +57710,106 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn recent_receipts_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // chain.receipts scope can only enter the store out-of-band. The
+        // read-side scope gate surfaces it as Err and must fail closed:
+        // deny and audit — never fall through to the blanket-allow an
+        // empty scope gets.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "chain.receipts".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::RecentReceipts {
+                limit: 10,
+                since_ms: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("receipt reads rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "chain:receipts"
+                        && action == "chain.receipts"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_receipts_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the read must fail
+        // closed — deny and audit — rather than serve receipts under a
+        // grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "chain.receipts", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::RecentReceipts {
+                limit: 10,
+                since_ms: None,
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("receipt reads rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not serve: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "chain:receipts"
+                        && action == "chain.receipts"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn receipt_batches_rejects_scope_limit_exceeded_and_audits() {
         let s = server_with(vec![], "");
         grant_scoped_action(
@@ -57735,6 +57835,94 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn receipt_batches_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // chain.batches scope can only enter the store out-of-band. The
+        // batch-read scope gate surfaces it as Err and must fail closed:
+        // deny and audit — never fall through to the blanket-allow an
+        // empty scope gets.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "chain.batches".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s.op_respond(Request::ReceiptBatches { limit: 10 }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("receipt batch reads rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "chain:batches"
+                        && action == "chain.batches"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn receipt_batches_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the batch read must
+        // fail closed — deny and audit — rather than serve summaries under
+        // a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "chain.batches", serde_json::json!({})).await;
+
+        match s.op_respond(Request::ReceiptBatches { limit: 10 }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("receipt batch reads rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not serve: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "chain:batches"
+                        && action == "chain.batches"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn flush_receipts_rejects_scope_limit_exceeded_and_audits() {
         let s = server_with(vec![], "");
         grant_scoped_action(
@@ -57757,6 +57945,149 @@ required = {caps:?}
                 AuditKind::CapabilityScopeRejected { action, .. } if action == "chain.flush"
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn flush_receipts_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // chain.flush scope can only enter the store out-of-band. The
+        // flush-side scope gate surfaces it as Err and must fail closed:
+        // deny, audit, and confirm nothing — never fall through to the
+        // blanket-allow an empty scope gets.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        s.settlement
+            .record(SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: operator.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: None,
+                credits_consumed: 3,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "chain.flush".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s.op_respond(Request::FlushReceipts { limit: 10 }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("receipt flushing rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "chain:flush"
+                        && action == "chain.flush"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        let receipts = s.settlement.recent(10).await.unwrap();
+        assert!(
+            receipts
+                .iter()
+                .all(|r| r.batch_id.is_none() && r.confirmed_at.is_none()),
+            "a scope-rejected flush must not confirm receipts: {receipts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn flush_receipts_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the flush must fail
+        // closed — deny, audit, and confirm nothing — rather than batch
+        // receipts under a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let operator = s.identity.agent_id();
+        s.settlement
+            .record(SettlementReceipt {
+                id: Uuid::new_v4(),
+                payer: operator.clone(),
+                resource: ResourceKind::Memory,
+                memory_record_id: None,
+                credits_consumed: 3,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: None,
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        grant_scoped_action(&s, "chain.flush", serde_json::json!({})).await;
+
+        match s.op_respond(Request::FlushReceipts { limit: 10 }).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("receipt flushing rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not flush: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, action, reason }
+                    if agent_id == "chain:flush"
+                        && action == "chain.flush"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+
+        let receipts = s.settlement.recent(10).await.unwrap();
+        assert!(
+            receipts
+                .iter()
+                .all(|r| r.batch_id.is_none() && r.confirmed_at.is_none()),
+            "a fail-closed flush must not confirm receipts: {receipts:?}"
+        );
     }
 
     #[tokio::test]

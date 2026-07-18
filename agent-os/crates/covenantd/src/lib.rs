@@ -49121,6 +49121,171 @@ required = {caps:?}
     }
 
     #[tokio::test]
+    async fn call_tool_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // tool.call scope can only enter the store out-of-band. The tool
+        // scope gate surfaces it as Err and must fail closed: deny, audit,
+        // and never run the tool body — the blanket-allow an empty scope
+        // gets must not extend to a scope that no longer validates.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "tool.call.echo".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("tool echo rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "tool:echo"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::ToolCallCompleted { .. })),
+            "a scope-rejected call must never reach the tool body: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_tool_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The tool capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the call must fail
+        // closed — deny, audit, and never run the tool body — rather than
+        // execute under a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "tool.call.echo", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::CallTool {
+                name: "echo".into(),
+                arguments: serde_json::json!({ "text": "hi" }),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("tool echo rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not call: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "tool:echo"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::ToolCallCompleted { .. })),
+            "a fail-closed call must never reach the tool body: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn acedata_tool_call_denies_when_capability_store_read_fails_at_model_gate() {
+        // acedata.* calls pass the generic tool.call scope gate first, and
+        // that gate runs the same validate_scope the model gate does, so a
+        // malformed scope can never reach the model gate's invalid-scope
+        // arm — it dies one gate earlier. The arm's only reachable trigger
+        // is a store that degrades AFTER the generic gate: the third
+        // list_for_subject read (check, tool gate, model gate) errs and
+        // the call must fail closed — deny and audit — rather than run a
+        // generative tool under a grant it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingNthListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+            fail_from: 3,
+        }));
+        grant_scoped_action(&s, "tool.call.acedata.imagine", serde_json::json!({})).await;
+
+        match s
+            .op_respond(Request::CallTool {
+                name: "acedata.imagine".into(),
+                arguments: serde_json::json!({ "prompt": "a covenant seal" }),
+            })
+            .await
+        {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("tool acedata.imagine rejected by invalid capability scope"),
+                    "a store failure at the model gate must deny, not call: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "tool:acedata.imagine"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, AuditKind::ToolCallCompleted { .. })),
+            "a fail-closed call must never reach the tool body: {events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn call_tool_records_failed_outcome_when_tool_raises() {
         let s = server_with(vec![], "");
         s.op_respond(Request::GrantCapability {
@@ -70010,6 +70175,93 @@ budget_credits_per_hour = {credits}
             ),
             other => panic!("expected Error, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn pay_x402_denies_when_grant_scope_is_malformed() {
+        // grant_capability validates scopes at grant time, so a malformed
+        // x402.outbound.pay scope can only enter the store out-of-band. The
+        // destination scope gate surfaces it as Err and must fail closed —
+        // deny and audit, before the dispatch-config check so the refusal
+        // is recorded even with no funding-key sidecar wired — never fall
+        // through to the blanket-allow an empty scope gets.
+        let s = server_with(vec![], "");
+        let operator = s.identity.agent_id();
+        let cap = Capability {
+            subject: operator.clone(),
+            action: "x402.outbound.pay".into(),
+            scope: serde_json::json!({ "version": 2 }),
+            granted_by: operator.clone(),
+            expires_at: None,
+        };
+        let signed = sign_capability(cap, s.identity.signing_key());
+        s.capabilities.record(signed).await.unwrap();
+
+        match s.op_respond(pay_x402_req()).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("x402 dispatch rejected by invalid capability scope"),
+                    "a malformed grant scope must be denied as invalid: {message}"
+                );
+                assert!(
+                    message.contains("unsupported scope version 2"),
+                    "the denial must carry the validation cause for triage: {message}"
+                );
+            }
+            other => panic!("expected an invalid-scope Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "x402:pay"
+                        && reason.contains("unsupported scope version 2")
+            )),
+            "a malformed-scope refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pay_x402_denies_when_capability_store_read_fails_at_scope_gate() {
+        // The x402 capability check swallows a store read failure
+        // (unwrap_or_default) and refuses on the missing grant, so a store
+        // that is down before the check never reaches the scope gate. The
+        // exposed arm is a store that fails BETWEEN the check and the gate:
+        // the second list_for_subject read errs and the dispatch must fail
+        // closed — deny and audit — rather than egress funds under a grant
+        // it can no longer read.
+        let s = server_with_capabilities_dyn(Arc::new(FailingSecondListCapabilityStore {
+            inner: covenant_permissions::InMemoryCapabilityStore::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        grant_scoped_action(&s, "x402.outbound.pay", serde_json::json!({})).await;
+
+        match s.op_respond(pay_x402_req()).await {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("x402 dispatch rejected by invalid capability scope"),
+                    "a store failure at the scope gate must deny, not pay: {message}"
+                );
+                assert!(
+                    message.contains("injected capability list failure"),
+                    "the denial must carry the store's cause for triage: {message}"
+                );
+            }
+            other => panic!("expected a fail-closed Error, got: {other:?}"),
+        }
+
+        let events = s.audit.recent(20).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::CapabilityScopeRejected { agent_id, reason, .. }
+                    if agent_id == "x402:pay"
+                        && reason.contains("injected capability list failure")
+            )),
+            "a store-failure refusal must record CapabilityScopeRejected with the cause: {events:?}"
+        );
     }
 
     #[tokio::test]

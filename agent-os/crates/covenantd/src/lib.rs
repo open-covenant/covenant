@@ -2009,12 +2009,29 @@ impl Server {
                 ProjectionTrigger::Exhausted => "budget_overshoot",
                 ProjectionTrigger::ProjectedOvershoot => "budget_projected_overshoot",
             };
+            // Snapshot the staged checkpoint before the kill. Dispatch
+            // clears `active_budget_pauses` the instant its subprocess
+            // reaps (`child.wait()` returns ~ms after the signal), and that
+            // clear deterministically beats a post-kill read here — the
+            // preempt drain loop polls on a 50ms cadence. Reading after
+            // `preempt_intent` would almost always find the entry already
+            // cleared, leaving the projection-preempted intent with no
+            // resumable checkpoint.
+            let staged_snapshot = if matches!(trigger, ProjectionTrigger::ProjectedOvershoot) {
+                self.active_budget_pauses
+                    .lock()
+                    .await
+                    .get(&intent_id)
+                    .cloned()
+            } else {
+                None
+            };
             if let PreemptResult::Preempted { .. } =
                 self.preempt_intent(intent_id, reason.into(), grace).await
             {
                 preempted += 1;
-                if matches!(trigger, ProjectionTrigger::ProjectedOvershoot) {
-                    self.save_projection_preempt_checkpoint(intent_id, &agent)
+                if let Some(snapshot) = staged_snapshot {
+                    self.save_projection_preempt_checkpoint(&agent, snapshot)
                         .await;
                 }
             }
@@ -2022,28 +2039,27 @@ impl Server {
         preempted
     }
 
-    /// Persist the staged active checkpoint for a projection-preempted
-    /// intent so the kill stays resumable through `covenant intents
-    /// resume`. Dispatch stages an active checkpoint (with a placeholder
-    /// `Shutdown` reason) for every budgeted run; this rewrite stamps the
-    /// real cause (`ProjectedOvershoot`), refreshes `tokens_remaining`,
-    /// and sets `refill_eta_ms` to the save time — the bucket is not
-    /// exhausted on the projection leg, so the intent is budget-eligible
-    /// immediately. Zero-budget dispatches stage nothing and are skipped:
-    /// there is no debit context to resume against. A repeated tick that
-    /// re-preempts a not-yet-reaped entry hits `AlreadyPaused`, which is
-    /// the persisted-once invariant working, not an error.
-    async fn save_projection_preempt_checkpoint(&self, intent_id: Uuid, agent: &AgentId) {
+    /// Persist the projection-preempt checkpoint the caller snapshotted
+    /// from `active_budget_pauses` BEFORE the kill. The snapshot is taken
+    /// pre-kill in `run_projection_tick_iteration` because dispatch clears
+    /// that map the moment its subprocess reaps — a clear that arrives
+    /// ~ms after the signal and deterministically beats a post-kill read
+    /// (the preempt drain loop polls on a 50ms cadence). Reading after the
+    /// kill would find the entry gone, so the projection-preempted intent
+    /// would have no resumable checkpoint.
+    ///
+    /// This rewrite stamps the real cause (`ProjectedOvershoot`), refreshes
+    /// `tokens_remaining` from the live ledger, and sets `refill_eta_ms`
+    /// to the save time — the bucket is not exhausted on the projection
+    /// leg, so the intent is budget-eligible immediately. A repeated tick
+    /// that re-preempts a not-yet-reaped entry hits `AlreadyPaused`, which
+    /// is the persisted-once invariant working, not an error.
+    async fn save_projection_preempt_checkpoint(
+        &self,
+        agent: &AgentId,
+        mut checkpoint: BudgetPauseCheckpoint,
+    ) {
         let Some(store) = &self.budget_checkpoints else {
-            return;
-        };
-        let staged = self
-            .active_budget_pauses
-            .lock()
-            .await
-            .get(&intent_id)
-            .cloned();
-        let Some(mut checkpoint) = staged else {
             return;
         };
         let now = epoch_ms();
@@ -61431,6 +61447,13 @@ budget_credits_per_hour = {credits}
         // preempt must audit reason budget_projected_overshoot and rewrite
         // the staged active checkpoint into a persisted ProjectedOvershoot
         // pause the resume path can claim.
+        //
+        // The clear-on-reap below mirrors `dispatch_intent`: the staged
+        // entry is removed the moment the subprocess reaps (`child.wait()`
+        // returns ~ms after the signal). A post-kill read in the tick
+        // would lose that race against its 50ms preempt poll, so the tick
+        // must snapshot the checkpoint before the kill — this assertion
+        // fails if it reads `active_budget_pauses` after `preempt_intent`.
         use std::os::unix::process::CommandExt;
         let dir = tempfile::tempdir().unwrap();
         let checkpoints = Arc::new(
@@ -61512,9 +61535,13 @@ budget_credits_per_hour = {credits}
             min_observation_window_ms: 0,
             min_debit_samples: 1,
         };
-        let (preempted, _exit) = tokio::join!(
+        let clear_on_reap = async {
+            child.wait().await.unwrap();
+            s.clear_active_budget_checkpoint(intent_id).await;
+        };
+        let (preempted, ()) = tokio::join!(
             s.run_projection_tick_iteration(std::time::Duration::from_millis(250), policy),
-            child.wait(),
+            clear_on_reap,
         );
         assert_eq!(
             preempted, 1,

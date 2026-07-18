@@ -363,6 +363,12 @@ pub enum BudgetPauseReason {
     OperatorRequested,
     Shutdown,
     Maintenance,
+    /// The budget projection tick preempted the in-flight subprocess
+    /// because its debit rate projected past `tokens_remaining` before
+    /// the bucket was actually exhausted. Distinct from
+    /// `BudgetExhausted` so resume tooling can tell a predictive stop
+    /// from an empty bucket.
+    ProjectedOvershoot,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1424,11 +1430,12 @@ mod tests {
         // are durable on disk — renaming one without a migration would
         // silently strand previously paused intents because the resume
         // claim path can't deserialize them.
-        let cases: [(BudgetPauseReason, &str); 4] = [
+        let cases: [(BudgetPauseReason, &str); 5] = [
             (BudgetPauseReason::BudgetExhausted, "budget_exhausted"),
             (BudgetPauseReason::OperatorRequested, "operator_requested"),
             (BudgetPauseReason::Shutdown, "shutdown"),
             (BudgetPauseReason::Maintenance, "maintenance"),
+            (BudgetPauseReason::ProjectedOvershoot, "projected_overshoot"),
         ];
         for (variant, slug) in cases {
             let wire = serde_json::to_string(&variant).unwrap();

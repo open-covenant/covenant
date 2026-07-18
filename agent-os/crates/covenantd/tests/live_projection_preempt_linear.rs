@@ -245,8 +245,10 @@ budget_credits_per_hour = 10
             "BudgetPreempted carries the raw manifest id from TrackedSubprocess.agent_id",
         );
         assert_eq!(
-            reason, "budget_overshoot",
-            "both tick triggers share this reason; the debit arithmetic below is what attributes the preempt to the linear leg",
+            reason, "budget_projected_overshoot",
+            "the tick attributes each trigger with its own reason slug, so the linear leg must \
+             carry the projection-attributed slug; the debit arithmetic below independently \
+             corroborates that only the linear leg could have fired",
         );
         assert!(
             matches!(signal_sent.as_str(), "SIGTERM" | "SIGKILL" | "none"),

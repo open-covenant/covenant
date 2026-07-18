@@ -1954,6 +1954,17 @@ impl Server {
     /// flags under `policy`. Returns the number of successful preempts
     /// (`PreemptResult::Preempted`).
     ///
+    /// The preempt reason attributes the trigger: the policy-independent
+    /// exhaustion guarantee emits `budget_overshoot` (the slug the daemon
+    /// shipped before linear projection existed), while the
+    /// linear-extrapolation leg emits `budget_projected_overshoot`. A
+    /// projection-attributed preempt additionally persists the staged
+    /// active checkpoint (see
+    /// [`Self::save_projection_preempt_checkpoint`]) so the killed intent
+    /// stays resumable; an exhaustion preempt does not — its bucket is
+    /// empty, so the resume story stays with the `BudgetExhausted`
+    /// admission path.
+    ///
     /// This is the single-iteration core of the budget projection tick.
     /// The `spawn_projection_tick_driver` task wires a `tokio::time::interval`
     /// driver that calls this on each tick with the configured policy; the
@@ -1975,11 +1986,11 @@ impl Server {
         let mut preempted = 0;
         for (intent_id, entry) in self.subprocess_tracker.snapshot() {
             let agent = agent_id_for_card_id(&entry.agent_id);
-            let preempt = match self
+            let trigger = match self
                 .projection_decision(&agent, entry.started_at_ms, policy)
                 .await
             {
-                Ok(flag) => flag,
+                Ok(trigger) => trigger,
                 Err(BudgetError::NoCapacity(_)) => continue,
                 Err(e) => {
                     warn!(
@@ -1991,20 +2002,76 @@ impl Server {
                     continue;
                 }
             };
-            if preempt {
-                if let PreemptResult::Preempted { .. } = self
-                    .preempt_intent(intent_id, "budget_overshoot".into(), grace)
-                    .await
-                {
-                    preempted += 1;
+            let Some(trigger) = trigger else {
+                continue;
+            };
+            let reason = match trigger {
+                ProjectionTrigger::Exhausted => "budget_overshoot",
+                ProjectionTrigger::ProjectedOvershoot => "budget_projected_overshoot",
+            };
+            if let PreemptResult::Preempted { .. } =
+                self.preempt_intent(intent_id, reason.into(), grace).await
+            {
+                preempted += 1;
+                if matches!(trigger, ProjectionTrigger::ProjectedOvershoot) {
+                    self.save_projection_preempt_checkpoint(intent_id, &agent)
+                        .await;
                 }
             }
         }
         preempted
     }
 
+    /// Persist the staged active checkpoint for a projection-preempted
+    /// intent so the kill stays resumable through `covenant intents
+    /// resume`. Dispatch stages an active checkpoint (with a placeholder
+    /// `Shutdown` reason) for every budgeted run; this rewrite stamps the
+    /// real cause (`ProjectedOvershoot`), refreshes `tokens_remaining`,
+    /// and sets `refill_eta_ms` to the save time — the bucket is not
+    /// exhausted on the projection leg, so the intent is budget-eligible
+    /// immediately. Zero-budget dispatches stage nothing and are skipped:
+    /// there is no debit context to resume against. A repeated tick that
+    /// re-preempts a not-yet-reaped entry hits `AlreadyPaused`, which is
+    /// the persisted-once invariant working, not an error.
+    async fn save_projection_preempt_checkpoint(&self, intent_id: Uuid, agent: &AgentId) {
+        let Some(store) = &self.budget_checkpoints else {
+            return;
+        };
+        let staged = self
+            .active_budget_pauses
+            .lock()
+            .await
+            .get(&intent_id)
+            .cloned();
+        let Some(mut checkpoint) = staged else {
+            return;
+        };
+        let now = epoch_ms();
+        checkpoint.reason = BudgetPauseReason::ProjectedOvershoot;
+        checkpoint.tokens_remaining = self
+            .budget
+            .tokens_remaining(agent)
+            .await
+            .unwrap_or(checkpoint.tokens_remaining);
+        checkpoint.refill_eta_ms = now;
+        checkpoint.saved_at_ms = now;
+        checkpoint
+            .resume_state
+            .insert("source".into(), "projection_preempt".into());
+        match store.save_pause(checkpoint).await {
+            Ok(()) | Err(BudgetCheckpointError::AlreadyPaused(_)) => {}
+            Err(e) => warn!(error = %e, "projection preempt checkpoint save failed"),
+        }
+    }
+
     /// Decide whether the in-flight subprocess for one tracker entry must
-    /// be preempted this tick.
+    /// be preempted this tick, and under which trigger: `Ok(None)` leaves
+    /// the entry running, `Ok(Some(ProjectionTrigger::Exhausted))` is the
+    /// empty-bucket guarantee, and
+    /// `Ok(Some(ProjectionTrigger::ProjectedOvershoot))` is the
+    /// linear-extrapolation leg. The caller maps the trigger to the
+    /// preempt reason slug and decides checkpoint persistence, so the
+    /// attribution must never collapse back into a bare flag.
     ///
     /// The empty-bucket hard guarantee comes first and is
     /// policy-independent: `would_exceed(agent, 1)` is true exactly when
@@ -2035,15 +2102,15 @@ impl Server {
         agent: &AgentId,
         started_at_ms: u64,
         policy: covenant_budget::BudgetProjectionPolicy,
-    ) -> Result<bool, BudgetError> {
+    ) -> Result<Option<ProjectionTrigger>, BudgetError> {
         if self.budget.would_exceed(agent, 1).await? {
-            return Ok(true);
+            return Ok(Some(ProjectionTrigger::Exhausted));
         }
         if matches!(
             policy,
             covenant_budget::BudgetProjectionPolicy::NoExtrapolation
         ) {
-            return Ok(false);
+            return Ok(None);
         }
         let signal = self
             .budget
@@ -2056,7 +2123,8 @@ impl Server {
             signal.observed_debit_samples,
             remaining,
             policy,
-        ))
+        )
+        .then_some(ProjectionTrigger::ProjectedOvershoot))
     }
 
     /// Best-effort outbound error frame on the read-side failures the
@@ -5236,7 +5304,7 @@ impl Server {
                             tokens_remaining,
                             issued_at,
                             issued_at,
-                            budget_resume_state(&text, &card.id, "active_dispatch"),
+                            budget_resume_state(&text, &card.id, "active_dispatch", peer),
                         );
                         self.remember_active_budget_checkpoint(checkpoint).await;
                     }
@@ -5277,7 +5345,7 @@ impl Server {
                             tokens_remaining,
                             refill_eta_ms,
                             epoch_ms(),
-                            budget_resume_state(&text, &card.id, "budget_exhausted"),
+                            budget_resume_state(&text, &card.id, "budget_exhausted", peer),
                         );
                         self.save_budget_pause_checkpoint(checkpoint).await;
                         let event = AuditEvent {
@@ -5514,13 +5582,84 @@ impl Server {
                 }
                 self.dispatch_intent(Uuid::new_v4(), t, peer, false).await
             }
-            None => Response::Error {
-                message: format!(
-                    "resume: no BudgetExhausted audit row for intent {intent_id} \
-                     within last {window} events"
-                ),
-            },
+            None => {
+                self.resume_from_pause_checkpoint(intent_id, peer, window)
+                    .await
+            }
         }
+    }
+
+    /// Fallback resume source when no `BudgetExhausted` audit row is in
+    /// the recent window: the persisted pause checkpoint. A
+    /// projection-preempted intent never writes a text-bearing audit row
+    /// (`BudgetPreempted` is daemon-issued and text-free), so its only
+    /// resume payload is the checkpoint staged at dispatch and persisted
+    /// at preempt time; the same fallback also recovers a
+    /// budget-exhausted intent whose audit row has aged out of the
+    /// window. The checkpoint's `resume_state` binds the submitting
+    /// peer's pubkey, and a non-submitter gets the same "no audit row"
+    /// error as a missing checkpoint — the fallback must not become an
+    /// existence oracle for other peers' paused intents, and their
+    /// `intent_text` must never reach a redispatch they didn't submit.
+    async fn resume_from_pause_checkpoint(
+        &self,
+        intent_id: Uuid,
+        peer: &AgentId,
+        window: usize,
+    ) -> Response {
+        let no_row = || Response::Error {
+            message: format!(
+                "resume: no BudgetExhausted audit row for intent {intent_id} \
+                 within last {window} events"
+            ),
+        };
+        let Some(store) = &self.budget_checkpoints else {
+            return no_row();
+        };
+        let mut found = None;
+        for card in self.router.agents().iter() {
+            let agent = agent_id_for_card(card);
+            if let Some(checkpoint) = store.active_pause(intent_id, &agent).await {
+                found = Some((agent, checkpoint));
+                break;
+            }
+        }
+        let Some((agent, checkpoint)) = found else {
+            return no_row();
+        };
+        let submitter = serde_json::Value::from(peer.pubkey.to_vec());
+        if checkpoint.resume_state.get("submitter_pubkey") != Some(&submitter) {
+            return no_row();
+        }
+        let Some(text) = checkpoint
+            .resume_state
+            .get("intent_text")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        else {
+            return Response::Error {
+                message: format!(
+                    "resume: checkpoint for intent {intent_id} has no portable intent text"
+                ),
+            };
+        };
+        match store.claim_resume(intent_id, &agent, epoch_ms()).await {
+            Ok(_) => {}
+            Err(BudgetCheckpointError::AlreadyResumed(_)) => {
+                return Response::Error {
+                    message: format!(
+                        "resume: checkpoint for intent {intent_id} was already claimed"
+                    ),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    message: format!("resume: checkpoint claim failed: {e}"),
+                };
+            }
+        }
+        self.dispatch_intent(Uuid::new_v4(), text, peer, false)
+            .await
     }
 
     fn budget_agent_by_display(&self, display: &str) -> Option<AgentId> {
@@ -11106,21 +11245,24 @@ impl Server {
                         kind: "audit_budget_preempt_failed_reason_empty".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::BudgetPreemptFailed with reason = \"\"; the only production BudgetPreemptFailed write-site in covenantd is preempt_intent's PreemptOutcome::PermissionDenied arm, whose sole production caller — run_projection_tick_iteration — passes the hardcoded literal \"budget_overshoot\".into() before the arm clones it into the BudgetPreemptFailed audit event; the field is never sourced from caller input on any reachable code path and the literal is always non-empty",
+                            "audit event {} has kind = AuditKind::BudgetPreemptFailed with reason = \"\"; the only production BudgetPreemptFailed write-site in covenantd is preempt_intent's PreemptOutcome::PermissionDenied arm, whose sole production caller — run_projection_tick_iteration — passes one of the two trigger-attributed literals (\"budget_overshoot\" for the exhaustion trigger, \"budget_projected_overshoot\" for the linear-projection trigger) before the arm clones it into the BudgetPreemptFailed audit event; the field is never sourced from caller input on any reachable code path and both literals are non-empty",
                             event.id
                         ),
-                        repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetPreemptFailed write-site routes through preempt_intent's PreemptOutcome::PermissionDenied arm whose only reachable caller (run_projection_tick_iteration) passes the hardcoded literal \"budget_overshoot\", so an empty reason detaches the signal-send-failure row from the preempt-reason classifier that distinguishes a budget-overshoot kill-attempt from any future reason kind (manual-cancel, deadline, policy), erasing the load-bearing reason discriminator the incident-triage trail (agent_display, reason, errno) needs to classify ESRCH benign vs. EPERM security incident against the originating preempt cause".into(),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetPreemptFailed write-site routes through preempt_intent's PreemptOutcome::PermissionDenied arm whose only reachable caller (run_projection_tick_iteration) passes a trigger-attributed literal (\"budget_overshoot\" for the exhaustion trigger, \"budget_projected_overshoot\" for the linear-projection trigger), so an empty reason detaches the signal-send-failure row from the preempt-reason classifier that distinguishes an exhaustion kill-attempt from a projected-overshoot kill-attempt and from any future reason kind (manual-cancel, deadline, policy), erasing the load-bearing reason discriminator the incident-triage trail (agent_display, reason, errno) needs to classify ESRCH benign vs. EPERM security incident against the originating preempt cause".into(),
                     });
-                } else if !matches!(reason.as_str(), "budget_overshoot") {
+                } else if !matches!(
+                    reason.as_str(),
+                    "budget_overshoot" | "budget_projected_overshoot"
+                ) {
                     not_recognized_budget_preempt_failed_reason_audit_refs += 1;
                     drift.push(VerifyDrift {
                         kind: "audit_budget_preempt_failed_reason_not_recognized".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::BudgetPreemptFailed with reason = {reason:?}; the only production BudgetPreemptFailed write-site in covenantd is preempt_intent's PreemptOutcome::PermissionDenied arm, whose sole production caller — run_projection_tick_iteration (lib.rs:1996) — passes the hardcoded literal \"budget_overshoot\".into() before the arm clones it into the BudgetPreemptFailed audit event; the field is never sourced from caller input on any reachable code path, so a non-empty reason outside the closed set {{\"budget_overshoot\"}} cannot be produced by the daemon",
+                            "audit event {} has kind = AuditKind::BudgetPreemptFailed with reason = {reason:?}; the only production BudgetPreemptFailed write-site in covenantd is preempt_intent's PreemptOutcome::PermissionDenied arm, whose sole production caller — run_projection_tick_iteration (lib.rs:2013) — passes one of the two trigger-attributed literals (\"budget_overshoot\" for the exhaustion trigger, \"budget_projected_overshoot\" for the linear-projection trigger) before the arm clones it into the BudgetPreemptFailed audit event; the field is never sourced from caller input on any reachable code path, so a non-empty reason outside the closed set {{\"budget_overshoot\", \"budget_projected_overshoot\"}} cannot be produced by the daemon",
                             event.id
                         ),
-                        repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetPreemptFailed write-site routes through preempt_intent's PreemptOutcome::PermissionDenied arm whose only reachable caller (run_projection_tick_iteration at lib.rs:1996) passes the hardcoded literal \"budget_overshoot\", so any non-empty reason outside that single-value closed set detaches the signal-send-failure row from the preempt-reason classifier that distinguishes a budget-overshoot kill-attempt from any future reason kind (manual-cancel, deadline, policy), erasing the load-bearing reason discriminator the incident-triage trail (agent_display, reason, errno) needs to classify ESRCH benign vs. EPERM security incident against the originating preempt cause; this fires independently of the reason_empty arm, which catches the zero-length case".into(),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetPreemptFailed write-site routes through preempt_intent's PreemptOutcome::PermissionDenied arm whose only reachable caller (run_projection_tick_iteration at lib.rs:2013) passes a trigger-attributed literal (\"budget_overshoot\" for the exhaustion trigger, \"budget_projected_overshoot\" for the linear-projection trigger), so any non-empty reason outside that two-value closed set detaches the signal-send-failure row from the preempt-reason classifier that distinguishes an exhaustion kill-attempt from a projected-overshoot kill-attempt and from any future reason kind (manual-cancel, deadline, policy), erasing the load-bearing reason discriminator the incident-triage trail (agent_display, reason, errno) needs to classify ESRCH benign vs. EPERM security incident against the originating preempt cause; this fires independently of the reason_empty arm, which catches the zero-length case".into(),
                     });
                 }
                 if !agent_display.is_empty()
@@ -12615,21 +12757,24 @@ impl Server {
                         kind: "audit_budget_preempted_reason_empty".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::BudgetPreempted with reason = \"\"; the only production BudgetPreempted write-site in covenantd is preempt_intent, whose sole production caller — run_projection_tick_iteration — passes the hardcoded literal \"budget_overshoot\".into() before the PreemptOutcome match clones it into every BudgetPreempted arm; the field is never sourced from caller input on any reachable code path and the literal is always non-empty",
+                            "audit event {} has kind = AuditKind::BudgetPreempted with reason = \"\"; the only production BudgetPreempted write-site in covenantd is preempt_intent, whose sole production caller — run_projection_tick_iteration — passes one of the two trigger-attributed literals (\"budget_overshoot\" for the exhaustion trigger, \"budget_projected_overshoot\" for the linear-projection trigger) before the PreemptOutcome match clones it into every BudgetPreempted arm; the field is never sourced from caller input on any reachable code path and both literals are non-empty",
                             event.id
                         ),
-                        repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetPreempted write-site routes through preempt_intent whose only reachable caller (run_projection_tick_iteration) passes the hardcoded literal \"budget_overshoot\", so an empty reason detaches the forced-termination row from the preempt-reason classifier that distinguishes a budget-overshoot kill from any future reason kind (manual-cancel, deadline, policy), erasing the load-bearing reason discriminator every preempt-audit consumer joins on when filtering budget-driven preemptions from other forced-termination paths".into(),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetPreempted write-site routes through preempt_intent whose only reachable caller (run_projection_tick_iteration) passes a trigger-attributed literal (\"budget_overshoot\" for the exhaustion trigger, \"budget_projected_overshoot\" for the linear-projection trigger), so an empty reason detaches the forced-termination row from the preempt-reason classifier that distinguishes an exhaustion kill from a projected-overshoot kill and from any future reason kind (manual-cancel, deadline, policy), erasing the load-bearing reason discriminator every preempt-audit consumer joins on when filtering budget-driven preemptions from other forced-termination paths".into(),
                     });
-                } else if !matches!(reason.as_str(), "budget_overshoot") {
+                } else if !matches!(
+                    reason.as_str(),
+                    "budget_overshoot" | "budget_projected_overshoot"
+                ) {
                     not_recognized_budget_preempted_reason_audit_refs += 1;
                     drift.push(VerifyDrift {
                         kind: "audit_budget_preempted_reason_not_recognized".into(),
                         id: Some(event.id.to_string()),
                         message: format!(
-                            "audit event {} has kind = AuditKind::BudgetPreempted with reason = {reason:?}; the only production BudgetPreempted write-site in covenantd is preempt_intent, whose sole production caller — run_projection_tick_iteration (lib.rs:1996) — passes the hardcoded literal \"budget_overshoot\".into() before the PreemptOutcome match clones it into every BudgetPreempted arm; the field is never sourced from caller input on any reachable code path, so a non-empty reason outside the closed set {{\"budget_overshoot\"}} cannot be produced by the daemon",
+                            "audit event {} has kind = AuditKind::BudgetPreempted with reason = {reason:?}; the only production BudgetPreempted write-site in covenantd is preempt_intent, whose sole production caller — run_projection_tick_iteration (lib.rs:2013) — passes one of the two trigger-attributed literals (\"budget_overshoot\" for the exhaustion trigger, \"budget_projected_overshoot\" for the linear-projection trigger) before the PreemptOutcome match clones it into every BudgetPreempted arm; the field is never sourced from caller input on any reachable code path, so a non-empty reason outside the closed set {{\"budget_overshoot\", \"budget_projected_overshoot\"}} cannot be produced by the daemon",
                             event.id
                         ),
-                        repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetPreempted write-site routes through preempt_intent whose only reachable caller (run_projection_tick_iteration at lib.rs:1996) passes the hardcoded literal \"budget_overshoot\", so any non-empty reason outside that single-value closed set detaches the forced-termination row from the preempt-reason classifier that distinguishes a budget-overshoot kill from any future reason kind (manual-cancel, deadline, policy), erasing the load-bearing reason discriminator every preempt-audit consumer joins on when filtering budget-driven preemptions from other forced-termination paths; this fires independently of the reason_empty arm, which catches the zero-length case".into(),
+                        repair: "review the audit JSONL row and the writer that produced it; the sole production BudgetPreempted write-site routes through preempt_intent whose only reachable caller (run_projection_tick_iteration at lib.rs:2013) passes a trigger-attributed literal (\"budget_overshoot\" for the exhaustion trigger, \"budget_projected_overshoot\" for the linear-projection trigger), so any non-empty reason outside that two-value closed set detaches the forced-termination row from the preempt-reason classifier that distinguishes an exhaustion kill from a projected-overshoot kill and from any future reason kind (manual-cancel, deadline, policy), erasing the load-bearing reason discriminator every preempt-audit consumer joins on when filtering budget-driven preemptions from other forced-termination paths; this fires independently of the reason_empty arm, which catches the zero-length case".into(),
                     });
                 }
                 if !agent_display.is_empty()
@@ -16165,6 +16310,19 @@ pub enum PreemptResult {
     },
 }
 
+/// Which projection-tick trigger flagged an in-flight entry for preempt.
+/// `Exhausted` is the policy-independent empty-bucket guarantee and keeps
+/// the pre-projection `budget_overshoot` preempt reason; the
+/// linear-extrapolation leg reports `ProjectedOvershoot`, carries the
+/// `budget_projected_overshoot` reason, and is the only trigger that
+/// persists the staged pause checkpoint — the bucket still has tokens, so
+/// the killed intent is worth a resume record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectionTrigger {
+    Exhausted,
+    ProjectedOvershoot,
+}
+
 /// Wraps a [`BudgetError`] from [`Server::register_agent_budgets`] with
 /// the manifest id that failed, so startup error messages name the
 /// offending agent instead of dropping a bare `serde:` line on the
@@ -16402,11 +16560,20 @@ fn budget_resume_state(
     intent_text: &str,
     matched_agent: &str,
     source: &str,
+    submitter: &AgentId,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut state = serde_json::Map::new();
     state.insert("intent_text".into(), intent_text.into());
     state.insert("matched_agent".into(), matched_agent.into());
     state.insert("source".into(), source.into());
+    // Binds the checkpoint to the submitting peer. Checkpoint-sourced
+    // resume has no peer-scoped audit row to filter on (BudgetPreempted
+    // is daemon-issued and text-free), so this is the only thing standing
+    // between another peer and the checkpoint's intent_text.
+    state.insert(
+        "submitter_pubkey".into(),
+        serde_json::Value::from(submitter.pubkey.to_vec()),
+    );
     state
 }
 
@@ -34980,8 +35147,9 @@ required = {caps:?}
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();
         let event_id = Uuid::new_v4();
-        // Non-empty (bypasses the reason_empty arm) but outside the single-value
-        // closed set {"budget_overshoot"} the sole production caller emits.
+        // Non-empty (bypasses the reason_empty arm) but outside the two-value
+        // closed set {"budget_overshoot", "budget_projected_overshoot"} the
+        // sole production caller emits.
         let reason = "manual_cancel";
         s.audit
             .record(AuditEvent {
@@ -34998,6 +35166,26 @@ required = {caps:?}
             })
             .await
             .unwrap();
+        // The projection-attributed slug is inside the closed set: a
+        // well-formed row carrying it must produce no drift. Guards the
+        // set extension — a revert to the single-value set would flag
+        // every projection-preempt row as tampered.
+        let projected_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: projected_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::BudgetPreempted {
+                    agent_display: "card".into(),
+                    intent_id: Uuid::new_v4(),
+                    reason: "budget_projected_overshoot".into(),
+                    signal_sent: "SIGTERM".into(),
+                    exit_code: None,
+                },
+            })
+            .await
+            .unwrap();
 
         let resp = s.op_respond(Request::Verify { window: 100 }).await;
         match resp {
@@ -35007,6 +35195,12 @@ required = {caps:?}
                 checks,
                 ..
             } => {
+                assert!(
+                    drift
+                        .iter()
+                        .all(|item| item.id.as_deref() != Some(&projected_id.to_string())),
+                    "a well-formed budget_projected_overshoot row is in the closed set and must not drift: {drift:?}"
+                );
                 let row = drift
                     .iter()
                     .find(|item| {
@@ -35133,8 +35327,9 @@ required = {caps:?}
         let s = server_with(vec![], "");
         let me = s.identity.agent_id();
         let event_id = Uuid::new_v4();
-        // Non-empty (bypasses the reason_empty arm) but outside the single-value
-        // closed set {"budget_overshoot"} the sole production caller emits.
+        // Non-empty (bypasses the reason_empty arm) but outside the two-value
+        // closed set {"budget_overshoot", "budget_projected_overshoot"} the
+        // sole production caller emits.
         let reason = "manual_cancel";
         s.audit
             .record(AuditEvent {
@@ -35150,6 +35345,24 @@ required = {caps:?}
             })
             .await
             .unwrap();
+        // In-set counterpart: a well-formed row carrying the
+        // projection-attributed slug must not drift (guards the closed-set
+        // extension on the PermissionDenied leg too).
+        let projected_id = Uuid::new_v4();
+        s.audit
+            .record(AuditEvent {
+                id: projected_id,
+                timestamp_ms: epoch_ms(),
+                issuer: me.clone(),
+                kind: AuditKind::BudgetPreemptFailed {
+                    agent_display: "card".into(),
+                    intent_id: Uuid::new_v4(),
+                    reason: "budget_projected_overshoot".into(),
+                    errno: 1,
+                },
+            })
+            .await
+            .unwrap();
 
         let resp = s.op_respond(Request::Verify { window: 100 }).await;
         match resp {
@@ -35159,6 +35372,12 @@ required = {caps:?}
                 checks,
                 ..
             } => {
+                assert!(
+                    drift
+                        .iter()
+                        .all(|item| item.id.as_deref() != Some(&projected_id.to_string())),
+                    "a well-formed budget_projected_overshoot BudgetPreemptFailed row is in the closed set and must not drift: {drift:?}"
+                );
                 let row = drift
                     .iter()
                     .find(|item| {
@@ -61182,7 +61401,12 @@ budget_credits_per_hour = {credits}
             9,
             epoch_ms(),
             epoch_ms(),
-            budget_resume_state("find recent papers", "research", "active_dispatch"),
+            budget_resume_state(
+                "find recent papers",
+                "research",
+                "active_dispatch",
+                &s.identity.agent_id(),
+            ),
         );
         s.active_budget_pauses
             .lock()
@@ -61195,6 +61419,387 @@ budget_credits_per_hour = {credits}
             Some(checkpoint)
         );
         assert_eq!(s.save_shutdown_budget_checkpoints().await, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn projection_tick_preempt_persists_claimable_checkpoint_with_projected_reason() {
+        // The projection-attributed preempt is the only tick trigger that
+        // persists a pause: capacity 10 with five 1-credit debits leaves
+        // remaining=5 and current_debit=5, so would_exceed(agent,1) is
+        // false and only the linear leg (2*5 > 5) can flag the entry. The
+        // preempt must audit reason budget_projected_overshoot and rewrite
+        // the staged active checkpoint into a persisted ProjectedOvershoot
+        // pause the resume path can claim.
+        use std::os::unix::process::CommandExt;
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints = Arc::new(
+            JsonlPauseCheckpointStore::open(dir.path().join("checkpoints.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let card = stub_card_with_budget("research", vec!["tool.web_search"], 10);
+        let agent = agent_id_for_card(&card);
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![card])),
+            Arc::new(MockRunner::new("mocked summary")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_budget_checkpoints(checkpoints.clone());
+        s.register_agent_budgets().await.unwrap();
+
+        let started = epoch_ms().saturating_sub(10_000);
+        for _ in 0..5 {
+            budget.try_debit(&agent, 1, Uuid::new_v4()).await.unwrap();
+        }
+
+        let intent_id = Uuid::new_v4();
+        let submitter = s.identity.agent_id();
+        let staged = budget_pause_checkpoint(
+            intent_id,
+            agent.clone(),
+            BudgetPauseReason::Shutdown,
+            1,
+            5,
+            started,
+            started,
+            budget_resume_state(
+                "find recent papers",
+                "research",
+                "active_dispatch",
+                &submitter,
+            ),
+        );
+        s.active_budget_pauses
+            .lock()
+            .await
+            .insert(intent_id, staged);
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+        s.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "research".into(),
+                pid,
+                started_at_ms: started,
+            },
+        );
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 1,
+        };
+        let (preempted, _exit) = tokio::join!(
+            s.run_projection_tick_iteration(std::time::Duration::from_millis(250), policy),
+            child.wait(),
+        );
+        assert_eq!(
+            preempted, 1,
+            "the linear leg must preempt the tracked entry"
+        );
+
+        let events = audit.recent(16).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::BudgetPreempted { reason, .. }
+                    if reason == "budget_projected_overshoot"
+            )),
+            "a projection-attributed preempt must audit the projected slug, not budget_overshoot: {events:?}"
+        );
+
+        let saved = checkpoints
+            .active_pause(intent_id, &agent)
+            .await
+            .expect("projection preempt must persist the staged checkpoint");
+        assert_eq!(saved.reason, BudgetPauseReason::ProjectedOvershoot);
+        assert_eq!(
+            saved.tokens_remaining, 5,
+            "the persisted pause must carry the refreshed token count"
+        );
+        assert_eq!(saved.resume_state["source"], "projection_preempt");
+        assert_eq!(saved.resume_state["intent_text"], "find recent papers");
+        assert_eq!(
+            saved.resume_state["submitter_pubkey"],
+            serde_json::Value::from(submitter.pubkey.to_vec()),
+            "the submitter binding staged at dispatch must survive the rewrite"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn projection_tick_exhaustion_preempt_keeps_overshoot_reason_and_saves_no_pause() {
+        // The exhaustion trigger is the pre-projection contract: reason
+        // stays budget_overshoot and no pause checkpoint is persisted —
+        // the bucket is empty, so the resume story belongs to the
+        // BudgetExhausted admission path, not a preempt pause.
+        use std::os::unix::process::CommandExt;
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints = Arc::new(
+            JsonlPauseCheckpointStore::open(dir.path().join("checkpoints.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let card = stub_card_with_budget("research", vec!["tool.web_search"], 1);
+        let agent = agent_id_for_card(&card);
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![card])),
+            Arc::new(MockRunner::new("mocked summary")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            budget.clone(),
+        )
+        .with_budget_checkpoints(checkpoints.clone());
+        s.register_agent_budgets().await.unwrap();
+
+        let started = epoch_ms().saturating_sub(10_000);
+        budget.try_debit(&agent, 1, Uuid::new_v4()).await.unwrap();
+
+        let intent_id = Uuid::new_v4();
+        let submitter = s.identity.agent_id();
+        let staged = budget_pause_checkpoint(
+            intent_id,
+            agent.clone(),
+            BudgetPauseReason::Shutdown,
+            1,
+            0,
+            started,
+            started,
+            budget_resume_state(
+                "find recent papers",
+                "research",
+                "active_dispatch",
+                &submitter,
+            ),
+        );
+        s.active_budget_pauses
+            .lock()
+            .await
+            .insert(intent_id, staged);
+
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+        s.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "research".into(),
+                pid,
+                started_at_ms: started,
+            },
+        );
+
+        let (preempted, _exit) = tokio::join!(
+            s.run_projection_tick_iteration(
+                std::time::Duration::from_millis(250),
+                covenant_budget::BudgetProjectionPolicy::NoExtrapolation,
+            ),
+            child.wait(),
+        );
+        assert_eq!(preempted, 1, "the exhaustion trigger must preempt");
+
+        let events = audit.recent(16).await.unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                AuditKind::BudgetPreempted { reason, .. } if reason == "budget_overshoot"
+            )),
+            "the exhaustion trigger must keep the pre-projection budget_overshoot slug: {events:?}"
+        );
+        assert!(
+            checkpoints.active_pause(intent_id, &agent).await.is_none(),
+            "an exhaustion preempt must not persist a pause checkpoint"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_intent_redispatches_projection_preempted_intent_from_checkpoint_once() {
+        // A projection-preempted intent has no BudgetExhausted audit row —
+        // its resume payload is the persisted checkpoint. The fallback must
+        // redispatch from resume_state.intent_text for the bound submitter,
+        // consume the claim, and reject a second resume.
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints = Arc::new(
+            JsonlPauseCheckpointStore::open(dir.path().join("checkpoints.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let card = stub_card_with_budget("research", vec!["tool.web_search"], 10);
+        let agent = agent_id_for_card(&card);
+        let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![card])),
+            Arc::new(MockRunner::new("mocked summary")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            audit.clone(),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_budget_checkpoints(checkpoints.clone());
+        s.register_agent_budgets().await.unwrap();
+        grant_action(&s, "tool.web_search").await;
+        grant_action(&s, "memory.write").await;
+
+        let intent_id = Uuid::new_v4();
+        let submitter = s.identity.agent_id();
+        checkpoints
+            .save_pause(budget_pause_checkpoint(
+                intent_id,
+                agent.clone(),
+                BudgetPauseReason::ProjectedOvershoot,
+                1,
+                5,
+                epoch_ms(),
+                epoch_ms(),
+                budget_resume_state(
+                    "find recent papers",
+                    "research",
+                    "projection_preempt",
+                    &submitter,
+                ),
+            ))
+            .await
+            .unwrap();
+
+        let first = s.op_respond(Request::ResumeIntent { intent_id }).await;
+        assert!(
+            matches!(first, Response::IntentResult { .. }),
+            "checkpoint-sourced resume must redispatch the preempted text, got {first:?}"
+        );
+        assert!(
+            checkpoints.active_pause(intent_id, &agent).await.is_none(),
+            "the fallback resume must consume the single-use claim"
+        );
+
+        // A claimed checkpoint drops out of active_pause, so the fallback's
+        // discovery step finds nothing on the second attempt: the consumed
+        // claim surfaces as the same not-found error a never-paused intent
+        // gets (the "already claimed" message belongs to the audit-row flow,
+        // whose BudgetExhausted row persists as the discovery index). The
+        // single-use invariant is the redispatch NOT happening again.
+        let second = s.op_respond(Request::ResumeIntent { intent_id }).await;
+        assert!(
+            matches!(second, Response::Error { ref message } if message.contains("no BudgetExhausted audit row")),
+            "a second resume must not redispatch a consumed claim, got {second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_intent_denies_foreign_projection_checkpoint_without_text_leak() {
+        // The checkpoint's submitter binding is the only peer scope the
+        // fallback has. A caller with a different pubkey must get the same
+        // "no audit row" error as a missing checkpoint — no existence
+        // oracle — and the checkpoint text must never reach the response
+        // or a redispatch, and the claim must stay unconsumed.
+        let dir = tempfile::tempdir().unwrap();
+        let checkpoints = Arc::new(
+            JsonlPauseCheckpointStore::open(dir.path().join("checkpoints.jsonl"))
+                .await
+                .unwrap(),
+        );
+        let card = stub_card_with_budget("research", vec!["tool.web_search"], 10);
+        let agent = agent_id_for_card(&card);
+        let s = Server::new(
+            Arc::new(Router::from_cards(vec![card])),
+            Arc::new(MockRunner::new("mocked summary")),
+            Arc::new(InMemoryStore::new()),
+            Arc::new(InMemorySettlement::new()),
+            Arc::new(covenant_audit::InMemoryAuditLog::new()),
+            Arc::new(covenant_permissions::InMemoryCapabilityStore::new()),
+            Arc::new(covenant_llm::MockEmbedder::new(64)),
+            Arc::new(LocalIdentity::generate("user@local")),
+            Arc::new(IgnoreSet::default()),
+            Arc::new(ToolRegistry::default()),
+            Arc::new(covenant_a2a::InMemoryMailbox::new()),
+            Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
+            Arc::new(covenant_budget::InMemoryLedger::new()),
+        )
+        .with_budget_checkpoints(checkpoints.clone());
+        s.register_agent_budgets().await.unwrap();
+
+        let alien = AgentId::new("alice@local", [9u8; 32]);
+        let intent_id = Uuid::new_v4();
+        checkpoints
+            .save_pause(budget_pause_checkpoint(
+                intent_id,
+                agent.clone(),
+                BudgetPauseReason::ProjectedOvershoot,
+                1,
+                5,
+                epoch_ms(),
+                epoch_ms(),
+                budget_resume_state("leaked", "research", "projection_preempt", &alien),
+            ))
+            .await
+            .unwrap();
+
+        let resp = s.op_respond(Request::ResumeIntent { intent_id }).await;
+        match resp {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("no BudgetExhausted audit row"),
+                    "a foreign checkpoint must look like a missing one, got: {message}"
+                );
+                assert!(
+                    !message.contains("leaked"),
+                    "intent_text must not appear in the error"
+                );
+            }
+            other => panic!("expected Response::Error, got: {other:?}"),
+        }
+        assert!(
+            checkpoints.active_pause(intent_id, &agent).await.is_some(),
+            "a denied fallback must not consume the foreign claim"
+        );
     }
 
     /// Phase-0 manifests have `budget_credits_per_hour = 0`. The daemon
@@ -62257,7 +62862,8 @@ budget_credits_per_hour = {credits}
     fn budget_pause_checkpoint_pins_each_field() {
         let intent_id = Uuid::new_v4();
         let agent = AgentId::new("x@local", [7u8; 32]);
-        let resume_state = budget_resume_state("intent", "x", "active_dispatch");
+        let submitter = AgentId::new("submitter@local", [9u8; 32]);
+        let resume_state = budget_resume_state("intent", "x", "active_dispatch", &submitter);
         let ck = budget_pause_checkpoint(
             intent_id,
             agent.clone(),
@@ -62280,21 +62886,34 @@ budget_credits_per_hour = {credits}
     }
 
     #[test]
-    fn budget_resume_state_pins_three_keys() {
-        let active = budget_resume_state("compute something", "agentA", "active_dispatch");
-        assert_eq!(active.len(), 3);
+    fn budget_resume_state_pins_four_keys() {
+        let submitter = AgentId::new("submitter@local", [5u8; 32]);
+        let active =
+            budget_resume_state("compute something", "agentA", "active_dispatch", &submitter);
+        assert_eq!(active.len(), 4);
         assert_eq!(
             active["intent_text"],
             serde_json::json!("compute something")
         );
         assert_eq!(active["matched_agent"], serde_json::json!("agentA"));
         assert_eq!(active["source"], serde_json::json!("active_dispatch"));
+        assert_eq!(
+            active["submitter_pubkey"],
+            serde_json::json!([5u8; 32].to_vec()),
+            "submitter_pubkey must round-trip the exact peer pubkey bytes; \
+             checkpoint-sourced resume compares it against the caller's pubkey"
+        );
 
-        let exhausted = budget_resume_state("other intent", "agentB", "budget_exhausted");
-        assert_eq!(exhausted.len(), 3);
+        let exhausted =
+            budget_resume_state("other intent", "agentB", "budget_exhausted", &submitter);
+        assert_eq!(exhausted.len(), 4);
         assert_eq!(exhausted["intent_text"], serde_json::json!("other intent"));
         assert_eq!(exhausted["matched_agent"], serde_json::json!("agentB"));
         assert_eq!(exhausted["source"], serde_json::json!("budget_exhausted"));
+        assert_eq!(
+            exhausted["submitter_pubkey"],
+            serde_json::json!([5u8; 32].to_vec())
+        );
     }
 
     #[test]
@@ -70196,9 +70815,10 @@ budget_credits_per_hour = {credits}
             )
             .await
             .expect("decision must succeed for a provisioned agent");
-        assert!(
+        assert_eq!(
             preempt,
-            "exhausted bucket must preempt even under NoExtrapolation (policy-independent guarantee)",
+            Some(ProjectionTrigger::Exhausted),
+            "exhausted bucket must preempt even under NoExtrapolation (policy-independent guarantee), attributed to the exhaustion trigger",
         );
     }
 
@@ -70232,8 +70852,8 @@ budget_credits_per_hour = {credits}
             )
             .await
             .expect("decision must succeed");
-        assert!(
-            !preempt,
+        assert_eq!(
+            preempt, None,
             "NoExtrapolation must not preempt a non-exhausted agent (remaining=10) even though current_debit=90 > remaining",
         );
     }
@@ -70267,9 +70887,10 @@ budget_credits_per_hour = {credits}
             .projection_decision(&agent, epoch_ms().saturating_sub(10_000), policy)
             .await
             .expect("decision must succeed");
-        assert!(
+        assert_eq!(
             preempt,
-            "linear policy must flag a non-exhausted agent whose 2x projected debit (80) exceeds remaining (60)",
+            Some(ProjectionTrigger::ProjectedOvershoot),
+            "linear policy must flag a non-exhausted agent whose 2x projected debit (80) exceeds remaining (60), attributed to the projection trigger",
         );
     }
 
@@ -70301,8 +70922,8 @@ budget_credits_per_hour = {credits}
             .projection_decision(&agent, epoch_ms().saturating_sub(10_000), policy)
             .await
             .expect("decision must succeed");
-        assert!(
-            !preempt,
+        assert_eq!(
+            preempt, None,
             "with only 1 debit sample below min_debit_samples=5 the linear policy must stay conservative",
         );
     }
@@ -70677,8 +71298,8 @@ budget_credits_per_hour = {credits}
             )
             .await
             .expect("NoExtrapolation never reads the rate signal, so the same double must succeed");
-        assert!(
-            !preempt,
+        assert_eq!(
+            preempt, None,
             "would_exceed is Ok(false), so the default policy must not preempt"
         );
     }
@@ -70843,9 +71464,10 @@ budget_credits_per_hour = {credits}
             events.iter().any(|e| matches!(
                 &e.kind,
                 AuditKind::BudgetPreempted { intent_id: id, reason, .. }
-                    if *id == intent_id && reason.as_str() == "budget_overshoot"
+                    if *id == intent_id && reason.as_str() == "budget_projected_overshoot"
             )),
-            "linear preempt must emit a BudgetPreempted row tagged budget_overshoot; events: {events:?}",
+            "linear preempt must emit a BudgetPreempted row tagged with the projection-attributed \
+             budget_projected_overshoot slug, not the exhaustion slug; events: {events:?}",
         );
     }
 

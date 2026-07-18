@@ -1959,7 +1959,7 @@ impl Server {
     /// shipped before linear projection existed), while the
     /// linear-extrapolation leg emits `budget_projected_overshoot`. A
     /// projection-attributed preempt additionally persists the staged
-    /// active checkpoint (see
+    /// active checkpoint under the pause-map lock before the kill (see
     /// [`Self::save_projection_preempt_checkpoint`]) so the killed intent
     /// stays resumable; an exhaustion preempt does not — its bucket is
     /// empty, so the resume story stays with the `BudgetExhausted`
@@ -2009,44 +2009,43 @@ impl Server {
                 ProjectionTrigger::Exhausted => "budget_overshoot",
                 ProjectionTrigger::ProjectedOvershoot => "budget_projected_overshoot",
             };
-            // Snapshot the staged checkpoint before the kill. Dispatch
-            // clears `active_budget_pauses` the instant its subprocess
-            // reaps (`child.wait()` returns ~ms after the signal), and that
-            // clear deterministically beats a post-kill read here — the
-            // preempt drain loop polls on a 50ms cadence. Reading after
-            // `preempt_intent` would almost always find the entry already
-            // cleared, leaving the projection-preempted intent with no
-            // resumable checkpoint.
-            let staged_snapshot = if matches!(trigger, ProjectionTrigger::ProjectedOvershoot) {
-                self.active_budget_pauses
-                    .lock()
-                    .await
-                    .get(&intent_id)
-                    .cloned()
-            } else {
-                None
-            };
+            // Persist under the active-pause map lock BEFORE the kill —
+            // the same ordering law as `save_shutdown_budget_checkpoints`
+            // (the race this closes is documented on
+            // `save_projection_preempt_checkpoint`). The lock spans only
+            // this read+save, never the kill or its grace drain, and
+            // `save_pause` / `tokens_remaining` take store- and
+            // ledger-internal locks (not this map), so holding it across
+            // the awaits cannot deadlock. The persist is decoupled from
+            // the preempt outcome: a kill that fails or finds nothing in
+            // flight leaves the row to the same void-on-success,
+            // keep-on-error rule dispatch enforces.
+            if matches!(trigger, ProjectionTrigger::ProjectedOvershoot) {
+                let active = self.active_budget_pauses.lock().await;
+                if let Some(checkpoint) = active.get(&intent_id) {
+                    self.save_projection_preempt_checkpoint(&agent, checkpoint.clone())
+                        .await;
+                }
+            }
             if let PreemptResult::Preempted { .. } =
                 self.preempt_intent(intent_id, reason.into(), grace).await
             {
                 preempted += 1;
-                if let Some(snapshot) = staged_snapshot {
-                    self.save_projection_preempt_checkpoint(&agent, snapshot)
-                        .await;
-                }
             }
         }
         preempted
     }
 
-    /// Persist the projection-preempt checkpoint the caller snapshotted
-    /// from `active_budget_pauses` BEFORE the kill. The snapshot is taken
-    /// pre-kill in `run_projection_tick_iteration` because dispatch clears
-    /// that map the moment its subprocess reaps — a clear that arrives
-    /// ~ms after the signal and deterministically beats a post-kill read
-    /// (the preempt drain loop polls on a 50ms cadence). Reading after the
-    /// kill would find the entry gone, so the projection-preempted intent
-    /// would have no resumable checkpoint.
+    /// Persist the projection-preempt checkpoint the caller read from
+    /// `active_budget_pauses` while holding the map lock and BEFORE the kill.
+    /// The caller (`run_projection_tick_iteration`) holds that lock across the
+    /// read and this save because dispatch clears the map the moment its
+    /// subprocess reaps — a clear that arrives ~ms after the signal and
+    /// deterministically beats a post-kill read (the preempt drain loop polls
+    /// on a 50ms cadence). Reading after the kill would find the entry gone,
+    /// and a snapshot-then-release-then-persist would let a completion void
+    /// the not-yet-persisted row and strand a stale claimable one; holding the
+    /// lock across read+save closes both windows.
     ///
     /// This rewrite stamps the real cause (`ProjectedOvershoot`), refreshes
     /// `tokens_remaining` from the live ledger, and sets `refill_eta_ms`
@@ -61623,6 +61622,120 @@ budget_credits_per_hour = {credits}
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn projection_tick_persist_before_kill_lets_completion_void_the_row() {
+        // The persist moved BEFORE the kill and under the active-pause map
+        // lock so a dispatch that completes during the kill's grace drain
+        // cannot strand a stale claimable row. A SIGTERM-trapping agent that
+        // exits 0, or a natural completion racing the signal, reaps within
+        // ~ms: dispatch clears its in-memory row and voids the persisted one
+        // while the tick is still draining on its 250ms poll. Under the prior
+        // snapshot-then-kill-then-persist ordering that void landed before the
+        // persist (a NotFound no-op) and the tick then persisted the stale
+        // snapshot — an orphaned claimable row for settled, delivered work a
+        // later resume re-executes. With the persist durable before the kill,
+        // the completion's void finds and tombstones the row; the map lock
+        // serializes the two, so the void cannot land between a snapshot and a
+        // save the way the released-lock window allowed.
+        //
+        // The tracked `sleep` is a stand-in: the gated dispatch runs on the
+        // in-process runner (no tracked pid of its own), so a subprocess is
+        // hand-registered for the tick to preempt while the gated runner
+        // supplies the racing successful completion.
+        use std::os::unix::process::CommandExt;
+        let (s, checkpoints, agent, entered, release, budget, _dir) =
+            gated_budget_server(true).await;
+
+        // Seed four 1-credit debits so the dispatch's own debit lands the
+        // agent at current_debit=5, remaining=5 — the linear leg (2*5 > 5)
+        // flags ProjectedOvershoot without tripping the exhaustion guard.
+        for _ in 0..4 {
+            budget
+                .try_debit(&agent, 1, Uuid::new_v4())
+                .await
+                .expect("seed debit");
+        }
+
+        let dispatch = tokio::spawn({
+            let s = s.clone();
+            async move {
+                s.op_respond(Request::SubmitIntent {
+                    text: "find recent papers".into(),
+                    prefer_stream: None,
+                })
+                .await
+            }
+        });
+        entered.acquire().await.expect("entered semaphore").forget();
+        let intent_id = {
+            let staged = s.active_budget_pauses.lock().await;
+            *staged
+                .keys()
+                .next()
+                .expect("dispatch must stage its pause row before the runner parks")
+        };
+
+        let started = epoch_ms().saturating_sub(10_000);
+        let mut std_cmd = std::process::Command::new("sleep");
+        std_cmd
+            .arg("60")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        let mut child = tokio::process::Command::from(std_cmd)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid available before reap");
+        s.subprocess_tracker().register(
+            intent_id,
+            covenant_runtime::TrackedSubprocess {
+                agent_id: "research".into(),
+                pid,
+                started_at_ms: started,
+            },
+        );
+
+        let policy = covenant_budget::BudgetProjectionPolicy::LinearExtrapolation {
+            min_observation_window_ms: 0,
+            min_debit_samples: 1,
+        };
+        // Release the runner so its completion (clear + void) races the
+        // tick's kill drain — the exact window the before-kill persist closes.
+        let complete = async {
+            release.add_permits(1);
+            dispatch.await.expect("dispatch task")
+        };
+        let reap = async {
+            child.wait().await.expect("reap sleep");
+        };
+        let (preempted, resp, ()) = tokio::join!(
+            s.run_projection_tick_iteration(std::time::Duration::from_millis(250), policy),
+            complete,
+            reap,
+        );
+
+        assert_eq!(
+            preempted, 1,
+            "the linear leg must preempt the tracked entry so the persist fires"
+        );
+        assert!(
+            !matches!(resp, Response::Error { .. }),
+            "gated dispatch must complete successfully, got {resp:?}"
+        );
+        assert!(
+            checkpoints.active_pause(intent_id, &agent).await.is_none(),
+            "a completion landing during the kill drain must tombstone the \
+             tick-persisted row; a surviving row would re-execute settled work on resume"
+        );
+        assert!(
+            s.active_budget_pauses.lock().await.is_empty(),
+            "completion must clear the staged in-memory row"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn projection_tick_exhaustion_preempt_keeps_overshoot_reason_and_saves_no_pause() {
         // The exhaustion trigger is the pre-projection contract: reason
         // stays budget_overshoot and no pause checkpoint is persisted —
@@ -67222,6 +67335,7 @@ budget_credits_per_hour = {credits}
         AgentId,
         Arc<tokio::sync::Semaphore>,
         Arc<tokio::sync::Semaphore>,
+        Arc<covenant_budget::InMemoryLedger>,
         tempfile::TempDir,
     ) {
         let dir = tempfile::tempdir().unwrap();
@@ -67234,6 +67348,7 @@ budget_credits_per_hour = {credits}
         let agent = agent_id_for_card(&card);
         let entered = Arc::new(tokio::sync::Semaphore::new(0));
         let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let budget = Arc::new(covenant_budget::InMemoryLedger::new());
         let runner = GatedRunner {
             inner: MockRunner::new("gated summary"),
             entered: entered.clone(),
@@ -67254,14 +67369,14 @@ budget_credits_per_hour = {credits}
                 Arc::new(ToolRegistry::default()),
                 Arc::new(covenant_a2a::InMemoryMailbox::new()),
                 Arc::new(covenant_peer_auth::InMemoryPeerRegistry::new()),
-                Arc::new(covenant_budget::InMemoryLedger::new()),
+                budget.clone(),
             )
             .with_budget_checkpoints(checkpoints.clone()),
         );
         s.register_agent_budgets().await.unwrap();
         grant_action(&s, "tool.web_search").await;
         grant_action(&s, "memory.write").await;
-        (s, checkpoints, agent, entered, release, dir)
+        (s, checkpoints, agent, entered, release, budget, dir)
     }
 
     #[tokio::test]
@@ -67284,7 +67399,8 @@ budget_credits_per_hour = {credits}
         // persists stale) but this test passes either way. Exercising it
         // needs a store hook that parks inside save_pause while a
         // completion races the void; recorded as a coverage gap.
-        let (s, checkpoints, agent, entered, release, _dir) = gated_budget_server(true).await;
+        let (s, checkpoints, agent, entered, release, _budget, _dir) =
+            gated_budget_server(true).await;
 
         let dispatch = tokio::spawn({
             let s = s.clone();
@@ -67338,7 +67454,8 @@ budget_credits_per_hour = {credits}
         // (the projection-preempt guarantee). A regression that voids on
         // the error arm makes every killed or crashed in-flight intent
         // unresumable, silently dropping paused work at shutdown.
-        let (s, checkpoints, agent, entered, release, _dir) = gated_budget_server(false).await;
+        let (s, checkpoints, agent, entered, release, _budget, _dir) =
+            gated_budget_server(false).await;
 
         let dispatch = tokio::spawn({
             let s = s.clone();

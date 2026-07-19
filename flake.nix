@@ -35,6 +35,15 @@
           # focused on producing the daemon and CLI binaries.
           doCheck = false;
 
+          # buildRustPackage copies every built binary into the output. The
+          # covenantd crate also builds preempt_fixture (src/bin/preempt_fixture.rs),
+          # a test helper the live budget-preempt harness stages out-of-band;
+          # drop it so the package ships only covenantd + covenant, matching
+          # Formula/covenant.rb's --bin scoping and docs/source-install.md.
+          postInstall = ''
+            rm -f $out/bin/preempt_fixture
+          '';
+
           meta = {
             description = "Local control plane for governed autonomous agents";
             homepage = "https://opencovenant.org";

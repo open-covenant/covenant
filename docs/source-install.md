@@ -157,7 +157,7 @@ Build an RPM from the working tree on `x86_64` or `aarch64`:
 rpmbuild --build-in-place -bb covenant.spec
 ```
 
-These are templates, not published packages: no archive URLs, no checksums, no signatures, no repositories. Both builds fetch crates from the network (the tree vendors nothing), so they run on a networked machine and are not sbuild/pbuilder/mock-compatible without crate vendoring. The Debian scriptlets defer systemd lifecycle handling to debhelper, and the spec uses the standard `%systemd_post`/`%systemd_preun`/`%systemd_postun_with_restart` macros. Repository hosting, signing keys, and uploads remain operator-owned; for a signed release, see [RELEASES.md](../RELEASES.md).
+These are templates, not published packages: no archive URLs, no checksums, no signatures, no repositories. Both builds fetch crates from the network (the tree vendors nothing), so they run on a networked machine and are not sbuild/pbuilder/mock-compatible without crate vendoring. CI builds, installs, and smoke-checks both packages on packaging changes (`.github/workflows/packaging.yml`). The Debian scriptlets defer systemd lifecycle handling to debhelper, and the spec uses the standard `%systemd_post`/`%systemd_preun`/`%systemd_postun_with_restart` macros. Repository hosting, signing keys, and uploads remain operator-owned; for a signed release, see [RELEASES.md](../RELEASES.md).
 
 ## Validation
 

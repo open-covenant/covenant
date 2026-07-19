@@ -1,0 +1,111 @@
+name: packaging
+
+# Exercises the HEAD-only packaging templates (debian/, covenant.spec):
+# build, install, and smoke-check on packaging changes. Publication,
+# signing, and repositories are operator-owned and stay out of CI.
+# Scope: only packaging-template files trigger this workflow. Source-tree
+# builds live in ci.yml; a covenantd/covenant binary rename under agent-os/
+# is a known gap this workflow will not catch.
+
+on:
+  push:
+    paths:
+      - "debian/**"
+      - "covenant.spec"
+      - ".github/workflows/packaging.yml"
+  pull_request:
+    paths:
+      - "debian/**"
+      - "covenant.spec"
+      - ".github/workflows/packaging.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  debian:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: install rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.8.1
+        with:
+          workspaces: agent-os
+
+      - name: install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential debhelper pkg-config libssl-dev
+
+      - name: build package
+        # -d skips the apt build-dep check: the workspace toolchain comes from
+        # rustup on PATH, not Debian's cargo/rustc packages.
+        run: dpkg-buildpackage -us -uc -b -d
+
+      - name: inspect package
+        run: |
+          dpkg-deb --info ../covenant_*.deb
+          dpkg-deb --contents ../covenant_*.deb
+          dpkg-deb --contents ../covenant_*.deb | grep -E "\./usr/bin/covenantd$"
+          dpkg-deb --contents ../covenant_*.deb | grep -E "\./usr/bin/covenant$"
+          dpkg-deb --contents ../covenant_*.deb | grep -E "systemd/system/covenantd\.service$"
+
+      - name: install and smoke-check
+        # policy-rc.d exit 101 is the standard guard that keeps the postinst
+        # from starting covenantd on the shared runner.
+        run: |
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+          sudo chmod 0755 /usr/sbin/policy-rc.d
+          sudo dpkg -i ../covenant_*.deb
+          covenantd --version
+          rc=0
+          covenant >/dev/null 2>&1 || rc=$?
+          test "$rc" -eq 2
+          sudo dpkg -r covenant
+
+  rpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: fedora:42
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: install build tools
+        run: dnf install -y cargo rust rpm-build systemd-rpm-macros pkg-config openssl-devel gcc
+
+      - name: build package
+        run: rpmbuild --build-in-place -bb covenant.spec --define "_topdir $PWD/rpmbuild"
+
+      - name: inspect package
+        run: |
+          rpm -qip rpmbuild/RPMS/*/covenant-*.rpm
+          rpm -qlp rpmbuild/RPMS/*/covenant-*.rpm
+          rpm -qlp rpmbuild/RPMS/*/covenant-*.rpm | grep -E "^/usr/bin/covenantd$"
+          rpm -qlp rpmbuild/RPMS/*/covenant-*.rpm | grep -E "^/usr/bin/covenant$"
+          rpm -qlp rpmbuild/RPMS/*/covenant-*.rpm | grep -E "systemd/system/covenantd\.service$"
+
+      - name: install and smoke-check
+        # No systemd in the container; the scriptlet macros are guarded and
+        # the unit is never started.
+        run: |
+          dnf install -y rpmbuild/RPMS/*/covenant-*.rpm
+          covenantd --version
+          rc=0
+          covenant >/dev/null 2>&1 || rc=$?
+          test "$rc" -eq 2
+          dnf remove -y covenant

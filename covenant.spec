@@ -12,6 +12,7 @@ ExclusiveArch:  x86_64 aarch64
 
 BuildRequires:  cargo
 BuildRequires:  rust
+BuildRequires:  gcc
 BuildRequires:  pkg-config
 BuildRequires:  pkgconfig(openssl)
 BuildRequires:  systemd-rpm-macros

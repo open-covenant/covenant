@@ -399,11 +399,11 @@ mod tests {
         // Hyre's 402 body and its discovery header disagree on the network
         // spelling — the body says the short "solana" while the operator
         // capability carries the CAIP-2 id — so network_matches accepts BOTH
-        // directions plus the exact case (x402.rs:145-147).
+        // directions plus the exact case (x402.rs:146-148).
         // select_matches_short_network_against_caip2_capability only exercises
-        // the body-short / want-CAIP-2 arm (x402.rs:146); the exact-equality
-        // arm (x402.rs:145) and the reverse body-CAIP-2 / want-short arm
-        // (x402.rs:147) are otherwise unpinned, so a regression dropping either
+        // the body-short / want-CAIP-2 arm (x402.rs:147); the exact-equality
+        // arm (x402.rs:146) and the reverse body-CAIP-2 / want-short arm
+        // (x402.rs:148) are otherwise unpinned, so a regression dropping either
         // would silently stop matching a legitimate option and the call would
         // settle nothing. The negative cases pin the ':' delimiter: matching
         // must be chain-id equality or a colon-delimited prefix, never a bare

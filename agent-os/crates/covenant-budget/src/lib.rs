@@ -4140,7 +4140,7 @@ mod tests {
         // JsonlPauseCheckpointStore enforces budget-pause accounting
         // correctness via four BudgetCheckpointError rejection
         // variants. Three are already pinned: AlreadyResumed
-        // (pause_checkpoint_records_resume_and_returns_state,
+        // (pause_checkpoint_claim_is_single_use_and_preserves_ledger,
         // pause_checkpoint_replays_resume_state_across_reopen,
         // pause_checkpoint_replay_rejects_duplicate_claims) and
         // InvalidCheckpoint (the InvalidCheckpoint version pinned by

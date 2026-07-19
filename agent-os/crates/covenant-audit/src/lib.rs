@@ -2584,7 +2584,7 @@ mod tests {
     fn sha256_hex_pins_nist_vectors_and_lowercase_output() {
         // covenant_audit::sha256_hex is the foundation
         // of the audit chain: chain_hash hashes
-        // (previous_chain || "\n" || event_hex) through it,
+        // (previous_hash_hex || "\n" || event_hash_hex) through it,
         // chain_entry_for_line hashes each event line through it, and
         // operators rely on the deterministic 64-character lowercase
         // hex output to verify the chain externally with any
@@ -3100,7 +3100,7 @@ mod tests {
         //
         // audit_event_serde_pins_four_required_fields uses
         // CapabilityCheck only as a payload carrier and is now joined
-        // by audit_kind_capability_check_serde_pins_four_field_variant
+        // by audit_kind_capability_check_serde_pins_five_field_variant
         // which pins that variant's wire form directly; this test pins
         // the IntentDispatched wire form so a refactor that flipped
         // result_hash_hex to #[serde(default)] (chain_hash absorbs an
@@ -3369,8 +3369,8 @@ mod tests {
 
     #[test]
     fn audit_kind_budget_preempted_serde_pins_five_field_variant_and_optional_exit_code() {
-        // BudgetPreempted is the audit row covenantd's preempt_dispatcher
-        // (future C2 slice) emits after a successful subprocess
+        // BudgetPreempted is the audit row covenantd's preempt_intent
+        // emits after a successful subprocess
         // termination. Operator post-mortem joins on (intent_id,
         // signal_sent, exit_code) to classify cooperative SIGTERM exits
         // vs. SIGKILL fallbacks vs. natural-exit races. The five fields

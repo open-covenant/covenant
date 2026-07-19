@@ -9332,7 +9332,7 @@ impl Server {
         // outside the memory-side repair set.
         //
         // settled_at is stamped by epoch_ms() at every production receipt
-        // write site (see covenantd lib.rs `record_settlement` and the
+        // write site (see `spend_authz::record_spend_settlement` and the
         // staking/intent settlement paths), so settled_at == 0 is the same
         // out-of-band evidence pattern as audit_event_timestamp_zero
         // below: a serde regression defaulting the u64 field, a future

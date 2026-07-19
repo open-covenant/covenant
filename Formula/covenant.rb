@@ -1,17 +1,17 @@
 class Covenant < Formula
   desc "Local control plane for governed autonomous agents"
   homepage "https://opencovenant.org"
-  head "https://github.com/open-covenant/covenant.git", branch: "main"
-
   license "Apache-2.0"
+  head "https://github.com/open-covenant/covenant.git", branch: "main"
 
   depends_on "rust" => :build
 
   def install
     cd "agent-os" do
-      system "cargo", "build", "-p", "covenantd", "-p", "covenant", "--locked", "--release"
-      bin.install "target/release/covenantd"
-      bin.install "target/release/covenant"
+      # --bin scopes each install: the covenantd crate also builds a
+      # preempt_fixture test helper that must not land in the prefix.
+      system "cargo", "install", *std_cargo_args(path: "crates/covenantd"), "--bin", "covenantd"
+      system "cargo", "install", *std_cargo_args(path: "crates/covenant"), "--bin", "covenant"
     end
   end
 

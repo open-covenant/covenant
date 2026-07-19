@@ -1,8 +1,9 @@
 name: packaging
 
-# Exercises the HEAD-only packaging templates (debian/, covenant.spec):
-# build, install, and smoke-check on packaging changes. Publication,
-# signing, and repositories are operator-owned and stay out of CI.
+# Exercises the HEAD-only packaging templates (debian/, covenant.spec,
+# Formula/): build, install, and smoke-check on packaging changes, plus
+# `brew style` on the Homebrew formula. Publication, signing, and
+# repositories are operator-owned and stay out of CI.
 # Scope: only packaging-template files trigger this workflow. Source-tree
 # builds live in ci.yml; a covenantd/covenant binary rename under agent-os/
 # is a known gap this workflow will not catch.
@@ -12,11 +13,13 @@ on:
     paths:
       - "debian/**"
       - "covenant.spec"
+      - "Formula/**"
       - ".github/workflows/packaging.yml"
   pull_request:
     paths:
       - "debian/**"
       - "covenant.spec"
+      - "Formula/**"
       - ".github/workflows/packaging.yml"
   workflow_dispatch:
 
@@ -109,3 +112,20 @@ jobs:
           covenant >/dev/null 2>&1 || rc=$?
           test "$rc" -eq 2
           dnf remove -y covenant
+
+  homebrew:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: brew style
+        # Lint gate for the HEAD formula: catches DSL drift (component order,
+        # the std_cargo_args idiom, deprecated APIs) the build-only jobs miss.
+        # The formula builds the same two binaries as debian/rpm via the same
+        # agent-os workspace, so the build is exercised by ci.yml; this job
+        # guards the formula DSL. brew install --HEAD is out of scope: it would
+        # fetch the head URL (origin/main), not the commit under test.
+        run: brew style Formula/covenant.rb

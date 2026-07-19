@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-19T01:42:13.553Z",
+  "updatedAt": "2026-07-19T02:02:17.423Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12911,
+    "events": 12914,
     "tasks": 1514,
-    "integrated": 1514
+    "integrated": 1515
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 23,
-    "velocity": 3.3
+    "last24h": 4,
+    "last7d": 24,
+    "velocity": 3.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-19",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-19",
-      "total": 1514
+      "total": 1515
     }
   ],
   "states": {
-    "integrated": 1506,
+    "integrated": 1507,
     "proposed": 1,
-    "blocked": 6,
-    "cross_review": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "store-append-fsync-durability",
-    "state": "cross_review",
-    "since": "2026-07-19T01:41:37.942Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-19T01:47:23.715Z",
+      "task": "store-append-fsync-durability",
+      "note": "Committed 4b534671 (feat: fsync jsonl data appends across the store crates) and pushed 1cf4f944..4b534671 to origin/loop/main-track. 8 files"
+    },
     {
       "at": "2026-07-18T22:04:16.617Z",
       "task": "projection-preempt-persist-before-kill",
@@ -315,11 +315,6 @@
       "at": "2026-07-13T12:59:27.618Z",
       "task": "capabilities-doc-effective-status-set-guard",
       "note": "merged and pushed on loop/main-track as 64b55154; HEAD == origin/loop/main-track."
-    },
-    {
-      "at": "2026-07-13T12:51:22.292Z",
-      "task": "capabilities-doc-scope-namespace-grammar-guard",
-      "note": "merged and pushed on loop/main-track as fc3ee779; HEAD == origin/loop/main-track."
     }
   ]
 }

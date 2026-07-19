@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-19T01:02:05.886Z",
+  "updatedAt": "2026-07-19T01:22:09.641Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12909,
+    "events": 12910,
     "tasks": 1514,
     "integrated": 1514
   },
@@ -187,7 +187,7 @@
     "integrated": 1506,
     "proposed": 1,
     "blocked": 6,
-    "in_progress": 1
+    "self_review": 1
   },
   "areas": [
     {
@@ -217,8 +217,8 @@
   ],
   "inFlight": {
     "task": "store-append-fsync-durability",
-    "state": "in_progress",
-    "since": "2026-07-19T00:55:20.814Z"
+    "state": "self_review",
+    "since": "2026-07-19T01:14:42.647Z"
   },
   "recent": [
     {

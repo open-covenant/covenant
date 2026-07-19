@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-19T22:06:33.815Z",
+  "updatedAt": "2026-07-19T22:26:37.570Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12929,
+    "events": 12932,
     "tasks": 1516,
-    "integrated": 1516
+    "integrated": 1517
   },
   "throughput": {
-    "last24h": 2,
-    "last7d": 23,
-    "velocity": 3.3
+    "last24h": 3,
+    "last7d": 24,
+    "velocity": 3.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-19",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-19",
-      "total": 1516
+      "total": 1517
     }
   ],
   "states": {
-    "integrated": 1508,
+    "integrated": 1509,
     "proposed": 1,
-    "blocked": 6,
-    "cross_review": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "packaging-ci-coverage",
-    "state": "cross_review",
-    "since": "2026-07-19T21:36:52.250Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-19T22:21:45.978Z",
+      "task": "packaging-ci-coverage",
+      "note": "integrated: packaging CI workflow committed. Exercises debian/ (dpkg-buildpackage + policy-rc.d guard) and covenant.spec (rpmbuild in fedora"
+    },
     {
       "at": "2026-07-19T21:32:07.719Z",
       "task": "debian-rpm-head-packaging-templates",
@@ -315,11 +315,6 @@
       "at": "2026-07-13T17:28:35.342Z",
       "task": "provenance-capability-rule-evaluation-trace",
       "note": "Committed as 0b3d546d (feat(audit): project capability-budget-exhaustion into provenance), pushed fast-forward to origin/loop/main-track (40"
-    },
-    {
-      "at": "2026-07-13T13:09:07.894Z",
-      "task": "capabilities-doc-resource-kind-second-copy-guard",
-      "note": "merged and pushed on loop/main-track as 40d6f5a0; HEAD == origin/loop/main-track."
     }
   ]
 }

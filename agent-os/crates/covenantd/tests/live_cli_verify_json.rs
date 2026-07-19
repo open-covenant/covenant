@@ -13470,8 +13470,8 @@ async fn live_cli_verify_json_reports_audit_a2a_auto_retry_scheduler_scan_skippe
     assert!(
         row["repair"].as_str().is_some_and(|repair| repair
             .contains("entry-or-insert-0-and-add-1")
-            && repair.contains("record_auto_retry_scan")),
-        "zero-bucket A2AAutoRetrySchedulerScan drift repair string should name the entry-or-insert-0-and-add-1 idiom and record_auto_retry_scan write-site: {row:?}"
+            && repair.contains("record_a2a_auto_retry_scheduler_scan")),
+        "zero-bucket A2AAutoRetrySchedulerScan drift repair string should name the entry-or-insert-0-and-add-1 idiom and record_a2a_auto_retry_scheduler_scan write-site: {row:?}"
     );
 
     let _ = restarted.kill().await;

@@ -9,7 +9,7 @@
 //! both are built on. This pins that wire contract: `Response::CapabilityRevoked
 //! { signature_b58, removed }` (covenant-ipc/src/lib.rs:1013) and the
 //! already-revoked branch that reports `removed = false` on a repeat
-//! (covenantd/src/lib.rs:16040).
+//! (covenantd/src/lib.rs:16246-16251).
 //!
 //! Seeded over the socket via `GrantCapability`; assertions key off the granted
 //! `signature_b58` only, so no identity derivation is needed (the operator

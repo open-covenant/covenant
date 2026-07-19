@@ -1,7 +1,7 @@
 //! Live HTTP coverage for the buffered `GET /memory/recent` JSON path.
 //!
-//! `memory_recent` (http.rs:445 -> `Request::RecentMemory` -> `recent_memory`
-//! lib.rs:5987) is dual-mode: `Accept: text/event-stream` streams, anything
+//! `memory_recent` (http.rs:472 -> `Request::RecentMemory` -> `recent_memory`
+//! lib.rs:6186) is dual-mode: `Accept: text/event-stream` streams, anything
 //! else returns the buffered `Response::Memories` envelope. The SSE branch and
 //! the buffered branch's *empty* page are covered by `live_http_memory_sse.rs`,
 //! whose header notes it could not seed records ("would require a CLI verb that

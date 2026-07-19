@@ -979,7 +979,7 @@ async fn bearer_auth_surfaces_peer_registry_outage_as_503_with_distinct_audit() 
 
 #[tokio::test]
 async fn reject_surfaces_audit_write_failure_as_503() {
-    // Anti-starvation guard: reject() (covenantd/src/http.rs:248) treats a
+    // Anti-starvation guard: reject() (covenantd/src/http.rs:275) treats a
     // successful audit-write as a precondition for the auth-failed
     // response. If the AuthenticationFailed row cannot land, the daemon
     // returns a generic 503 "audit write failed; refusing to proceed"

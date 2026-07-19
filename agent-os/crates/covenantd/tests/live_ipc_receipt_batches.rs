@@ -9,7 +9,7 @@
 //! This pins that wire contract: `Response::ReceiptBatches { batches }`
 //! (covenant-ipc/src/lib.rs:971) and `ReceiptBatchSummary`
 //! (covenant-ipc/src/lib.rs:53), reached via the `chain.batches` gate
-//! (`receipt_batches`, covenantd/src/lib.rs:7191).
+//! (`receipt_batches`, covenantd/src/lib.rs:7388).
 //!
 //! Seeded entirely over the socket via the public API: an intent mints one
 //! operator-owned local receipt, then `FlushReceipts` assigns it a batch_id

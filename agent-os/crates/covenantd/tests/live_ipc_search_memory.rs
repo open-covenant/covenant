@@ -5,7 +5,7 @@
 //! The verb is covered today over the CLI (`live_cli_memory_search.rs`) and
 //! HTTP (`live_http_memory_search.rs`) but never over the raw Unix socket both
 //! are built on. This pins that wire contract: the `memory.read` capability
-//! gate (`search_memory`, covenantd/src/lib.rs:7286), the
+//! gate (`search_memory`, covenantd/src/lib.rs:7485), the
 //! `Response::Memories { records }` variant, and the owner-scoped read that
 //! stamps every record with the calling operator (`MemoryRecord.owner`,
 //! covenant-types/src/lib.rs:236).

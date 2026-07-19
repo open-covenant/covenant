@@ -4,7 +4,7 @@
 //! mailbox, then the delegate calls `Request::PostA2AResult` for
 //! that task without holding the corresponding
 //! `a2a.respond.<operator_display>` capability. The daemon's
-//! respond gate (lib.rs:3085-3102) rejects the post; the test
+//! respond gate (lib.rs:3205-3222) rejects the post; the test
 //! asserts the rejection names the respond capability.
 //!
 //! The task must be enqueued first or the dispatch returns

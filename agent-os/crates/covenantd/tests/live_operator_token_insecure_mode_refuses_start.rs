@@ -2,12 +2,12 @@
 //! `$COVENANT_HOME/peers/operator.token` carries insecure file
 //! permissions, failing loud before the socket appears.
 //!
-//! `require_operator_token_mode_0600` (covenantd lib.rs:16334) rejects any
+//! `require_operator_token_mode_0600` (covenantd lib.rs:16581) rejects any
 //! operator-token mode with a group or world bit set (`mode & 0o077 != 0`)
 //! and rejects a symlink at that path outright. The pure function is
 //! unit-tested (`require_operator_token_mode_0600_pins_accept_reject_paths`
-//! at lib.rs:57644), but the security-relevant decision is the daemon's:
-//! `bootstrap_operator_token` (main.rs:756) calls it with `?` during
+//! at lib.rs:62659), but the security-relevant decision is the daemon's:
+//! `bootstrap_operator_token` (main.rs:771) calls it with `?` during
 //! startup, so an insecure-permission token must abort boot — not be
 //! silently regenerated or reused, which would hand the bootstrap
 //! credential to every user who could already read the file. That

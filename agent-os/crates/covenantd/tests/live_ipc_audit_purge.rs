@@ -5,7 +5,7 @@
 //! The verb is covered today over the CLI (`live_cli_audit_purge_json.rs`) and
 //! HTTP (`live_http_audit_purge.rs`) but never over the raw Unix socket both are
 //! built on. This pins that wire contract: the `audit.purge` capability gate
-//! (`purge_audit`, covenantd/src/lib.rs:4255) — which the operator must hold
+//! (`purge_audit`, covenantd/src/lib.rs:4370) — which the operator must hold
 //! even as the trust root — and `Response::AuditPurged { purged }`
 //! (covenant-ipc/src/lib.rs:1050).
 //!

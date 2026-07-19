@@ -3,7 +3,7 @@
 //! peer cannot revoke a capability whose subject is a different peer by
 //! replaying its signature.
 //!
-//! `revoke_capability` (lib.rs:16023-16075) only revokes capabilities
+//! `revoke_capability` (lib.rs:16210-16308) only revokes capabilities
 //! whose subject is the authenticated peer: it lists
 //! `list_for_subject(peer.pubkey)` and, when the replayed signature is
 //! neither the caller's own cap nor already revoked, records a

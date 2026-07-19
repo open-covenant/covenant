@@ -1,7 +1,7 @@
 //! Live HTTP delegated denial coverage for `POST /peers/rotate`.
-//! `peers_rotate` (http.rs:958) dispatches `Request::RotateOperatorToken`
+//! `peers_rotate` (http.rs:1058) dispatches `Request::RotateOperatorToken`
 //! with the Bearer-resolved delegate `AgentId`, so the operator-identity
-//! gate in `rotate_operator_token` (lib.rs:3641) applies over HTTP: when
+//! gate in `rotate_operator_token` (lib.rs:3761) applies over HTTP: when
 //! `peer.pubkey != self.identity.agent_id().pubkey` it returns
 //! `Response::Error "operator token rotation requires the operator identity"`
 //! with NO capability fallback (and records a daemon-issued

@@ -4,7 +4,7 @@
 //! and the five rejection paths (missing capability, stale timestamp, empty,
 //! oversized, and non-base58 message).
 //!
-//! `sign_attestation` (covenantd/src/lib.rs:5935) gates on the `identity.attest`
+//! `sign_attestation` (covenantd/src/lib.rs:6134) gates on the `identity.attest`
 //! capability, enforces a 120s timestamp-freshness window, rejects non-base58
 //! input, bounds the bs58 message to 1..=4096 bytes, then signs
 //! `b"covenant.identity.attest.v1\n"`

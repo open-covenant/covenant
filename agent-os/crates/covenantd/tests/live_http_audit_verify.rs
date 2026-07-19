@@ -4,7 +4,7 @@
 //! `covenant audit verify` is live-tested over the CLI/socket path by
 //! `live_cli_audit_verify.rs`, but no test drives `/audit/verify` over the HTTP
 //! gateway. That leaves the operator-identity gate (`verify_audit_integrity`
-//! rejects any peer whose pubkey != `self.identity`, lib.rs:4377) and the
+//! rejects any peer whose pubkey != `self.identity`, lib.rs:4497) and the
 //! `AuditIntegrity` wire variant (`kind: "audit_integrity"` with the report
 //! nested under `report`: `events`, `anchors`, `valid`, `root_hash_hex`,
 //! `failures`) unexercised on the HTTP path.

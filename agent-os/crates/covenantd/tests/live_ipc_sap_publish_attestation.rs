@@ -208,7 +208,7 @@ async fn live_ipc_sap_publish_attestation_returns_published_receipt() {
 #[ignore = "live: spawns covenantd with the SAP bridge disabled + asserts Request::SapPublishAttestation flattens onto Response::Error"]
 async fn live_ipc_sap_publish_attestation_rejects_disabled_bridge() {
     let home = tempfile::tempdir().expect("tempdir");
-    // No COVENANT_SAP_ENABLED: main.rs still wires the bridge (lib.rs:424), so
+    // No COVENANT_SAP_ENABLED: main.rs still wires the bridge (lib.rs:228), so
     // require_enabled is what rejects, not the unit-test-only "not wired" arm.
     let mut child = spawn_daemon(home.path(), &[]).await;
 

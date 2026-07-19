@@ -6,7 +6,7 @@
 //! refuses the send at the recv gate before the task lands in the
 //! mailbox.
 //!
-//! The recv gate (lib.rs:2940-3017) is the recipient-side
+//! The recv gate (lib.rs:3059-3138) is the recipient-side
 //! capability check: a send is only durable when the recipient peer
 //! has granted itself an `a2a.recv.<sender_display>` capability. A
 //! delegated allowance for arbitrary peers to receive operator-

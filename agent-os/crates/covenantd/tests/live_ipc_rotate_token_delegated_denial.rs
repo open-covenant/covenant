@@ -2,7 +2,7 @@
 //! pre-seeded with a non-operator delegate peer, and verifies that the
 //! delegate cannot rotate the operator token.
 //!
-//! `rotate_operator_token` (lib.rs:3641) gates on the operator identity
+//! `rotate_operator_token` (lib.rs:3761) gates on the operator identity
 //! with no capability fallback: when `peer.pubkey !=
 //! self.identity.agent_id().pubkey` it records a daemon-issued
 //! `AuditKind::OperatorTokenRotationRejected { peer_display,

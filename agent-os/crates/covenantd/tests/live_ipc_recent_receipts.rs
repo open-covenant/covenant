@@ -5,10 +5,10 @@
 //! The verb is covered today over the CLI (`live_cli_receipts_recent_json.rs`)
 //! and HTTP (`live_http_receipts_recent_since_ms.rs`) but never over the raw
 //! Unix socket both are built on. This pins that wire contract: the
-//! `chain.receipts` capability gate (`recent_receipts`, covenantd/src/lib.rs:6516),
+//! `chain.receipts` capability gate (`recent_receipts`, covenantd/src/lib.rs:6708),
 //! the `Response::Receipts { receipts }` variant (covenant-ipc/src/lib.rs:961),
 //! and the payer attribution the handler filters on — `SettlementReceipt.payer`
-//! is the authenticated peer, set in `dispatch_intent` (covenant-types/src/lib.rs:392).
+//! is the authenticated peer, set in `dispatch_intent` (covenant-types/src/lib.rs:400).
 //!
 //! Receipts are seeded through the public API: one `SubmitIntent` persists a
 //! memory record and settles credits for it, producing exactly one local

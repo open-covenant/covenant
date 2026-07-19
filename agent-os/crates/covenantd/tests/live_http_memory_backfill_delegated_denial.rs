@@ -1,10 +1,10 @@
 //! Live HTTP delegated denial coverage for `POST /memory/records/backfill`.
-//! `backfill_memory_records` (lib.rs:15578) checks the
-//! `memory.backfill.<mode>` capability FIRST (14587) and only past it the
-//! operator-identity gate (14595) `peer.pubkey !=
+//! `backfill_memory_records` (lib.rs:15783) checks the
+//! `memory.backfill.<mode>` capability FIRST (15799) and only past it the
+//! operator-identity gate (15809) `peer.pubkey !=
 //! self.identity.agent_id().pubkey`, returning `Response::Error
 //! "memory backfill requires the operator identity"` with no capability
-//! fallback. The HTTP handler (`memory_backfill_records`, http.rs:1263)
+//! fallback. The HTTP handler (`memory_backfill_records`, http.rs:1390)
 //! dispatches `Request::BackfillMemoryRecords` with the bearer-resolved
 //! delegate `AgentId`, so the same two-gate ordering applies over the
 //! gateway. The IPC path is pinned by

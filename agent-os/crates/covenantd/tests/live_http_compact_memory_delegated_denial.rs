@@ -1,10 +1,10 @@
 //! Live HTTP delegated denial coverage for `POST /memory/compact`.
-//! `compact_memory` (lib.rs:15339) checks the `memory.compact.<mode>`
-//! capability FIRST (14340) and only past it the operator-identity gate
-//! (14348) `peer.pubkey != self.identity.agent_id().pubkey`, returning
+//! `compact_memory` (lib.rs:15544) checks the `memory.compact.<mode>`
+//! capability FIRST (15552) and only past it the operator-identity gate
+//! (15562) `peer.pubkey != self.identity.agent_id().pubkey`, returning
 //! `Response::Error "memory compaction requires the operator identity"`
 //! with no capability fallback. The HTTP handler (`memory_compact`,
-//! http.rs:553) dispatches `Request::CompactMemory` with the bearer-
+//! http.rs:580) dispatches `Request::CompactMemory` with the bearer-
 //! resolved delegate `AgentId`, so the same two-gate ordering applies over
 //! the gateway. The IPC path is pinned by
 //! `live_ipc_compact_memory_delegated_denial.rs`; this extends the same pin

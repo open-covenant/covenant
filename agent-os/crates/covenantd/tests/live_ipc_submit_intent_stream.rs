@@ -3,28 +3,28 @@
 //! `live_ipc_memory_recent_stream.rs`.
 //!
 //! `Request::SubmitIntent { prefer_stream: Some(true) }` is routed to
-//! `Server::stream_submit_intent` (lib.rs:6354) by the dispatch fork at
-//! lib.rs:2278. That orchestrator calls `self.dispatch_intent(...)` which
+//! `Server::stream_submit_intent` (lib.rs:6553) by the dispatch fork at
+//! lib.rs:2356. That orchestrator calls `self.dispatch_intent(...)` which
 //! owns the capability checks: `dispatch_intent_run` gates the very first
-//! step on `memory.write` via `check_capabilities` (lib.rs:5141) and
+//! step on `memory.write` via `check_capabilities` (lib.rs:5262) and
 //! returns `Response::Error` naming `memory.write` when the grant is
-//! absent (lib.rs:5145).
+//! absent (lib.rs:5265).
 //!
 //! - On `Response::IntentResult { .. }` the orchestrator registers a
 //!   stream_tracker entry and drives `stream_dispatch::emit_intent_stream`,
 //!   writing a `StreamBegin { response_kind: "intent_result" }` / one
 //!   `StreamChunk` / `StreamEnd` sequence directly to the socket writer
-//!   (lib.rs:6106).
+//!   (lib.rs:6589-6599).
 //! - On any other variant — the `Response::Error` the `memory.write` gate
 //!   returns when the grant is absent — the orchestrator's
-//!   `other => return write_frame(writer, &other)` arm (lib.rs:6386)
+//!   `other => return write_frame(writer, &other)` arm (lib.rs:6585)
 //!   writes the failure as a v1-shape TERMINAL `Response` frame and never
 //!   opens a stream.
 //!
 //! Two `#[ignore]`'d tests drive the raw request over the Unix socket as
 //! the authenticated operator, controlling only whether `memory.write` is
 //! granted. Both run against an empty daemon (no agent card registered),
-//! so `dispatch_intent_run` takes the phase-0 echo else-branch (lib.rs:5349)
+//! so `dispatch_intent_run` takes the phase-0 echo else-branch (lib.rs:5477)
 //! and returns `IntentResult { status: "ok", .. }` once the gate passes —
 //! no real runner, network, or signer is involved.
 //!
@@ -175,7 +175,7 @@ async fn live_ipc_submit_intent_stream_returns_stream_when_granted() {
             // packs exactly one AgentResult chunk. Zero chunks would mean the
             // orchestrator opened a stream with no payload; two would mean a
             // double-emit of the runtime_events fold the comment at
-            // lib.rs:6335-6338 warns against.
+            // lib.rs:6534-6537 warns against.
             assert_eq!(
                 collected.chunks.len(),
                 1,

@@ -3,15 +3,15 @@
 //! delegate which SELF-GRANTS `memory.backfill.dry_run` is still refused
 //! by the operator-identity gate that sits behind the capability gate.
 //!
-//! `backfill_memory_records` (lib.rs:15576) checks the
-//! `memory.backfill.<mode>` capability FIRST (14582) and only past it the
-//! operator-identity gate (14597) `peer.pubkey !=
+//! `backfill_memory_records` (lib.rs:15783) checks the
+//! `memory.backfill.<mode>` capability FIRST (15799) and only past it the
+//! operator-identity gate (15809) `peer.pubkey !=
 //! self.identity.agent_id().pubkey`, returning `Response::Error
 //! "memory backfill requires the operator identity"` with no capability
 //! fallback. The happy-path live test (`live_memory_backfill.rs`)
 //! authenticates as the operator, so the operator-identity line never runs
 //! for a non-operator that holds the capability. `grant_capability`
-//! (lib.rs:5877) stores a `None` scope as the empty object `{}` and records
+//! (lib.rs:6076) stores a `None` scope as the empty object `{}` and records
 //! the capability subject as the authenticated peer, so a delegate can
 //! self-grant the capability and clear the first gate; an empty scope is
 //! unbounded and clears the post-gate scope probe (which checks

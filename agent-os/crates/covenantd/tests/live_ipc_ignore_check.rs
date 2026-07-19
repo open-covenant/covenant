@@ -9,7 +9,7 @@
 //! variant (`ignored`, `matched_pattern`, `rules_loaded`;
 //! covenant-ipc/src/lib.rs:1022) and the content-redaction floor a fresh daemon
 //! ships with: on first boot it seeds `default_ignorefile()` (which carries
-//! `**/id_rsa*` and `**/.ssh/**`, covenantd/src/main.rs:1066/:760) and loads it,
+//! `**/id_rsa*` and `**/.ssh/**`, covenantd/src/main.rs:1083/:190) and loads it,
 //! so a credential path is ignored and a benign intent is not.
 //!
 //! Both cases run on one authenticated connection so they exercise the same

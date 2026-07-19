@@ -2,7 +2,7 @@
 //! pre-seeded with a non-operator delegate peer, and verifies that the
 //! delegate cannot trigger A2A auto-retry of stale tasks.
 //!
-//! `retry_a2a_stale` (lib.rs:3396) checks `peer.pubkey !=
+//! `retry_a2a_stale` (lib.rs:3516) checks `peer.pubkey !=
 //! self.identity.agent_id().pubkey` FIRST — returning `Response::Error
 //! "a2a auto retry requires the operator identity"` — and only past that
 //! gate checks the `a2a.repair.requeue` capability when the policy is

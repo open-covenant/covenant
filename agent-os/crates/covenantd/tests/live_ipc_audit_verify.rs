@@ -9,7 +9,7 @@
 //! variant (covenant-ipc/src/lib.rs:1044) wrapping an `AuditIntegrityReport`
 //! (`events`, `anchors`, `valid`, `root_hash_hex`, `failures`;
 //! covenant-audit/src/lib.rs:62), and the operator-identity gate in
-//! `verify_audit_integrity` (covenantd/src/lib.rs:4377) that admits the
+//! `verify_audit_integrity` (covenantd/src/lib.rs:4497) that admits the
 //! daemon's own operator and would otherwise answer `Response::Error`.
 //!
 //! Audit state is seeded through the public API — a capability grant appends

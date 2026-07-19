@@ -1,10 +1,10 @@
 //! Live HTTP delegated denial coverage for `POST /settlement/receipts/backfill`.
-//! `backfill_settlement_receipts` (lib.rs:15450) checks the
-//! `settlement.backfill.<mode>` capability FIRST (14456) and only past it
-//! the operator-identity gate (14467) `peer.pubkey !=
+//! `backfill_settlement_receipts` (lib.rs:15655) checks the
+//! `settlement.backfill.<mode>` capability FIRST (15671) and only past it
+//! the operator-identity gate (15681) `peer.pubkey !=
 //! self.identity.agent_id().pubkey`, returning `Response::Error
 //! "settlement backfill requires the operator identity"` with no capability
-//! fallback. The HTTP handler (`settlement_backfill_receipts`, http.rs:1237)
+//! fallback. The HTTP handler (`settlement_backfill_receipts`, http.rs:1364)
 //! dispatches `Request::BackfillSettlementReceipts` with the bearer-resolved
 //! delegate `AgentId`, so the same two-gate ordering applies over the
 //! gateway. The IPC path is pinned by

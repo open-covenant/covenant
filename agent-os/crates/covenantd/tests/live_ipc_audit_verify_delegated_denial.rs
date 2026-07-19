@@ -2,7 +2,7 @@
 //! pre-seeded with a non-operator delegate peer, and verifies that the
 //! delegate cannot run global audit-integrity verification.
 //!
-//! `verify_audit_integrity` (lib.rs:4376) gates on the operator identity
+//! `verify_audit_integrity` (lib.rs:4496) gates on the operator identity
 //! with no capability fallback: when `peer.pubkey !=
 //! self.identity.agent_id().pubkey` it returns `Response::Error "audit
 //! integrity verification requires the operator identity"`; only the

@@ -10,7 +10,7 @@
 //! (`cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y`). It reads no settlement
 //! state and exposes no governance surface.
 //!
-//! A separate `BuyLockVault` PDA-owned CVNT account holds buyback inflows.
+//! A separate PDA-owned CVNT vault (`buylock_cvnt_vault`) holds buyback inflows.
 //! The vault has no withdraw instruction in v1 — buybacks are effectively
 //! locked until a future upgrade adds a timelocked release path.
 

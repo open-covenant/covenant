@@ -3260,7 +3260,7 @@ mod tests {
     fn request_ignore_check_serde_pins_single_field_variant() {
         // Request::IgnoreCheck is the operator-driven ignore-rule
         // probe the CLI and HTTP gateway send to test whether a
-        // candidate intent string matches the local IgnoreList
+        // candidate intent string matches the local IgnoreSet
         // policy. It pairs with Response::IgnoreReport (already
         // pinned) which carries ignored, matched_pattern, and
         // rules_loaded back. With
@@ -3310,7 +3310,7 @@ mod tests {
              error branch — every CLI/HTTP probe fails with a \
              confusing fallback message instead of IgnoreReport, \
              and the operator cannot validate a candidate intent \
-             against the loaded IgnoreList through the supported \
+             against the loaded IgnoreSet through the supported \
              path",
         );
         assert_eq!(
@@ -3341,7 +3341,7 @@ mod tests {
             "Request::IgnoreCheck wire form must reject a payload \
              missing 'text'; a stray #[serde(default)] would let \
              a malformed frame decode with text=\"\" and the \
-             daemon would run the IgnoreList matcher against an \
+             daemon would run the IgnoreSet matcher against an \
              empty string — which matches nothing in any normal \
              policy and returns ignored:false with a meaningless \
              0-rule attribution, silently lying to the operator \
@@ -7912,7 +7912,7 @@ mod tests {
     #[test]
     fn response_memory_purged_serde_pins_single_field_variant() {
         // Response::MemoryPurged is the variant the daemon sends
-        // after PurgeMemories removes scoped memory rows matching
+        // after PurgeMemory removes scoped memory rows matching
         // the requested predicate. It carries purged: u64 — the
         // count of memory rows the predicate matched and removed,
         // which the CLI surfaces so the operator can confirm the
@@ -8425,7 +8425,7 @@ mod tests {
     #[test]
     fn response_capabilities_serde_pins_single_field_variant() {
         // Response::Capabilities is the variant the daemon sends
-        // after ListCapabilities returns the SignedCapability rows
+        // after RecentCapabilities returns the SignedCapability rows
         // the caller's authorization permits. It carries
         // capabilities: Vec<SignedCapability> — the capability list
         // the CLI renders to the operator. With #[serde(tag =
@@ -9505,7 +9505,7 @@ mod tests {
     #[test]
     fn response_memory_repaired_serde_pins_single_field_variant() {
         // Response::MemoryRepaired is the variant the daemon sends
-        // after Request::MemoryRepair applies (or dry-runs) a scoped
+        // after Request::RepairMemory applies (or dry-runs) a scoped
         // repair against a memory row — detaching a stale parent,
         // deleting a record, or backfilling provenance — and reports
         // the per-row outcome. It carries outcome: MemoryRepairOutcome,
@@ -9602,7 +9602,7 @@ mod tests {
     #[test]
     fn response_memory_compacted_serde_pins_single_field_variant() {
         // Response::MemoryCompacted is the variant the daemon sends
-        // after Request::MemoryCompact runs a bounded compaction pass
+        // after Request::CompactMemory runs a bounded compaction pass
         // against the local memory store — deleting expired
         // working/episodic rows, marking long-term rows stale, and
         // optionally detaching stale parents. It carries outcome:
@@ -10212,7 +10212,7 @@ mod tests {
     #[test]
     fn response_receipt_batch_flushed_serde_pins_two_field_variant() {
         // Response::ReceiptBatchFlushed is the variant the daemon
-        // sends after Request::FlushReceiptBatch anchors a batch of
+        // sends after Request::FlushReceipts anchors a batch of
         // local receipts into a single on-chain Merkle root. It
         // carries batch: ReceiptBatchSummary (batch_id, merkle_root,
         // receipt_count, tx_sig, slot) plus receipts_updated: u64

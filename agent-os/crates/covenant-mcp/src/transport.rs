@@ -919,7 +919,7 @@ mod tests {
         // TRANSPORT_CLOSED_CODE and TRANSPORT_CLOSED_MESSAGE are the
         // JSON-RPC sentinel the reader's EOF/shutdown path emits when
         // a stdio MCP child process exits. The emit site in
-        // NewStdioClient::spawn uses LITERAL values:
+        // StdioMcpClient::spawn uses LITERAL values:
         //
         //     code: -32099,
         //     message: "transport closed".into(),

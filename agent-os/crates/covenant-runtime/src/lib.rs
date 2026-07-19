@@ -106,7 +106,7 @@ pub enum RuntimeTrace {
         preview: String,
     },
     /// Hermes finished invoking a tool. `error` is `true` when the tool
-    /// raised, `false` otherwise. Independent from `HermesRunFailed`.
+    /// raised, `false` otherwise. Independent from `RunnerError::RunFailed`.
     HermesToolCompleted {
         run_id: String,
         tool: String,
@@ -2245,7 +2245,7 @@ cpu_ms_per_task = 150
         // exactly one entry keyed by intent.id with the spawned pid and
         // a fresh started_at_ms; after the dispatch returns the tracker
         // must be empty. Failure mode 1 of the wire-tracker slice closes
-        // here: a RegisterGuard whose Drop ran before child.wait()
+        // here: a TrackerGuard whose Drop ran before child.wait()
         // would surface as an empty tracker during the poll.
         let dir = tempdir().unwrap();
         let script = dir.path().join("slow_ok.sh");
@@ -2294,7 +2294,7 @@ cpu_ms_per_task = 5000
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         let entry = seen.expect(
-            "tracker must record the spawned subprocess while the dispatch is in flight; a missing entry indicates the RegisterGuard was dropped before child.wait() or the runner never reached the spawn path",
+            "tracker must record the spawned subprocess while the dispatch is in flight; a missing entry indicates the TrackerGuard was dropped before child.wait() or the runner never reached the spawn path",
         );
         assert!(entry.pid > 0, "tracker pid must be > 0 (got {})", entry.pid);
         assert_eq!(
@@ -2359,7 +2359,7 @@ cpu_ms_per_task = 150
         );
         assert!(
             tracker.is_empty(),
-            "tracker must be empty after the timeout-kill path (len={}); a RegisterGuard scoped only inside the happy branch would leak an entry here",
+            "tracker must be empty after the timeout-kill path (len={}); a TrackerGuard scoped only inside the happy branch would leak an entry here",
             tracker.len()
         );
     }

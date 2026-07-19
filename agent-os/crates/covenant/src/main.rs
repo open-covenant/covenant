@@ -1325,7 +1325,7 @@ async fn run_chain_buy_credits(args: &[String]) -> Result<()> {
         Ok(Ok(Err(client_err))) => {
             bail!(
                 "send_and_confirm_transaction failed: {client_err} \
-                 (if HasOneConstraintViolation: fetch config.treasury via `chain status` \
+                 (if ConstraintHasOne: fetch config.treasury via `chain status` \
                  and pass it verbatim to --treasury)"
             )
         }
@@ -10663,7 +10663,7 @@ mod tests {
         fn single_signer_only_the_operator() {
             // The on-chain RegisterAgent struct expects exactly one
             // signer (the operator). A tx built with extra signing
-            // keypairs would be rejected with SignerCountMismatch.
+            // keypairs would fail to sign — no signer slot exists for them.
             let kp = Keypair::new();
             let tx = sign_register_agent_tx(&kp, &fixed_program(), &fixed_args(), Hash::default());
             assert_eq!(tx.signatures.len(), 1, "exactly one signature");

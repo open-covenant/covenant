@@ -3037,7 +3037,7 @@ mod tests {
         // for duplicate-safe A2A sends; it pairs with the already-pinned
         // A2AIdempotencyCacheKey. The struct rides JSON both in the
         // in-memory result_cache HashMap and in the persisted
-        // result_cache field of the receiver's PersistentA2AState — so
+        // IdempotencyResultCached rows replayed into MailboxState — so
         // a daemon restart re-decodes whatever shape was last written.
         // Four fields: source_task_id (Uuid, required), status
         // (A2ATaskStatus, required), content (Vec<Content>,
@@ -3378,7 +3378,7 @@ mod tests {
         // path. Three required fields: task_id, reason, attempt; one
         // optional: lease_age_ms with #[serde(default,
         // skip_serializing_if = "Option::is_none")] so the
-        // OperatorDisabled and NotInFlight branches (which fire before
+        // Disabled and NotInFlight branches (which fire before
         // a lease is read) stay compact on disk.
         let task_id = Uuid::nil();
 

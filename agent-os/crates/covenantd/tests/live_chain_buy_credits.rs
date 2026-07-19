@@ -23,7 +23,7 @@
 //!     account at `COVENANT_LIVE_CHAIN_TREASURY` (this value MUST
 //!     equal config.treasury — fetch it via `chain status` if
 //!     unknown; passing a different account triggers
-//!     HasOneConstraintViolation at submission).
+//!     ConstraintHasOne at submission).
 //!
 //! When the env vars are unset, the test exits early with a clear
 //! reason so an operator running `cargo test -- --ignored` against

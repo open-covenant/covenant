@@ -223,7 +223,7 @@ pub fn hermes_gateway_config_from_env() -> Option<HermesGatewayConfig> {
 /// `COVENANT_SAP_*` environment the worker reads, so daemon and worker
 /// stay consistent. The returned config may be `enabled: false`
 /// (default); callers should still construct a [`SapBridge`] from it —
-/// disabled-bridge methods return `BridgeDisabledError` without
+/// disabled-bridge methods return `BridgeError::Disabled` without
 /// touching the network.
 pub fn sap_bridge_config_from_env() -> SapBridgeConfig {
     SapBridgeConfig::from_env(std::env::vars())
@@ -1343,7 +1343,7 @@ pub struct Server {
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
     /// need on-chain identity / attestation / discovery read this and
-    /// surface `BridgeDisabledError` when it's absent or
+    /// surface `BridgeError::Disabled` when it's absent or
     /// `enabled = false`.
     sap_bridge: Option<SapBridge>,
     /// Outcomes of in-flight async (hermes) dispatches, keyed by intent id.
@@ -1577,7 +1577,7 @@ impl Server {
     /// Attach the Synapse Agent Protocol bridge. Daemon `main` calls
     /// this once at boot with the bridge from [`sap_bridge_config_from_env`],
     /// so it is always attached; the config's `enabled` flag governs
-    /// behavior, and a disabled bridge surfaces `BridgeDisabledError`.
+    /// behavior, and a disabled bridge surfaces `BridgeError::Disabled`.
     pub fn with_sap_bridge(mut self, bridge: SapBridge) -> Self {
         self.sap_bridge = Some(bridge);
         self
@@ -1585,7 +1585,7 @@ impl Server {
 
     /// Returns the attached SAP bridge, if any. Handlers should treat
     /// `None` the same as a disabled bridge — a soft no-op surfaced as
-    /// `BridgeDisabledError` to the caller.
+    /// `BridgeError::Disabled` to the caller.
     pub fn sap_bridge(&self) -> Option<&SapBridge> {
         self.sap_bridge.as_ref()
     }
@@ -65749,8 +65749,8 @@ budget_credits_per_hour = {credits}
     /// Seed a `PeerEntry` whose `agent_id.pubkey` equals the daemon's
     /// own identity pubkey — i.e., the operator's bootstrap row as the
     /// daemon's `bootstrap_operator_token` would write it. The seeded
-    /// entry's `agent_id.display` is `"operator@local"` to mirror the
-    /// `boot_identity()` shape; for the self-revoke guard the predicate
+    /// entry's `agent_id.display` is `"operator@local"`; the real boot
+    /// row carries `identity.display()`; the self-revoke guard predicate
     /// is identity-pubkey-centric so the display is irrelevant to the
     /// guard's decision but informative for the audit row payload.
     async fn seed_operator_self_entry(s: &Server) -> (PeerToken, [u8; 32]) {
@@ -67021,7 +67021,7 @@ budget_credits_per_hour = {credits}
     }
 
     /// Like [`FailingCapabilityStore`] but the fault is on the read path: only
-    /// `recent` fails, so [`Server::recent_capability`] reaches its bail arm
+    /// `recent` fails, so [`Server::recent_capabilities`] reaches its bail arm
     /// while the other trait methods stay inert.
     struct FailingRecentCapabilityStore;
 

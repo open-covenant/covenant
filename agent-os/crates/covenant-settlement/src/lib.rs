@@ -1767,7 +1767,7 @@ mod tests {
 
     #[test]
     fn receipt_hash_pins_canonical_json_field_order_and_value_encoding() {
-        // receipt_hash (lib.rs:358) is sha256(serde_json::to_vec(payload)) over
+        // receipt_hash (lib.rs:360) is sha256(serde_json::to_vec(payload)) over
         // a serde_json::json! object. With serde_json's default Map backing (no
         // preserve_order feature anywhere in the workspace) keys serialize in
         // BTreeMap ALPHABETICAL order, and the conditional memory_record_id is

@@ -364,14 +364,14 @@ fn build_stake_instruction(
 }
 
 // Account ordering and signer/writable flags mirror the on-chain
-// BuyCredits struct at agent-os/programs/settlement/src/lib.rs:738-758:
+// BuyCredits struct at agent-os/programs/settlement/src/lib.rs:738-765:
 //   config        — PDA, read-only (has_one = treasury)
 //   credits       — PDA, writable, !signer (has_one = owner)
 //   owner         — signer, writable (fee payer + transfer authority)
 //   owner_covnt   — writable, !signer (source of the COVNT transfer)
 //   treasury      — writable, !signer (destination of the COVNT transfer;
-//                   the operator must supply config.treasury verbatim or
-//                   the has_one check fails)
+//                   the operator must supply config.treasury verbatim)
+//   covnt_mint     — read-only (must equal config.covnt_mint)
 //   token_program — read-only, legacy SPL Token
 // No system_program is referenced because BuyCredits does not init
 // any new account (credits PDA is initialized by initialize_credits).
@@ -9905,9 +9905,9 @@ mod tests {
 
         #[test]
         fn accounts_follow_on_chain_struct_order_positionally() {
-            // agent-os/programs/settlement/src/lib.rs:738-758 declares
+            // agent-os/programs/settlement/src/lib.rs:738-765 declares
             // BuyCredits { config, credits, owner, owner_covnt,
-            // treasury, token_program }.
+            // treasury, covnt_mint, token_program }.
             let program = fixed_program();
             let operator = fixed_operator();
             let ix = build_fixture_ix();

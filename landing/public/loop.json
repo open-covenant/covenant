@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-19T21:26:26.466Z",
+  "updatedAt": "2026-07-19T21:46:30.141Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12920,
-    "tasks": 1515,
-    "integrated": 1515
+    "events": 12929,
+    "tasks": 1516,
+    "integrated": 1516
   },
   "throughput": {
-    "last24h": 2,
-    "last7d": 22,
-    "velocity": 3.1
+    "last24h": 3,
+    "last7d": 23,
+    "velocity": 3.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-19",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-19",
-      "total": 1515
+      "total": 1516
     }
   ],
   "states": {
-    "integrated": 1507,
+    "integrated": 1508,
     "proposed": 1,
     "blocked": 6,
     "cross_review": 1
@@ -216,11 +216,16 @@
     }
   ],
   "inFlight": {
-    "task": "debian-rpm-head-packaging-templates",
+    "task": "packaging-ci-coverage",
     "state": "cross_review",
-    "since": "2026-07-19T21:24:47.132Z"
+    "since": "2026-07-19T21:36:52.250Z"
   },
   "recent": [
+    {
+      "at": "2026-07-19T21:32:07.719Z",
+      "task": "debian-rpm-head-packaging-templates",
+      "note": "43b7eeed pushed to origin/loop/main-track; debian/ + covenant.spec + source-install.md section; cross-review findings applied pre-integratio"
+    },
     {
       "at": "2026-07-19T01:47:23.715Z",
       "task": "store-append-fsync-durability",
@@ -315,11 +320,6 @@
       "at": "2026-07-13T13:09:07.894Z",
       "task": "capabilities-doc-resource-kind-second-copy-guard",
       "note": "merged and pushed on loop/main-track as 40d6f5a0; HEAD == origin/loop/main-track."
-    },
-    {
-      "at": "2026-07-13T12:59:27.618Z",
-      "task": "capabilities-doc-effective-status-set-guard",
-      "note": "merged and pushed on loop/main-track as 64b55154; HEAD == origin/loop/main-track."
     }
   ]
 }

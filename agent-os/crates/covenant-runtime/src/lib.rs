@@ -729,8 +729,37 @@ fn write_snapshot(path: &Path, rows: &[PersistedEntry]) -> std::io::Result<()> {
         buf.push('\n');
     }
     let tmp = path.with_extension("jsonl.tmp");
-    std::fs::write(&tmp, buf.as_bytes())?;
-    std::fs::rename(&tmp, path)
+    {
+        use std::io::Write;
+        let mut out = std::fs::File::create(&tmp)?;
+        out.write_all(buf.as_bytes())?;
+        out.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    // Reopen the renamed inode and fsync it, then best-effort fsync the
+    // parent directory: a crash between rename returning and the FS flushing
+    // the directory entry can revert to the pre-rename file (POSIX gap). See
+    // the settlement backfill rewrite for the canonical treatment.
+    std::fs::File::open(path)?.sync_all()?;
+    if let Some(parent) = path.parent() {
+        match std::fs::File::open(parent) {
+            Ok(dir) => {
+                if let Err(e) = dir.sync_all() {
+                    warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "subprocess-tracker: parent directory fsync failed; snapshot may not be crash-durable",
+                    );
+                }
+            }
+            Err(e) => warn!(
+                path = %path.display(),
+                error = %e,
+                "subprocess-tracker: could not open parent directory for fsync",
+            ),
+        }
+    }
+    Ok(())
 }
 
 /// Outcome of one [`preempt_subprocess_pg`] call. The daemon-side
@@ -2441,7 +2470,7 @@ backend = "linux-gvisor"
     fn gvisor_oci_config_pins_memory_mb_byte_limit() {
         // oci_config projects resources.memory_mb into the OCI cgroup memory
         // ceiling at linux.resources.memory.limit, converting MiB -> bytes via
-        // saturating_mul(1024 * 1024) (lib.rs:1211-1215, 1261-1263). That limit
+        // saturating_mul(1024 * 1024) (lib.rs:1240-1244, 1290-1292). That limit
         // is the sandbox's memory-exhaustion guard: a unit slip (MiB -> KiB)
         // would cap a 64-MiB agent at 64 KiB and brick it, while dropping the
         // field removes the bound entirely. The restrictive-OCI-config test

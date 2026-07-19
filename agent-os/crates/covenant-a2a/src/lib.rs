@@ -1447,9 +1447,34 @@ impl Mailbox for JsonlMailbox {
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
         }
-        f.flush().await?;
+        f.sync_all().await?;
         drop(f);
         fs::rename(&tmp_path, &self.path).await?;
+        // Reopen the renamed inode and fsync it, then best-effort fsync the
+        // parent directory: a crash between rename returning and the FS
+        // flushing the directory entry can revert to the pre-rename file
+        // (POSIX gap). See the settlement backfill rewrite for the canonical
+        // treatment of this idiom.
+        let renamed = OpenOptions::new().read(true).open(&self.path).await?;
+        renamed.sync_all().await?;
+        if let Some(parent) = self.path.parent() {
+            match fs::File::open(parent).await {
+                Ok(dir) => {
+                    if let Err(e) = dir.sync_all().await {
+                        tracing::warn!(
+                            path = %self.path.display(),
+                            error = %e,
+                            "a2a mailbox: parent directory fsync failed; compact may not be crash-durable",
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    path = %self.path.display(),
+                    error = %e,
+                    "a2a mailbox: could not open parent directory for fsync",
+                ),
+            }
+        }
 
         // Mirror the on-disk drop into in-memory state so the senders
         // map stays consistent without a reopen. Replay-on-open is the

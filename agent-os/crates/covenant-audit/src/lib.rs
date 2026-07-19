@@ -1073,19 +1073,14 @@ async fn read_chain_entries(path: &PathBuf) -> Result<Vec<AuditChainEntry>, Audi
 }
 
 /// Crash-atomic chain rewrite via tmp + rename: write the full body to a
-/// sibling `.tmp` path, flush the user-space buffer, then atomically rename it
-/// over the chain. Without this, a power loss mid-write would leave the chain
-/// file truncated at an arbitrary offset, which `read_chain_entries` would
-/// surface as a serde error. With it, observers see either the old body or
-/// the new one — never half a row.
-///
-/// Best-effort under hostile power loss: this does NOT `sync_all()` the tmp
-/// file or fsync the parent directory, matching the pre-existing events
-/// rewrite path. A crash AFTER the rename returns but BEFORE the filesystem
-/// flushes the rename + new inode can still revert to the old body on next
-/// boot. Strengthening this requires a paired upgrade of the events path —
-/// tracked separately to keep the two halves of the audit log on the same
-/// durability tier.
+/// sibling `.tmp` path, fsync it, atomically rename it over the chain, then
+/// reopen and fsync the renamed inode plus the parent directory. Without
+/// this, a power loss mid-write would leave the chain file truncated at an
+/// arbitrary offset, which `read_chain_entries` would surface as a serde
+/// error. With it, observers see either the old body or the new one — never
+/// half a row — and, once the best-effort directory fsync lands, the rename
+/// survives a crash after it returns. The events purge rewrite below is on
+/// the same durability tier; the settlement backfill rewrite is canonical.
 async fn write_chain_entries(
     path: &PathBuf,
     entries: &[AuditChainEntry],
@@ -1102,9 +1097,29 @@ async fn write_chain_entries(
         f.write_all(line.as_bytes()).await?;
         f.write_all(b"\n").await?;
     }
-    f.flush().await?;
+    f.sync_all().await?;
     drop(f);
     fs::rename(&tmp_path, path).await?;
+    let renamed = OpenOptions::new().read(true).open(path).await?;
+    renamed.sync_all().await?;
+    if let Some(parent) = path.parent() {
+        match fs::File::open(parent).await {
+            Ok(dir) => {
+                if let Err(e) = dir.sync_all().await {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "audit chain: parent directory fsync failed; rewrite may not be crash-durable",
+                    );
+                }
+            }
+            Err(e) => tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "audit chain: could not open parent directory for fsync",
+            ),
+        }
+    }
     Ok(())
 }
 
@@ -1253,9 +1268,34 @@ impl AuditLog for JsonlAuditLog {
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
         }
-        f.flush().await?;
+        f.sync_all().await?;
         drop(f);
         fs::rename(&tmp_path, &self.path).await?;
+        // Reopen the renamed inode and fsync it, then best-effort fsync the
+        // parent directory: a crash between rename returning and the FS
+        // flushing the directory entry can revert to the pre-rename file
+        // (POSIX gap). Paired with `write_chain_entries` so both halves of
+        // the audit log share one durability tier.
+        let renamed = OpenOptions::new().read(true).open(&self.path).await?;
+        renamed.sync_all().await?;
+        if let Some(parent) = self.path.parent() {
+            match fs::File::open(parent).await {
+                Ok(dir) => {
+                    if let Err(e) = dir.sync_all().await {
+                        tracing::warn!(
+                            path = %self.path.display(),
+                            error = %e,
+                            "audit events: parent directory fsync failed; purge may not be crash-durable",
+                        );
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    path = %self.path.display(),
+                    error = %e,
+                    "audit events: could not open parent directory for fsync",
+                ),
+            }
+        }
         Ok(purged)
     }
 
@@ -1951,12 +1991,12 @@ mod tests {
 
     #[tokio::test]
     async fn jsonl_integrity_report_pins_root_hash_as_genesis_seeded_chain_fold() {
-        // verify_integrity returns root_hash_hex (lib.rs:1319) as the final
+        // verify_integrity returns root_hash_hex (lib.rs:1359) as the final
         // accumulator of the audit hash chain: it seeds previous_hash_hex from
-        // ZERO_CHAIN_HASH (lib.rs:1274), then folds each event line forward as
-        // previous = chain_hash(previous, sha256_hex(line)) (lib.rs:1275-1307).
+        // ZERO_CHAIN_HASH (lib.rs:1314), then folds each event line forward as
+        // previous = chain_hash(previous, sha256_hex(line)) (lib.rs:1315-1347).
         // That root is the audit-root subject release signing binds
-        // (lib.rs:2699), so its exact byte construction is load-bearing for any
+        // (lib.rs:2739), so its exact byte construction is load-bearing for any
         // independent verifier of the anchor.
         //
         // jsonl_integrity_report_accepts_untampered_chain pins root_hash_hex
@@ -2007,11 +2047,11 @@ mod tests {
     #[tokio::test]
     async fn jsonl_integrity_report_detects_dangling_chain_anchor() {
         // verify_integrity flags a hash-chain sidecar that outruns the
-        // event log: `if anchors.len() > event_lines.len()` (lib.rs:1309)
+        // event log: `if anchors.len() > event_lines.len()` (lib.rs:1349)
         // reports the surplus as "<n> dangling chain anchor(s)" — the
         // specific diagnostic for an event log that lost trailing lines
         // (truncated or rolled back) while the append-only chain sidecar
-        // kept its anchors. The earlier `!=` parity check (lib.rs:1267)
+        // kept its anchors. The earlier `!=` parity check (lib.rs:1307)
         // also marks any count mismatch invalid, so line 827 is the
         // dangling-count diagnostic on top of that verdict, not the sole
         // gate. Every other integrity test runs equal event/anchor counts
@@ -2066,7 +2106,7 @@ mod tests {
     async fn jsonl_integrity_report_detects_missing_anchor_for_unanchored_event() {
         // verify_integrity flags a well-formed event line that has no backing
         // chain anchor: the `Ok(event)` branch's `None => "chain entry {index}
-        // missing"` arm (lib.rs:1291), reached only when the event log outruns
+        // missing"` arm (lib.rs:1331), reached only when the event log outruns
         // the append-only hash-chain sidecar (event_lines.len() >
         // anchors.len()). That skew is the signature of a forged event appended
         // without extending the chain, and the diagnostic must name the
@@ -2077,7 +2117,7 @@ mod tests {
         //
         // Mutation: narrowing line 977 to `None => {}` drops only this
         // per-index diagnostic. The `anchors.len() != event_lines.len()` parity
-        // check at lib.rs:1267 already flips `valid`, so asserting only
+        // check at lib.rs:1307 already flips `valid`, so asserting only
         // `!report.valid` would NOT catch the regression — the load-bearing
         // assertion is the specific "chain entry 1 missing" string.
         let dir = tempfile::tempdir().unwrap();

@@ -1963,7 +1963,7 @@ mod tests {
 
     #[test]
     fn checkpoint_key_pins_pubkey_only_and_display_independence_and_tuple_order() {
-        // checkpoint_key (line 557-559) is the JsonlPauseCheckpointStore
+        // checkpoint_key (line 788-790) is the JsonlPauseCheckpointStore
         // HashMap-keying function: (intent_id, agent.pubkey). The store
         // keys self.checkpoints on the returned tuple, so the function's
         // contract decides whether two AgentId values with identical
@@ -2388,12 +2388,12 @@ mod tests {
     #[test]
     fn refill_clamps_overflowing_grant_to_capacity_before_cast() {
         // The per-step grant is computed in u128 (add_u128 = elapsed *
-        // capacity / MS_PER_HOUR) then narrowed to u64 at lib.rs:349 via
+        // capacity / MS_PER_HOUR) then narrowed to u64 at lib.rs:354 via
         // `add_u128.min(bucket.capacity as u128) as u64`. The .min() must
         // run BEFORE the cast: a capacity near u64::MAX idle past an hour
         // drives add_u128 over u64::MAX, where an unclamped `as u64` wraps
         // and silently zeroes the grant. The downstream tokens.min(capacity)
-        // at lib.rs:353 cannot recover a grant already lost to the wrap.
+        // at lib.rs:358 cannot recover a grant already lost to the wrap.
         //
         // capacity 2^63, elapsed two hours -> add_u128 = 7_200_000 * 2^63 /
         // 3_600_000 = 2^64 exactly, which casts to 0. With the clamp add is
@@ -2409,7 +2409,7 @@ mod tests {
             b.tokens_remaining,
             1u64 << 63,
             "add_u128 == 2^64 must clamp to capacity before the u128->u64 \
-             cast; dropping the lib.rs:349 .min (or flipping it to .max) \
+             cast; dropping the lib.rs:354 .min (or flipping it to .max) \
              lets `as u64` wrap to 0, leaving a high-capacity bucket empty \
              after an hour-plus idle so every spend is denied"
         );
@@ -2459,12 +2459,12 @@ mod tests {
 
     #[test]
     fn refill_eta_ms_pins_div_ceil_rounding_up_for_non_exact_division() {
-        // covenant_budget::refill_eta_ms (line 236-246) computes the
+        // covenant_budget::refill_eta_ms (line 377-387) computes the
         // ETA via:
         //
         //   let ms = (needed * MS_PER_HOUR).div_ceil(bucket.capacity as u128);
         //
-        // The docstring (line 233-235) documents the return as the
+        // The docstring (line 374-376) documents the return as the
         // moment 'the bucket will hold AT LEAST `credits` tokens' —
         // 'at least' requires the remainder to round UP, otherwise
         // an operator polling the ETA and retrying try_debit at the
@@ -2472,7 +2472,7 @@ mod tests {
         // before the bucket actually has the credits.
         //
         // refill_eta_grows_with_shortfall_at_capacity_rate (line
-        // 1837) tests capacity=10 with needed=1 and 2, both of which
+        // 2437) tests capacity=10 with needed=1 and 2, both of which
         // produce exact divisions:
         //   needed=1: 3_600_000 / 10 = 360_000 (div_ceil == floor div)
         //   needed=2: 7_200_000 / 10 = 720_000 (div_ceil == floor div)
@@ -2540,10 +2540,10 @@ mod tests {
 
     #[test]
     fn refill_eta_ms_clamps_overflowing_shortfall_to_u64_max() {
-        // refill_eta_ms (line 365) computes the ETA in u128 via
+        // refill_eta_ms (line 385) computes the ETA in u128 via
         //   ms = (needed * MS_PER_HOUR).div_ceil(capacity)
         // then folds it into the u64 return with
-        //   now.saturating_add(ms.min(u64::MAX as u128) as u64)   (line 374)
+        //   now.saturating_add(ms.min(u64::MAX as u128) as u64)   (line 386)
         // The `.min(u64::MAX as u128)` clamp is the only thing between a
         // u128 ms that exceeds u64::MAX and a silently wrapping `as u64`
         // cast. At capacity=1 the boundary sits at
@@ -3091,8 +3091,8 @@ mod tests {
     #[tokio::test]
     async fn in_memory_try_debit_and_would_exceed_allow_spending_exactly_the_remaining_balance() {
         // Both spend gates use a STRICT `tokens_remaining < credits`
-        // comparison: try_debit (lib.rs:479) returns Exhausted only when
-        // the balance is strictly short, and would_exceed (:427) reports
+        // comparison: try_debit (lib.rs:484) returns Exhausted only when
+        // the balance is strictly short, and would_exceed (:508) reports
         // `tokens_remaining < credits`. The `<` is exclusive, so credits
         // EXACTLY equal to the remaining balance is allowed — an agent may
         // spend down to exactly zero in one debit, and would_exceed
@@ -3145,7 +3145,7 @@ mod tests {
     async fn jsonl_try_debit_and_would_exceed_allow_spending_exactly_the_remaining_balance() {
         // JsonlLedger mirrors the in-memory spend gates with the same
         // strict `tokens_remaining < credits` comparison: try_debit
-        // (lib.rs:952) and would_exceed (:905). Pin the same exact-balance
+        // (lib.rs:1007) and would_exceed (:1046). Pin the same exact-balance
         // equality keep-arm on the persistent backend so a `<` -> `<=`
         // flip that slipped past the in-memory pin is still caught here.
         let dir = tempfile::tempdir().unwrap();
@@ -3337,8 +3337,8 @@ mod tests {
     #[tokio::test]
     async fn in_memory_compact_keeps_debit_stamped_exactly_at_cutoff() {
         // compact_older_than drops debits strictly older than the cutoff:
-        // retain(|d| d.at_ms >= before_ms) (lib.rs:549); the module doc
-        // (lib.rs:323) pins the contract as "drop events with at_ms <
+        // retain(|d| d.at_ms >= before_ms) (lib.rs:554); the `compact_older_than` doc
+        // (lib.rs:328) pins the contract as "drop events with at_ms <
         // before_ms". So a debit stamped EXACTLY at before_ms is on the
         // keep side. in_memory_compact_drops_old_debits_only only probes
         // at_ms=50 vs cutoff 100 (strictly older); the at_ms == before_ms
@@ -3381,8 +3381,8 @@ mod tests {
     #[tokio::test]
     async fn jsonl_compact_keeps_debit_stamped_exactly_at_cutoff() {
         // JsonlLedger::compact_older_than mirrors the keep-arm: the Debit
-        // drop arm (d.at_ms < before_ms, lib.rs:1077) drives the dropped
-        // count and the in-memory retain (:1076) drops the matching rows.
+        // drop arm (d.at_ms < before_ms, lib.rs:1132) drives the dropped
+        // count and the in-memory retain (:1253) drops the matching rows.
         // Pin the exact-cutoff keep boundary on the persistent backend
         // with two debits straddling the cutoff so both the dropped count
         // and the surviving in-memory row are checked — a `<` -> `<=`
@@ -3432,7 +3432,7 @@ mod tests {
     #[tokio::test]
     async fn jsonl_compact_clamps_persisted_balance_when_dropped_debits_exceed_capacity() {
         // compact_older_than folds dropped pre-cutoff debits into a synthetic
-        // bucket via saturating_sub (lib.rs:1080) and persists the result as a
+        // bucket via saturating_sub (lib.rs:1135) and persists the result as a
         // Snapshot that becomes the authoritative balance across every reopen.
         // When the dropped debits sum beyond the bucket (reachable via a
         // capacity lowered after debits, or a legacy log) a plain `-` underflows:
@@ -3496,7 +3496,7 @@ mod tests {
     #[tokio::test]
     async fn jsonl_open_replay_clamps_balance_when_persisted_debits_exceed_capacity() {
         // JsonlLedger::open replays each persisted Debit into the in-memory
-        // bucket with saturating_sub (lib.rs:844). A crafted or legacy ledger
+        // bucket with saturating_sub (lib.rs:898). A crafted or legacy ledger
         // can carry pre-recorded debits summing beyond capacity (try_debit
         // refuses them live, but a hand-written or capacity-lowered log can
         // hold them). A plain `-` underflows here: a debug panic during open,
@@ -4143,8 +4143,9 @@ mod tests {
         // (pause_checkpoint_records_resume_and_returns_state,
         // pause_checkpoint_replays_resume_state_across_reopen,
         // pause_checkpoint_replay_rejects_duplicate_claims) and
-        // InvalidCheckpoint (the InvalidCheckpoint-version tests near
-        // line 1550, plus
+        // InvalidCheckpoint (the InvalidCheckpoint version pinned by
+        // validate_pause_checkpoint_pins_version_credits_and_resume_state
+        // (lib.rs:1813), plus
         // pause_checkpoint_rejects_machine_local_resume_paths just
         // above). Two rejection branches lacked direct test coverage
         // until this pin:

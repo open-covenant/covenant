@@ -2060,17 +2060,17 @@ mod tests {
         // specific diagnostic for an event log that lost trailing lines
         // (truncated or rolled back) while the append-only chain sidecar
         // kept its anchors. The earlier `!=` parity check (lib.rs:1315)
-        // also marks any count mismatch invalid, so line 827 is the
+        // also marks any count mismatch invalid, so the lib.rs:1357 arm is the
         // dangling-count diagnostic on top of that verdict, not the sole
         // gate. Every other integrity test runs equal event/anchor counts
         // or mutates an event line in place; none drives anchors.len() >
-        // event_lines.len(), so the line-827 arm is exercised by no test
+        // event_lines.len(), so the lib.rs:1357 arm is exercised by no test
         // (grep "dangling" matches only the format string). A `>` -> `>=`
         // flip is the severe regression: it pushes a "0 dangling chain
         // anchor(s)" failure on every healthy equal-count log (valid ->
-        // false for untampered chains) — unique to line 827, since the
-        // line-785 `!=` is correctly silent at equal counts. Inverting or
-        // dropping line 827 loses the dangling diagnostic (line 785 still
+        // false for untampered chains) — unique to the lib.rs:1357 arm, since the
+        // lib.rs:1315 `!=` is correctly silent at equal counts. Inverting or
+        // dropping the lib.rs:1357 arm loses the dangling diagnostic (lib.rs:1315 still
         // flags invalidity, with a less specific message). Pin both arms:
         // the equal-count log stays valid and the surplus surfaces the
         // dangling diagnostic.
@@ -2119,11 +2119,11 @@ mod tests {
         // anchors.len()). That skew is the signature of a forged event appended
         // without extending the chain, and the diagnostic must name the
         // specific unanchored index. The sibling dangling-anchor test drives
-        // the OPPOSITE skew (anchors > events), landing in the line-995 block
+        // the OPPOSITE skew (anchors > events), landing in the lib.rs:1357 block
         // and the `Some` arms; the tampered/malformed tests run equal counts
         // (the `Some(_)` mismatch / parse-error arms). None reaches this `None`.
         //
-        // Mutation: narrowing line 977 to `None => {}` drops only this
+        // Mutation: narrowing the lib.rs:1339 arm to `None => {}` drops only this
         // per-index diagnostic. The `anchors.len() != event_lines.len()` parity
         // check at lib.rs:1315 already flips `valid`, so asserting only
         // `!report.valid` would NOT catch the regression — the load-bearing

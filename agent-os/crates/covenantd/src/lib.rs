@@ -16520,10 +16520,16 @@ fn read_operator_token_b58(path: &std::path::Path) -> std::io::Result<PeerToken>
 /// `Server::rotate_operator_token`.
 ///
 /// `OpenOptionsExt::mode` is honoured only on file creation. If the
-/// file already exists with a permissive mode, `O_CREAT|O_TRUNC` reuses
-/// the inode and our `0o600` is silently ignored. We `remove_file`
-/// first to force a fresh inode, then `set_permissions` after writing
-/// to defend against any umask-overlay surprises.
+/// token file already exists with a permissive mode, `O_CREAT|O_TRUNC`
+/// would reuse the inode and our `0o600` would be silently ignored, so
+/// the token is staged in a `create_new` tmp file (always a fresh
+/// inode) and renamed over `path` — rename carries the tmp's 0600
+/// along and replaces the old inode in one step, so no reader ever
+/// sees a missing or truncated token file. The tmp is fsynced before
+/// the rename and the renamed inode plus parent directory after it: a
+/// rotation whose new token was already registered and handed out must
+/// not revert to the old file on power loss. The final
+/// `set_permissions` defends against any umask-overlay surprises.
 pub fn write_operator_token_0600(path: &std::path::Path, token_b58: &str) -> std::io::Result<()> {
     use std::fs::Permissions;
     use std::io::Write;
@@ -16531,18 +16537,41 @@ pub fn write_operator_token_0600(path: &std::path::Path, token_b58: &str) -> std
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if path.exists() {
-        std::fs::remove_file(path)?;
+    let tmp = path.with_extension("token.tmp");
+    if tmp.exists() {
+        std::fs::remove_file(&tmp)?;
     }
     let mut f = std::fs::OpenOptions::new()
         .create_new(true)
         .write(true)
         .mode(0o600)
-        .open(path)?;
+        .open(&tmp)?;
     f.write_all(token_b58.as_bytes())?;
     f.write_all(b"\n")?;
-    f.flush()?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, path)?;
     std::fs::set_permissions(path, Permissions::from_mode(0o600))?;
+    let renamed = std::fs::File::open(path)?;
+    renamed.sync_all()?;
+    if let Some(parent) = path.parent() {
+        match std::fs::File::open(parent) {
+            Ok(dir) => {
+                if let Err(e) = dir.sync_all() {
+                    warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "operator-token: parent directory fsync failed; write may not be crash-durable",
+                    );
+                }
+            }
+            Err(e) => warn!(
+                path = %path.display(),
+                error = %e,
+                "operator-token: could not open parent directory for fsync",
+            ),
+        }
+    }
     Ok(())
 }
 
@@ -62604,6 +62633,10 @@ budget_credits_per_hour = {credits}
         assert_eq!(mode, 0o600, "mode must be 0o600 after write");
         require_operator_token_mode_0600(&path)
             .expect("mode-0600 reader gate must accept after first write");
+        assert!(
+            !path.with_extension("token.tmp").exists(),
+            "tmp staging file must be renamed away, not left lingering after first write"
+        );
 
         write_operator_token_0600(&path, "DIFFERENTb58body").expect("second write");
         let bytes2 = fs::read(&path).expect("read after second write");
@@ -62615,6 +62648,10 @@ budget_credits_per_hour = {credits}
         assert_eq!(mode2, 0o600, "mode must be 0o600 after overwrite");
         require_operator_token_mode_0600(&path)
             .expect("mode-0600 reader gate must accept after overwrite");
+        assert!(
+            !path.with_extension("token.tmp").exists(),
+            "tmp staging file must be renamed away, not left lingering after overwrite"
+        );
     }
 
     #[cfg(unix)]

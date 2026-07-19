@@ -1,9 +1,10 @@
 name: packaging
 
 # Exercises the HEAD-only packaging templates (debian/, covenant.spec,
-# Formula/): build, install, and smoke-check on packaging changes, plus
-# `brew style` on the Homebrew formula. Publication, signing, and
-# repositories are operator-owned and stay out of CI.
+# Formula/, flake.nix): build, install, and smoke-check on packaging
+# changes, plus `brew style` on the Homebrew formula and `nix flake check`
+# on the Nix flake. Publication, signing, and repositories are
+# operator-owned and stay out of CI.
 # Scope: only packaging-template files trigger this workflow. Source-tree
 # builds live in ci.yml; a covenantd/covenant binary rename under agent-os/
 # is a known gap this workflow will not catch.
@@ -14,12 +15,14 @@ on:
       - "debian/**"
       - "covenant.spec"
       - "Formula/**"
+      - "flake.nix"
       - ".github/workflows/packaging.yml"
   pull_request:
     paths:
       - "debian/**"
       - "covenant.spec"
       - "Formula/**"
+      - "flake.nix"
       - ".github/workflows/packaging.yml"
   workflow_dispatch:
 
@@ -129,3 +132,25 @@ jobs:
         # guards the formula DSL. brew install --HEAD is out of scope: it would
         # fetch the head URL (origin/main), not the commit under test.
         run: brew style Formula/covenant.rb
+
+  nix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: install nix
+        # Pinned to a specific release commit, not the mutable @v31 tag, so a
+        # repointed upstream tag cannot change CI behavior. install-nix-action
+        # enables flakes and nix-command by default.
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+
+      - name: flake check
+        # Evaluates the flake's packages and nixosModules without building the
+        # daemon: the flake declares no `checks` output, so `nix flake check`
+        # evaluates the buildRustPackage derivations and the NixOS module but
+        # runs no cargo build. The binary build stays exercised by ci.yml and
+        # the debian/rpm jobs, mirroring the homebrew job's DSL-guard scope.
+        run: nix flake check

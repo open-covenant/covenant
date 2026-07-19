@@ -3304,7 +3304,7 @@ impl Server {
     /// (senders-map invariant: `senders[task_id] ==
     /// authenticated_peer_at_send`); rows whose lookup returns `None` (the
     /// task pre-dates the senders map, or was compacted) drop, matching
-    /// `try_recv_a2a_result_for`'s posture. Lookup errors drop the row
+    /// `try_recv_a2a_result`'s posture. Lookup errors drop the row
     /// and warn — the operator dashboard prefers a missing row over a
     /// leaked one. Compared on the 32-byte pubkey.
     async fn recent_a2a_results(&self, limit: usize, peer: &AgentId) -> Response {
@@ -10313,7 +10313,7 @@ impl Server {
         // JSONL edit zeroing the pubkey to anonymize issuer attribution
         // and collapse incident-response correlation to a single
         // identity. The covenant-identity test
-        // `agent_id_returns_self_display_and_pubkey_bytes` documents the
+        // `agent_id_pins_display_and_pubkey_composition_from_self` documents the
         // matching write-time regression class.
         let mut zero_timestamp_audit_refs = 0_u64;
         let mut nil_id_audit_refs = 0_u64;

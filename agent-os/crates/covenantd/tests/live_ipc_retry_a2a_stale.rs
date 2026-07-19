@@ -3,8 +3,8 @@
 //! on `a2a.repair.requeue`, then returns an empty report over a clean store.
 //!
 //! The verb is covered today over the CLI (`live_cli_a2a_retry_stale_json.rs`)
-//! and HTTP (`live_http_a2a_retry_stale.rs`) but never over the raw Unix socket
-//! both are built on. This pins the `Response::A2AAutoRetried { report }` wire
+//! but never over the raw Unix socket it is built on; the HTTP surface has no
+//! retry-stale route. This pins the `Response::A2AAutoRetried { report }` wire
 //! shape (covenant-ipc/src/lib.rs:1084): the daemon echoes the requested policy
 //! and, with no in-flight leases, considers and requeues nothing.
 //!

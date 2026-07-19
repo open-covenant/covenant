@@ -3,7 +3,7 @@
 //! Spawns the real binary against a tempdir HOME, sends a task, kills the
 //! daemon, respawns against the same HOME, then verifies that
 //!
-//! 1. the queued task survived the restart (`try_recv_task` returns it),
+//! 1. the queued task survived the restart (`TryRecvA2ATask` returns it),
 //! 2. the senders map survived the restart (`PostA2AResult` requires the
 //!    sender-scoped `a2a.respond.<sender>` cap whose subject is the
 //!    original sender of the task — only knowable if the senders map

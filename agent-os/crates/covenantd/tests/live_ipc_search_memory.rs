@@ -2,7 +2,7 @@
 //! `Request::SearchMemory` over the raw IPC socket through its full gate —
 //! ungranted rejection, granted-but-empty, then a semantically matched row.
 //!
-//! The verb is covered today over the CLI (`live_cli_memory_search.rs`) and
+//! The verb is covered today over the CLI (`live_cli_memory_search_min_relevance.rs`) and
 //! HTTP (`live_http_memory_search.rs`) but never over the raw Unix socket both
 //! are built on. This pins that wire contract: the `memory.read` capability
 //! gate (`search_memory`, covenantd/src/lib.rs:7485), the

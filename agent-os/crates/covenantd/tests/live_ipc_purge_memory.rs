@@ -2,7 +2,7 @@
 //! `Request::PurgeMemory` over the raw IPC socket, asserting the granted purge
 //! deletes only records strictly below the `before_ms` cutoff.
 //!
-//! The verb is covered today over the CLI (`live_cli_memory_purge.rs`) and HTTP
+//! The verb is covered today over the CLI (`live_cli_memory_purge_json.rs`) and HTTP
 //! (`live_http_memory_purge.rs`) but never over the raw Unix socket both are
 //! built on. This pins that wire contract: `Response::MemoryPurged { purged }`
 //! (covenant-ipc/src/lib.rs:952) reached through the `memory.purge` gate, and

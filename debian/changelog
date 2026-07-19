@@ -1,0 +1,10 @@
+covenant (0.1.0~head) UNRELEASED; urgency=medium
+
+  * HEAD-only packaging template: build covenantd and covenant from the
+    agent-os workspace with cargo --locked --release, matching
+    Formula/covenant.rb and flake.nix.
+  * Install the covenantd systemd unit mirroring the Nix module contract:
+    COVENANT_HOME pinned to /var/lib/covenant, StateDirectory=covenant,
+    Restart=always.
+
+ -- Covenant <covenant@users.noreply.github.com>  Sun, 19 Jul 2026 12:00:00 +0000

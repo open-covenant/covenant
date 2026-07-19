@@ -1,0 +1,26 @@
+Source: covenant
+Section: admin
+Priority: optional
+Maintainer: Covenant <covenant@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               cargo,
+               rustc,
+               pkg-config,
+               libssl-dev
+Standards-Version: 4.7.0
+Homepage: https://opencovenant.org
+Vcs-Git: https://github.com/open-covenant/covenant.git
+Vcs-Browser: https://github.com/open-covenant/covenant
+Rules-Requires-Root: no
+
+Package: covenant
+Architecture: amd64 arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: local control plane for governed autonomous agents
+ Covenant runs covenantd, a local daemon that gives autonomous agents
+ governance, permissions, accountability, and a tamper-proof audit
+ record, plus the covenant operator CLI.
+ .
+ HEAD-only package: built from the working tree, not a tagged release.
+ Release binding (immutable archives, checksums, signatures, repository
+ hosting) is operator-owned.

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Systemd lifecycle is debhelper-generated (dh_installsystemd); the explicit
+# maintscript keeps the scriptlet surface reviewable.
+set -e
+
+#DEBHELPER#
+
+exit 0

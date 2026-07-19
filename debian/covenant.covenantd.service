@@ -1,0 +1,14 @@
+# Debian counterpart of the flake's nixosModules.covenant service and the
+# formula's launchd block: same unit contract, same state pinning.
+[Unit]
+Description=Covenant local control plane daemon
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/covenantd
+Restart=always
+Environment=COVENANT_HOME=/var/lib/covenant
+StateDirectory=covenant
+
+[Install]
+WantedBy=multi-user.target

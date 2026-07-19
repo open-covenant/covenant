@@ -141,6 +141,24 @@ For manual runs, `COVENANT_HOME` defaults to `~/.covenant`.
 
 This is a convenience channel for tracking the checkout. Publication of the flake, nixpkgs submission, derivation hash pinning, and cache signing remain operator-owned; for a signed release, see [RELEASES.md](../RELEASES.md).
 
+## Debian and RPM (Head Packaging Templates)
+
+HEAD-only packaging templates live at `debian/` and `covenant.spec`. Both build the same `covenantd` and `covenant` binaries as the source installer (`cargo build -p covenantd -p covenant --locked --release` from `agent-os/`) and install a `covenantd` systemd unit with the same contract as the Nix module: `COVENANT_HOME` pinned to `/var/lib/covenant`, `StateDirectory=covenant`, `Restart=always`.
+
+Build a native Debian package from a clone on `amd64` or `arm64`:
+
+```bash
+dpkg-buildpackage -us -uc -b
+```
+
+Build an RPM from the working tree on `x86_64` or `aarch64`:
+
+```bash
+rpmbuild --build-in-place -bb covenant.spec
+```
+
+These are templates, not published packages: no archive URLs, no checksums, no signatures, no repositories. Both builds fetch crates from the network (the tree vendors nothing), so they run on a networked machine and are not sbuild/pbuilder/mock-compatible without crate vendoring. The Debian scriptlets defer systemd lifecycle handling to debhelper, and the spec uses the standard `%systemd_post`/`%systemd_preun`/`%systemd_postun_with_restart` macros. Repository hosting, signing keys, and uploads remain operator-owned; for a signed release, see [RELEASES.md](../RELEASES.md).
+
 ## Validation
 
 Run the public guard:

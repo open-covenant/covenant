@@ -1,0 +1,26 @@
+#!/usr/bin/make -f
+# HEAD-only rules: build the working tree's agent-os workspace, matching
+# Formula/covenant.rb and flake.nix. Release binding is operator-owned.
+
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cd agent-os && cargo build -p covenantd -p covenant --locked --release
+
+override_dh_auto_install:
+	install -D -m 0755 agent-os/target/release/covenantd debian/covenant/usr/bin/covenantd
+	install -D -m 0755 agent-os/target/release/covenant debian/covenant/usr/bin/covenant
+
+# Workspace tests run in repo validators; the package build stays focused
+# on producing the daemon and CLI binaries (the flake sets doCheck = false).
+override_dh_auto_test:
+
+override_dh_installsystemd:
+	dh_installsystemd --name=covenantd
+
+override_dh_auto_clean:
+	cd agent-os && cargo clean
+	rm -rf debian/cargo-home

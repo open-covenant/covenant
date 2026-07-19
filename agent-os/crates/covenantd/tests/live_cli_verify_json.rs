@@ -13058,9 +13058,9 @@ async fn live_cli_verify_json_reports_audit_settlement_receipt_backfill_applied_
     );
     assert!(
         row["repair"].as_str().is_some_and(|repair| repair
-            .contains("settlement_backfill_receipts")
-            && repair.contains("backfill_receipts")),
-        "dry-run-rollback-path-some SettlementReceiptBackfillApplied drift repair string should name settlement_backfill_receipts and backfill_receipts: {row:?}"
+            .contains("backfill_settlement_receipts")
+            && repair.contains("backfill_receipts_with_correlations")),
+        "dry-run-rollback-path-some SettlementReceiptBackfillApplied drift repair string should name backfill_settlement_receipts and backfill_receipts_with_correlations: {row:?}"
     );
 
     let _ = restarted.kill().await;
@@ -15523,9 +15523,9 @@ async fn live_cli_verify_json_reports_audit_settlement_receipt_backfill_applied_
     );
     assert!(
         row["repair"].as_str().is_some_and(|repair| repair
-            .contains("settlement_backfill_receipts")
-            && repair.contains("backfill_receipts")),
-        "row-count-zero-rollback-path-some SettlementReceiptBackfillApplied drift repair string should name settlement_backfill_receipts and backfill_receipts: {row:?}"
+            .contains("backfill_settlement_receipts")
+            && repair.contains("backfill_receipts_with_correlations")),
+        "row-count-zero-rollback-path-some SettlementReceiptBackfillApplied drift repair string should name backfill_settlement_receipts and backfill_receipts_with_correlations: {row:?}"
     );
 
     let _ = restarted.kill().await;
@@ -16000,9 +16000,9 @@ async fn live_cli_verify_json_reports_audit_settlement_receipt_backfill_applied_
     );
     assert!(
         row["repair"].as_str().is_some_and(|repair| repair
-            .contains("settlement_backfill_receipts")
-            && repair.contains("backfill_receipts")),
-        "row-count-nonzero-rollback-path-none SettlementReceiptBackfillApplied drift repair string should name settlement_backfill_receipts and backfill_receipts: {row:?}"
+            .contains("backfill_settlement_receipts")
+            && repair.contains("backfill_receipts_with_correlations")),
+        "row-count-nonzero-rollback-path-none SettlementReceiptBackfillApplied drift repair string should name backfill_settlement_receipts and backfill_receipts_with_correlations: {row:?}"
     );
 
     let _ = restarted.kill().await;

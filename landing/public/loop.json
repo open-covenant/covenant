@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-19T22:26:37.570Z",
+  "updatedAt": "2026-07-19T22:46:41.244Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12932,
-    "tasks": 1516,
-    "integrated": 1517
+    "events": 12939,
+    "tasks": 1517,
+    "integrated": 1518
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 24,
-    "velocity": 3.4
+    "last24h": 4,
+    "last7d": 25,
+    "velocity": 3.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-19",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-19",
-      "total": 1517
+      "total": 1518
     }
   ],
   "states": {
-    "integrated": 1509,
+    "integrated": 1510,
     "proposed": 1,
     "blocked": 6
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-19T22:35:19.070Z",
+      "task": "distribution-readiness-debian-rpm-evidence",
+      "note": "INTEGRATED LOCALLY ONLY: target files (docs/internal/distribution-readiness.md, agent-os/scripts/distribution-readiness.mjs + validate-distr"
+    },
     {
       "at": "2026-07-19T22:21:45.978Z",
       "task": "packaging-ci-coverage",
@@ -310,11 +315,6 @@
       "at": "2026-07-13T18:40:27.426Z",
       "task": "capabilities-doc-duplicate-risk-set-guard",
       "note": "Merged and pushed on loop/main-track as aa59589d (ff 0b3d546d..aa59589d); HEAD == origin/loop/main-track; all identity guards ok."
-    },
-    {
-      "at": "2026-07-13T17:28:35.342Z",
-      "task": "provenance-capability-rule-evaluation-trace",
-      "note": "Committed as 0b3d546d (feat(audit): project capability-budget-exhaustion into provenance), pushed fast-forward to origin/loop/main-track (40"
     }
   ]
 }

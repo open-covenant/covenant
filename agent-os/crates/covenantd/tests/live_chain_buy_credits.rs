@@ -12,10 +12,10 @@
 //!   * a Solana validator reachable at `COVENANT_LIVE_CHAIN_RPC_URL`
 //!     (`solana-test-validator` on the default port works);
 //!   * the settlement program deployed at
-//!     `COVENANT_LIVE_CHAIN_PROGRAM_ID` with `initialize_config`
+//!     `COVENANT_LIVE_CHAIN_PROGRAM_ID` with `initialize`
 //!     already run, so the config PDA exists;
 //!   * the credits PDA for the operator already initialized via
-//!     `initialize_credits` (the credits account is `has_one = owner`
+//!     `open_credit_account` (the credits account is `has_one = owner`
 //!     and is not init'd by the buy_credits instruction itself);
 //!   * an operator keypair at `COVENANT_LIVE_CHAIN_KEYPAIR_PATH`
 //!     funded with at least --amount-covnt COVNT tokens at
@@ -35,7 +35,7 @@
 //! ```bash
 //! solana-test-validator --reset &
 //! anchor deploy   # in agent-os/, after `anchor build`
-//! # ... seed config + initialize_credits + create owner_covnt funded ...
+//! # ... seed config + open_credit_account + create owner_covnt funded ...
 //! cargo test -p covenantd --test live_chain_buy_credits -- --ignored live_
 //! ```
 

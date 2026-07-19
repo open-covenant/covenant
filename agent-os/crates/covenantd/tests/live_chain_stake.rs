@@ -12,7 +12,7 @@
 //!   * a Solana validator reachable at `COVENANT_LIVE_CHAIN_RPC_URL`
 //!     (`solana-test-validator` on the default port works);
 //!   * the settlement program deployed at
-//!     `COVENANT_LIVE_CHAIN_PROGRAM_ID` with `initialize_config`
+//!     `COVENANT_LIVE_CHAIN_PROGRAM_ID` with `initialize`
 //!     already run, so the config PDA exists;
 //!   * an operator keypair at `COVENANT_LIVE_CHAIN_KEYPAIR_PATH`
 //!     that has already been registered via `chain register-agent`

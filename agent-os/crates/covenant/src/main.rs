@@ -374,7 +374,7 @@ fn build_stake_instruction(
 //   covnt_mint     — read-only (must equal config.covnt_mint)
 //   token_program — read-only, legacy SPL Token
 // No system_program is referenced because BuyCredits does not init
-// any new account (credits PDA is initialized by initialize_credits).
+// any new account (credits PDA is initialized by open_credit_account).
 fn build_buy_credits_instruction(
     program_id: &Pubkey,
     operator: &Pubkey,

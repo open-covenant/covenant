@@ -3048,7 +3048,7 @@ fn endpoint_status_str(s: covenant_zauth::EndpointStatus) -> &'static str {
         covenant_zauth::EndpointStatus::Failing => "FAILING",
         covenant_zauth::EndpointStatus::Flaky => "FLAKY",
         covenant_zauth::EndpointStatus::Untested => "UNTESTED",
-        covenant_zauth::EndpointStatus::OverBudget => "OVER_BUDG",
+        covenant_zauth::EndpointStatus::OverBudget => "OVER_BUDGET",
     }
 }
 

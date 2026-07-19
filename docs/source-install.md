@@ -85,7 +85,7 @@ Install from a clone of this repository:
 brew install --HEAD --formula Formula/covenant.rb
 ```
 
-The formula builds `covenantd` and `covenant` with the same locked release profile as the source installer (`cargo build -p covenantd -p covenant --locked --release` from `agent-os/`) and links both binaries into the Homebrew prefix. It declares a build dependency on Homebrew's `rust`.
+The formula builds `covenantd` and `covenant` from `agent-os/` with `--locked --release` (via Homebrew's `std_cargo_args`), installing each binary by name (`cargo install ... --bin covenantd`, then `--bin covenant`). The `--bin` scoping keeps the crate's `preempt_fixture` test helper (`src/bin/preempt_fixture.rs`) out of the prefix. It declares a build dependency on Homebrew's `rust`.
 
 Run the formula test:
 

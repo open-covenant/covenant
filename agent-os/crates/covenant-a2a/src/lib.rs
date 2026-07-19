@@ -1145,6 +1145,7 @@ impl JsonlMailbox {
         f.write_all(line.as_bytes()).await?;
         f.write_all(b"\n").await?;
         f.flush().await?;
+        f.sync_all().await?;
         Ok(())
     }
 }
@@ -1447,6 +1448,7 @@ impl Mailbox for JsonlMailbox {
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
         }
+        f.flush().await?;
         f.sync_all().await?;
         drop(f);
         fs::rename(&tmp_path, &self.path).await?;
@@ -6302,7 +6304,7 @@ mod tests {
     #[tokio::test]
     async fn jsonl_task_queue_orders_leased_entries_by_lease_age_then_task_id() {
         // Parity with the in-memory backend: JsonlMailbox::task_queue
-        // (lib.rs:1321) delegates to MailboxState::task_queue (lib.rs:1057),
+        // (lib.rs:1322) delegates to MailboxState::task_queue (lib.rs:1057),
         // whose own copy of the leased comparator lives at lib.rs:1076. Seed
         // the event log with TaskLeased rows carrying a controlled
         // leased_at_ms so replay rebuilds the same three-way tie, then open

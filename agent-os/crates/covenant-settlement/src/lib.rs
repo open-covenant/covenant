@@ -273,6 +273,7 @@ pub(crate) async fn backfill_receipts_with_correlations(
         .open(&rollback_path)
         .await?;
     rollback.write_all(original.as_bytes()).await?;
+    rollback.flush().await?;
     rollback.sync_all().await?;
     drop(rollback);
 
@@ -283,6 +284,7 @@ pub(crate) async fn backfill_receipts_with_correlations(
             .await?;
         out.write_all(b"\n").await?;
     }
+    out.flush().await?;
     out.sync_all().await?;
     drop(out);
     fs::rename(&tmp, store_path).await?;
@@ -428,6 +430,7 @@ impl Settlement for JsonlReceiptStore {
         f.write_all(line.as_bytes()).await?;
         f.write_all(b"\n").await?;
         f.flush().await?;
+        f.sync_all().await?;
         Ok(())
     }
 
@@ -503,6 +506,7 @@ impl Settlement for JsonlReceiptStore {
         let mut out = fs::File::create(&tmp).await?;
         use tokio::io::AsyncWriteExt;
         out.write_all(body.as_bytes()).await?;
+        out.flush().await?;
         out.sync_all().await?;
         drop(out);
         fs::rename(&tmp, &self.path).await?;

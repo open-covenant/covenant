@@ -1493,6 +1493,7 @@ impl CapabilityStore for JsonlCapabilityStore {
         f.write_all(line.as_bytes()).await?;
         f.write_all(b"\n").await?;
         f.flush().await?;
+        f.sync_all().await?;
         Ok(())
     }
 
@@ -1525,6 +1526,7 @@ impl CapabilityStore for JsonlCapabilityStore {
         f.write_all(line.as_bytes()).await?;
         f.write_all(b"\n").await?;
         f.flush().await?;
+        f.sync_all().await?;
         Ok(true)
     }
 
@@ -1658,6 +1660,7 @@ impl CapabilityStore for JsonlCapabilityStore {
             f.write_all(b"\n").await?;
         }
         f.flush().await?;
+        f.sync_all().await?;
         Ok(BudgetConsumeOutcome::Consumed)
     }
 
@@ -1703,6 +1706,7 @@ impl JsonlCapabilityStore {
             f.write_all(line.as_bytes()).await?;
             f.write_all(b"\n").await?;
         }
+        f.flush().await?;
         f.sync_all().await?;
         drop(f);
         fs::rename(&tmp_path, path).await?;

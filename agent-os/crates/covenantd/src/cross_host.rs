@@ -174,6 +174,7 @@ impl JsonlCrossHostDedup {
             .await?;
         file.write_all(&line).await?;
         file.flush().await?;
+        file.sync_all().await?;
         Ok(())
     }
 
@@ -192,6 +193,7 @@ impl JsonlCrossHostDedup {
         let tmp = self.path.with_extension("jsonl.tmp");
         let mut out = tokio::fs::File::create(&tmp).await?;
         out.write_all(&buf).await?;
+        out.flush().await?;
         out.sync_all().await?;
         drop(out);
         tokio::fs::rename(&tmp, &self.path).await?;

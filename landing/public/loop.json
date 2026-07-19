@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-19T23:06:44.930Z",
+  "updatedAt": "2026-07-19T23:26:48.445Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12939,
-    "tasks": 1517,
-    "integrated": 1518
+    "events": 12946,
+    "tasks": 1518,
+    "integrated": 1519
   },
   "throughput": {
-    "last24h": 4,
-    "last7d": 25,
-    "velocity": 3.6
+    "last24h": 5,
+    "last7d": 26,
+    "velocity": 3.7
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-19",
-      "count": 4
+      "count": 5
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-19",
-      "total": 1518
+      "total": 1519
     }
   ],
   "states": {
-    "integrated": 1510,
+    "integrated": 1511,
     "proposed": 1,
     "blocked": 6
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-19T23:23:53.930Z",
+      "task": "homebrew-formula-style-ci-coverage",
+      "note": "Committing formula fix + packaging.yml homebrew job to loop/main-track."
+    },
     {
       "at": "2026-07-19T22:35:19.070Z",
       "task": "distribution-readiness-debian-rpm-evidence",
@@ -310,11 +315,6 @@
       "at": "2026-07-13T18:51:40.663Z",
       "task": "audit-integrity-doc-tool-call-outcome-set-guard",
       "note": "Merged and pushed on loop/main-track as 9246451b; HEAD == origin/loop/main-track; all identity guards ok."
-    },
-    {
-      "at": "2026-07-13T18:40:27.426Z",
-      "task": "capabilities-doc-duplicate-risk-set-guard",
-      "note": "Merged and pushed on loop/main-track as aa59589d (ff 0b3d546d..aa59589d); HEAD == origin/loop/main-track; all identity guards ok."
     }
   ]
 }

@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-19T21:06:22.753Z",
+  "updatedAt": "2026-07-19T21:26:26.466Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12914,
-    "tasks": 1514,
+    "events": 12920,
+    "tasks": 1515,
     "integrated": 1515
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1507,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "cross_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "debian-rpm-head-packaging-templates",
+    "state": "cross_review",
+    "since": "2026-07-19T21:24:47.132Z"
+  },
   "recent": [
     {
       "at": "2026-07-19T01:47:23.715Z",

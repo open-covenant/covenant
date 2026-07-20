@@ -251,6 +251,7 @@ async fn main() -> Result<()> {
                 reputation_base = %cfg.reputation_base_url,
                 include_trust_gate = cfg.include_trust_gate,
                 credit_enabled = cfg.credit_enabled,
+                x402_pay_per_read = cfg.x402_enabled,
                 "fairscale reputation oracle enabled (read-only soft signal, per-read provenance)"
             );
             tools_vec.extend(added);
@@ -1167,16 +1168,25 @@ fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::Krex
 }
 
 /// Build the FairScale read-only reputation oracle from env, or None when the
-/// operator hasn't opted in. Phase 0 authenticates with a `fairkey` header
-/// (FairScale's free tier); the x402 pay path is the next increment. The credit
-/// read is a separate, heavier read and stays off unless explicitly enabled.
+/// operator hasn't opted in. Reads authenticate with a `fairkey` header
+/// (FairScale's free tier) or settle per read over x402 through the signer
+/// sidecar. The credit read is a separate, heavier read and stays off unless
+/// explicitly enabled.
 ///
 /// - `COVENANT_FAIRSCALE_ENABLED` truthy turns on the `fairscale.score` tool
-/// - `COVENANT_FAIRSCALE_KEY` the `fairkey` (from sales.fairscale.xyz); without
-///   it a read fails 401/402 until the x402 pay path is wired
+/// - `COVENANT_FAIRSCALE_KEY` the `fairkey` (from sales.fairscale.xyz)
+/// - `COVENANT_FAIRSCALE_X402` truthy settles keyless reads per call in USDC
+///   on Solana mainnet through `COVENANT_X402_SIGNER_BINARY` (the same sidecar
+///   as outbound x402 dispatch, fed `COVENANT_X402_FUNDING_KEYPAIR` and
+///   `COVENANT_X402_RPC_URL`)
+/// - `COVENANT_FAIRSCALE_X402_READ_CAP` / `COVENANT_FAIRSCALE_X402_CREDIT_CAP`
+///   per-read atomic-USDC caps (defaults 10000 / 600000)
 /// - `COVENANT_FAIRSCALE_REPUTATION_URL` / `_AGENT_URL` override the hosts
 /// - `COVENANT_FAIRSCALE_TRUST_GATE` include the agent trust-gate decision
 /// - `COVENANT_FAIRSCALE_CREDIT_ENABLED` include the credit underwriting read
+///
+/// With neither a fairkey nor a wired payer, keyless reads fail 401/402,
+/// loudly.
 fn fairscale_from_env() -> Option<(
     covenant_fairscale::FairScaleClient,
     covenant_fairscale::FairScaleConfig,
@@ -1210,14 +1220,61 @@ fn fairscale_from_env() -> Option<(
         cfg.reputation_base_url.clone(),
         cfg.agent_base_url.clone(),
     );
-    match std::env::var("COVENANT_FAIRSCALE_KEY") {
-        Ok(key) if !key.trim().is_empty() => client = client.with_fairkey(key),
-        _ => tracing::warn!(
-            "COVENANT_FAIRSCALE_ENABLED set without COVENANT_FAIRSCALE_KEY; reads will fail \
-             unauthenticated (401/402) until a fairkey is set or the x402 pay path is wired"
-        ),
+    let has_key = match std::env::var("COVENANT_FAIRSCALE_KEY") {
+        Ok(key) if !key.trim().is_empty() => {
+            client = client.with_fairkey(key);
+            true
+        }
+        _ => false,
+    };
+    if truthy("COVENANT_FAIRSCALE_X402") {
+        if let Some(v) = env_atomic_cap("COVENANT_FAIRSCALE_X402_READ_CAP") {
+            cfg.x402_read_cap_atomic = v;
+        }
+        if let Some(v) = env_atomic_cap("COVENANT_FAIRSCALE_X402_CREDIT_CAP") {
+            cfg.x402_credit_cap_atomic = v;
+        }
+        match std::env::var("COVENANT_X402_SIGNER_BINARY") {
+            Ok(bin) if !bin.trim().is_empty() => {
+                let mut signer = covenantd::x402::SubprocessSigner::new(bin.trim());
+                for key in ["COVENANT_X402_FUNDING_KEYPAIR", "COVENANT_X402_RPC_URL"] {
+                    if let Ok(v) = std::env::var(key) {
+                        signer = signer.env(key, v);
+                    }
+                }
+                cfg.x402_enabled = true;
+                client = client.with_payer(
+                    Arc::new(signer),
+                    cfg.x402_read_cap_atomic,
+                    cfg.x402_credit_cap_atomic,
+                );
+            }
+            _ => tracing::warn!(
+                "COVENANT_FAIRSCALE_X402 set without COVENANT_X402_SIGNER_BINARY; keyless \
+                 reads will fail on the 402 instead of settling it"
+            ),
+        }
+    }
+    if !has_key && !cfg.x402_enabled {
+        tracing::warn!(
+            "COVENANT_FAIRSCALE_ENABLED set with neither COVENANT_FAIRSCALE_KEY nor a wired \
+             x402 payer; keyless reads will fail 401/402"
+        );
     }
     Some((client, cfg))
+}
+
+/// Parse an atomic-USDC cap override; junk is refused loudly rather than
+/// silently becoming some other number.
+fn env_atomic_cap(key: &str) -> Option<u64> {
+    let raw = std::env::var(key).ok()?;
+    match raw.trim().parse::<u64>() {
+        Ok(v) if v > 0 => Some(v),
+        _ => {
+            tracing::warn!(%key, value = %raw, "ignoring unparseable atomic-USDC cap");
+            None
+        }
+    }
 }
 
 /// Build the Hyre provider config from env, or None when the operator

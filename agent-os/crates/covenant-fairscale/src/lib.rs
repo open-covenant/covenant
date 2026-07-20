@@ -13,9 +13,10 @@
 //! endpoint, and a hash of the exact response, so the read itself is verifiable
 //! even though FairScale's number is not.
 //!
-//! Phase 0 authenticates with a `fairkey` header (FairScale's documented free
-//! tier). Paying per read over x402 on Solana is the next increment; the read
-//! surface is identical either way.
+//! Reads authenticate with a `fairkey` header (FairScale's documented free
+//! tier) or, with an x402 payer attached, settle per read: USDC on Solana
+//! mainnet, amount quoted by the live 402 challenge, bounded by a per-read
+//! cap, paid once and retried once. The read surface is identical either way.
 //!
 //! One honest caveat, stamped in the trust label: FairScale's agent
 //! `work_history` pillar is partly derived from Covenant's own exported conduct
@@ -38,6 +39,8 @@ pub enum FairScaleError {
     Http(#[from] reqwest::Error),
     #[error("fairscale api [{status}]: {message}")]
     Api { status: u16, message: String },
+    #[error("fairscale x402 payment: {0}")]
+    Payment(String),
     #[error("decode: {0}")]
     Decode(String),
 }

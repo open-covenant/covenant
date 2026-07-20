@@ -109,37 +109,35 @@ echo "$payment_requirements_json" | covenant-x402-signer   # -> base64 X-PAYMENT
       <h2>Exposing a paid resource (inbound)</h2>
       <p>
         Covenant runs a public x402 seller at{" "}
-        <code>https://x402-seller.opencovenant.org</code>. It sells a Covenant
-        agent reputation and attestation lookup:
+        <code>https://x402-seller.opencovenant.org</code>. It sells
+        Covenant-signed trust reads, all advertised at{" "}
+        <code>GET /.well-known/x402</code>:
       </p>
       <pre>
-        <code>{`GET /x402/agent/<solana-pubkey>`}</code>
+        <code>{`GET  /x402/passport/<mpl-core-asset>   verify an on-chain identity passport
+POST /x402/attest                      a Covenant-signed attestation over a claim
+GET  /x402/payai/reputation/<wallet>   a wallet's PayAI settlement-grounded reputation
+GET  /x402/er/enclave/<validator>      a live TDX verification of a MagicBlock ephemeral rollup`}</code>
       </pre>
       <p>
-        Unpaid, it returns an x402 v2 <code>402</code> challenge: the{" "}
+        Unpaid, each returns an x402 v2 <code>402</code> challenge: the{" "}
         <code>exact</code> scheme, Solana mainnet, USDC, <code>payTo</code> the
-        Covenant treasury, <code>feePayer</code> the PayAI sponsor, price $0.001.
-        Pay and retry, and it returns a{" "}
-        <code>covenant_agent_attestation_v0</code> object for that pubkey.
-        Returning a status of 400 or higher from the resource cancels
+        Covenant treasury, <code>feePayer</code> the PayAI sponsor, priced per
+        call (currently $0.001 to $0.01). Pay and retry to receive the signed
+        result. Returning a status of 400 or higher from the resource cancels
         settlement, so a caller is never charged for an error.
       </p>
-      <p>The endpoint is discoverable and monitored:</p>
+      <p>The endpoints are discoverable and monitored:</p>
       <ul>
         <li>
-          <code>GET /.well-known/x402</code> advertises the resource so crawlers
-          (the zauth directory, x402scan) can list it.
+          <code>GET /.well-known/x402</code> advertises them so crawlers (the
+          zauth directory, x402scan) can list the resources.
         </li>
         <li>
-          It is registered and health-monitored in the{" "}
+          They are registered and health-monitored in the{" "}
           <Link href="/zauth">zauth provider hub</Link> on Solana mainnet.
         </li>
       </ul>
-      <p>
-        The v0 attestation surface returns verified on-chain presence today;
-        richer reputation fields wire to the Covenant audit and reputation layer
-        next.
-      </p>
 
       <h2>Related</h2>
       <ul>

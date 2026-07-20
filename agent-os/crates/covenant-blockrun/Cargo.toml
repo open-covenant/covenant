@@ -24,3 +24,7 @@ base64 = "0.22"
 async-trait = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"
+
+[[example]]
+name = "live_verified_call"
+path = "examples/live_verified_call.rs"

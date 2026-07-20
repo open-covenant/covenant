@@ -286,6 +286,10 @@ app.get("/x402/er/enclave/:validator", async (req: Request, res: Response) => {
     res.status(400).json({ error: "agent must be a base58 Solana address" });
     return;
   }
+  if (provenanceRoot && !/^[0-9a-fA-F]{64}$/.test(provenanceRoot)) {
+    res.status(400).json({ error: "provenance_root must be 32-byte hex" });
+    return;
+  }
   try {
     const enclave = await verifyErEnclave(validator, { agent, provenanceRoot });
     const attestation = attestor.attest(validator, enclave, Math.floor(Date.now() / 1000));
@@ -295,6 +299,7 @@ app.get("/x402/er/enclave/:validator", async (req: Request, res: Response) => {
       res.status(e.status).json({ error: e.message });
       return;
     }
+    console.error("er enclave verify failed:", e);
     res.status(502).json({ error: "enclave verification upstream unavailable" });
   }
 });

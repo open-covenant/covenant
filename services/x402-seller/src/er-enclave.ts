@@ -16,6 +16,23 @@ const require = createRequire(import.meta.url);
 const MAGIC_ROUTER = process.env.MAGIC_ROUTER ?? 'https://router.magicblock.app';
 const PCCS = process.env.PCCS_URL ?? 'https://pccs.phala.network/tdx/certification/v4';
 const BIND_DOMAIN = 'covenant.tee.bind.v1';
+const COLLATERAL_TIMEOUT_MS = 15_000;
+
+// Compile and instantiate the DCAP wasm once; the functions are stateless, so a
+// per-request init both wastes a compile and races the module-global instance.
+// Reset on failure so a transient error does not poison the process.
+// (Mirrored in services/covenant-trust-mcp/src/er.ts.)
+let qvlReady: Promise<typeof import('@phala/dcap-qvl-web')> | undefined;
+function loadQvl(): Promise<typeof import('@phala/dcap-qvl-web')> {
+  return (qvlReady ??= (async () => {
+    const qvl = await import('@phala/dcap-qvl-web');
+    await qvl.default({ module_or_path: readFileSync(require.resolve('@phala/dcap-qvl-web/dcap-qvl-web_bg.wasm')) });
+    return qvl;
+  })().catch((e) => { qvlReady = undefined; throw e; }));
+}
+
+const rejectAfter = <T>(ms: number, msg: string): Promise<T> =>
+  new Promise((_, rej) => setTimeout(() => rej(new ErEnclaveError(502, msg)), ms));
 
 export interface EnclaveResult {
   validator: string;
@@ -43,6 +60,27 @@ export async function verifyErEnclave(
   validator: string,
   opts: { agent?: string; provenanceRoot?: string } = {},
 ): Promise<EnclaveResult> {
+  // Build the challenge before any network work so a bad binding fails fast and
+  // for free, without spending a router round trip.
+  const nonce = randomBytes(32);
+  let binding: Buffer;
+  let subject: EnclaveResult['subject'] = null;
+  if (opts.agent && opts.provenanceRoot) {
+    const root = Buffer.from(opts.provenanceRoot, 'hex');
+    if (root.length !== 32) throw new ErEnclaveError(400, 'provenance_root must be 32-byte hex');
+    let agentBytes: Uint8Array;
+    try {
+      agentBytes = new PublicKey(opts.agent).toBytes();
+    } catch {
+      throw new ErEnclaveError(400, 'agent is not a valid public key');
+    }
+    binding = createHash('sha256').update(BIND_DOMAIN).update(agentBytes).update(root).digest();
+    subject = { agent: opts.agent, provenance_root: opts.provenanceRoot };
+  } else {
+    binding = randomBytes(32);
+  }
+  const challenge = Buffer.concat([binding, nonce]);
+
   const routerRes = await fetch(MAGIC_ROUTER, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -54,33 +92,21 @@ export async function verifyErEnclave(
   const route = routes.find((r) => r.identity === validator);
   if (!route) throw new ErEnclaveError(404, 'validator is not served by the Magic Router');
 
-  const nonce = randomBytes(32);
-  let binding: Buffer;
-  let subject: EnclaveResult['subject'] = null;
-  if (opts.agent && opts.provenanceRoot) {
-    const root = Buffer.from(opts.provenanceRoot, 'hex');
-    if (root.length !== 32) throw new ErEnclaveError(400, 'provenance_root must be 32-byte hex');
-    binding = createHash('sha256')
-      .update(BIND_DOMAIN)
-      .update(new PublicKey(opts.agent).toBytes())
-      .update(root)
-      .digest();
-    subject = { agent: opts.agent, provenance_root: opts.provenanceRoot };
-  } else {
-    binding = randomBytes(32);
-  }
-  const challenge = Buffer.concat([binding, nonce]);
-
   const quoteUrl = new URL(`quote?challenge=${encodeURIComponent(challenge.toString('base64'))}`, route.fqdn).toString();
   const qres = await fetch(quoteUrl, { signal: AbortSignal.timeout(15_000) });
-  if (!qres.ok) throw new ErEnclaveError(404, 'this ER serves no enclave quote — open, non-TEE validator');
+  // 404 means no quote endpoint (an open, non-TEE validator); a 5xx is a
+  // transient failure of a real one, not proof it lacks an enclave.
+  if (qres.status === 404) throw new ErEnclaveError(404, 'this ER serves no enclave quote — open, non-TEE validator');
+  if (!qres.ok) throw new ErEnclaveError(502, `quote endpoint returned ${qres.status}`);
   const q = (await qres.json()) as { quote?: string };
   if (!q.quote) throw new ErEnclaveError(404, 'this ER serves no enclave quote — open, non-TEE validator');
   const rawQuote = Uint8Array.from(Buffer.from(q.quote, 'base64'));
 
-  const qvl = await import('@phala/dcap-qvl-web');
-  await qvl.default({ module_or_path: readFileSync(require.resolve('@phala/dcap-qvl-web/dcap-qvl-web_bg.wasm')) });
-  const collateral = await qvl.js_get_collateral(PCCS, rawQuote);
+  const qvl = await loadQvl();
+  const collateral = await Promise.race([
+    qvl.js_get_collateral(PCCS, rawQuote),
+    rejectAfter<Awaited<ReturnType<typeof qvl.js_get_collateral>>>(COLLATERAL_TIMEOUT_MS, 'PCCS collateral fetch timeout'),
+  ]);
   const result = qvl.js_verify(rawQuote, collateral, BigInt(Math.floor(Date.now() / 1000)));
   const report = result.report?.TD10 ?? result.report?.TD15;
   if (!report) throw new ErEnclaveError(502, 'DCAP result carries no TD report');

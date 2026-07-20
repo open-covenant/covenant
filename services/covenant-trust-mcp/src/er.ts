@@ -15,6 +15,24 @@ const COVENANT_ISSUER = new PublicKey('AdChcSmDKX57rU9qChMJ3MKnqNZbmiQAjuns9VCjz
 const SETTLEMENT_PROGRAM = new PublicKey('cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y');
 const MAGIC_ROUTER = process.env.MAGIC_ROUTER ?? 'https://router.magicblock.app';
 const PCCS = process.env.PCCS_URL ?? 'https://pccs.phala.network/tdx/certification/v4';
+const COLLATERAL_TIMEOUT_MS = 15_000;
+
+// Compile and instantiate the DCAP wasm once. The functions are stateless, so
+// a single long-lived instance is correct; a per-request init both wastes a
+// compile and races the module-global instance under concurrency. Reset on
+// failure so a transient read/compile error does not poison the process.
+// (Mirrored in services/x402-seller/src/er-enclave.ts.)
+let qvlReady: Promise<typeof import('@phala/dcap-qvl-web')> | undefined;
+function loadQvl(): Promise<typeof import('@phala/dcap-qvl-web')> {
+  return (qvlReady ??= (async () => {
+    const qvl = await import('@phala/dcap-qvl-web');
+    await qvl.default({module_or_path: fs.readFileSync(require.resolve('@phala/dcap-qvl-web/dcap-qvl-web_bg.wasm'))});
+    return qvl;
+  })().catch((e) => { qvlReady = undefined; throw e; }));
+}
+
+const rejectAfter = <T>(ms: number, msg: string): Promise<T> =>
+  new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms));
 
 export interface Route {
   identity: string;
@@ -81,7 +99,7 @@ function decodeAttestation(buf: Buffer): {verified: boolean; status: string; mrT
 function decodeAuthorizedSigners(buf: Buffer): PublicKey[] {
   let o = 1 + 32;
   const nameLen = buf.readUInt32LE(o); o += 4 + nameLen;
-  const count = buf.readUInt32LE(o); o += 4;
+  const count = Math.min(buf.readUInt32LE(o), Math.floor((buf.length - (o + 4)) / 32)); o += 4;
   const signers: PublicKey[] = [];
   for (let i = 0; i < count; i++, o += 32) signers.push(new PublicKey(buf.subarray(o, o + 32)));
   return signers;
@@ -89,12 +107,23 @@ function decodeAuthorizedSigners(buf: Buffer): PublicKey[] {
 
 export async function resolveEr(connection: Connection, validator: string): Promise<ErResolution> {
   const {credential, schema} = registryPdas();
-  const attestation = pda([Buffer.from('attestation'), credential.toBuffer(), schema.toBuffer(), new PublicKey(validator).toBuffer()]);
+  let attestation: PublicKey;
+  try {
+    attestation = pda([Buffer.from('attestation'), credential.toBuffer(), schema.toBuffer(), new PublicKey(validator).toBuffer()]);
+  } catch {
+    return {verified: false, reason: 'invalid validator identity'};
+  }
   const [attAcct, credAcct] = await connection.getMultipleAccountsInfo([attestation, credential]);
   if (!attAcct || !attAcct.owner.equals(SAS_PROGRAM)) return {verified: false, reason: 'no attestation for this validator'};
   if (!credAcct || !credAcct.owner.equals(SAS_PROGRAM)) return {verified: false, reason: 'issuer credential not found'};
-  const att = decodeAttestation(Buffer.from(attAcct.data));
-  const trustedSigner = decodeAuthorizedSigners(Buffer.from(credAcct.data)).some((s) => s.equals(att.signer));
+  let att: ReturnType<typeof decodeAttestation>;
+  let trustedSigner: boolean;
+  try {
+    att = decodeAttestation(Buffer.from(attAcct.data));
+    trustedSigner = decodeAuthorizedSigners(Buffer.from(credAcct.data)).some((s) => s.equals(att.signer));
+  } catch (e) {
+    return {verified: false, reason: `malformed attestation account (${e instanceof Error ? e.message : 'decode error'})`};
+  }
   const notExpired = att.expiry === 0n || att.expiry > BigInt(Math.floor(Date.now() / 1000));
   const verified = trustedSigner && notExpired && att.verified;
   return {
@@ -128,14 +157,19 @@ export async function verifyEnclaveLive(validator: string): Promise<{validator: 
   const challenge = randomBytes(64);
   const quoteUrl = new URL(`quote?challenge=${encodeURIComponent(challenge.toString('base64'))}`, route.fqdn).toString();
   const qres = await fetch(quoteUrl, {signal: AbortSignal.timeout(15_000)});
-  if (!qres.ok) throw new Error(`this ER serves no enclave quote (${qres.status}) — open, non-TEE validator`);
+  // 404 means no quote endpoint (an open, non-TEE validator); a 5xx is a
+  // transient failure of a real one, not proof it lacks an enclave.
+  if (qres.status === 404) throw new Error('this ER serves no enclave quote — open, non-TEE validator');
+  if (!qres.ok) throw new Error(`quote endpoint returned ${qres.status}`);
   const q = (await qres.json()) as {quote?: string};
   if (!q.quote) throw new Error('this ER serves no enclave quote — open, non-TEE validator');
   const rawQuote = Uint8Array.from(Buffer.from(q.quote, 'base64'));
 
-  const qvl = await import('@phala/dcap-qvl-web');
-  await qvl.default({module_or_path: fs.readFileSync(require.resolve('@phala/dcap-qvl-web/dcap-qvl-web_bg.wasm'))});
-  const collateral = await qvl.js_get_collateral(PCCS, rawQuote);
+  const qvl = await loadQvl();
+  const collateral = await Promise.race([
+    qvl.js_get_collateral(PCCS, rawQuote),
+    rejectAfter<Awaited<ReturnType<typeof qvl.js_get_collateral>>>(COLLATERAL_TIMEOUT_MS, 'PCCS collateral fetch timeout'),
+  ]);
   const result = qvl.js_verify(rawQuote, collateral, BigInt(Math.floor(Date.now() / 1000)));
   const report = result.report?.TD10 ?? result.report?.TD15;
   if (!report) throw new Error('DCAP result carries no TD report');

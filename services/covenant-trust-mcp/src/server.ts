@@ -23,6 +23,22 @@ const RPC_TIMEOUT = Number(process.env.RPC_TIMEOUT_MS ?? 9000);
 const REPUTATION_LIMIT = Number(process.env.REPUTATION_LIMIT ?? 100);
 const PORT = Number(process.env.PORT ?? 8930);
 
+// One shared connection for the ER tools, with the same per-request timeout the
+// other tools thread through, so a hung RPC cannot pin a free anonymous call.
+const erConnection = new Connection(RPC_URL, {
+  commitment: 'confirmed',
+  fetch: (input, init) => fetch(input as string, {...init, signal: init?.signal ?? AbortSignal.timeout(RPC_TIMEOUT)}),
+});
+
+// verifyProvenance's own validation errors are safe to echo; anything else
+// (an RPC failure whose message may carry a keyed endpoint) is not.
+const SAFE_PROVENANCE_ERRORS = new Set([
+  'credit account not found',
+  'account is not owned by the Covenant settlement program',
+  'credit account predates provenance (not migrated)',
+  'receipt hashes must be 32-byte hex',
+]);
+
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 function reputationText(r: Reputation): string {
@@ -135,10 +151,17 @@ function buildServer(): McpServer {
       annotations: {readOnlyHint: true, openWorldHint: true},
     },
     async () => {
-      const ers = await listVerifiedErs(new Connection(RPC_URL, 'confirmed'));
+      let ers;
+      try {
+        ers = await listVerifiedErs(erConnection);
+      } catch {
+        return {content: [{type: 'text', text: 'Magic Router or chain RPC unavailable'}], isError: true};
+      }
+      const expiryLabel = (expiry?: number) =>
+        !expiry ? 'no expiry' : `expires ${new Date(expiry * 1000).toISOString()}`;
       const lines = ers.map((r) =>
         `${r.covenant.verified ? 'verified  ' : 'unverified'}  ${r.fqdn}  ${r.identity}` +
-        (r.covenant.verified ? `  [TCB ${r.covenant.status}, expires ${new Date((r.covenant.expiry ?? 0) * 1000).toISOString()}]` : `  (${r.covenant.reason})`));
+        (r.covenant.verified ? `  [TCB ${r.covenant.status}, ${expiryLabel(r.covenant.expiry)}]` : `  (${r.covenant.reason})`));
       const picked = ers.find((r) => r.covenant.verified);
       const text = lines.join('\n') + '\n' + (picked ? `pick -> ${picked.fqdn}` : 'no Covenant-verified ER right now');
       return {content: [{type: 'text', text}], structuredContent: {routes: ers, picked: picked ?? null} as unknown as Record<string, unknown>};
@@ -163,10 +186,11 @@ function buildServer(): McpServer {
       }
       try {
         const v = await verifyEnclaveLive(validator);
+        const advisories = v.advisoryIds.length ? ` (advisories: ${v.advisoryIds.join(', ')})` : '';
         const text =
-          `PASS · genuine Intel TDX enclave\n` +
+          `PASS · genuine Intel TDX enclave, TCB ${v.status}${advisories}\n` +
           `validator ${v.validator} · ${v.endpoint}\n` +
-          `TCB ${v.status} · mr_td ${v.mrTd.slice(0, 32)}…\n` +
+          `mr_td ${v.mrTd.slice(0, 32)}…\n` +
           `verified live at ${new Date(v.verifiedAt * 1000).toISOString()}`;
         return {content: [{type: 'text', text}], structuredContent: v as unknown as Record<string, unknown>};
       } catch (e) {
@@ -195,13 +219,14 @@ function buildServer(): McpServer {
         return {content: [{type: 'text', text: 'not a valid account address'}], isError: true};
       }
       try {
-        const r = await verifyProvenance(new Connection(RPC_URL, 'confirmed'), credits_account, receipt_hashes);
+        const r = await verifyProvenance(erConnection, credits_account, receipt_hashes);
         const text = r.match
           ? `MATCH · the on-chain root is the hash-chain of these ${r.actions} actions\nroot ${r.onChain}`
           : `MISMATCH · recomputed ${r.recomputed}\non-chain ${r.onChain}`;
         return {content: [{type: 'text', text}], isError: !r.match, structuredContent: r as unknown as Record<string, unknown>};
       } catch (e) {
-        return {content: [{type: 'text', text: e instanceof Error ? e.message : 'verification failed'}], isError: true};
+        const msg = e instanceof Error && SAFE_PROVENANCE_ERRORS.has(e.message) ? e.message : 'chain RPC unavailable';
+        return {content: [{type: 'text', text: msg}], isError: true};
       }
     },
   );

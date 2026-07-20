@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canonicalize } from "../jcs.js";
 import { decodeChallenge, pickAccept } from "../challenge.js";
-import { buildReceipt, verifyReceipt, receiptDigest } from "../receipt.js";
+import { buildReceipt, verifyReceipt, receiptDigest, canonicalSha256Hex } from "../receipt.js";
 import { withCovenantReceipts, type FetchLike } from "../decorator.js";
 
 // The exact base64 BlockRun returns for a default gpt-4o-mini 402.
@@ -14,6 +14,37 @@ describe("jcs", () => {
   });
   it("is stable across key order", () => {
     expect(canonicalize({ x: 1, y: [3, 2] })).toBe(canonicalize({ y: [3, 2], x: 1 }));
+  });
+  it("drops the .0 on integral floats, matching Rust and Python", () => {
+    expect(canonicalize(78.0)).toBe("78");
+    expect(canonicalize(1.0)).toBe("1");
+    expect(canonicalize(0.003)).toBe("0.003");
+  });
+});
+
+describe("cross-language digest", () => {
+  it("hashes a whole-number-float receipt to the shared vector", async () => {
+    const r = {
+      provider: "blockrun",
+      endpoint: "/v1/chat/completions",
+      modelRequested: "gpt-4o-mini",
+      modelServed: "openai/gpt-4o-mini",
+      verdict: "delivered",
+      inputSha256: "aaaa",
+      outputSha256: "bbbb",
+      routing: { model: "openai/gpt-4o-mini", savingsPct: 78.0 },
+      payment: {
+        network: "eip155:8453",
+        asset: "0x8335",
+        amount: "1000000",
+        amountUsdc: 1.0,
+        payTo: "0xe903",
+        tx: "0xabc",
+      },
+    };
+    expect(await canonicalSha256Hex(r)).toBe(
+      "8328699dcfa1ab8c2d8e5cfca12378999ccf94cffe68fa2ee5cefec818041baf",
+    );
   });
 });
 

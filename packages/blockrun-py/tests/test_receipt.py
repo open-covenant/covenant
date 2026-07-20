@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from covenant_blockrun import (  # noqa: E402
     ReceiptTransport,
     build_receipt,
+    canonical_sha256_hex,
     canonicalize,
     decode_challenge,
     payment_from_accept,
@@ -35,6 +36,41 @@ def _payment():
 def test_jcs_sorts_keys():
     assert canonicalize({"b": 1, "a": 2}) == '{"a":2,"b":1}'
     assert canonicalize({"x": 1, "y": [3, 2]}) == canonicalize({"y": [3, 2], "x": 1})
+
+
+def test_jcs_integral_floats_match_ecmascript():
+    # RFC 8785 / Rust serde_jcs / JS all drop the ".0"; Python must too.
+    assert canonicalize(78.0) == "78"
+    assert canonicalize(1.0) == "1"
+    assert canonicalize(0.003) == "0.003"
+
+
+def test_whole_float_receipt_matches_cross_language_vector():
+    # A receipt whose savingsPct and amountUsdc are whole-number floats. The
+    # Rust crate, TS SDK, and this package must all hash it to the same digest;
+    # regressing Python's number formatting would break receipts silently.
+    r = {
+        "provider": "blockrun",
+        "endpoint": "/v1/chat/completions",
+        "modelRequested": "gpt-4o-mini",
+        "modelServed": "openai/gpt-4o-mini",
+        "verdict": "delivered",
+        "inputSha256": "aaaa",
+        "outputSha256": "bbbb",
+        "routing": {"model": "openai/gpt-4o-mini", "savingsPct": 78.0},
+        "payment": {
+            "network": "eip155:8453",
+            "asset": "0x8335",
+            "amount": "1000000",
+            "amountUsdc": 1.0,
+            "payTo": "0xe903",
+            "tx": "0xabc",
+        },
+    }
+    assert (
+        canonical_sha256_hex(r)
+        == "8328699dcfa1ab8c2d8e5cfca12378999ccf94cffe68fa2ee5cefec818041baf"
+    )
 
 
 def test_decode_live_challenge():

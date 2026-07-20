@@ -31,8 +31,14 @@ def _encode(value: Any) -> str:
     if isinstance(value, float):
         if value != value or value in (float("inf"), float("-inf")):
             raise ValueError("cannot canonicalize a non-finite number")
-        # json.dumps gives the ECMAScript-style shortest round-trip for the
-        # value range receipts use.
+        # RFC 8785 uses ECMAScript number-to-string: an integral float is an
+        # integer (78.0 -> "78", -0.0 -> "0"), which json.dumps does not do
+        # (it keeps "78.0"). Rust serde_jcs and JS JSON.stringify both drop the
+        # ".0", so Python must too or the digest diverges. For non-integral
+        # values in the range a receipt carries, json.dumps already matches the
+        # ECMAScript shortest round-trip.
+        if value.is_integer():
+            return str(int(value))
         return json.dumps(value)
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(_encode(v) for v in value) + "]"

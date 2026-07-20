@@ -296,6 +296,35 @@ mod tests {
     }
 
     #[test]
+    fn whole_number_float_digest_matches_cross_language_vector() {
+        // savingsPct and amountUsdc are whole-number floats. RFC 8785 drops the
+        // ".0"; the TS and Python SDKs must agree, so this hex is pinned in all
+        // three. It guards the number-format divergence json.dumps would cause.
+        let receipt = json!({
+            "provider": "blockrun",
+            "endpoint": "/v1/chat/completions",
+            "modelRequested": "gpt-4o-mini",
+            "modelServed": "openai/gpt-4o-mini",
+            "verdict": "delivered",
+            "inputSha256": "aaaa",
+            "outputSha256": "bbbb",
+            "routing": { "model": "openai/gpt-4o-mini", "savingsPct": 78.0 },
+            "payment": {
+                "network": "eip155:8453",
+                "asset": "0x8335",
+                "amount": "1000000",
+                "amountUsdc": 1.0,
+                "payTo": "0xe903",
+                "tx": "0xabc"
+            }
+        });
+        assert_eq!(
+            canonical_sha256_hex(&receipt),
+            "8328699dcfa1ab8c2d8e5cfca12378999ccf94cffe68fa2ee5cefec818041baf"
+        );
+    }
+
+    #[test]
     fn routing_parsed_from_headers() {
         let mut h = reqwest::header::HeaderMap::new();
         h.insert("x-clawrouter-model", "kimi-k2".parse().unwrap());

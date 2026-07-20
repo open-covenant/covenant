@@ -1,8 +1,8 @@
 //! Read-only REST client for FairScale's reputation, agent-trust, and credit
 //! reads. Reputation lives on one host, agent + credit on another. Auth is an
 //! optional `fairkey` header (free tier); an unauthenticated read gets a 401
-//! (live behavior) or a 402 (documented behavior), both surfaced as the same
-//! clear error until the x402 pay path is wired.
+//! (reputation host) or a 402 (agent host), both surfaced as the same clear
+//! error until the x402 pay path is wired.
 //!
 //! Response bodies vary in shape across FairScale's products and their own spec
 //! carries a score-scale inconsistency (0-100 vs ~0-1000 across endpoints), so
@@ -67,7 +67,7 @@ impl FairScaleClient {
     }
 
     /// Attach a FairScale API key, sent as the `fairkey` header. Without one,
-    /// FairScale answers a read with a 401 (live) or 402 (documented x402 path).
+    /// reads fail: 401 on the reputation host, 402 on the agent host.
     pub fn with_fairkey(mut self, key: impl Into<String>) -> Self {
         let key = key.into();
         self.fairkey = if key.trim().is_empty() {

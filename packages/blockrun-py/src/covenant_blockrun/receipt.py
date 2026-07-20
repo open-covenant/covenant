@@ -103,7 +103,12 @@ def canonical_sha256_hex(value: Any) -> str:
 def verdict_for(requested: str, served: str) -> str:
     if not served:
         return VERDICT_UNVERIFIED
-    return VERDICT_DELIVERED if requested.lower() == served.lower() else VERDICT_SUBSTITUTED
+    return VERDICT_DELIVERED if _model_base(requested) == _model_base(served) else VERDICT_SUBSTITUTED
+
+
+def _model_base(model: str) -> str:
+    """Model name without a provider namespace: openai/gpt-4o-mini -> gpt-4o-mini."""
+    return model.lower().rsplit("/", 1)[-1]
 
 
 def build_receipt(

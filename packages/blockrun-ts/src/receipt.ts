@@ -52,9 +52,15 @@ export async function canonicalSha256Hex(value: unknown): Promise<string> {
 
 export function verdictFor(requested: string, served: string): Verdict {
   if (!served) return VERDICT_UNVERIFIED;
-  return requested.toLowerCase() === served.toLowerCase()
+  return modelBase(requested) === modelBase(served)
     ? VERDICT_DELIVERED
     : VERDICT_SUBSTITUTED;
+}
+
+/** Model name without a provider namespace: `openai/gpt-4o-mini` → `gpt-4o-mini`. */
+function modelBase(model: string): string {
+  const parts = model.toLowerCase().split("/");
+  return parts[parts.length - 1];
 }
 
 /** Build a receipt from one exchange. */

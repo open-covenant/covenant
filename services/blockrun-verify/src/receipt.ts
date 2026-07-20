@@ -55,9 +55,13 @@ export function canonicalSha256Hex(value: unknown): string {
 
 export function verdictFor(requested: string, served: string): string {
   if (!served) return VERDICT_UNVERIFIED;
-  return requested.toLowerCase() === served.toLowerCase()
-    ? VERDICT_DELIVERED
-    : VERDICT_SUBSTITUTED;
+  return modelBase(requested) === modelBase(served) ? VERDICT_DELIVERED : VERDICT_SUBSTITUTED;
+}
+
+/** Model name without a provider namespace: `openai/gpt-4o-mini` → `gpt-4o-mini`. */
+function modelBase(model: string): string {
+  const parts = model.toLowerCase().split("/");
+  return parts[parts.length - 1];
 }
 
 export function verifyReceipt(receipt: CallReceipt, expectedDigest?: string): VerifyResult {

@@ -125,11 +125,8 @@ impl BlockRunClient {
             .build_payment(&accept.to_requirements())
             .await
             .map_err(|e| BlockRunError::Signer(e.to_string()))?;
-        // The signer emits a bare v2 envelope ({x402Version, scheme, network,
-        // payload}); the CDP facilitator's x402V2PaymentPayload instead wants the
-        // full `accepted` requirement echoed back and no top-level scheme/network.
-        // Rewrap before sending; a header that is not a base64 JSON envelope
-        // (e.g. a mock) passes through unchanged.
+        // Rewrap the signer's bare v2 envelope into the CDP facilitator's shape
+        // (see `to_cdp_v2_header`); a non-envelope header passes through unchanged.
         let header = to_cdp_v2_header(&signed, &accept);
 
         let paid = self

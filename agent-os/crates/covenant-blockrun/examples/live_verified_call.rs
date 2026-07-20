@@ -1,4 +1,4 @@
-//! Flagship demo: a verifiable BlockRun call on Base mainnet.
+//! A verifiable BlockRun call on Base mainnet, end to end.
 //!
 //! Makes one real paid call to BlockRun over x402 (USDC on Base, EIP-3009
 //! gasless), captures the Covenant receipt, verifies it locally, and prints the

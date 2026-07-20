@@ -220,7 +220,7 @@ def _read_routing(response: Any) -> RoutingClaim:
     return routing
 
 
-# --- duck-typed httpx accessors (no httpx import required) ---
+# duck-typed httpx accessors, so httpx need not be imported
 
 
 def _status(response: Any) -> int:

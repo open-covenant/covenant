@@ -109,8 +109,7 @@ impl CallReceipt {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        // The router reports the served model in the response body or, failing
-        // that, in the routing headers.
+        // served model: response body, else the routing header.
         let model_served = response
             .get("model")
             .and_then(Value::as_str)

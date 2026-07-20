@@ -40,6 +40,33 @@ test("digest matches the cross-language vector (Rust + TS + Python)", () => {
   );
 });
 
+test("whole-number-float receipt matches the shared vector", () => {
+  // savingsPct and amountUsdc as integral floats; the ".0" must drop to match
+  // Rust and the SDKs.
+  const r = {
+    provider: "blockrun",
+    endpoint: "/v1/chat/completions",
+    modelRequested: "gpt-4o-mini",
+    modelServed: "openai/gpt-4o-mini",
+    verdict: "delivered",
+    inputSha256: "aaaa",
+    outputSha256: "bbbb",
+    routing: { model: "openai/gpt-4o-mini", savingsPct: 78.0 },
+    payment: {
+      network: "eip155:8453",
+      asset: "0x8335",
+      amount: "1000000",
+      amountUsdc: 1.0,
+      payTo: "0xe903",
+      tx: "0xabc",
+    },
+  };
+  assert.equal(
+    canonicalSha256Hex(r),
+    "8328699dcfa1ab8c2d8e5cfca12378999ccf94cffe68fa2ee5cefec818041baf",
+  );
+});
+
 test("verify accepts a consistent receipt and its digest", () => {
   const r = receipt();
   const digest = canonicalSha256Hex(r);

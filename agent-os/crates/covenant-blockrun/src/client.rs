@@ -22,6 +22,7 @@ pub struct BlockRunClient {
     http: reqwest::Client,
     base_url: String,
     signer: Arc<dyn Signer>,
+    max_atomic: u64,
 }
 
 /// A completed call: the provider's response plus the receipt binding it.
@@ -45,7 +46,16 @@ impl BlockRunClient {
             http,
             base_url: base_url.into(),
             signer,
+            max_atomic: crate::config::DEFAULT_MAX_ATOMIC,
         }
+    }
+
+    /// Cap the atomic amount this client will sign for. `0` keeps the default.
+    pub fn with_max_atomic(mut self, max_atomic: u64) -> Self {
+        if max_atomic != 0 {
+            self.max_atomic = max_atomic;
+        }
+        self
     }
 
     /// POST `body` to `endpoint`, paying the x402 challenge if one is returned,
@@ -57,10 +67,18 @@ impl BlockRunClient {
         if first.status() == StatusCode::PAYMENT_REQUIRED {
             return self.pay_and_capture(endpoint, &url, body, first).await;
         }
-        // Free endpoint (or an error). Surface errors; otherwise emit a receipt
-        // with an empty payment so the exchange is still recorded.
+        // Not a 402: a free call (2xx) or an error. Emit a receipt only for a
+        // real success; a 4xx/5xx with a JSON error body must surface as an
+        // error, not a $0 "delivered" receipt.
+        let status = first.status();
         let routing = RoutingClaim::from_headers(first.headers());
         let response = read_json(first).await?;
+        if !status.is_success() {
+            return Err(BlockRunError::Api {
+                status: status.as_u16(),
+                message: response.to_string(),
+            });
+        }
         let payment = PaymentInfo {
             network: String::new(),
             asset: String::new(),
@@ -81,10 +99,26 @@ impl BlockRunClient {
         challenge_resp: reqwest::Response,
     ) -> Result<PaidCall> {
         let challenge = decode_challenge(challenge_resp).await?;
+        // BlockRun mainnet returns a single Base USDC option today, so taking the
+        // first is correct. If it ever offers multiple chains, this needs to pin
+        // the network the configured signer can actually sign for; see `pick`.
         let accept = challenge
             .pick(None)
             .ok_or_else(|| BlockRunError::Challenge("no payment options offered".into()))?
             .clone();
+
+        // Refuse an implausible charge before signing. The signer would authorize
+        // whatever value the 402 names, so a compromised or buggy challenge is
+        // capped here, not at the funding key.
+        let atomic: u64 = accept.amount.parse().map_err(|_| {
+            BlockRunError::Challenge(format!("non-numeric amount {:?}", accept.amount))
+        })?;
+        if atomic > self.max_atomic {
+            return Err(BlockRunError::Challenge(format!(
+                "402 amount {atomic} exceeds the {} atomic cap",
+                self.max_atomic
+            )));
+        }
 
         let signed = self
             .signer
@@ -176,17 +210,47 @@ fn to_cdp_v2_header(signed: &str, accept: &Accept) -> String {
     engine.encode(v2.to_string().as_bytes())
 }
 
+/// A remote that answers a paid request controls its response, so an unbounded
+/// read lets a hostile or broken one exhaust a worker's memory. The 120s timeout
+/// bounds latency, not size; this bounds size. Mirrors `covenant_x402`'s cap.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 async fn read_json(resp: reqwest::Response) -> Result<Value> {
     let status = resp.status();
-    let text = resp.text().await?;
-    serde_json::from_str(&text).map_err(|_| BlockRunError::Api {
+    let bytes = read_capped(resp, MAX_RESPONSE_BYTES).await?;
+    serde_json::from_slice(&bytes).map_err(|_| BlockRunError::Api {
         status: status.as_u16(),
-        message: if text.is_empty() {
+        message: if bytes.is_empty() {
             "empty response".into()
         } else {
-            text
+            String::from_utf8_lossy(&bytes).into_owned()
         },
     })
+}
+
+/// Read the body chunk by chunk, refusing once it exceeds `cap`. A truthful
+/// `Content-Length` lets us reject up front; a lying or absent one is caught by
+/// the running total.
+async fn read_capped(mut resp: reqwest::Response, cap: usize) -> Result<Vec<u8>> {
+    if let Some(len) = resp.content_length() {
+        if len as usize > cap {
+            return Err(BlockRunError::Api {
+                status: resp.status().as_u16(),
+                message: format!("response body {len} bytes exceeds the {cap}-byte cap"),
+            });
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if buf.len() + chunk.len() > cap {
+            return Err(BlockRunError::Api {
+                status: resp.status().as_u16(),
+                message: format!("response body exceeds the {cap}-byte cap"),
+            });
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -260,6 +324,43 @@ mod tests {
             .unwrap();
         assert_eq!(out.receipt.payment.amount, "0");
         assert_eq!(out.receipt.model_served, "x");
+    }
+
+    #[tokio::test]
+    async fn surfaces_error_on_non_402_first_response() {
+        // A 500 with a JSON body must be an error, not a $0 "delivered" receipt.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(500)
+                    .set_body_json(json!({"error": "upstream", "model": "gpt-4o-mini"})),
+            )
+            .mount(&server)
+            .await;
+        let client = BlockRunClient::new(server.uri(), signer());
+        let err = client
+            .call("/v1/chat/completions", json!({"model": "gpt-4o-mini"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BlockRunError::Api { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_402_over_the_spend_cap() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(402).insert_header("x-payment-required", LIVE_B64))
+            .mount(&server)
+            .await;
+        // Cap below the challenge's 3000 atomic → refuse before signing.
+        let client = BlockRunClient::new(server.uri(), signer()).with_max_atomic(1000);
+        let err = client
+            .call("/v1/chat/completions", json!({"model": "gpt-4o-mini"}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BlockRunError::Challenge(m) if m.contains("cap")));
     }
 
     #[tokio::test]

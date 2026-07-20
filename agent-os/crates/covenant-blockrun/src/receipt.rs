@@ -66,7 +66,8 @@ impl RoutingClaim {
             profile: get(&["x-clawrouter-profile", "x-blockrun-profile"]),
             model: get(&["x-clawrouter-model", "x-blockrun-model", "x-model"]),
             savings_pct: get(&["x-clawrouter-savings", "x-blockrun-savings"])
-                .and_then(|s| s.trim_end_matches('%').trim().parse::<f64>().ok()),
+                .and_then(|s| s.trim_end_matches('%').trim().parse::<f64>().ok())
+                .filter(|f| f.is_finite()),
         }
     }
 

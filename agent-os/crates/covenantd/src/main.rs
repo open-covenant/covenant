@@ -1023,7 +1023,7 @@ fn blockrun_from_env() -> Option<(
     };
     if let Ok(url) = std::env::var("COVENANT_BLOCKRUN_BASE_URL") {
         if !url.trim().is_empty() {
-            cfg.base_url = url;
+            cfg.base_url = url.trim().to_string();
         }
     }
     if let Ok(list) = std::env::var("COVENANT_BLOCKRUN_ALLOW") {
@@ -1034,6 +1034,11 @@ fn blockrun_from_env() -> Option<(
                 .collect(),
         );
     }
+    if let Ok(v) = std::env::var("COVENANT_BLOCKRUN_MAX_ATOMIC") {
+        if let Ok(n) = v.trim().parse::<u64>() {
+            cfg.max_atomic = n;
+        }
+    }
     match x402_dispatch_config_from_env() {
         Some(x402) => {
             let mut signer = covenantd::x402::SubprocessSigner::new(&x402.signer_binary);
@@ -1043,9 +1048,11 @@ fn blockrun_from_env() -> Option<(
             let client = covenant_blockrun::BlockRunClient::new(
                 cfg.base_url.clone(),
                 std::sync::Arc::new(signer),
-            );
+            )
+            .with_max_atomic(cfg.max_atomic());
             info!(
                 base_url = %cfg.base_url,
+                max_atomic = cfg.max_atomic(),
                 signer = %x402.signer_binary.display(),
                 "blockrun enabled (x402 pay-per-call)"
             );

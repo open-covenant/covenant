@@ -58,6 +58,14 @@ impl Tool for CallTool {
 
     async fn call(&self, arguments: Value) -> Result<ToolCallResult, ToolError> {
         let endpoint = require_str(&arguments, "endpoint")?;
+        // A relative path only. This reaches a payment-signing path, so an
+        // absolute URL or an authority-injecting `@` must not redirect the call
+        // to an attacker-controlled host.
+        if !endpoint.starts_with('/') || endpoint.contains("//") || endpoint.contains('@') {
+            return Err(ToolError::InvalidArguments(
+                "endpoint must be a path beginning with '/'".into(),
+            ));
+        }
         let body = arguments
             .get("body")
             .cloned()
@@ -183,6 +191,28 @@ mod tests {
             .map(|t| t.name().to_string())
             .collect();
         assert_eq!(names, vec![CALL_TOOL, VERIFY_TOOL]);
+    }
+
+    #[tokio::test]
+    async fn call_rejects_a_non_path_endpoint() {
+        // Validated before any network call, so no server is needed.
+        let client = Arc::new(BlockRunClient::new(
+            "http://127.0.0.1:1",
+            Arc::new(covenant_x402::MockSigner),
+        ));
+        let tool = CallTool { client };
+        for bad in [
+            "v1/chat",
+            "https://evil.com/x",
+            "/@evil.com/x",
+            "//evil.com",
+        ] {
+            let out = tool.call(json!({"endpoint": bad, "body": {}})).await;
+            assert!(
+                matches!(out, Err(ToolError::InvalidArguments(_))),
+                "expected rejection for {bad:?}"
+            );
+        }
     }
 
     #[tokio::test]

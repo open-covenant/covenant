@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_BASE_URL: &str = "https://blockrun.ai/api";
 
+/// Default per-call spend ceiling: 1 USDC in atomic units (6 decimals). A single
+/// BlockRun call is a fraction of a cent, so this is a wide safety margin that
+/// still refuses a 402 demanding an implausible amount before anything is signed.
+/// Matches the AceData path's `DEFAULT_MAX_ATOMIC`.
+pub const DEFAULT_MAX_ATOMIC: u64 = 1_000_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BlockRunConfig {
     #[serde(default)]
@@ -14,10 +20,18 @@ pub struct BlockRunConfig {
     /// Tool allowlist. `None` = all registered tools, `Some([])` = none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<String>>,
+    /// Reject any 402 whose atomic amount exceeds this before signing. `0` is
+    /// treated as the default rather than "no ceiling".
+    #[serde(default = "default_max_atomic")]
+    pub max_atomic: u64,
 }
 
 fn default_base_url() -> String {
     DEFAULT_BASE_URL.to_string()
+}
+
+fn default_max_atomic() -> u64 {
+    DEFAULT_MAX_ATOMIC
 }
 
 impl Default for BlockRunConfig {
@@ -26,6 +40,18 @@ impl Default for BlockRunConfig {
             enabled: false,
             base_url: default_base_url(),
             allow: None,
+            max_atomic: DEFAULT_MAX_ATOMIC,
+        }
+    }
+}
+
+impl BlockRunConfig {
+    /// The effective ceiling, mapping `0` to the default.
+    pub fn max_atomic(&self) -> u64 {
+        if self.max_atomic == 0 {
+            DEFAULT_MAX_ATOMIC
+        } else {
+            self.max_atomic
         }
     }
 }

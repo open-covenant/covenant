@@ -34,6 +34,12 @@ http_client = httpx.Client(transport=transport)
 # hand http_client to your BlockRun / OpenAI-compatible client
 ```
 
+The transport tees the response stream, so `on_receipt` fires once the response
+body has been consumed and its stream closed (httpx does this for you on a normal
+request). The caller's body is never touched. A call is receipted only on a 2xx
+response. Pass `on_error=...` to observe any receipt-build failure; it never
+affects the call.
+
 Each completed call yields a `CallReceipt`. `receipt.verdict` is the point:
 `delivered` when you got the model you asked for, `substituted` when the router
 swapped it, `unverified` when no served model was reported — turning "cheapest

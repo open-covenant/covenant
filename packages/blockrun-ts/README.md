@@ -34,6 +34,13 @@ const fetchWithReceipts = withCovenantReceipts(globalThis.fetch, {
 const client = new OpenAI({ fetch: fetchWithReceipts, /* … */ });
 ```
 
+`onReceipt` is called **after** the wrapped `fetch` resolves, not during it — the
+receipt is built off the response clone so it never delays your call. Read
+receipts in the callback (persist, log, enqueue); don't expect one to exist the
+line after `await fetch(...)`. A call is only receipted on a 2xx response; a
+plain 2xx with no preceding 402 gets a receipt with empty payment fields. Pass
+`onError` to see any receipt-build failure (it never affects the call).
+
 Each completed call yields a `CallReceipt`:
 
 ```jsonc

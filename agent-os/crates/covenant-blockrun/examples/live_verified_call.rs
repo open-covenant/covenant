@@ -6,9 +6,11 @@
 //! chat call is ~0.003 USDC) — it is a `live_` example, never run by `cargo
 //! test`.
 //!
-//! Run:
-//!   COVENANT_X402_EVM_KEY_HEX=<64-hex Base secp256k1 secret, funded with USDC> \
+//! Run (the key is a 64-hex Base secp256k1 secret funded with USDC, given as a
+//! file path so it never reaches the shell history, or inline):
+//!   COVENANT_X402_EVM_KEY=/path/to/key.hex \
 //!   cargo run -p covenant-blockrun --example live_verified_call
+//!   # or: COVENANT_X402_EVM_KEY_HEX=<64-hex> cargo run …
 //!
 //! Optional:
 //!   BLOCKRUN_MODEL     model to request (default gpt-4o-mini)

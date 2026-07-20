@@ -150,11 +150,12 @@ describe("decorator", () => {
     };
 
     const receipts: import("../receipt.js").CallReceipt[] = [];
+    const errors: unknown[] = [];
     const wrapped = withCovenantReceipts(base, {
       onReceipt: (r) => {
         receipts.push(r);
       },
-      rethrowReceiptErrors: true,
+      onError: (e) => errors.push(e),
     });
 
     const body = JSON.stringify({ model: "gpt-4o-mini", messages: [] });
@@ -166,6 +167,7 @@ describe("decorator", () => {
     // Let the fire-and-forget receipt build settle.
     await new Promise((r) => setTimeout(r, 10));
 
+    expect(errors).toHaveLength(0);
     expect(receipts).toHaveLength(1);
     const r = receipts[0];
     expect(r.verdict).toBe("delivered");
@@ -173,5 +175,18 @@ describe("decorator", () => {
     expect(r.payment.amount).toBe("3000");
     expect(r.payment.amountUsdc).toBeCloseTo(0.003);
     expect(r.endpoint).toBe("/api/v1/chat/completions");
+  });
+
+  it("emits no receipt for a non-2xx response", async () => {
+    const base: FetchLike = async () =>
+      new Response(JSON.stringify({ error: "bad request" }), { status: 400 });
+    const receipts: import("../receipt.js").CallReceipt[] = [];
+    const wrapped = withCovenantReceipts(base, { onReceipt: (r) => receipts.push(r) });
+    await wrapped("https://blockrun.ai/api/v1/chat/completions", {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-4o-mini" }),
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(receipts).toHaveLength(0);
   });
 });

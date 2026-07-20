@@ -38,11 +38,27 @@ def test_jcs_sorts_keys():
     assert canonicalize({"x": 1, "y": [3, 2]}) == canonicalize({"y": [3, 2], "x": 1})
 
 
-def test_jcs_integral_floats_match_ecmascript():
-    # RFC 8785 / Rust serde_jcs / JS all drop the ".0"; Python must too.
-    assert canonicalize(78.0) == "78"
-    assert canonicalize(1.0) == "1"
-    assert canonicalize(0.003) == "0.003"
+def test_jcs_numbers_match_ecmascript():
+    # ECMAScript Number.toString (what Rust serde_jcs and JS JSON.stringify use).
+    cases = {
+        78.0: "78",
+        1.0: "1",
+        0.003: "0.003",
+        -0.0: "0",
+        1e-5: "0.00001",
+        1e-6: "0.000001",
+        1e-7: "1e-7",
+        1e20: "100000000000000000000",
+        1e21: "1e+21",
+        123.456: "123.456",
+    }
+    for value, expected in cases.items():
+        assert canonicalize(value) == expected, f"{value!r} -> {canonicalize(value)}"
+
+
+def test_jcs_sorts_keys_by_utf16_code_unit():
+    # A supplementary-plane key must sort before U+FFFF, matching Rust/JS.
+    assert canonicalize({"￿": 1, "\U0001f600": 2}) == '{"\U0001f600":2,"￿":1}'
 
 
 def test_whole_float_receipt_matches_cross_language_vector():
@@ -105,6 +121,39 @@ def test_substituted_when_router_swaps():
     assert r.verdict == "substituted"
 
 
+def test_build_path_digest_matches_literal():
+    # Exercises to_json()/RoutingClaim assembly (with a whole-number float
+    # savings), not just a hand-built literal, so an assembly regression is caught.
+    from covenant_blockrun import RoutingClaim, canonical_sha256_hex
+
+    built = build_receipt(
+        "/v1/chat/completions",
+        {"model": "gpt-4o-mini", "messages": []},
+        {"model": "openai/gpt-4o-mini", "choices": []},
+        _payment(),
+        RoutingClaim(model="openai/gpt-4o-mini", savings_pct=78.0),
+    )
+    literal = {
+        "provider": "blockrun",
+        "endpoint": "/v1/chat/completions",
+        "modelRequested": "gpt-4o-mini",
+        "modelServed": "openai/gpt-4o-mini",
+        "verdict": "delivered",
+        "inputSha256": built.input_sha256,
+        "outputSha256": built.output_sha256,
+        "routing": {"model": "openai/gpt-4o-mini", "savingsPct": 78.0},
+        "payment": {
+            "network": "eip155:8453",
+            "asset": "0x8335",
+            "amount": "3000",
+            "amountUsdc": 0.003,
+            "payTo": "0xe903",
+            "tx": "0xabc",
+        },
+    }
+    assert built.digest() == canonical_sha256_hex(literal)
+
+
 def test_digest_stable_across_key_order():
     a = build_receipt("/x", {"model": "m"}, {"model": "m", "id": "1", "choices": []}, _payment())
     b = build_receipt("/x", {"model": "m"}, {"choices": [], "id": "1", "model": "m"}, _payment())
@@ -145,14 +194,25 @@ class _Headers(dict):
         return super().get(k.lower(), default)
 
 
+class _Stream:
+    """A minimal sync httpx byte stream: iterable of chunks with close()."""
+
+    def __init__(self, body: bytes):
+        self._chunks = [body] if body else []
+        self.closed = False
+
+    def __iter__(self):
+        yield from self._chunks
+
+    def close(self):
+        self.closed = True
+
+
 class _Resp:
     def __init__(self, status, headers, body):
         self.status_code = status
         self.headers = _Headers({k.lower(): v for k, v in headers.items()})
-        self.content = body.encode() if isinstance(body, str) else body
-
-    def read(self):
-        return self.content
+        self.stream = _Stream(body.encode() if isinstance(body, str) else body)
 
 
 class _FakeInner:
@@ -167,23 +227,47 @@ class _FakeInner:
         )
 
 
+def _drain(response):
+    """Mimic httpx: read the body, then close the stream (fires the receipt)."""
+    body = b"".join(response.stream)
+    response.stream.close()
+    return body
+
+
 def test_transport_pairs_402_with_paid_retry():
     received = []
-    transport = ReceiptTransport(_FakeInner(), on_receipt=received.append, swallow_receipt_errors=False)
+    errors = []
+    transport = ReceiptTransport(_FakeInner(), on_receipt=received.append, on_error=errors.append)
 
     body = '{"model": "gpt-4o-mini", "messages": []}'
     url = "https://blockrun.ai/api/v1/chat/completions"
 
     first = _Req("POST", url, body)
-    transport.handle_request(first)  # 402, stashes challenge
+    _drain(transport.handle_request(first))  # 402, stashes challenge
 
     retry = _Req("POST", url, body)
     retry.headers_paid = True
-    transport.handle_request(retry)  # paid, emits receipt
+    resp = transport.handle_request(retry)
+    # The caller's body must still be intact through the tee.
+    assert _drain(resp) == b'{"model": "gpt-4o-mini", "choices": []}'
 
+    assert errors == []
     assert len(received) == 1
     r = received[0]
     assert r.verdict == "delivered"
     assert r.payment.tx == "0xdeadbeef"
     assert r.payment.amount == "3000"
     assert r.endpoint == "/api/v1/chat/completions"
+
+
+def test_transport_skips_non_2xx():
+    received = []
+
+    class _ErrInner:
+        def handle_request(self, request):
+            return _Resp(500, {}, '{"error": "upstream"}')
+
+    transport = ReceiptTransport(_ErrInner(), on_receipt=received.append)
+    resp = transport.handle_request(_Req("POST", "https://blockrun.ai/api/v1/x", "{}"))
+    _drain(resp)
+    assert received == []

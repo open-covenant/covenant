@@ -1,0 +1,45 @@
+{
+  "name": "@covenant-org/blockrun",
+  "version": "0.1.0",
+  "description": "Covenant trust receipts for BlockRun x402 calls: wrap your fetch, get a verifiable receipt binding requested model, served model, and settlement for every call.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-covenant/covenant.git"
+  },
+  "homepage": "https://opencovenant.org",
+  "keywords": [
+    "blockrun",
+    "x402",
+    "covenant",
+    "agent",
+    "receipt",
+    "provenance"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

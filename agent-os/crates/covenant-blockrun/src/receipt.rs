@@ -249,6 +249,35 @@ mod tests {
     }
 
     #[test]
+    fn canonical_digest_matches_cross_language_vector() {
+        // The identical receipt hashed by the TS (@covenant-org/blockrun) and
+        // Python (covenant-blockrun) packages. If this hex changes, a receipt
+        // built by one SDK stops verifying in the others — treat as a break.
+        let receipt = json!({
+            "provider": "blockrun",
+            "endpoint": "/v1/chat/completions",
+            "modelRequested": "gpt-4o",
+            "modelServed": "gpt-4o-mini",
+            "verdict": "substituted",
+            "inputSha256": "aaaa",
+            "outputSha256": "bbbb",
+            "routing": { "model": "gpt-4o-mini", "savingsPct": 78 },
+            "payment": {
+                "network": "eip155:8453",
+                "asset": "0x8335",
+                "amount": "3000",
+                "amountUsdc": 0.003,
+                "payTo": "0xe903",
+                "tx": "0xabc"
+            }
+        });
+        assert_eq!(
+            canonical_sha256_hex(&receipt),
+            "cff938c0db919fe334bc4e70b8ac545e2485537be66e381491af68276ad218a9"
+        );
+    }
+
+    #[test]
     fn routing_parsed_from_headers() {
         let mut h = reqwest::header::HeaderMap::new();
         h.insert("x-clawrouter-model", "kimi-k2".parse().unwrap());

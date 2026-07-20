@@ -40,3 +40,5 @@ services:
       # for production, where responses must verify against a pinned pubkey).
       - key: COVENANT_ATTEST_KEYPAIR
         sync: false
+      - key: BLOCKRUN_VERIFY_PRICE
+        value: "5000"

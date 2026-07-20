@@ -88,6 +88,13 @@ if (!/^0x[0-9a-fA-F]{40}$/.test(PAY_TO)) {
   process.exit(1);
 }
 
+if (!/^[1-9][0-9]*$/.test(PRICE)) {
+  console.error(
+    `BLOCKRUN_VERIFY_PRICE must be a positive integer in USDC base units (got "${PRICE}"); 5000 = 0.005 USDC`,
+  );
+  process.exit(1);
+}
+
 const attestor = process.env.COVENANT_ATTEST_KEYPAIR
   ? new Attestor(JSON.parse(process.env.COVENANT_ATTEST_KEYPAIR) as number[])
   : Attestor.generate();

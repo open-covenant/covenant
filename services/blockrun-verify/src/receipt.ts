@@ -37,7 +37,10 @@ export interface VerifyResult {
   verdictConsistent: boolean;
   statedVerdict: string;
   expectedVerdict: string;
-  settled: boolean;
+  // Whether the receipt carries a settlement tx string. This is not an on-chain
+  // check: the service never touches the chain, it only confirms the field is
+  // present. Named to say exactly that.
+  hasSettlementTx: boolean;
 }
 
 export function canonicalize(value: unknown): string {
@@ -69,7 +72,6 @@ export function verifyReceipt(receipt: CallReceipt, expectedDigest?: string): Ve
   const expectedVerdict = verdictFor(receipt.modelRequested ?? "", receipt.modelServed ?? "");
   const verdictConsistent = expectedVerdict === receipt.verdict;
   const digestMatches = expectedDigest === undefined ? null : expectedDigest === digest;
-  const settled = Boolean(receipt.payment?.tx);
   return {
     valid: verdictConsistent && (digestMatches ?? true),
     digest,
@@ -77,7 +79,7 @@ export function verifyReceipt(receipt: CallReceipt, expectedDigest?: string): Ve
     verdictConsistent,
     statedVerdict: receipt.verdict ?? "",
     expectedVerdict,
-    settled,
+    hasSettlementTx: Boolean(receipt.payment?.tx),
   };
 }
 

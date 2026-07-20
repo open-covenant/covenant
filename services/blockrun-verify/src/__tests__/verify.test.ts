@@ -74,7 +74,7 @@ test("verify accepts a consistent receipt and its digest", () => {
   assert.equal(res.valid, true);
   assert.equal(res.verdictConsistent, true);
   assert.equal(res.digestMatches, true);
-  assert.equal(res.settled, true);
+  assert.equal(res.hasSettlementTx, true);
 });
 
 test("verify catches a tampered verdict", () => {
@@ -126,5 +126,31 @@ test("handler rejects a malformed receipt without charging (>=400)", () => {
     },
   };
   handler({ body: { receipt: { not: "a receipt" } } } as any, res);
+  assert.equal(status, 400);
+});
+
+test("a pathologically nested receipt is a 400, not an uncaught crash", () => {
+  const handler = makeVerifyHandler(Attestor.generate());
+  let deep: any = "x";
+  for (let i = 0; i < 30000; i++) deep = [deep];
+  const receipt = {
+    verdict: "x",
+    modelRequested: "x",
+    modelServed: "x",
+    inputSha256: "x",
+    outputSha256: "x",
+    routing: deep,
+  };
+  let status = 200;
+  const res: any = {
+    status(s: number) {
+      status = s;
+      return this;
+    },
+    json() {
+      return this;
+    },
+  };
+  handler({ body: { receipt } } as any, res);
   assert.equal(status, 400);
 });

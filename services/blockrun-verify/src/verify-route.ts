@@ -25,7 +25,16 @@ export function makeVerifyHandler(attestor: Attestor) {
       res.status(400).json({ error: "expectedDigest, if given, must be a string" });
       return;
     }
-    const result = verifyReceipt(body.receipt, body.expectedDigest);
+    // A pathologically nested receipt can overflow the recursive canonicalizer.
+    // Catch it as the contracted "malformed receipt is free" 400 rather than an
+    // uncaught 500 (returning >= 400 cancels settlement either way).
+    let result;
+    try {
+      result = verifyReceipt(body.receipt, body.expectedDigest);
+    } catch {
+      res.status(400).json({ error: "receipt could not be canonicalized" });
+      return;
+    }
     // Sign the verification over the receipt digest as subject, so the buyer can
     // pin the pubkey and check the statement independently.
     const attestation = attestor.attest(result.digest, result, Math.floor(Date.now() / 1000));

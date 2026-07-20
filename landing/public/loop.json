@@ -1,21 +1,17 @@
 {
-  "updatedAt": "2026-07-19T23:46:52.175Z",
+  "updatedAt": "2026-07-20T00:06:55.952Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12951,
-    "tasks": 1519,
-    "integrated": 1519
+    "events": 12962,
+    "tasks": 1520,
+    "integrated": 1521
   },
   "throughput": {
-    "last24h": 5,
-    "last7d": 26,
-    "velocity": 3.7
+    "last24h": 7,
+    "last7d": 28,
+    "velocity": 4
   },
   "daily": [
-    {
-      "date": "06-29",
-      "count": 28
-    },
     {
       "date": "06-30",
       "count": 14
@@ -94,14 +90,14 @@
     },
     {
       "date": "07-19",
-      "count": 5
+      "count": 7
+    },
+    {
+      "date": "07-20",
+      "count": 0
     }
   ],
   "cumulative": [
-    {
-      "date": "06-29",
-      "total": 1451
-    },
     {
       "date": "06-30",
       "total": 1465
@@ -180,14 +176,17 @@
     },
     {
       "date": "07-19",
-      "total": 1519
+      "total": 1521
+    },
+    {
+      "date": "07-20",
+      "total": 1521
     }
   ],
   "states": {
-    "integrated": 1511,
+    "integrated": 1513,
     "proposed": 1,
-    "blocked": 6,
-    "self_review": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,18 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "dist-flake-binary-contract-and-nix-ci",
-    "state": "self_review",
-    "since": "2026-07-19T23:41:51.421Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-19T23:57:48.480Z",
+      "task": "dist-homebrew-doc-formula-command-accuracy",
+      "note": "Integrated and pushed as c42ed171 (docs(dist): correct stale Homebrew build command in source-install.md). Removes the inaccurate cargo buil"
+    },
+    {
+      "at": "2026-07-19T23:49:19.613Z",
+      "task": "dist-flake-binary-contract-and-nix-ci",
+      "note": "Integrated and pushed to origin/loop/main-track as 318b5bf8 (fix(dist): drop leaked preempt_fixture from the nix flake package) + 557c6cde ("
+    },
     {
       "at": "2026-07-19T23:23:53.930Z",
       "task": "homebrew-formula-style-ci-coverage",
@@ -310,16 +315,6 @@
       "at": "2026-07-14T01:15:25.748Z",
       "task": "nix-head-flake-channel",
       "note": "Landed on loop/main-track as 7501450f (flake.nix +85, docs/source-install.md +38) and pushed to origin (1156b852..7501450f). Public surface "
-    },
-    {
-      "at": "2026-07-13T18:55:23.488Z",
-      "task": "ipc-http-doc-duplicate-safety-set-guard",
-      "note": "Merged and pushed on loop/main-track as c66d8071; HEAD == origin/loop/main-track; all identity guards ok."
-    },
-    {
-      "at": "2026-07-13T18:51:40.663Z",
-      "task": "audit-integrity-doc-tool-call-outcome-set-guard",
-      "note": "Merged and pushed on loop/main-track as 9246451b; HEAD == origin/loop/main-track; all identity guards ok."
     }
   ]
 }

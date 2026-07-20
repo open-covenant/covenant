@@ -59,8 +59,8 @@ export function verdictFor(requested: string, served: string): Verdict {
 
 /** Model name without a provider namespace: `openai/gpt-4o-mini` → `gpt-4o-mini`. */
 function modelBase(model: string): string {
-  const parts = model.toLowerCase().split("/");
-  return parts[parts.length - 1];
+  const lower = model.toLowerCase();
+  return lower.slice(lower.lastIndexOf("/") + 1);
 }
 
 /** Build a receipt from one exchange. */

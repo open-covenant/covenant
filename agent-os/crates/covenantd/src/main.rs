@@ -226,6 +226,21 @@ async fn main() -> Result<()> {
             tools_vec.extend(circuit_tools);
         }
     }
+    if let Some((client, cfg)) = krexa_from_env() {
+        let added = covenant_krexa::krexa_tools(Arc::new(client), &cfg);
+        if added.is_empty() {
+            tracing::warn!("krexa enabled but registered no tools");
+        } else {
+            info!(
+                count = added.len(),
+                base_url = %cfg.base_url,
+                credit_enabled = cfg.credit_enabled,
+                onchain_verify = cfg.rpc_url.is_some(),
+                "krexa credit/risk oracle enabled (read-only; credit-backed draws stay off)"
+            );
+            tools_vec.extend(added);
+        }
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -1082,6 +1097,58 @@ fn circuit_from_env() -> Option<Vec<Arc<dyn covenant_mcp::Tool>>> {
     let tools = covenant_circuit::circuit_tools(inference, data, &cfg);
     info!(count = tools.len(), funder = %funder, "circuit provider ready");
     Some(tools)
+}
+
+/// Build the Krexa read-only credit/risk oracle from env, or None when the
+/// operator hasn't opted in. These are free public REST reads (no key, no
+/// funds), so there's no billing branch like acedata. The credit-backed
+/// draw path stays gated by COVENANT_KREXA_CREDIT_ENABLED (default false)
+/// and is not wired into live settlement regardless of this flag.
+///
+/// - `COVENANT_KREXA_ENABLED` truthy turns on the `krexa.score` tool
+/// - `COVENANT_KREXA_BASE_URL` overrides the backend host (optional)
+/// - `COVENANT_KREXA_CREDIT_ENABLED` un-gates the built-but-off credit module
+/// - `COVENANT_KREXA_RPC_URL` mainnet RPC for the trustless on-chain read
+///   (defaults to mainnet-beta; set empty to force REST-only)
+fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::KrexaConfig)> {
+    let truthy = |k: &str| {
+        std::env::var(k)
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    };
+    if !truthy("COVENANT_KREXA_ENABLED") {
+        return None;
+    }
+    let mut cfg = covenant_krexa::KrexaConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_KREXA_BASE_URL") {
+        if !url.trim().is_empty() {
+            cfg.base_url = url;
+        }
+    }
+    cfg.credit_enabled = truthy("COVENANT_KREXA_CREDIT_ENABLED");
+    if cfg.credit_enabled {
+        tracing::warn!(
+            "COVENANT_KREXA_CREDIT_ENABLED is set, but credit-backed draws are not wired into \
+             the live x402 settlement path; this only un-gates the built-but-off credit module"
+        );
+    }
+    // Trustless on-chain read of the KrexitScore account. Defaults to a
+    // mainnet endpoint (production posture); Krexa's score program is
+    // currently devnet-only, so point COVENANT_KREXA_RPC_URL at devnet to
+    // exercise the read today, or "" to force REST-only.
+    cfg.rpc_url = match std::env::var("COVENANT_KREXA_RPC_URL") {
+        Ok(u) if u.trim().is_empty() => None,
+        Ok(u) => Some(u),
+        Err(_) => Some(covenant_krexa::DEFAULT_RPC_URL.to_string()),
+    };
+    let mut client = covenant_krexa::KrexaClient::new(cfg.base_url.clone());
+    if let Some(url) = cfg.rpc_url.clone() {
+        client = client.with_rpc_url(url);
+    }
+    Some((client, cfg))
 }
 
 /// Build the Hyre provider config from env, or None when the operator

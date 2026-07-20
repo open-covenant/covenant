@@ -43,6 +43,7 @@ covenant-metaplex = { path = "../covenant-metaplex" }
 covenant-sns = { path = "../covenant-sns" }
 covenant-acedata = { path = "../covenant-acedata" }
 covenant-circuit = { path = "../covenant-circuit", optional = true }
+covenant-krexa = { path = "../covenant-krexa" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }

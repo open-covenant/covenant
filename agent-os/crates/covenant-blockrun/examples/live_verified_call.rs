@@ -23,9 +23,15 @@ use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let key_hex = std::env::var("COVENANT_X402_EVM_KEY_HEX").map_err(|_| {
-        "COVENANT_X402_EVM_KEY_HEX is required: a 64-hex Base secp256k1 secret, funded with USDC"
-    })?;
+    // Prefer a file path so the secret never touches the shell or its history;
+    // fall back to an inline hex for one-off runs. Matches the x402 signer sidecar.
+    let key_hex = match std::env::var("COVENANT_X402_EVM_KEY") {
+        Ok(path) if !path.trim().is_empty() => std::fs::read_to_string(path.trim())
+            .map_err(|e| format!("reading COVENANT_X402_EVM_KEY file: {e}"))?,
+        _ => std::env::var("COVENANT_X402_EVM_KEY_HEX").map_err(|_| {
+            "set COVENANT_X402_EVM_KEY (path to a 64-hex key file) or COVENANT_X402_EVM_KEY_HEX"
+        })?,
+    };
     let secret = decode_key(key_hex.trim())?;
     let signer = EvmSigner::from_secret_bytes(&secret)?;
     let payer = signer.address_hex();

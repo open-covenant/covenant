@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: covenant-blockrun-verify
+    runtime: node
+    plan: starter
+    region: frankfurt
+    rootDir: services/blockrun-verify
+    autoDeploy: false
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: X402_NETWORK
+        value: base-sepolia
+      # Unset resolves to the network's canonical USDC: Base Sepolia
+      # 0x036CbD53842c5426634e7929541eC2318f3dCF7e, Base mainnet
+      # 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913.
+      - key: X402_ASSET
+        sync: false
+      # payTo: the 0x address USDC revenue settles to. Required.
+      - key: COVENANT_BASE_PAYTO
+        sync: false
+      # Facilitator base. Leave unset to take the network-aware default: Coinbase's
+      # CDP facilitator on base, the public https://x402.org/facilitator on
+      # base-sepolia. Set it to pin a specific facilitator.
+      - key: X402_FACILITATOR_URL
+        sync: false
+      # CDP credentials authenticate settlement on Base mainnet (fee-free USDC).
+      # Required for base; unused on base-sepolia's public facilitator.
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
+      - key: X402_SYNC_FACILITATOR
+        value: "true"
+      # 64-byte JSON array seed for the ed25519 attestation signer. An ephemeral
+      # key is generated at boot when this is unset (fine for a smoke test, not
+      # for production, where responses must verify against a pinned pubkey).
+      - key: COVENANT_ATTEST_KEYPAIR
+        sync: false

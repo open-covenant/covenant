@@ -9,6 +9,7 @@ description = "FairScale reputation/credit provider for Covenant. Read-only Fair
 
 [dependencies]
 covenant-mcp = { path = "../covenant-mcp" }
+covenant-x402 = { path = "../covenant-x402" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -22,3 +23,21 @@ tokio = { version = "1", features = ["time"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 wiremock = "0.6"
+base64 = "0.22"
+
+[features]
+# In-process Solana signing, only needed by the live_paid_read example. The
+# daemon signs through the covenant-x402-signer sidecar and stays light.
+solana-example = ["covenant-x402/solana"]
+
+[[example]]
+name = "live_paid_read"
+required-features = ["solana-example"]
+
+[[example]]
+name = "probe_verify"
+required-features = ["solana-example"]
+
+[[example]]
+name = "probe_header_variant"
+required-features = ["solana-example"]

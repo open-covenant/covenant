@@ -150,12 +150,19 @@ impl CallReceipt {
 fn verdict_for(requested: &str, served: &str) -> String {
     if served.is_empty() {
         VERDICT_UNVERIFIED
-    } else if requested.eq_ignore_ascii_case(served) {
+    } else if model_base(requested).eq_ignore_ascii_case(model_base(served)) {
         VERDICT_DELIVERED
     } else {
         VERDICT_SUBSTITUTED
     }
     .to_string()
+}
+
+/// The model name without a provider namespace prefix: `openai/gpt-4o-mini` and
+/// `gpt-4o-mini` are the same model, so the verdict compares the part after the
+/// last `/`. A genuine swap (`gpt-4o` vs `gpt-4o-mini`) still differs.
+fn model_base(model: &str) -> &str {
+    model.rsplit('/').next().unwrap_or(model)
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -211,6 +218,17 @@ mod tests {
         let resp = json!({"model": "gpt-4o-mini", "choices": []});
         let r = CallReceipt::from_exchange("/x", &req, &resp, payment(), RoutingClaim::default());
         assert_eq!(r.verdict, VERDICT_SUBSTITUTED);
+    }
+
+    #[test]
+    fn delivered_when_served_only_adds_a_provider_namespace() {
+        // BlockRun echoes the model as `openai/gpt-4o-mini`; that is the same
+        // model, so the verdict is delivered, not substituted.
+        let req = json!({"model": "gpt-4o-mini", "messages": []});
+        let resp = json!({"model": "openai/gpt-4o-mini", "choices": []});
+        let r = CallReceipt::from_exchange("/x", &req, &resp, payment(), RoutingClaim::default());
+        assert_eq!(r.verdict, VERDICT_DELIVERED);
+        assert_eq!(r.model_served, "openai/gpt-4o-mini");
     }
 
     #[test]

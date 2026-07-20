@@ -4,11 +4,12 @@
 
 use std::sync::Arc;
 
+use base64::Engine;
 use covenant_x402::Signer;
 use reqwest::StatusCode;
 use serde_json::Value;
 
-use crate::challenge::Challenge;
+use crate::challenge::{Accept, Challenge};
 use crate::receipt::{CallReceipt, PaymentInfo, RoutingClaim};
 use crate::{BlockRunError, Result};
 
@@ -85,11 +86,17 @@ impl BlockRunClient {
             .ok_or_else(|| BlockRunError::Challenge("no payment options offered".into()))?
             .clone();
 
-        let header = self
+        let signed = self
             .signer
             .build_payment(&accept.to_requirements())
             .await
             .map_err(|e| BlockRunError::Signer(e.to_string()))?;
+        // The signer emits a bare v2 envelope ({x402Version, scheme, network,
+        // payload}); the CDP facilitator's x402V2PaymentPayload instead wants the
+        // full `accepted` requirement echoed back and no top-level scheme/network.
+        // Rewrap before sending; a header that is not a base64 JSON envelope
+        // (e.g. a mock) passes through unchanged.
+        let header = to_cdp_v2_header(&signed, &accept);
 
         let paid = self
             .http
@@ -143,6 +150,30 @@ async fn decode_challenge(resp: reqwest::Response) -> Result<Challenge> {
     }
     let body = read_json(resp).await?;
     Challenge::from_json(&body)
+}
+
+/// Rewrap the signer's base64 v2 envelope into the shape the CDP facilitator
+/// verifies: `{ x402Version: 2, accepted: <the chosen requirement>, payload }`,
+/// carrying the signer's `payload` verbatim and dropping the top-level
+/// scheme/network the CDP schema does not accept. A header that is not a base64
+/// JSON envelope carrying a `payload` (e.g. a mock signer) is returned unchanged.
+fn to_cdp_v2_header(signed: &str, accept: &Accept) -> String {
+    let engine = base64::engine::general_purpose::STANDARD;
+    let Ok(bytes) = engine.decode(signed.trim()) else {
+        return signed.to_string();
+    };
+    let Ok(env) = serde_json::from_slice::<Value>(&bytes) else {
+        return signed.to_string();
+    };
+    let Some(payload) = env.get("payload").cloned() else {
+        return signed.to_string();
+    };
+    let v2 = serde_json::json!({
+        "x402Version": 2,
+        "accepted": accept.to_accepted_json(),
+        "payload": payload,
+    });
+    engine.encode(v2.to_string().as_bytes())
 }
 
 async fn read_json(resp: reqwest::Response) -> Result<Value> {

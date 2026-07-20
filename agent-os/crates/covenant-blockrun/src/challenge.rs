@@ -93,6 +93,23 @@ impl Accept {
         self.amount.parse::<u128>().unwrap_or(0) as f64 / 10u128.pow(USDC_DECIMALS) as f64
     }
 
+    /// The `accepted` object an x402 v2 payment payload must echo back for the
+    /// CDP facilitator: the exact requirement being satisfied.
+    pub fn to_accepted_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "scheme": self.scheme,
+            "network": self.network,
+            "amount": self.amount,
+            "asset": self.asset,
+            "payTo": self.pay_to,
+            "maxTimeoutSeconds": self.max_timeout_seconds,
+            "extra": self.extra.as_ref().map(|e| serde_json::json!({
+                "name": e.name,
+                "version": e.version,
+            })),
+        })
+    }
+
     /// Convert into the requirements a `covenant_x402::Signer` consumes.
     pub fn to_requirements(&self) -> PaymentRequirements {
         PaymentRequirements {

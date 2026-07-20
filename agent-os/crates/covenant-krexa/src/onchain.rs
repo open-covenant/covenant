@@ -253,27 +253,39 @@ impl<'a> Reader<'a> {
     }
 
     fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.take(2)?.try_into().expect("2 bytes")))
+        Ok(u16::from_le_bytes(
+            self.take(2)?.try_into().expect("2 bytes"),
+        ))
     }
 
     fn i16(&mut self) -> Result<i16> {
-        Ok(i16::from_le_bytes(self.take(2)?.try_into().expect("2 bytes")))
+        Ok(i16::from_le_bytes(
+            self.take(2)?.try_into().expect("2 bytes"),
+        ))
     }
 
     fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().expect("4 bytes")))
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("4 bytes"),
+        ))
     }
 
     fn i32(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.take(4)?.try_into().expect("4 bytes")))
+        Ok(i32::from_le_bytes(
+            self.take(4)?.try_into().expect("4 bytes"),
+        ))
     }
 
     fn u64(&mut self) -> Result<u64> {
-        Ok(u64::from_le_bytes(self.take(8)?.try_into().expect("8 bytes")))
+        Ok(u64::from_le_bytes(
+            self.take(8)?.try_into().expect("8 bytes"),
+        ))
     }
 
     fn i64(&mut self) -> Result<i64> {
-        Ok(i64::from_le_bytes(self.take(8)?.try_into().expect("8 bytes")))
+        Ok(i64::from_le_bytes(
+            self.take(8)?.try_into().expect("8 bytes"),
+        ))
     }
 }
 

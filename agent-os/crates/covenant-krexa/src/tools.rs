@@ -26,7 +26,8 @@ pub const TRUST_LABEL: &str = "krexa-attested (third-party REST), soft signal";
 /// The label for the on-chain-verified score: decoded straight from the
 /// `KrexitScore` account and cross-checked against the queried agent, so it
 /// no longer depends on trusting Krexa's REST server.
-pub const ONCHAIN_TRUST_LABEL: &str = "krexa on-chain (KrexitScore account, agent-verified), trustless";
+pub const ONCHAIN_TRUST_LABEL: &str =
+    "krexa on-chain (KrexitScore account, agent-verified), trustless";
 
 /// Build the Krexa tool set. Empty when disabled.
 pub fn krexa_tools(client: Arc<KrexaClient>, cfg: &KrexaConfig) -> Vec<Arc<dyn Tool>> {
@@ -281,10 +282,19 @@ mod tests {
             other => panic!("expected json, got {other:?}"),
         };
         // The two scores come from different sources and stay distinct.
-        assert_eq!(body["score"], 342, "top-level score is the REST soft signal");
+        assert_eq!(
+            body["score"], 342,
+            "top-level score is the REST soft signal"
+        );
         assert_eq!(body["onchainVerified"], true);
-        assert_eq!(body["scoreOnchain"], 730, "trustless score decoded from chain");
+        assert_eq!(
+            body["scoreOnchain"], 730,
+            "trustless score decoded from chain"
+        );
         assert_eq!(body["onchainTrust"], ONCHAIN_TRUST_LABEL);
-        assert_eq!(body["scoreProgram"], "BuutifX7Wj8ysKeLQt1pag3JYWQdZHjktCA6ePUfHFHs");
+        assert_eq!(
+            body["scoreProgram"],
+            "BuutifX7Wj8ysKeLQt1pag3JYWQdZHjktCA6ePUfHFHs"
+        );
     }
 }

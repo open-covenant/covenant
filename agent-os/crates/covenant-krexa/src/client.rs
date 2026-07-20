@@ -141,11 +141,7 @@ impl KrexaClient {
     /// error, missing account, or an agent mismatch — is a
     /// [`KrexaError::Chain`], so a caller can degrade to the REST soft
     /// signal on error. Requires an RPC url ([`Self::with_rpc_url`]).
-    pub async fn score_onchain(
-        &self,
-        agent_pubkey: &str,
-        score_pda: &str,
-    ) -> Result<OnchainScore> {
+    pub async fn score_onchain(&self, agent_pubkey: &str, score_pda: &str) -> Result<OnchainScore> {
         let rpc_url = self
             .rpc_url
             .as_deref()
@@ -675,8 +671,8 @@ mod tests {
     async fn live_onchain_devnet() {
         let agent = "HTPY5dAxLUs3DQ2SmkbKRH5pxnQQY1FvR8WrHE3Vrt5n";
         let pda = "Ho93vyNnuicqCSgoLTo28tjYNDXMpmE1cJfU76eq8r5P";
-        let c = KrexaClient::new(crate::config::BASE_URL)
-            .with_rpc_url("https://api.devnet.solana.com");
+        let c =
+            KrexaClient::new(crate::config::BASE_URL).with_rpc_url("https://api.devnet.solana.com");
         let oc = c
             .score_onchain(agent, pda)
             .await
@@ -687,7 +683,10 @@ mod tests {
         );
         assert_eq!(oc.account.score, 720);
         assert_eq!(oc.account.credit_level, 3);
-        assert_eq!(oc.owner_program, "2GwtAXnjY5LehfZfT77ZH3XSshwbni8LP9zXeA84WUqh");
+        assert_eq!(
+            oc.owner_program,
+            "2GwtAXnjY5LehfZfT77ZH3XSshwbni8LP9zXeA84WUqh"
+        );
         assert!(oc.account.matches_agent(&decode_pubkey32(agent).unwrap()));
     }
 

@@ -37,9 +37,8 @@ export interface VerifyResult {
   verdictConsistent: boolean;
   statedVerdict: string;
   expectedVerdict: string;
-  // Whether the receipt carries a settlement tx string. This is not an on-chain
-  // check: the service never touches the chain, it only confirms the field is
-  // present. Named to say exactly that.
+  // Whether the receipt carries a settlement tx string. Not an on-chain check:
+  // the service never touches the chain, only confirms the field is present.
   hasSettlementTx: boolean;
 }
 

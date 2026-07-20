@@ -5,7 +5,9 @@
 //! queried, the endpoint, and a hash of the exact response into one
 //! hash-addressable record. It does not make FairScale's number trustworthy; it
 //! makes the read verifiable: that this response, for this wallet, came back
-//! from this endpoint. The daemon anchors it in the audit chain.
+//! from this endpoint. The record rides back with the tool result for the
+//! caller to store or anchor; the daemon's audit chain records the call today,
+//! and anchoring `digest()` there is the next increment.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,7 +42,7 @@ impl ReadProvenance {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
-    /// Stable hash over the record; the identity the audit chain anchors.
+    /// Stable hash over the record; the identity a consumer stores or anchors.
     pub fn digest(&self) -> String {
         canonical_sha256_hex(&self.to_json())
     }

@@ -1,7 +1,8 @@
 //! Read-only REST client for FairScale's reputation, agent-trust, and credit
 //! reads. Reputation lives on one host, agent + credit on another. Auth is an
-//! optional `fairkey` header (free tier); an unauthenticated read gets a 402,
-//! which is surfaced as a clear error until the x402 pay path is wired.
+//! optional `fairkey` header (free tier); an unauthenticated read gets a 401
+//! (live behavior) or a 402 (documented behavior), both surfaced as the same
+//! clear error until the x402 pay path is wired.
 //!
 //! Response bodies vary in shape across FairScale's products and their own spec
 //! carries a score-scale inconsistency (0-100 vs ~0-1000 across endpoints), so
@@ -37,10 +38,6 @@ pub struct TrustGate {
     #[serde(default)]
     pub decision: String,
     #[serde(default)]
-    pub fairscore: f64,
-    #[serde(default)]
-    pub tier: String,
-    #[serde(default)]
     pub recommendation: String,
     #[serde(default)]
     pub reasons: Vec<String>,
@@ -70,7 +67,7 @@ impl FairScaleClient {
     }
 
     /// Attach a FairScale API key, sent as the `fairkey` header. Without one,
-    /// FairScale answers a read with a 402 (its x402 pay path).
+    /// FairScale answers a read with a 401 (live) or 402 (documented x402 path).
     pub fn with_fairkey(mut self, key: impl Into<String>) -> Self {
         let key = key.into();
         self.fairkey = if key.trim().is_empty() {
@@ -122,7 +119,7 @@ impl FairScaleClient {
             }
             match req.send().await {
                 Ok(resp) => {
-                    if attempt < MAX_ATTEMPTS && is_cold_start_status(resp.status()) {
+                    if attempt < MAX_ATTEMPTS && is_retryable_status(resp.status()) {
                         tokio::time::sleep(backoff(attempt)).await;
                         continue;
                     }
@@ -140,10 +137,16 @@ impl FairScaleClient {
     async fn read(&self, resp: reqwest::Response) -> Result<Value> {
         let status = resp.status();
         let body = resp.text().await?;
-        if status.as_u16() == 402 {
+        // The docs promise a 402 on no-auth; the live API returns a 401.
+        // Treat both as the same actionable condition. The PAYMENT-REQUIRED
+        // header and `accepts` body carry the x402 challenge; capture them
+        // here when the paid-read increment lands.
+        if matches!(status.as_u16(), 401 | 402) {
             return Err(FairScaleError::Api {
-                status: 402,
-                message: "FairScale requires payment: set a fairkey or pay over x402".into(),
+                status: status.as_u16(),
+                message: "FairScale rejected the read as unauthenticated: set a fairkey or pay \
+                          over x402"
+                    .into(),
             });
         }
         if !status.is_success() {
@@ -178,13 +181,18 @@ impl CreditAssessment {
         self.raw.get("risk_band").and_then(Value::as_str)
     }
 
+    /// FairScale nests the terms under `underwriting`, not at the top level.
     pub fn lending_terms(&self) -> Option<&Value> {
-        self.raw.get("lending_terms")
+        self.raw
+            .get("underwriting")
+            .and_then(|u| u.get("lending_terms"))
     }
 }
 
-fn is_cold_start_status(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 502..=504)
+/// 429 (free tier is 10 req/min and FairScale prescribes backoff-and-retry)
+/// plus the gateway 5xxs a serverless cold start throws.
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 502..=504)
 }
 
 fn backoff(attempt: u32) -> Duration {
@@ -193,10 +201,11 @@ fn backoff(attempt: u32) -> Duration {
 
 fn truncate(s: &str) -> String {
     const MAX: usize = 500;
-    if s.len() <= MAX {
-        s.to_string()
+    let cut: String = s.chars().take(MAX).collect();
+    if cut.len() < s.len() {
+        format!("{cut}…")
     } else {
-        format!("{}…", &s[..MAX])
+        cut
     }
 }
 
@@ -253,16 +262,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_402_reads_as_pay_over_x402() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/score"))
-            .respond_with(ResponseTemplate::new(402))
-            .mount(&server)
-            .await;
-        let client = FairScaleClient::new(server.uri(), server.uri());
-        let err = client.score("wallet").await.unwrap_err();
-        assert!(matches!(err, FairScaleError::Api { status: 402, .. }));
+    async fn unauthenticated_401_and_402_read_as_pay_over_x402() {
+        for code in [401u16, 402] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/score"))
+                .respond_with(ResponseTemplate::new(code))
+                .mount(&server)
+                .await;
+            let client = FairScaleClient::new(server.uri(), server.uri());
+            let err = client.score("wallet").await.unwrap_err();
+            match err {
+                FairScaleError::Api { status, message } => {
+                    assert_eq!(status, code);
+                    assert!(message.contains("fairkey"), "{message}");
+                }
+                other => panic!("expected api error, got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]
@@ -282,5 +299,55 @@ mod tests {
         let client = FairScaleClient::new(server.uri(), server.uri());
         let s = client.score("wallet").await.unwrap();
         assert_eq!(s.fairscore(), Some(40.0));
+    }
+
+    #[tokio::test]
+    async fn retries_a_429_then_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/score"))
+            .respond_with(ResponseTemplate::new(429))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/score"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "fairscore": 40.0 })))
+            .mount(&server)
+            .await;
+        let client = FairScaleClient::new(server.uri(), server.uri());
+        let s = client.score("wallet").await.unwrap();
+        assert_eq!(s.fairscore(), Some(40.0));
+    }
+
+    #[tokio::test]
+    async fn credit_reads_lending_terms_from_underwriting() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/credit"))
+            .and(query_param("amount", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "wallet": "x", "credit_score": 71.0, "risk_band": "prime",
+                "underwriting": {
+                    "opinion": "approve",
+                    "lending_terms": { "max_credit_line": 2500, "suggested_apr_range": "8-12%" }
+                }
+            })))
+            .mount(&server)
+            .await;
+        let client = FairScaleClient::new(server.uri(), server.uri());
+        let c = client.credit("wallet", 1000).await.unwrap();
+        assert_eq!(c.credit_score(), Some(71.0));
+        assert_eq!(c.risk_band(), Some("prime"));
+        assert_eq!(c.lending_terms().unwrap()["max_credit_line"], json!(2500));
+    }
+
+    #[test]
+    fn truncate_is_char_safe_on_multibyte() {
+        let multibyte = "é".repeat(600);
+        assert_eq!(truncate(&multibyte).chars().count(), 501);
+        let ascii = "a".repeat(600);
+        assert_eq!(truncate(&ascii).chars().count(), 501);
+        assert_eq!(truncate("short"), "short");
     }
 }

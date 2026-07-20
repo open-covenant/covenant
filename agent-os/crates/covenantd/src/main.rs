@@ -1173,7 +1173,7 @@ fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::Krex
 ///
 /// - `COVENANT_FAIRSCALE_ENABLED` truthy turns on the `fairscale.score` tool
 /// - `COVENANT_FAIRSCALE_KEY` the `fairkey` (from sales.fairscale.xyz); without
-///   it a read gets a 402 until the x402 pay path is wired
+///   it a read fails 401/402 until the x402 pay path is wired
 /// - `COVENANT_FAIRSCALE_REPUTATION_URL` / `_AGENT_URL` override the hosts
 /// - `COVENANT_FAIRSCALE_TRUST_GATE` include the agent trust-gate decision
 /// - `COVENANT_FAIRSCALE_CREDIT_ENABLED` include the credit underwriting read
@@ -1210,13 +1210,12 @@ fn fairscale_from_env() -> Option<(
         cfg.reputation_base_url.clone(),
         cfg.agent_base_url.clone(),
     );
-    if let Ok(key) = std::env::var("COVENANT_FAIRSCALE_KEY") {
-        client = client.with_fairkey(key);
-    } else {
-        tracing::warn!(
-            "COVENANT_FAIRSCALE_ENABLED set without COVENANT_FAIRSCALE_KEY; reads will 402 until \
-             a fairkey is set or the x402 pay path is wired"
-        );
+    match std::env::var("COVENANT_FAIRSCALE_KEY") {
+        Ok(key) if !key.trim().is_empty() => client = client.with_fairkey(key),
+        _ => tracing::warn!(
+            "COVENANT_FAIRSCALE_ENABLED set without COVENANT_FAIRSCALE_KEY; reads will fail \
+             unauthenticated (401/402) until a fairkey is set or the x402 pay path is wired"
+        ),
     }
     Some((client, cfg))
 }

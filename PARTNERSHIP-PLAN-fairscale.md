@@ -1,4 +1,4 @@
-# Covenant × FairScale — Partnership & Integration Plan
+# Covenant × FairScale: Partnership & Integration Plan
 
 *Status: PLAN ONLY (local). Nothing built or pushed. Follows the partner-integration convention: nested worktree `covenant-fairscale`, branch `feat/fairscale`, new crate `agent-os/crates/covenant-fairscale`. Mirrors the merged `covenant-krexa` oracle pattern, consumed inbound as a labeled soft signal.*
 
@@ -45,20 +45,20 @@ Covenant closes #1 and #2 by attesting the read, and manages #3 by keeping the s
 
 ---
 
-## 5. The product — `fairscale.score`, a provenance-wrapped soft signal
+## 5. The product: `fairscale.score`, a provenance-wrapped soft signal
 
 Mirror `covenant-krexa` exactly:
 
 - **MCP tool `fairscale.score { pubkey }`** returns a labeled projection of the FairScore (reputation `fairscore` + tier, optionally the agent `trust-gate` decision and the credit band/terms), tagged `TRUST_LABEL = "fairscale-attested (third-party REST), soft signal"`, alongside the raw upstream blob.
-- **Consumed over x402** by default (pay $0.005 USDC on Solana through the daemon's x402 Solana payer + Dexter facilitator), with a `fairkey` header fallback for free-tier reads.
-- **Provenance wrap:** each read emits a Covenant attestation binding `(reader, pubkey queried, endpoint, score returned, upstream response hash, x402 settlement sig, slot)` via `covenant-attestation`, so the read itself is verifiable even though FairScale's score is not. This is the value-add over the Krexa oracle.
+- **Consumed over x402** by default (pay $0.005 USDC on Solana through the daemon's x402 Solana payer + Dexter facilitator), with a `fairkey` header fallback for free-tier reads. Shipped Phase 0 is the `fairkey` path; the x402 payer is the next increment.
+- **Provenance wrap:** each read emits a Covenant attestation binding `(reader, pubkey queried, endpoint, score returned, upstream response hash, x402 settlement sig, slot)` via `covenant-attestation`, so the read itself is verifiable even though FairScale's score is not. This is the value-add over the Krexa oracle. Shipped Phase 0 binds `(pubkey, endpoint, response hash)` in a crate-local `ReadProvenance` returned with the result; the full envelope and audit-chain anchoring of the response hash are the exit-bar work.
 - **Kept separate** from Covenant's audit-derived reputation (the pinned `Response::Reputation` wire shape), never blended, per the Krexa design decision. spend-authz is the more useful blend target than reputation (a risk input to a spend decision).
 
 FairScale becomes the **preferred** third-party reputation/credit signal; `krexa.score` stays as a second, lower-weight source. Consuming both is consistent and non-conflicting.
 
 ---
 
-## 6. Architecture — mirror covenant-krexa, reuse x402
+## 6. Architecture: mirror covenant-krexa, reuse x402
 
 | Need | Existing crate / asset | New work |
 |---|---|---|
@@ -74,26 +74,36 @@ New crate: **`covenant-fairscale`** (`version = "0.0.0"`), REST-only + x402, no 
 
 ## 7. Phases (Covenant does the lifting)
 
-**Phase 0 — read-only oracle (ship first, low risk).**
-`fairscale.score` MCP tool: reputation + trust-gate reads, labeled soft signal, x402-paid, with the provenance wrap. No funds beyond the $0.005 read fee. Deliverables + loop tasks `fs-01..05`. Exit bar: a real FairScore read for a live pubkey, paid over x402 on Solana mainnet, its provenance attestation independently verifiable.
+**Phase 0: read-only oracle (ship first, low risk).**
+`fairscale.score` MCP tool: reputation + trust-gate reads, labeled soft signal, x402-paid, with the provenance wrap. No funds beyond the $0.005 read fee. Deliverables + loop tasks `fs-01..05`. Exit bar: a real FairScore read for a live pubkey, paid over x402 on Solana mainnet, its provenance attestation independently verifiable. Status: reads, labels, and crate-local provenance shipped behind `COVENANT_FAIRSCALE_ENABLED`; open for the exit bar: x402 payment and anchored provenance.
 
-**Phase 1 — credit read (still low risk; FairScale credit moves no funds).**
+**Phase 1: credit read (still low risk; FairScale credit moves no funds).**
 Add the `/v1/credit` underwriting read as a labeled advisory signal (band, suggested APR, max line) at $0.50/read. Unlike Krexa's credit (which disbursed USDC through a PDA), FairScale credit is opinion-only, so no gating of a funds path is needed. Keep it labeled and behind a per-call cap.
 
-**Phase 2 — shared, partnership-dependent.**
+**Phase 2: shared, partnership-dependent.**
 - Covenant provenance as a verifiability layer *for FairScale's own reads* (co-marketed: "FairScore reads you can prove").
 - Two-way attestation: our conduct-event export (already live) plus FairScore consume, both provenance-bound, so the loop is auditable end to end.
 - List Covenant in FairScale's `/v1/directory` (their x402 skill directory).
 
+### Running it today
+
+```sh
+COVENANT_FAIRSCALE_ENABLED=1 COVENANT_FAIRSCALE_KEY=zpka_... covenantd
+covenant capabilities grant tool.call.fairscale.score
+covenant tools call fairscale.score --args '{"pubkey":"<base58 wallet>"}'
+```
+
+Without a key, live reads fail unauthenticated (the API returns 401; set a `fairkey` or wait for the x402 path). Optional env: `COVENANT_FAIRSCALE_REPUTATION_URL` / `COVENANT_FAIRSCALE_AGENT_URL` (host overrides), `COVENANT_FAIRSCALE_TRUST_GATE=1` (agent trust-gate read), `COVENANT_FAIRSCALE_CREDIT_ENABLED=1` (credit read). The provenance block binds the `/score` response only; trust-gate and credit are best-effort side reads.
+
 ---
 
-## 8. FairScale vs Krexa — the honest read
+## 8. FairScale vs Krexa: the honest read
 
 The operator believes Krexa ripped off FairScale's trust/credit models and trusts FairScale more. On the facts:
 
 - **No public evidence of copying** was found (X, GitHub, news, community). Treat the ripoff belief as **unverified**; do not put it in any plan or outreach copy.
 - They are **direct competitors in the same lane** ("credit for AI agents on Solana"), which likely fuels the suspicion, but the products are architecturally distinct: FairScale scores 0-100 and **underwrites** (advisory), Krexa scores 200-850 (FICO-like) and **disburses** USDC with auto-repayment. Different scale, different scope, Krexa is multi-chain (Solana + Monad).
-- The trust preference is a legitimate operator call and drives this integration. Both can be consumed as labeled soft signals; FairScale is weighted preferred. No need to remove `krexa.score` — this adds a preferred source beside it.
+- The trust preference is a legitimate operator call and drives this integration. Both can be consumed as labeled soft signals; FairScale is weighted preferred. No need to remove `krexa.score`; this adds a preferred source beside it.
 
 ---
 
@@ -110,6 +120,7 @@ The operator believes Krexa ripped off FairScale's trust/credit models and trust
 ## 10. De-risking / verify before building
 
 - **Score scale inconsistency is real.** `/score.fairscore` is 0-100; `/fairScore.fair_score` is ~0-1000. Confirm the exact scale against a live response before wiring any threshold.
+- **Swagger is stale; the docs are the source of truth.** `swagger.api.fairscale.xyz/openapi.yaml` declares a lone `api2.fairscale.xyz` host, a 401 on no-auth, and no agent API at all. The live docs (verified Jul 2026) say `api.fairscale.xyz` + `agent-api.fairscale.xyz`, a 402, and fully specify `/v1/trust-gate` and `/v1/credit`. Live no-auth reads actually return the swagger 401 (verified against the real endpoint), so the client treats 401 and 402 as one unauthenticated condition; for hosts and paths it follows the docs. Confirm with a real key before trusting either.
 - **`@fairscale/sdk` is not on npm** (404). Consume via raw REST/x402, which is fully specified. Do not assume an installable SDK.
 - **Off-chain only.** No trustless on-chain read exists (unlike the Krexa devnet path). Provenance comes from Covenant's own attestation of the read, not from chain.
 - **Token defunct, product alive.** Build against the API; ignore `$FAIR`.

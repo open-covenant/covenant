@@ -34,14 +34,12 @@ pub use tools::{fairscale_tools, PROVIDER, SCORE_TOOL, TRUST_LABEL};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FairScaleError {
-    #[error("http: {0}")]
+    #[error("fairscale http: {0}")]
     Http(#[from] reqwest::Error),
     #[error("fairscale api [{status}]: {message}")]
     Api { status: u16, message: String },
     #[error("decode: {0}")]
     Decode(String),
-    #[error("fairscale credit reads are disabled (credit_enabled=false)")]
-    CreditDisabled,
 }
 
 pub type Result<T> = std::result::Result<T, FairScaleError>;

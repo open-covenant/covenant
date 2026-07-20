@@ -141,6 +141,16 @@ const facilitatorConfig =
   CDP_ID && CDP_SECRET ? createFacilitatorConfig(CDP_ID, CDP_SECRET) : { url: FACILITATOR_URL };
 const facilitator = new HTTPFacilitatorClient(facilitatorConfig);
 
+// The 402 challenge is built from the facilitator's advertised supported kinds.
+// With the boot sync off and no CDP credentials to authenticate an on-demand
+// fetch, the middleware never learns it can issue a challenge and throws 500 on
+// every unpaid request. Warn loudly rather than fail silently at request time.
+if (!SYNC && !(CDP_ID && CDP_SECRET)) {
+  console.warn(
+    "X402_SYNC_FACILITATOR=false with no CDP credentials: the facilitator's supported kinds are never fetched, so unpaid requests will 500 instead of returning a 402. Leave sync on (the default) or provide CDP_API_KEY_ID/SECRET.",
+  );
+}
+
 const gate = (amount: string, description: string, extensions: Record<string, unknown>) => ({
   accepts: {
     scheme: "exact" as const,

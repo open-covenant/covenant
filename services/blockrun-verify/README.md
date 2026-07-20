@@ -45,4 +45,10 @@ Configuration mirrors the Covenant x402 seller (`X402_NETWORK`,
 `COVENANT_BASE_PAYTO`, CDP credentials for Base mainnet settlement,
 `COVENANT_ATTEST_KEYPAIR`). See `render.yaml` and `src/server.ts`.
 
+Leave `X402_SYNC_FACILITATOR` on (the default). It fetches the facilitator's
+supported payment kinds at boot, which the 402 challenge is built from. Turning
+it off without CDP credentials leaves the middleware unable to issue a challenge,
+so unpaid requests fail with a 500 instead of a 402; the server warns at boot if
+you do this.
+
 Apache-2.0.

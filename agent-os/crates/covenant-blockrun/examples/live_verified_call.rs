@@ -30,11 +30,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer = EvmSigner::from_secret_bytes(&secret)?;
     let payer = signer.address_hex();
 
-    let base_url =
-        std::env::var("BLOCKRUN_BASE_URL").unwrap_or_else(|_| "https://blockrun.ai/api".to_string());
+    let base_url = std::env::var("BLOCKRUN_BASE_URL")
+        .unwrap_or_else(|_| "https://blockrun.ai/api".to_string());
     let model = std::env::var("BLOCKRUN_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-    let prompt =
-        std::env::var("BLOCKRUN_PROMPT").unwrap_or_else(|_| "Reply with the single word: ok".into());
+    let prompt = std::env::var("BLOCKRUN_PROMPT")
+        .unwrap_or_else(|_| "Reply with the single word: ok".into());
 
     eprintln!("payer (Base): {payer}");
     eprintln!("calling {base_url}/v1/chat/completions with model {model} — this spends real USDC");

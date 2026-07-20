@@ -2027,6 +2027,7 @@ dependencies = [
  "covenant-audit",
  "covenant-budget",
  "covenant-circuit",
+ "covenant-fairscale",
  "covenant-hyre",
  "covenant-identity",
  "covenant-ipc",

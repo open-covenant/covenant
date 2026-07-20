@@ -241,6 +241,21 @@ async fn main() -> Result<()> {
             tools_vec.extend(added);
         }
     }
+    if let Some((client, cfg)) = fairscale_from_env() {
+        let added = covenant_fairscale::fairscale_tools(Arc::new(client), &cfg);
+        if added.is_empty() {
+            tracing::warn!("fairscale enabled but registered no tools");
+        } else {
+            info!(
+                count = added.len(),
+                reputation_base = %cfg.reputation_base_url,
+                include_trust_gate = cfg.include_trust_gate,
+                credit_enabled = cfg.credit_enabled,
+                "fairscale reputation oracle enabled (read-only soft signal, per-read provenance)"
+            );
+            tools_vec.extend(added);
+        }
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -1147,6 +1162,61 @@ fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::Krex
     let mut client = covenant_krexa::KrexaClient::new(cfg.base_url.clone());
     if let Some(url) = cfg.rpc_url.clone() {
         client = client.with_rpc_url(url);
+    }
+    Some((client, cfg))
+}
+
+/// Build the FairScale read-only reputation oracle from env, or None when the
+/// operator hasn't opted in. Phase 0 authenticates with a `fairkey` header
+/// (FairScale's free tier); the x402 pay path is the next increment. The credit
+/// read is a separate, heavier read and stays off unless explicitly enabled.
+///
+/// - `COVENANT_FAIRSCALE_ENABLED` truthy turns on the `fairscale.score` tool
+/// - `COVENANT_FAIRSCALE_KEY` the `fairkey` (from sales.fairscale.xyz); without
+///   it a read gets a 402 until the x402 pay path is wired
+/// - `COVENANT_FAIRSCALE_REPUTATION_URL` / `_AGENT_URL` override the hosts
+/// - `COVENANT_FAIRSCALE_TRUST_GATE` include the agent trust-gate decision
+/// - `COVENANT_FAIRSCALE_CREDIT_ENABLED` include the credit underwriting read
+fn fairscale_from_env() -> Option<(
+    covenant_fairscale::FairScaleClient,
+    covenant_fairscale::FairScaleConfig,
+)> {
+    let truthy = |k: &str| {
+        std::env::var(k)
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    };
+    if !truthy("COVENANT_FAIRSCALE_ENABLED") {
+        return None;
+    }
+    let mut cfg = covenant_fairscale::FairScaleConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_FAIRSCALE_REPUTATION_URL") {
+        if !url.trim().is_empty() {
+            cfg.reputation_base_url = url.trim().to_string();
+        }
+    }
+    if let Ok(url) = std::env::var("COVENANT_FAIRSCALE_AGENT_URL") {
+        if !url.trim().is_empty() {
+            cfg.agent_base_url = url.trim().to_string();
+        }
+    }
+    cfg.include_trust_gate = truthy("COVENANT_FAIRSCALE_TRUST_GATE");
+    cfg.credit_enabled = truthy("COVENANT_FAIRSCALE_CREDIT_ENABLED");
+
+    let mut client = covenant_fairscale::FairScaleClient::new(
+        cfg.reputation_base_url.clone(),
+        cfg.agent_base_url.clone(),
+    );
+    if let Ok(key) = std::env::var("COVENANT_FAIRSCALE_KEY") {
+        client = client.with_fairkey(key);
+    } else {
+        tracing::warn!(
+            "COVENANT_FAIRSCALE_ENABLED set without COVENANT_FAIRSCALE_KEY; reads will 402 until \
+             a fairkey is set or the x402 pay path is wired"
+        );
     }
     Some((client, cfg))
 }

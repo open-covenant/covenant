@@ -184,7 +184,7 @@ impl CreditAssessment {
 }
 
 fn is_cold_start_status(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 502 | 503 | 504)
+    matches!(status.as_u16(), 502..=504)
 }
 
 fn backoff(attempt: u32) -> Duration {

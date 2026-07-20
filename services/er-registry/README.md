@@ -30,6 +30,8 @@ and rotates signers; it never runs in this service.
 | `ER_MONITOR_KEY` / `ER_MONITOR_KEY_FILE` | — | signer keypair (json array / path) |
 | `RPC_URL` | public mainnet | Solana RPC |
 | `ROUTER` | `https://router.magicblock.app` | Magic Router |
+| `COVENANT_ISSUER` | `AdChc…` | credential authority the attestations key to |
+| `PCCS_URL` | Phala PCCS | Intel PCCS for DCAP collateral |
 | `TTL_HOURS` | 72 | attestation lifetime |
 | `RENEW_BEFORE_HOURS` | 48 | renew when less than this remains |
 

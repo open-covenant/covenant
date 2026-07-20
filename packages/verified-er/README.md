@@ -40,19 +40,27 @@ const v = await resolveVerifiedEr(connection, "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFH
 
 Every action a Covenant-metered agent takes folds a receipt hash into the
 `provenance_root` on its credit account — updated gaslessly in the ER, committed
-to L1. The fold is deterministic, so the record is checkable from the receipts:
+to L1. The fold is deterministic, so the record is checkable from the receipts.
+
+A receipt hash is a 32-byte `sha256` you compute over whatever you defined the
+action to be (the settlement publisher uses `sha256(intent_id)`). Pass them in
+action order:
 
 ```js
 import { verifyProvenanceRoot } from "@covenant-org/verified-er";
+import { createHash } from "node:crypto";
+
+const receiptHashes = actions.map((a) => createHash("sha256").update(a.intentId).digest());
 
 const { match, onChain, recomputed } = await verifyProvenanceRoot(
   connection,
   "DrawYGmdbQ7sULxzzczUqyZT2nmP8SZeYPuJzy6TNksj",   // the agent's credit account
-  receiptHashes,                                     // 32-byte sha256 per action
+  receiptHashes,                                     // 32-byte Buffers or hex strings
 );
 ```
 
-Alter, add, or drop one action and the roots diverge.
+`foldProvenance(receiptHashes)` returns the same root offline without a chain
+read. Alter, add, or drop one action and the roots diverge.
 
 ## Trust model
 

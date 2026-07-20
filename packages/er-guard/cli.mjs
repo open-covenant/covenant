@@ -21,6 +21,8 @@ import os from "node:os";
 const SETTLEMENT = new PublicKey("cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y");
 const expand = (p) => p.replace(/^~/, os.homedir());
 const disc = (n) => crypto.createHash("sha256").update(`global:${n}`).digest().subarray(0, 8);
+const flag = (v) => !!v && v !== "0" && v !== "false";
+const num = (v, d) => (Number.isFinite(+v) && v !== undefined && v !== "" ? +v : d);
 
 const l1 = new Connection(process.env.L1 || "https://api.mainnet-beta.solana.com", "confirmed");
 const erUrl = process.env.ER || "https://as.magicblock.app";
@@ -37,7 +39,7 @@ if (process.env.KEYPAIRS || process.env.KEYPAIR) {
     accounts.push({
       address: credits,
       label: `credits of ${owner.publicKey.toBase58().slice(0, 8)}…`,
-      isActive: (erAi) => (erAi ? String(erAi.data.readBigUInt64LE(40)) : null),
+      isActive: (erAi) => (erAi && erAi.data.length >= 48 ? String(erAi.data.readBigUInt64LE(40)) : null),
       undelegate: (er) => sendAndConfirmTransaction(er, new Transaction().add(new TransactionInstruction({
         programId: SETTLEMENT,
         keys: [
@@ -62,12 +64,12 @@ if (process.env.KEYPAIRS || process.env.KEYPAIR) {
 await guard({
   l1, erUrl, accounts, tokenSigner,
   policy: {
-    idleMs: +(process.env.IDLE_MS || 15 * 60_000),
-    maxLifetimeMs: +(process.env.MAX_LIFETIME_MS || 30 * 60_000),
-    stallProbes: +(process.env.STALL_PROBES || 3),
-    pollMs: +(process.env.POLL_MS || 30_000),
-    retryMs: +(process.env.RETRY_MS || 60_000),
+    idleMs: num(process.env.IDLE_MS, 15 * 60_000),
+    maxLifetimeMs: num(process.env.MAX_LIFETIME_MS, 30 * 60_000),
+    stallProbes: num(process.env.STALL_PROBES, 3),
+    pollMs: num(process.env.POLL_MS, 30_000),
+    retryMs: num(process.env.RETRY_MS, 60_000),
   },
-  dryRun: !!process.env.DRY_RUN,
-  once: !!process.env.ONCE,
+  dryRun: flag(process.env.DRY_RUN),
+  once: flag(process.env.ONCE),
 });

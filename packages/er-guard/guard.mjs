@@ -13,12 +13,16 @@
 // `requestUndelegate` hook when the owner program exposes such an instruction,
 // and otherwise reports exactly what is stuck. State is never at risk either
 // way: the last committed state is final on L1.
-import { Connection } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { DELEGATION_PROGRAM_ID, getAuthToken } from "@magicblock-labs/ephemeral-rollups-sdk";
 import crypto from "node:crypto";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+const withTimeout = (p, ms) => {
+  let t;
+  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error("timeout")), ms); });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(t));
+};
 const short = (s) => `${String(s).slice(0, 8)}…`;
 
 const edSignerFor = (keypair) => async (msg) => {
@@ -49,14 +53,17 @@ export async function guard(opts) {
   const { idleMs = 15 * 60_000, maxLifetimeMs = 30 * 60_000, stallProbes = 3, pollMs = 30_000, retryMs = 60_000 } = policy;
   const isTee = /tee\./.test(erUrl);
 
+  if (!Array.isArray(accounts) || accounts.length === 0) throw new Error("guard requires a non-empty accounts array");
+  if (isTee && !tokenSigner) throw new Error("a *tee* endpoint needs a tokenSigner to mint its JWT");
+  for (const a of accounts) a.address = new PublicKey(a.address);
+
   let er = null;
   let tokenExp = 0;
   async function ensureEr() {
     if (er && (!isTee || tokenExp === 0 || Date.now() / 1000 < tokenExp - 60)) return;
     let url = erUrl;
     if (isTee) {
-      if (!tokenSigner) throw new Error("a *tee* endpoint needs a tokenSigner to mint its JWT");
-      const token = await getAuthToken(erUrl, tokenSigner.publicKey, tokenSigner.sign);
+      const token = await withTimeout(getAuthToken(erUrl, tokenSigner.publicKey, tokenSigner.sign), 10_000);
       try { tokenExp = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).exp || 0; } catch { tokenExp = 0; }
       url += (url.includes("?") ? "&" : "?") + "token=" + token;
       log(`minted TEE token (exp ${tokenExp || "n/a"})`);
@@ -70,27 +77,32 @@ export async function guard(opts) {
   async function check(acct) {
     const key = String(acct.address);
     let st = state.get(key);
-    if (!st) { st = { since: 0, activity: null, active: 0, attempt: 0 }; state.set(key, st); }
+    if (!st) { st = { since: 0, activity: null, active: 0, attempt: 0, seen: false }; state.set(key, st); }
 
     const ai = await l1.getAccountInfo(acct.address);
-    if (!ai) return;
+    if (!ai) { if (!st.seen) { st.seen = true; log(`${short(key)} not opened`); } return; }
     if (!ai.owner.equals(DELEGATION_PROGRAM_ID)) {
-      if (st.since) log(`${short(key)} home (owner ${short(ai.owner.toBase58())})`);
-      st.since = 0; st.activity = null;
+      // Log the transition home, and once on first sight so a run never looks silent.
+      if (st.since || !st.seen) log(`${short(key)} home (owner ${short(ai.owner.toBase58())})`);
+      st.since = 0; st.activity = null; st.seen = true;
       return;
     }
 
     const t = Date.now();
     if (!st.since) { st.since = t; st.active = t; log(`${short(key)} delegated, watching`); }
-    const erAi = await er.getAccountInfo(acct.address).catch(() => null);
+    const erAi = er ? await er.getAccountInfo(acct.address).catch(() => null) : null;
     const activity = acct.isActive ? acct.isActive(erAi, st.activity) : erAi?.data?.length ? crypto.createHash("sha256").update(erAi.data).digest("hex") : null;
     if (activity !== null && activity !== st.activity) { st.activity = activity; st.active = t; }
 
+    // A stalled validator takes priority: a cooperative undelegate routes
+    // through the ER and cannot land while it is unreachable, so idle and
+    // max-lifetime must not send it into a dead endpoint.
     const idleFor = t - st.active, lifeFor = t - st.since;
-    let reason = null, stalled = false;
-    if (lifeFor >= maxLifetimeMs) reason = `max-lifetime ${(lifeFor / 1e3) | 0}s`;
+    const stalled = stallFails >= stallProbes;
+    let reason = null;
+    if (stalled) reason = `validator stall (${stallFails} probes)`;
+    else if (lifeFor >= maxLifetimeMs) reason = `max-lifetime ${(lifeFor / 1e3) | 0}s`;
     else if (idleFor >= idleMs) reason = `idle ${(idleFor / 1e3) | 0}s`;
-    else if (stallFails >= stallProbes) { reason = `validator stall (${stallFails} probes)`; stalled = true; }
     if (!reason || t - st.attempt < retryMs) return;
     st.attempt = t;
 
@@ -122,17 +134,20 @@ export async function guard(opts) {
   log(`er-guard up, ER ${erUrl}, ${accounts.length} account(s), idle ${idleMs}ms lifetime ${maxLifetimeMs}ms${dryRun ? " [DRY_RUN]" : ""}`);
   for (const a of accounts) log(`  watch ${a.address}${a.label ? `  (${a.label})` : ""}`);
   do {
+    // A connection or token failure must not skip the account checks: the L1
+    // side still detects delegation, and the probe failure feeds the stall
+    // counter so the recovery path eventually fires.
+    let ok = false;
     try {
       await ensureEr();
-      let ok;
       try { await withTimeout(er.getVersion(), 8_000); ok = true; } catch { ok = false; }
-      stallFails = ok ? 0 : stallFails + 1;
-      if (!ok) log(`validator probe failed (${stallFails}/${stallProbes}) ${erUrl}`);
-      for (const a of accounts) {
-        try { await check(a); } catch (e) { log(`check error ${short(String(a.address))}: ${e.message}`); }
-      }
     } catch (e) {
-      log(`tick error: ${e.message}`);
+      log(`connection/token error: ${e.message}`);
+    }
+    stallFails = ok ? 0 : stallFails + 1;
+    if (!ok) log(`validator probe failed (${stallFails}/${stallProbes}) ${erUrl}`);
+    for (const a of accounts) {
+      try { await check(a); } catch (e) { log(`check error ${short(String(a.address))}: ${e.message}`); }
     }
     if (!once) await sleep(pollMs);
   } while (!once);

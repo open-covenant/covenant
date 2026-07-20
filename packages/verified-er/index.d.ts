@@ -16,7 +16,7 @@ export interface Route {
 export interface Resolution {
   verified: boolean;
   reason: string;
-  attestation: PublicKey;
+  attestation: PublicKey | null;
   trustedSigner?: boolean;
   notExpired?: boolean;
   status?: string;
@@ -39,9 +39,9 @@ export declare function pickVerifiedEr(
   connection: Connection,
   opts?: { router?: string; issuer?: PublicKey },
 ): Promise<{ picked: (Route & { covenant: Resolution }) | null; routes: Array<Route & { covenant: Resolution }> }>;
-export declare function foldProvenance(receiptHashes: Array<Buffer | string>): Buffer;
+export declare function foldProvenance(receiptHashes: Array<Uint8Array | string>): Uint8Array;
 export declare function verifyProvenanceRoot(
   connection: Connection,
   creditsAccount: string | PublicKey,
-  receiptHashes: Array<Buffer | string>,
+  receiptHashes: Array<Uint8Array | string>,
 ): Promise<{ match: boolean; onChain: string; recomputed: string }>;

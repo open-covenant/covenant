@@ -23,9 +23,11 @@ ACCOUNTS=<pubkey,pubkey> er-guard
 DRY_RUN=1 ONCE=1 er-guard    # single decide-and-log pass
 ```
 
-`ER` pointing at a `*tee*` host mints and refreshes the self-serve JWT
-automatically. Policy via `IDLE_MS`, `MAX_LIFETIME_MS`, `STALL_PROBES`,
-`POLL_MS`, `RETRY_MS`.
+`L1` sets the Solana RPC (defaults to public mainnet). `ER` pointing at a
+`*tee*` host mints and refreshes the self-serve JWT automatically. Policy via
+`IDLE_MS`, `MAX_LIFETIME_MS`, `STALL_PROBES`, `POLL_MS`, `RETRY_MS`. A quiet run
+means nothing needed action; the guard only logs a delegation, a state change,
+or a recovery.
 
 ## Library
 

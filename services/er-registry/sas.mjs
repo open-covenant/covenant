@@ -55,30 +55,30 @@ export async function issuerPdas(issuer) {
   return { credential, schema };
 }
 
-/** Current attestation for a validator: { exists, expiry, mrTd, status } */
+/** Current attestation for a validator, plus the schema account the refresh
+ *  needs, so one call serves both the freshness check and the replace. */
 export async function currentAttestation(rpc, issuer, validator) {
   const { credential, schema } = await issuerPdas(issuer);
   const [attestation] = await deriveAttestationPda({ credential, schema, nonce: address(validator) });
+  const schemaAcct = await fetchSchema(rpc, schema);
   const acct = await fetchMaybeAttestation(rpc, attestation);
-  if (!acct.exists) return { attestation, exists: false };
-  const d = deserializeAttestationData(await fetchSchema(rpc, schema).then((s) => s.data), Uint8Array.from(acct.data.data));
+  const base = { credential, schema, schemaAcct, attestation };
+  if (!acct.exists) return { ...base, exists: false };
+  const d = deserializeAttestationData(schemaAcct.data, Uint8Array.from(acct.data.data));
   return {
-    attestation,
+    ...base,
     exists: true,
     expiry: Number(acct.data.expiry),
     mrTd: Buffer.from(d.mr_td).toString("hex"),
     status: d.status,
-    signer: acct.data.signer,
+    endpoint: d.endpoint,
   };
 }
 
-/** Replace (or create) the attestation for a validator with a fresh one. */
-export async function refreshAttestation(rpc, signer, issuer, validator, v, ttlSeconds) {
-  const { credential, schema } = await issuerPdas(issuer);
-  const nonce = address(validator);
-  const [attestation] = await deriveAttestationPda({ credential, schema, nonce });
-  const schemaAcct = await fetchSchema(rpc, schema);
-  const data = serializeAttestationData(schemaAcct.data, {
+/** Replace (or create) the attestation for a validator with a fresh one.
+ *  `cur` is the currentAttestation result for the same validator. */
+export async function refreshAttestation(rpc, signer, validator, v, ttlSeconds, cur) {
+  const data = serializeAttestationData(cur.schemaAcct.data, {
     verified: v.status === "UpToDate",
     status: v.status,
     mr_td: Array.from(v.mrTd),
@@ -87,10 +87,13 @@ export async function refreshAttestation(rpc, signer, issuer, validator, v, ttlS
   });
   const expiry = BigInt(v.verifiedAt + ttlSeconds);
   const ixs = [];
-  if ((await fetchMaybeAttestation(rpc, attestation)).exists) {
-    ixs.push(getCloseAttestationInstruction({ payer: signer, authority: signer, credential, attestation }));
+  if (cur.exists) {
+    ixs.push(getCloseAttestationInstruction({ payer: signer, authority: signer, credential: cur.credential, attestation: cur.attestation }));
   }
-  ixs.push(getCreateAttestationInstruction({ payer: signer, authority: signer, credential, schema, attestation, nonce, data, expiry }));
+  ixs.push(getCreateAttestationInstruction({
+    payer: signer, authority: signer, credential: cur.credential, schema: cur.schema,
+    attestation: cur.attestation, nonce: address(validator), data, expiry,
+  }));
   const sig = await send(rpc, signer, ixs);
-  return { attestation, sig, expiry: Number(expiry) };
+  return { attestation: cur.attestation, sig, expiry: Number(expiry) };
 }

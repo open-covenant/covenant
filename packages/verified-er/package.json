@@ -1,20 +1,35 @@
 {
   "name": "@covenant-org/verified-er",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pick a Covenant-verified MagicBlock ephemeral rollup, and check an agent's on-chain provenance root. Read-only, one dependency.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "index.mjs",
   "types": "index.d.ts",
-  "files": ["index.mjs", "index.d.ts", "README.md"],
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "README.md"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/open-covenant/covenant",
     "directory": "packages/verified-er"
   },
   "homepage": "https://github.com/open-covenant/covenant/blob/main/docs/magicblock-integration.md",
-  "keywords": ["solana", "magicblock", "ephemeral-rollup", "attestation", "covenant", "tdx", "provenance"],
+  "keywords": [
+    "solana",
+    "magicblock",
+    "ephemeral-rollup",
+    "attestation",
+    "covenant",
+    "tdx",
+    "provenance"
+  ],
   "dependencies": {
     "@solana/web3.js": "^1.98.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

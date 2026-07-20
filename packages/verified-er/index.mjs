@@ -43,7 +43,7 @@ export async function getRoutes(router = MAGIC_ROUTER) {
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`${router} -> ${res.status}`);
-  const routes = (await res.json()).result;
+  const routes = (await res.json())?.result;
   if (!Array.isArray(routes)) throw new Error("getRoutes returned no route list");
   return routes;
 }
@@ -77,14 +77,17 @@ function decodeAttestation(buf) {
 function decodeAuthorizedSigners(buf) {
   let o = 1 + 32;
   const nameLen = buf.readUInt32LE(o); o += 4 + nameLen;
-  const count = buf.readUInt32LE(o); o += 4;
+  // Clamp to what the buffer can actually hold so a corrupt length prefix
+  // cannot spin the loop for billions of iterations.
+  const count = Math.min(buf.readUInt32LE(o), Math.floor((buf.length - (o + 4)) / 32)); o += 4;
   const signers = [];
   for (let i = 0; i < count; i++, o += 32) signers.push(new PublicKey(buf.subarray(o, o + 32)));
   return signers;
 }
 
 /** Resolve one validator's Covenant attestation. Fails closed: any missing
- *  account, untrusted signer, or lapsed expiry resolves to verified: false. */
+ *  account, malformed data, untrusted signer, or lapsed expiry resolves to
+ *  verified: false. */
 export async function resolveVerifiedEr(connection, validator, { issuer = COVENANT_ISSUER } = {}) {
   const attestationPda = deriveAttestationPda(validator, issuer);
   const { credential } = derivePdas(issuer);
@@ -95,8 +98,13 @@ export async function resolveVerifiedEr(connection, validator, { issuer = COVENA
   if (!credAcct || !credAcct.owner.equals(SAS_PROGRAM)) {
     return { verified: false, reason: "issuer credential not found", attestation: attestationPda };
   }
-  const att = decodeAttestation(Buffer.from(attAcct.data));
-  const signers = decodeAuthorizedSigners(Buffer.from(credAcct.data));
+  let att, signers;
+  try {
+    att = decodeAttestation(Buffer.from(attAcct.data));
+    signers = decodeAuthorizedSigners(Buffer.from(credAcct.data));
+  } catch (e) {
+    return { verified: false, reason: `malformed attestation account (${e.message})`, attestation: attestationPda };
+  }
   const trustedSigner = signers.some((s) => s.equals(att.signer));
   const notExpired = att.expiry === 0n || att.expiry > BigInt(Math.floor(Date.now() / 1000));
   const verified = trustedSigner && notExpired && att.verified;
@@ -121,8 +129,13 @@ export async function pickVerifiedEr(connection, { router = MAGIC_ROUTER, issuer
   const routes = await getRoutes(router);
   const annotated = [];
   for (const r of routes) {
-    const v = await resolveVerifiedEr(connection, r.identity, { issuer });
-    annotated.push({ ...r, covenant: v });
+    try {
+      annotated.push({ ...r, covenant: await resolveVerifiedEr(connection, r.identity, { issuer }) });
+    } catch (e) {
+      // One bad route entry (invalid identity, RPC hiccup) must not discard
+      // the rest of the listing.
+      annotated.push({ ...r, covenant: { verified: false, reason: e.message, attestation: null } });
+    }
   }
   return { picked: annotated.find((r) => r.covenant.verified) ?? null, routes: annotated };
 }
@@ -134,7 +147,7 @@ const sha256 = (...parts) => createHash("sha256").update(Buffer.concat(parts)).d
 export function foldProvenance(receiptHashes) {
   let root = Buffer.alloc(32);
   for (const h of receiptHashes) {
-    const buf = Buffer.isBuffer(h) ? h : Buffer.from(h, "hex");
+    const buf = typeof h === "string" ? Buffer.from(h, "hex") : Buffer.from(h);
     if (buf.length !== 32) throw new Error("receipt hashes must be 32 bytes");
     root = sha256(root, buf);
   }

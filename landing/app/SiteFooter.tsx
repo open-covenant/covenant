@@ -71,12 +71,7 @@ export function SiteFooter({ className, style, variant = "full" }: SiteFooterPro
       <div className="mx-auto w-full max-w-7xl px-5 sm:px-8">
         <div className="grid gap-10 border-t border-neutral-800/80 pt-12 md:grid-cols-[1.5fr_repeat(5,1fr)]">
           <div className="max-w-xs">
-            <div className="flex items-center gap-2.5">
-              <Image src="/logomark.svg" alt="" width={26} height={13} className="h-auto w-[26px]" />
-              <span className="text-[15px] font-extralight uppercase tracking-[0.22em] text-neutral-100">
-                Covenant
-              </span>
-            </div>
+            <Image src="/logomark.svg" alt="Covenant" width={26} height={13} className="h-auto w-[26px]" />
             <p className="mt-4 text-[12.5px] leading-relaxed text-neutral-500">{TAGLINE}.</p>
             <p className="mt-4 font-mono text-[11px] tracking-wide text-neutral-600">
               {FOOTER_PROTOCOLS.join("  ·  ")}

@@ -23,7 +23,6 @@ export const NAV_LINKS = [
   { label: "guard", href: "/guard", external: false as const },
   { label: "trading", href: "/trading", external: false as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
-  { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "buy", href: "/token", external: false as const },
 ];
 
@@ -57,6 +56,7 @@ export const FOOTER_COLUMNS: { title: string; links: FooterColumnLink[] }[] = [
     links: [
       { label: "Guard", href: "/guard" },
       { label: "Trading", href: "/trading" },
+      { label: "Sandbox", href: "https://sandbox.opencovenant.org", external: true },
       { label: "Agents", href: "/agents" },
       { label: "Arena", href: "/arena" },
       { label: "Stake", href: "https://stake.opencovenant.org", external: true },
@@ -67,7 +67,6 @@ export const FOOTER_COLUMNS: { title: string; links: FooterColumnLink[] }[] = [
     title: "Ecosystem",
     links: [
       { label: "Partners", href: "/partners" },
-      { label: "Sandbox", href: "https://sandbox.opencovenant.org", external: true },
       {
         label: "MCP Registry",
         href: "https://registry.modelcontextprotocol.io/v0.1/servers?search=org.opencovenant",

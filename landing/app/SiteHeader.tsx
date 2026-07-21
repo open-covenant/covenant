@@ -68,33 +68,35 @@ export function SiteHeader() {
           <div className="hidden items-center gap-4 xl:flex">
             <HeaderStats />
             <span aria-hidden className="h-4 w-px bg-neutral-700/50" />
-            <a
-              href={X_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Covenant on X"
-              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
-            >
-              <XIcon className="h-4 w-4" />
-            </a>
-            <a
-              href={TELEGRAM_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Covenant on Telegram"
-              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
-            >
-              <TelegramIcon className="h-4 w-4" />
-            </a>
-            <a
-              href={GITHUB_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Covenant on GitHub"
-              className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
-            >
-              <GithubIcon className="h-4 w-4" />
-            </a>
+            <div className="flex items-center gap-0.5">
+              <a
+                href={X_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Covenant on X"
+                className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+              >
+                <XIcon className="h-4 w-4" />
+              </a>
+              <a
+                href={TELEGRAM_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Covenant on Telegram"
+                className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+              >
+                <TelegramIcon className="h-4 w-4" />
+              </a>
+              <a
+                href={GITHUB_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Covenant on GitHub"
+                className="p-2 text-neutral-400 transition-colors hover:text-neutral-50"
+              >
+                <GithubIcon className="h-4 w-4" />
+              </a>
+            </div>
           </div>
 
           <div className="xl:hidden">

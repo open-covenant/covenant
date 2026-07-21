@@ -2,7 +2,9 @@
 //! reads. Reputation lives on one host, agent + credit on another. Auth is an
 //! optional `fairkey` header (free tier) or an x402 payer: on a 402 the client
 //! settles the quoted amount (USDC on Solana mainnet, bounded by a per-read
-//! cap) and retries once with the `x-payment` header. With neither, a keyless
+//! cap) and retries once with the envelope under both `x-payment` (x402
+//! standard) and `payment-signature` (FairScale's documented name). With
+//! neither key nor payer, a keyless
 //! read surfaces the 401/402 as one clear error.
 //!
 //! Response bodies vary in shape across FairScale's products and their own spec
@@ -246,9 +248,16 @@ impl FairScaleClient {
         tracing::debug!(
             url,
             amount,
-            "fairscale 402 settled; retrying with x-payment"
+            "fairscale 402 settled; retrying with payment headers"
         );
-        let mut req = self.http.get(url).header("x-payment", header);
+        // FairScale reads the envelope from `payment-signature` (their docs)
+        // and silently ignores the x402-standard `x-payment`; send both so we
+        // work against FairScale today and any standard-compliant wall later.
+        let mut req = self
+            .http
+            .get(url)
+            .header("x-payment", header.clone())
+            .header("payment-signature", header);
         if let Some(key) = &self.fairkey {
             req = req.header("fairkey", key);
         }
@@ -256,8 +265,18 @@ impl FairScaleClient {
         if matches!(resp.status().as_u16(), 401 | 402) {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
+            // An "insufficient funds" simulation failure means the funder's
+            // token account can no longer cover the quoted amount; say so
+            // plainly instead of only echoing truncated simulator logs.
+            let hint = if body.to_ascii_lowercase().contains("insufficient") {
+                format!(
+                    " (funder token balance below the required {amount} base units — top up the funding wallet)"
+                )
+            } else {
+                String::new()
+            };
             return Err(FairScaleError::Payment(format!(
-                "read still rejected ({status}) after payment: {}",
+                "read still rejected ({status}) after payment{hint}: {}",
                 truncate(&body)
             )));
         }
@@ -532,12 +551,18 @@ mod tests {
             .up_to_n_times(1)
             .mount(&agent)
             .await;
-        // The paid retry must carry the exact header the signer built from the
-        // chosen option; MockSigner encodes network + amount, pinning both.
+        // The paid retry must carry the exact envelope the signer built from
+        // the chosen option, under BOTH the x402-standard `x-payment` and
+        // FairScale's documented `payment-signature`; matching on both pins
+        // the dual-header behavior and the network + amount encoding.
         Mock::given(method("GET"))
             .and(path("/v1/score"))
             .and(header(
                 "x-payment",
+                "mock:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:5000",
+            ))
+            .and(header(
+                "payment-signature",
                 "mock:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:5000",
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({

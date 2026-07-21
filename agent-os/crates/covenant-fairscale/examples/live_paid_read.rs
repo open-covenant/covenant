@@ -1,7 +1,9 @@
-//! One live paid FairScale read, end to end, against production.
+//! Two live paid FairScale reads (score + trust-gate), end to end, against
+//! production.
 //!
-//! Settles the x402 challenge with real USDC on Solana mainnet ($0.005 per
-//! read at the 2026-07-20 quote), so it runs only when explicitly asked:
+//! Settles each x402 challenge with real USDC on Solana mainnet ($0.005 per
+//! read at the 2026-07-20 quote, so ~$0.01 for a full run), and runs only
+//! when explicitly asked:
 //!
 //! ```sh
 //! FAIRSCALE_LIVE=1 \

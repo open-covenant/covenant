@@ -35,6 +35,10 @@ name = "live_paid_read"
 required-features = ["solana-example"]
 
 [[example]]
+name = "live_credit_probe"
+required-features = ["solana-example"]
+
+[[example]]
 name = "probe_verify"
 required-features = ["solana-example"]
 

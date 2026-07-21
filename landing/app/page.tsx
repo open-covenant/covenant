@@ -75,7 +75,7 @@ export default function Page() {
               Try the sandbox →
             </a>
             <Link
-              href="/build"
+              href="/live"
               className="rounded-full border border-neutral-700/50 px-6 py-2.5 text-[11px] uppercase tracking-[0.28em] text-neutral-400 transition-colors hover:border-neutral-500 hover:text-neutral-100 sm:text-[12px]"
             >
               Watch it build itself →
@@ -129,7 +129,7 @@ export default function Page() {
           signed grant, is gated before it executes, and leaves a receipt in a hash-chained audit. The
           system holds itself to the rules it sells you.
         </p>
-        <Link href="/build" className={cardLink}>
+        <Link href="/live" className={cardLink}>
           Watch the live build log →
         </Link>
       </section>

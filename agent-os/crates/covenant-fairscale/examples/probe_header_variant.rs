@@ -1,12 +1,12 @@
 //! Probe: which request header name does FairScale's agent-api read the
-//! x402 envelope from, if any? The 402 response carries an unprefixed
-//! `payment-required` response header, so this replays one valid envelope
-//! under `payment` and one under `x-payment`, dumping status, headers,
-//! and body for each.
+//! x402 envelope from? Replays one valid envelope under each candidate
+//! header, dumping status, headers, and body for each.
 //!
-//! Result (2026-07-20): byte-identical 402s for both, same ETag as the
-//! unpaid challenge; the wall reads neither header. probe_verify holds
-//! the facilitator-side proof that the envelope itself is valid.
+//! History: the first run (2026-07-20) replayed `payment` and `x-payment`
+//! and got byte-identical 402s, and probe_verify held the facilitator-side
+//! proof that the envelope itself was valid. The discovery that followed:
+//! the wall reads `payment-signature` (or `x-payment`), which is the pair
+//! this probe now sends and the client ships.
 //!
 //! Each attempt costs ~$0.005 only if the server settles it, and a
 //! settle means a 200, which is the read we are paying for.
@@ -38,7 +38,7 @@ async fn main() {
         .network_verbatim(true)
         .x402_version(2);
 
-    let url = format!("{AGENT_BASE_URL}/v1/score/{wallet}");
+    let url = format!("{AGENT_BASE_URL}/v1/score?wallet={wallet}");
     let http = reqwest::Client::new();
 
     // 1. Unpaid hit → 402 challenge.
@@ -66,7 +66,7 @@ async fn main() {
     };
 
     // 2. Replay under each candidate header name, fresh envelope each time.
-    for header_name in ["payment", "x-payment"] {
+    for header_name in ["payment-signature", "x-payment"] {
         let envelope = signer.build_payment(&req).await.expect("build envelope");
         println!(
             "\n=== attempt: header `{header_name}` (envelope {} bytes) ===",

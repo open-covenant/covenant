@@ -1178,7 +1178,8 @@ fn krexa_from_env() -> Option<(covenant_krexa::KrexaClient, covenant_krexa::Krex
 /// - `COVENANT_FAIRSCALE_X402` truthy settles keyless reads per call in USDC
 ///   on Solana mainnet through `COVENANT_X402_SIGNER_BINARY` (the same sidecar
 ///   as outbound x402 dispatch, fed `COVENANT_X402_FUNDING_KEYPAIR` and
-///   `COVENANT_X402_RPC_URL`)
+///   `COVENANT_X402_RPC_URL`, pinned to the x402 v2 + verbatim-network
+///   envelope Dexter's facilitator validates)
 /// - `COVENANT_FAIRSCALE_X402_READ_CAP` / `COVENANT_FAIRSCALE_X402_CREDIT_CAP`
 ///   per-read atomic-USDC caps (defaults 10000 / 600000)
 /// - `COVENANT_FAIRSCALE_REPUTATION_URL` / `_AGENT_URL` override the hosts
@@ -1236,7 +1237,13 @@ fn fairscale_from_env() -> Option<(
         }
         match std::env::var("COVENANT_X402_SIGNER_BINARY") {
             Ok(bin) if !bin.trim().is_empty() => {
-                let mut signer = covenantd::x402::SubprocessSigner::new(bin.trim());
+                let mut signer = covenantd::x402::SubprocessSigner::new(bin.trim())
+                    // FairScale settles through Dexter's facilitator, which
+                    // validates x402 v2 with the CAIP-2 network verbatim
+                    // (live-verified 2026-07-20). Pinned per instance so PayAI
+                    // and Hyre dispatch keep the sidecar's v1 defaults.
+                    .env("COVENANT_X402_VERSION", "2")
+                    .env("COVENANT_X402_NETWORK_VERBATIM", "1");
                 for key in ["COVENANT_X402_FUNDING_KEYPAIR", "COVENANT_X402_RPC_URL"] {
                     if let Ok(v) = std::env::var(key) {
                         signer = signer.env(key, v);

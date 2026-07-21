@@ -27,7 +27,7 @@ Facts that matter for consumers:
 - **Reputation** (`/score`): `fairscore` 0-100 (fractional), `final_score = core_blend + identity_pillar + program_pillar + ownership_pillar`. `fairscore_base` is a 15-feature on-chain neural-net score; social and peer signals blend in; program membership (Superteam +20) and 01Resolved ownership (capped at 10) are additive. Unverified wallets are capped at 88 during the VeryAI beta (palm-scan humanity proof, a human product, not applicable to agent wallets). Tiers: bronze 0-24, silver 25-49, gold 50-74, platinum 75-89, diamond 90-100.
 - **Agent trust** (`/v1/score`): 0-100 across five pillars: `verification` (SAID, ERC-8004, SATI registry presence), `wallet_history`, `work_history` (verified job completions from Kamiyo, Dexter, 8004scan), `network_quality`, `peer_reputation`. Recommendation tiers: unverified 0-20, high_risk 21-40, caution 41-60, trusted 61-100. `/v1/trust-gate` returns `decision: "allow" | "deny"` with `reasons[]` and per-registry `verification` flags; their default `min_score` is 40. The directory indexed ~3,443 agents as of Jul 2026.
 - **Credit** (`/v1/credit`): `credit_score` 0-100, amount-agnostic (`score_basis: "profile"`), risk bands prime 75-100 / near_prime 60-74 / subprime 45-59 / deep_subprime 25-44 / decline 0-24. Six pillars, live multi-venue obligations (Kamino, Jupiter Lend, Save, Marginfi) with LTV and liquidation headroom, and suggested terms (APR range, collateral ratio, max line, 7-90 day terms). Advisory only; FairScale moves no funds. Every response carries an HMAC-signed attestation (`payload_hash` over `wallet|credit_score|risk_band|scored_at`) checkable at the public `GET /v1/verify-hash`.
-- **Caching**: 15 min on score/agent/credit reads (`?nocache=1` bypasses), 5 min on trust-gate, 2 min on directory. 429 above plan rate; FairScale prescribes backoff-and-retry.
+- **Caching**: 15 min on score/agent/credit reads (`?nocache=1` bypasses), 5 min on trust-gate, 2 min on directory. 429 above plan rate; FairScale prescribes backoff-and-retry. The client surfaces 429s instead of retrying them; a sub-second retry cannot clear a per-minute window.
 - **Keys**: `fairkey: zpka_...` from sales.fairscale.xyz. Plans: Free 1,000 req/mo at 10/min, Builder 20k/100, Scale 50k/300, Pro 100k/600.
 
 ## Score scales
@@ -49,7 +49,7 @@ The daemon registers the tool when `COVENANT_FAIRSCALE_ENABLED` is truthy. Every
 | --- | --- | --- |
 | `COVENANT_FAIRSCALE_ENABLED` | off | Truthy (`1`, `true`, `yes`) registers the `fairscale.score` tool. |
 | `COVENANT_FAIRSCALE_KEY` | unset | The `fairkey`, sent on every read. Free-tier friendly. |
-| `COVENANT_FAIRSCALE_X402` | off | Settle keyless reads per call in USDC on Solana mainnet through `COVENANT_X402_SIGNER_BINARY` (the same signer sidecar as outbound x402 dispatch, fed `COVENANT_X402_FUNDING_KEYPAIR` and `COVENANT_X402_RPC_URL`). |
+| `COVENANT_FAIRSCALE_X402` | off | Settle keyless reads per call in USDC on Solana mainnet through `COVENANT_X402_SIGNER_BINARY` (the same signer sidecar as outbound x402 dispatch, fed `COVENANT_X402_FUNDING_KEYPAIR` and `COVENANT_X402_RPC_URL`). Pinned to the x402 v2 + verbatim-network envelope Dexter validates. |
 | `COVENANT_FAIRSCALE_X402_READ_CAP` | `10000` | Per-read cap, atomic USDC (6 decimals), for score and trust-gate reads. Live quote: 5000 ($0.005). |
 | `COVENANT_FAIRSCALE_X402_CREDIT_CAP` | `600000` | Per-read cap for the credit read. Live quote: 500000 ($0.50). |
 | `COVENANT_FAIRSCALE_REPUTATION_URL` | `https://api.fairscale.xyz` | Override the reputation host. |
@@ -82,7 +82,7 @@ Output: a labeled projection, a provenance record, and the raw upstream blob, in
   },
   "credit": {
     "amountUsd": 1000,
-    "creditScore": 71.0,
+    "creditScore": 78.0,
     "riskBand": "prime",
     "lendingTerms": { "max_credit_line": 2500, "suggested_apr_range": "8-12%" }
   }
@@ -92,7 +92,7 @@ Output: a labeled projection, a provenance record, and the raw upstream blob, in
 Semantics worth knowing:
 
 - **Host selection.** A keyed read targets `GET {reputation}/score`. A paying read targets `GET {agent}/v1/score` instead: FairScale serves the score behind x402 on the agent host, and the reputation host rejects keyless reads (observed live).
-- **Side reads degrade, never fail.** `trustGate` (forwarded `min_score=60`, deliberately stricter than FairScale's default 40) and `credit` (underwritten against a fixed `amount=1000` probe, echoed as `amountUsd` so the terms are interpretable) are best-effort. If either read fails, the tool logs at debug and returns the reputation signal alone; only a failed `/score` read is a tool error.
+- **Side reads degrade, never fail.** `trustGate` (forwarded `min_score=60`, deliberately stricter than FairScale's default 40) and `credit` (underwritten against a fixed `amount=1000` probe, echoed as `amountUsd` so the terms are interpretable) are best-effort. If either read fails, the tool logs at debug and returns the reputation signal alone; only a failed `/score` read is a tool error. The example above pairs a reputation `fairscore` of 65.3 with an agent-trust deny computed on 24: different products, different scores; consistent, not a typo.
 - **Retry posture.** 429 and 502-504 (serverless cold starts) retry up to 3 attempts with exponential backoff (200ms doubling). Timeouts: 5s connect, 20s total.
 
 ### Provenance
@@ -117,7 +117,8 @@ The hash is over the RFC 8785 (JCS) canonical form, so an identical response has
 
 With `COVENANT_FAIRSCALE_X402` wired, a keyless read settles FairScale's live 402 challenge:
 
-- **Challenge** (shape captured live and pinned in tests): `{"error": "Payment required", "accepts": [{ "scheme": "exact", "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "amount": "5000", "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "payTo": "fairAUEuR1SCcHL254Vb3F3XpUWLruJ2a11f6QfANEN", "maxTimeoutSeconds": 60, "extra": { "feePayer": "DeXterR2kQm8AvRHnNPatWkE46TfAcMeBDjb6FySoAb8", "decimals": 6 } }]}`. Credit quotes `500000` ($0.50) against the same wallet.
+- **Challenge** (shape captured live and pinned in tests): `{"error": "Payment required", "accepts": [{ "scheme": "exact", "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "amount": "5000", "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "payTo": "fairAUEuR1SCcHL254Vb3F3XpUWLruJ2a11f6QfANEN", "maxTimeoutSeconds": 60, "extra": { "feePayer": "DeXterR2kQm8AvRHnNPatWkE46TfAcMeBDjb6FySoAb8", "decimals": 6 } }]}`. Credit quotes `500000` ($0.50) against the same wallet. Abbreviated: the live envelope also mirrors `amount` as `maxAmountRequired` (the x402-canonical field the client prefers) and carries a `resource` object.
+- **Accounting**: spend is operator-bounded by the per-read caps alone; worst case for one tool call with trust-gate and credit on is 10000 + 10000 + 600000 atomic ($0.62), $0.51 at live quotes. Each settlement logs at info. The daemon's `ExternalPaymentSettled` feed and digest anchoring are one deferred increment (see `provenance.rs`).
 - **Guard rails.** The client only accepts an `exact` / Solana-mainnet / USDC option; refuses zero-amount quotes as malformed rather than treating them as free; refuses any quote above the per-read cap before anything is signed; pays once and retries once; a second 401/402 after payment is surfaced, never re-settled. An "insufficient funds" simulation failure is translated into a plain top-up-the-funder message.
 - **Header quirk.** FairScale reads the payment envelope from `payment-signature` (their documented name) and ignores the x402-standard `x-payment`; the client sends both, so it works against FairScale today and any standard-compliant 402 wall later.
 - **Facilitation** is Dexter (`x402.dexter.cash`), the same facilitator Covenant already integrates elsewhere; Dexter fee-pays the settlement transaction.

@@ -1,6 +1,6 @@
 # Covenant × FairScale: Partnership & Integration Plan
 
-*Status: PLAN ONLY (local). Nothing built or pushed. Follows the partner-integration convention: nested worktree `covenant-fairscale`, branch `feat/fairscale`, new crate `agent-os/crates/covenant-fairscale`. Mirrors the merged `covenant-krexa` oracle pattern, consumed inbound as a labeled soft signal.*
+*Status: BUILT (feat/fairscale). x402 pay-per-read settled live on Solana mainnet 2026-07-20/21; credit read built, gated off by default. State of record: docs/integrations/fairscale.md. Follows the partner-integration convention: nested worktree `covenant-fairscale`, branch `feat/fairscale`, new crate `agent-os/crates/covenant-fairscale`. Mirrors the merged `covenant-krexa` oracle pattern, consumed inbound as a labeled soft signal.*
 
 ---
 
@@ -50,7 +50,7 @@ Covenant closes #1 and #2 by attesting the read, and manages #3 by keeping the s
 Mirror `covenant-krexa` exactly:
 
 - **MCP tool `fairscale.score { pubkey }`** returns a labeled projection of the FairScore (reputation `fairscore` + tier, optionally the agent `trust-gate` decision and the credit band/terms), tagged `TRUST_LABEL = "fairscale-attested (third-party REST), soft signal"`, alongside the raw upstream blob.
-- **Consumed over x402** by default (pay $0.005 USDC on Solana through the daemon's x402 Solana payer + Dexter facilitator), with a `fairkey` header fallback for free-tier reads. Shipped Phase 0 is the `fairkey` path; the x402 payer is the next increment.
+- **Consumed over x402** by default (pay $0.005 USDC on Solana through the daemon's x402 Solana payer + Dexter facilitator), with a `fairkey` header fallback for free-tier reads. Shipped Phase 0 is the `fairkey` path; the x402 payer shipped and settled live (see the docs-check log).
 - **Provenance wrap:** each read emits a Covenant attestation binding `(reader, pubkey queried, endpoint, score returned, upstream response hash, x402 settlement sig, slot)` via `covenant-attestation`, so the read itself is verifiable even though FairScale's score is not. This is the value-add over the Krexa oracle. Shipped Phase 0 binds `(pubkey, endpoint, response hash)` in a crate-local `ReadProvenance` returned with the result; the full envelope and audit-chain anchoring of the response hash are the exit-bar work.
 - **Kept separate** from Covenant's audit-derived reputation (the pinned `Response::Reputation` wire shape), never blended, per the Krexa design decision. spend-authz is the more useful blend target than reputation (a risk input to a spend decision).
 
@@ -75,7 +75,7 @@ New crate: **`covenant-fairscale`** (`version = "0.0.0"`), REST-only + x402, no 
 ## 7. Phases (Covenant does the lifting)
 
 **Phase 0: read-only oracle (ship first, low risk).**
-`fairscale.score` MCP tool: reputation + trust-gate reads, labeled soft signal, x402-paid, with the provenance wrap. No funds beyond the $0.005 read fee. Deliverables + loop tasks `fs-01..05`. Exit bar: a real FairScore read for a live pubkey, paid over x402 on Solana mainnet, its provenance attestation independently verifiable. Status: reads, labels, and crate-local provenance shipped behind `COVENANT_FAIRSCALE_ENABLED`; open for the exit bar: x402 payment and anchored provenance.
+`fairscale.score` MCP tool: reputation + trust-gate reads, labeled soft signal, x402-paid, with the provenance wrap. No funds beyond the $0.005 read fee. Deliverables + loop tasks `fs-01..05`. Exit bar: a real FairScore read for a live pubkey, paid over x402 on Solana mainnet, its provenance attestation independently verifiable. Status: reads, labels, and crate-local provenance shipped behind `COVENANT_FAIRSCALE_ENABLED`; open for the exit bar: anchored provenance (x402 payment shipped).
 
 **Phase 1: credit read (still low risk; FairScale credit moves no funds).**
 Add the `/v1/credit` underwriting read as a labeled advisory signal (band, suggested APR, max line) at $0.50/read. Unlike Krexa's credit (which disbursed USDC through a PDA), FairScale credit is opinion-only, so no gating of a funds path is needed. Keep it labeled and behind a per-call cap.

@@ -8,7 +8,7 @@
 //! ```sh
 //! FAIRSCALE_LIVE=1 \
 //! COVENANT_X402_FUNDING_KEYPAIR=$HOME/.config/solana/id.json \
-//! cargo run -p covenant-fairscale --example live_paid_read -- <wallet>
+//! cargo run -p covenant-fairscale --features solana-example --example live_paid_read -- <wallet>
 //! ```
 //!
 //! `COVENANT_X402_RPC_URL` overrides the RPC (default: the public mainnet

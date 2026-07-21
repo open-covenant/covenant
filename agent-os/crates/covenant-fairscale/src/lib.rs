@@ -43,6 +43,8 @@ pub enum FairScaleError {
     Payment(String),
     #[error("decode: {0}")]
     Decode(String),
+    #[error("response body of {0} bytes exceeds the in-memory cap")]
+    ResponseTooLarge(u64),
 }
 
 pub type Result<T> = std::result::Result<T, FairScaleError>;

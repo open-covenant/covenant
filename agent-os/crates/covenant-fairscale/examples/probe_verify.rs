@@ -35,7 +35,7 @@ async fn main() {
     // 1. Grab the live 402 challenge.
     let resp = http
         .get(format!(
-            "http://agent-api.fairscale.xyz/v1/score?wallet={wallet}"
+            "https://agent-api.fairscale.xyz/v1/score?wallet={wallet}"
         ))
         .send()
         .await
@@ -94,7 +94,7 @@ async fn main() {
     //    blockhash is still fresh, and dump everything it sends back.
     let paid = http
         .get(format!(
-            "http://agent-api.fairscale.xyz/v1/score?wallet={wallet}"
+            "https://agent-api.fairscale.xyz/v1/score?wallet={wallet}"
         ))
         .header("X-PAYMENT", header.trim())
         .send()

@@ -6,8 +6,10 @@
 //! hash-addressable record. It does not make FairScale's number trustworthy; it
 //! makes the read verifiable: that this response, for this wallet, came back
 //! from this endpoint. The record rides back with the tool result for the
-//! caller to store or anchor; the daemon's audit chain records the call today,
-//! and anchoring `digest()` there is the next increment.
+//! caller to store or anchor. Anchoring `digest()` into the daemon's audit
+//! chain, and putting x402 read spend on the settlement feed beside Hyre's,
+//! is the next increment; until then spend is bounded by the per-read caps
+//! and surfaced in the settle logs only.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -49,7 +51,16 @@ impl ReadProvenance {
 }
 
 pub fn canonical_sha256_hex(value: &Value) -> String {
-    let bytes = serde_jcs::to_vec(value).unwrap_or_else(|_| value.to_string().into_bytes());
+    let bytes = match serde_jcs::to_vec(value) {
+        Ok(b) => b,
+        Err(e) => {
+            // Unreachable for finite parsed JSON (serde_json rejects NaN/Inf
+            // at parse), but a silent fallback would quietly break the
+            // "identical response hashes identically" guarantee, so shout.
+            tracing::warn!(error = %e, "JCS canonicalization failed; hashing non-canonical JSON");
+            value.to_string().into_bytes()
+        }
+    };
     let mut h = Sha256::new();
     h.update(&bytes);
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()

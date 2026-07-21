@@ -66,6 +66,11 @@ pub struct CreditAssessment {
 }
 
 impl FairScaleClient {
+    /// # Panics
+    ///
+    /// If reqwest cannot initialize its TLS backend. That fault is
+    /// startup-only and unrecoverable, so construction panics rather than
+    /// returning an error nothing can handle.
     pub fn new(reputation_base: impl Into<String>, agent_base: impl Into<String>) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -114,36 +119,40 @@ impl FairScaleClient {
     /// Reputation FairScore for a wallet. Keyed tier: `GET {reputation}/score`.
     /// With a payer the read targets `GET {agent}/v1/score` instead: FairScale
     /// serves the score behind x402 on the agent host, and the reputation host
-    /// answers keyless reads with a 404 (both observed live 2026-07-20).
+    /// 401s keyless reads (both observed live 2026-07-20).
     pub async fn score(&self, wallet: &str) -> Result<FairScore> {
         let url = if self.payer.is_some() {
-            format!("{}/v1/score?wallet={wallet}", self.agent_base)
+            build_url(&self.agent_base, "/v1/score", &[("wallet", wallet)])?
         } else {
-            format!("{}/score?wallet={wallet}", self.reputation_base)
+            build_url(&self.reputation_base, "/score", &[("wallet", wallet)])?
         };
         Ok(FairScore {
-            raw: self.get(&url, self.read_cap_atomic).await?,
+            raw: self.get(url.as_str(), self.read_cap_atomic).await?,
         })
     }
 
     /// Agent allow/deny gate. `GET {agent}/v1/trust-gate?wallet=&min_score=`.
     pub async fn trust_gate(&self, wallet: &str, min_score: u32) -> Result<TrustGate> {
-        let url = format!(
-            "{}/v1/trust-gate?wallet={wallet}&min_score={min_score}",
-            self.agent_base
-        );
-        let raw = self.get(&url, self.read_cap_atomic).await?;
+        let min_score = min_score.to_string();
+        let url = build_url(
+            &self.agent_base,
+            "/v1/trust-gate",
+            &[("wallet", wallet), ("min_score", &min_score)],
+        )?;
+        let raw = self.get(url.as_str(), self.read_cap_atomic).await?;
         serde_json::from_value(raw).map_err(|e| FairScaleError::Decode(format!("trust-gate: {e}")))
     }
 
     /// Credit underwriting read. `GET {agent}/v1/credit?wallet=&amount=`.
     pub async fn credit(&self, wallet: &str, amount_usd: u64) -> Result<CreditAssessment> {
-        let url = format!(
-            "{}/v1/credit?wallet={wallet}&amount={amount_usd}",
-            self.agent_base
-        );
+        let amount_usd = amount_usd.to_string();
+        let url = build_url(
+            &self.agent_base,
+            "/v1/credit",
+            &[("wallet", wallet), ("amount", &amount_usd)],
+        )?;
         Ok(CreditAssessment {
-            raw: self.get(&url, self.credit_cap_atomic).await?,
+            raw: self.get(url.as_str(), self.credit_cap_atomic).await?,
         })
     }
 
@@ -193,7 +202,7 @@ impl FairScaleClient {
         cap_atomic: u64,
         payer: Arc<dyn Signer>,
     ) -> Result<Value> {
-        let body = challenge_resp.text().await?;
+        let body = read_body_capped(challenge_resp, MAX_RESPONSE_BYTES).await?;
         let challenge: Challenge = serde_json::from_str(&body).map_err(|e| {
             FairScaleError::Payment(format!(
                 "undecodable 402 challenge: {e}; body: {}",
@@ -214,8 +223,16 @@ impl FairScaleClient {
                     challenge.accepts.len()
                 ))
             })?;
-        let amount: u64 = option.amount.parse().map_err(|_| {
-            FairScaleError::Payment(format!("unparseable challenge amount {:?}", option.amount))
+        // x402's canonical quote field is `maxAmountRequired`; FairScale also
+        // mirrors it as `amount` today. Prefer the standard field so the pay
+        // path survives the mirror being dropped.
+        let quoted = if option.max_amount_required.is_empty() {
+            &option.amount
+        } else {
+            &option.max_amount_required
+        };
+        let amount: u64 = quoted.parse().map_err(|_| {
+            FairScaleError::Payment(format!("unparseable challenge amount {quoted:?}"))
         })?;
         if amount == 0 {
             return Err(FairScaleError::Payment(
@@ -227,11 +244,18 @@ impl FairScaleClient {
                 "quoted {amount} atomic USDC exceeds the per-read cap {cap_atomic}"
             )));
         }
-        let decimals = option.extra.as_ref().and_then(|e| e.decimals).unwrap_or(6);
+        // Display-only: the transfer and the cap check both run on the atomic
+        // `amount`. Clamped so a hostile `decimals` cannot inf/NaN the float.
+        let decimals = option
+            .extra
+            .as_ref()
+            .and_then(|e| e.decimals)
+            .unwrap_or(6)
+            .min(12);
         let requirements = PaymentRequirements {
             network: option.network.clone(),
             asset: option.asset.clone(),
-            amount: option.amount.clone(),
+            amount: quoted.clone(),
             amount_usdc: amount as f64 / 10f64.powi(decimals as i32),
             pay_to: option.pay_to.clone(),
             scheme: option.scheme.clone(),
@@ -264,7 +288,9 @@ impl FairScaleClient {
         let resp = req.send().await?;
         if matches!(resp.status().as_u16(), 401 | 402) {
             let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_body_capped(resp, MAX_RESPONSE_BYTES)
+                .await
+                .unwrap_or_default();
             // An "insufficient funds" simulation failure means the funder's
             // token account can no longer cover the quoted amount; say so
             // plainly instead of only echoing truncated simulator logs.
@@ -280,12 +306,15 @@ impl FairScaleClient {
                 truncate(&body)
             )));
         }
+        // Money left the funding wallet and a signal came back; keep that
+        // visible to operators without debug logging.
+        tracing::info!(url, amount, "fairscale x402 read settled");
         self.read(resp).await
     }
 
     async fn read(&self, resp: reqwest::Response) -> Result<Value> {
         let status = resp.status();
-        let body = resp.text().await?;
+        let body = read_body_capped(resp, MAX_RESPONSE_BYTES).await?;
         // The docs promise a 402 on no-auth; live, the reputation host 401s
         // and the agent host issues an x402 challenge. With a payer wired the
         // 402 was already settled in `pay_and_retry`; reaching here keyless,
@@ -354,6 +383,8 @@ struct ChallengeOption {
     network: String,
     #[serde(default)]
     amount: String,
+    #[serde(rename = "maxAmountRequired", default)]
+    max_amount_required: String,
     #[serde(default)]
     asset: String,
     #[serde(rename = "payTo", default)]
@@ -370,14 +401,55 @@ struct ChallengeExtra {
     decimals: Option<u32>,
 }
 
-/// 429 (free tier is 10 req/min and FairScale prescribes backoff-and-retry)
-/// plus the gateway 5xxs a serverless cold start throws.
+/// The gateway 5xxs a serverless cold start throws. A 429 is deliberately not
+/// retried: the free tier meters 10 req/min, so a sub-second re-hit cannot
+/// clear the window and only burns attempts. FairScale prescribes
+/// backoff-and-retry, but at minute granularity; for a soft signal, surfacing
+/// beats stalling.
 fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 429 | 502..=504)
+    matches!(status.as_u16(), 502..=504)
 }
 
 fn backoff(attempt: u32) -> Duration {
-    Duration::from_millis(200 * 2u64.pow(attempt - 1))
+    // Saturating so a future MAX_ATTEMPTS bump cannot overflow the shift.
+    Duration::from_millis(200u64.saturating_mul(1u64 << (attempt - 1).min(20)))
+}
+
+/// Query values are percent-encoded by `Url`'s serializer, so a caller-supplied
+/// wallet cannot smuggle extra parameters or path segments into the request.
+/// The tool layer already validates base58; this holds for direct client users.
+fn build_url(base: &str, path: &str, query: &[(&str, &str)]) -> Result<reqwest::Url> {
+    reqwest::Url::parse_with_params(&format!("{base}{path}"), query)
+        .map_err(|e| FairScaleError::Decode(format!("build request url {base}{path}: {e}")))
+}
+
+/// Maximum response body buffered into memory. The remote answering a
+/// (possibly paid) read controls its response, so an unbounded `.text()` lets
+/// a hostile or compromised host exhaust a worker (the same guard covenantd
+/// applies to paid-call bodies). 16 MiB sits far above any real FairScale
+/// response while stopping a runaway stream.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read a body into a string, refusing anything past `max`. The Content-Length
+/// check rejects an oversized declared body before it streams; the running
+/// accumulation check is the real guard, since the header is optional and
+/// remote-controlled.
+async fn read_body_capped(mut resp: reqwest::Response, max: usize) -> Result<String> {
+    if let Some(len) = resp.content_length() {
+        if len > max as u64 {
+            return Err(FairScaleError::ResponseTooLarge(len));
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if buf.len() + chunk.len() > max {
+            return Err(FairScaleError::ResponseTooLarge(
+                (buf.len() + chunk.len()) as u64,
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 fn truncate(s: &str) -> String {
@@ -483,22 +555,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retries_a_429_then_succeeds() {
+    async fn a_429_is_surfaced_immediately_not_retried() {
+        // The free tier meters requests per minute; a sub-second retry cannot
+        // clear the window, so the client must surface the 429 on the spot.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/score"))
             .respond_with(ResponseTemplate::new(429))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/score"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "fairscore": 40.0 })))
+            .expect(1)
             .mount(&server)
             .await;
         let client = FairScaleClient::new(server.uri(), server.uri());
-        let s = client.score("wallet").await.unwrap();
-        assert_eq!(s.fairscore(), Some(40.0));
+        let err = client.score("wallet").await.unwrap_err();
+        match err {
+            FairScaleError::Api { status, .. } => assert_eq!(status, 429),
+            other => panic!("expected api error, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -508,7 +580,7 @@ mod tests {
             .and(path("/v1/credit"))
             .and(query_param("amount", "1000"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "wallet": "x", "credit_score": 71.0, "risk_band": "prime",
+                "wallet": "x", "credit_score": 78.0, "risk_band": "prime",
                 "underwriting": {
                     "opinion": "approve",
                     "lending_terms": { "max_credit_line": 2500, "suggested_apr_range": "8-12%" }
@@ -518,7 +590,7 @@ mod tests {
             .await;
         let client = FairScaleClient::new(server.uri(), server.uri());
         let c = client.credit("wallet", 1000).await.unwrap();
-        assert_eq!(c.credit_score(), Some(71.0));
+        assert_eq!(c.credit_score(), Some(78.0));
         assert_eq!(c.risk_band(), Some("prime"));
         assert_eq!(c.lending_terms().unwrap()["max_credit_line"], json!(2500));
     }
@@ -618,7 +690,7 @@ mod tests {
                 "mock:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:500000",
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "credit_score": 71.0, "risk_band": "prime"
+                "credit_score": 78.0, "risk_band": "prime"
             })))
             .mount(&agent)
             .await;
@@ -630,7 +702,7 @@ mod tests {
             600_000,
         );
         let c = client.credit("wallet", 1000).await.unwrap();
-        assert_eq!(c.credit_score(), Some(71.0));
+        assert_eq!(c.credit_score(), Some(78.0));
     }
 
     #[tokio::test]
@@ -680,5 +752,76 @@ mod tests {
         let ascii = "a".repeat(600);
         assert_eq!(truncate(&ascii).chars().count(), 501);
         assert_eq!(truncate("short"), "short");
+    }
+
+    #[tokio::test]
+    async fn challenge_with_only_max_amount_required_still_pays() {
+        // x402's canonical quote field; FairScale's `amount` mirror may vanish
+        // if they align to spec, and the pay path must survive that.
+        let mut envelope = live_envelope("5000");
+        envelope["accepts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("amount");
+        let agent = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/score"))
+            .respond_with(ResponseTemplate::new(402).set_body_json(envelope))
+            .up_to_n_times(1)
+            .mount(&agent)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/score"))
+            .and(header(
+                "x-payment",
+                "mock:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:5000",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "fairscore": 50.0 })))
+            .mount(&agent)
+            .await;
+        let client = FairScaleClient::new("http://127.0.0.1:1", agent.uri()).with_payer(
+            std::sync::Arc::new(covenant_x402::MockSigner),
+            10_000,
+            600_000,
+        );
+        assert_eq!(
+            client.score("wallet").await.unwrap().fairscore(),
+            Some(50.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn response_bodies_are_read_capped() {
+        // The remote controls its body; past the cap the read fails instead of
+        // buffering without bound.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("a".repeat(4096)))
+            .mount(&server)
+            .await;
+        let resp = reqwest::get(server.uri()).await.unwrap();
+        let err = read_body_capped(resp, 64).await.unwrap_err();
+        assert!(
+            matches!(err, FairScaleError::ResponseTooLarge(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn client_percent_encodes_query_values() {
+        // The tool layer validates base58, but the client methods are pub; a
+        // raw caller's wallet string must not smuggle extra query params.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/score"))
+            .and(query_param("wallet", "a&admin=1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "fairscore": 1.0 })))
+            .mount(&server)
+            .await;
+        let s = FairScaleClient::new(server.uri(), server.uri())
+            .score("a&admin=1")
+            .await
+            .unwrap();
+        assert_eq!(s.fairscore(), Some(1.0));
     }
 }

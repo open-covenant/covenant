@@ -33,6 +33,12 @@ const TRUST_GATE_MIN_SCORE: u32 = 60;
 /// output so the returned terms are interpretable.
 const CREDIT_PROBE_USD: u64 = 1000;
 
+/// One wall-clock budget for the whole tool call. Three sequential reads, each
+/// able to hit HTTP timeouts plus a signer sidecar with its own 120s deadline,
+/// could otherwise stall a soft signal for minutes; past this, the call
+/// degrades to a tool error instead.
+const CALL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// Build the FairScale tool set. Empty when disabled.
 pub fn fairscale_tools(client: Arc<FairScaleClient>, cfg: &FairScaleConfig) -> Vec<Arc<dyn Tool>> {
     if !cfg.enabled {
@@ -76,6 +82,26 @@ impl Tool for ScoreTool {
     }
 
     async fn call(&self, arguments: Value) -> Result<ToolCallResult, ToolError> {
+        self.read_with_deadline(arguments, CALL_DEADLINE).await
+    }
+}
+
+impl ScoreTool {
+    async fn read_with_deadline(
+        &self,
+        arguments: Value,
+        deadline: std::time::Duration,
+    ) -> Result<ToolCallResult, ToolError> {
+        match tokio::time::timeout(deadline, self.read(arguments)).await {
+            Ok(result) => result,
+            Err(_) => Ok(ToolCallResult::error(format!(
+                "fairscale reads exceeded the {}s deadline",
+                deadline.as_secs()
+            ))),
+        }
+    }
+
+    async fn read(&self, arguments: Value) -> Result<ToolCallResult, ToolError> {
         let pubkey = arguments
             .get("pubkey")
             .and_then(Value::as_str)
@@ -117,7 +143,7 @@ impl Tool for ScoreTool {
                         "verification": gate.verification,
                     });
                 }
-                Err(e) => tracing::debug!(
+                Err(e) => tracing::warn!(
                     pubkey,
                     error = %e,
                     "fairscale trust-gate read failed; reputation signal only"
@@ -136,7 +162,7 @@ impl Tool for ScoreTool {
                         "lendingTerms": credit.lending_terms(),
                     });
                 }
-                Err(e) => tracing::debug!(
+                Err(e) => tracing::warn!(
                     pubkey,
                     error = %e,
                     "fairscale credit read failed; reputation signal only"
@@ -318,5 +344,34 @@ mod tests {
         let tools = fairscale_tools(Arc::new(FairScaleClient::new("http://x", "http://x")), &cfg);
         let err = tools[0].call(json!({})).await.unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments(_)));
+    }
+
+    #[tokio::test]
+    async fn a_wedged_read_degrades_at_the_deadline() {
+        // A hung upstream (or signer sidecar) must cost at most the call
+        // deadline, then degrade to a tool error, never stall the agent.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/score"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "fairscore": 1.0 }))
+                    .set_delay(std::time::Duration::from_secs(5)),
+            )
+            .mount(&server)
+            .await;
+        let tool = ScoreTool {
+            client: Arc::new(FairScaleClient::new(server.uri(), server.uri())),
+            include_trust_gate: false,
+            credit_enabled: false,
+        };
+        let res = tool
+            .read_with_deadline(
+                json!({ "pubkey": "EnteGjokMnFqTDcZSBitXDQEctMCnqV33HbPKw2LnDCg" }),
+                std::time::Duration::from_millis(50),
+            )
+            .await
+            .unwrap();
+        assert!(res.is_error);
     }
 }

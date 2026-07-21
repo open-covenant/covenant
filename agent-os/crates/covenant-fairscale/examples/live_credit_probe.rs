@@ -58,5 +58,8 @@ async fn main() {
         credit.risk_band()
     );
     println!("lending terms: {:?}", credit.lending_terms());
-    println!("raw: {}", serde_json::to_string_pretty(&credit.raw).unwrap());
+    println!(
+        "raw: {}",
+        serde_json::to_string_pretty(&credit.raw).unwrap()
+    );
 }

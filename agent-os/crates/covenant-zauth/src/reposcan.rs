@@ -10,10 +10,10 @@
 //! first hit is a 402.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use std::time::Duration;
 use covenant_x402::Signer;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 use tracing::debug;
 
 use crate::challenge;
@@ -159,7 +159,9 @@ impl RepoScanClient {
             crate::http::read_capped(paid, self.max_bytes, ZauthError::ResponseTooLarge)
                 .await
                 .unwrap_or_default();
-        let paid_amount = paid_status.is_success().then(|| requirements.amount.clone());
+        let paid_amount = paid_status
+            .is_success()
+            .then(|| requirements.amount.clone());
         // A rejected retry carries the reason in the same header-encoded
         // challenge; surface it so a failure is diagnosable, not opaque.
         let error_detail = (!paid_status.is_success())
@@ -189,8 +191,7 @@ fn accept_value(raw_challenge: &Value, accept: &challenge::Accept) -> Value {
             arr.iter()
                 .find(|v| {
                     v.get("network").and_then(|x| x.as_str()) == Some(accept.network.as_str())
-                        && v.get("payTo").and_then(|x| x.as_str())
-                            == Some(accept.pay_to.as_str())
+                        && v.get("payTo").and_then(|x| x.as_str()) == Some(accept.pay_to.as_str())
                         && v.get("asset").and_then(|x| x.as_str()) == Some(accept.asset.as_str())
                 })
                 .cloned()
@@ -337,7 +338,10 @@ mod tests {
             .await;
 
         let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
-        let result = client.scan(&req(), &FakeEnvelopeSigner).await.expect("paid");
+        let result = client
+            .scan(&req(), &FakeEnvelopeSigner)
+            .await
+            .expect("paid");
         assert_eq!(result.status, 200);
         assert_eq!(result.paid_amount.as_deref(), Some("50000"));
         let body: serde_json::Value = serde_json::from_str(&result.body).unwrap();
@@ -357,7 +361,10 @@ mod tests {
             .await;
 
         let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
-        let result = client.scan(&req(), &FakeEnvelopeSigner).await.expect("gratis");
+        let result = client
+            .scan(&req(), &FakeEnvelopeSigner)
+            .await
+            .expect("gratis");
         assert_eq!(result.status, 200);
         assert!(result.paid_amount.is_none());
     }
@@ -387,7 +394,10 @@ mod tests {
             .mount(&server)
             .await;
         let client = RepoScanClient::with_base_url(reqwest::Client::new(), server.uri());
-        let err = client.scan(&req(), &FakeEnvelopeSigner).await.expect_err("503");
+        let err = client
+            .scan(&req(), &FakeEnvelopeSigner)
+            .await
+            .expect_err("503");
         assert!(matches!(err, ZauthError::UnexpectedStatus(503)));
     }
 

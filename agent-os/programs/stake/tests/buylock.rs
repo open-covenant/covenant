@@ -103,9 +103,10 @@ fn withdraw_buylock_ix(
     authority: solana_sdk::pubkey::Pubkey,
     amount: u64,
 ) -> solana_sdk::instruction::Instruction {
-    let data = anchor_lang::InstructionData::data(
-        &covenant_stake_program::instruction::WithdrawBuylock { amount },
-    );
+    let data =
+        anchor_lang::InstructionData::data(&covenant_stake_program::instruction::WithdrawBuylock {
+            amount,
+        });
     let metas = vec![
         solana_sdk::instruction::AccountMeta::new_readonly(env.config, false),
         solana_sdk::instruction::AccountMeta::new_readonly(env.mint, false),
@@ -127,8 +128,12 @@ fn withdraw_buylock_moves_funds_for_authority() {
     let mut env = boot();
     let amount = 7_000_000_000;
     let payer = env.payer.insecure_clone();
-    let depositor_ata =
-        create_token_account(&mut env.svm, &payer, &env.mint, &env.fee_router_keypair.pubkey());
+    let depositor_ata = create_token_account(
+        &mut env.svm,
+        &payer,
+        &env.mint,
+        &env.fee_router_keypair.pubkey(),
+    );
     mint_to(&mut env.svm, &payer, &env.mint, &depositor_ata, amount);
     deposit_buylock_cvnt(&mut env, &depositor_ata, amount).expect("deposit");
 
@@ -148,8 +153,12 @@ fn withdraw_buylock_rejects_non_authority() {
     let mut env = boot();
     let amount = 3_000_000_000;
     let payer = env.payer.insecure_clone();
-    let depositor_ata =
-        create_token_account(&mut env.svm, &payer, &env.mint, &env.fee_router_keypair.pubkey());
+    let depositor_ata = create_token_account(
+        &mut env.svm,
+        &payer,
+        &env.mint,
+        &env.fee_router_keypair.pubkey(),
+    );
     mint_to(&mut env.svm, &payer, &env.mint, &depositor_ata, amount);
     deposit_buylock_cvnt(&mut env, &depositor_ata, amount).expect("deposit");
 

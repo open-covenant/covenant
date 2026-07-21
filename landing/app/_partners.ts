@@ -215,6 +215,14 @@ export const PARTNERS: Integration[] = [
     status: "building",
     href: "https://bentoguard.xyz",
   },
+  {
+    slug: "robinhood",
+    name: "Robinhood",
+    blurb:
+      "Agent crypto orders on Robinhood's API pass a Covenant policy gate before they're placed, and every decision lands on-chain as a verifiable trade receipt.",
+    status: "building",
+    href: "https://robinhood.com/us/en/agentic-trading/",
+  },
 ];
 
 // Partner avatars (X profile images) committed at public/partners/<slug>.jpg.

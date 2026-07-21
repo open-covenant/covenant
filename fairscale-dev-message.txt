@@ -1,5 +1,0 @@
-hey, following up on the credit scoring piece: the docs and /v1/credit are live, so we built the read into the Covenant client this week. Credit reads sit behind our trust gate with the same capped payer, and the first live credit read settled today at $0.50 over the same x402 rail. The signed attestation hash plus /v1/verify-hash on the credit response is a nice touch, we store it next to our own provenance record.
-
-One data point from that read (wallet EnteGjokMnFqTDcZSBitXDQEctMCnqV33HbPHw2LnDCg): credit_data came back with 0 transactions scanned and $0 balances, while trust_pillars on the same response counted 3 transactions and 5 active days. The credit indexer and the trust pillars disagree about the same wallet. Happy to send the full response body if that helps.
-
-The client side of the integration is up for review here: https://github.com/open-covenant/covenant/pull/118. If you have a minute I'd take your eyes on the header naming, envelope shape, and retry/settle semantics.

@@ -61,6 +61,15 @@ The daemon registers the tool when `COVENANT_FAIRSCALE_ENABLED` is truthy. Every
 COVENANT_FAIRSCALE_ENABLED=1 COVENANT_FAIRSCALE_KEY=zpka_... covenantd
 ```
 
+Grant and call it from the client:
+
+```sh
+covenant capabilities grant tool.call.fairscale.score
+covenant tools call fairscale.score --args '{"pubkey":"<base58 wallet>"}'
+```
+
+The crate's live examples are money-gated: each refuses unless `FAIRSCALE_LIVE=1` is set (plus a funded `COVENANT_X402_FUNDING_KEYPAIR` for the paid ones), and each file's header carries its exact run command, e.g. `cargo run -p covenant-fairscale --features solana-example --example live_paid_read`.
+
 ## The `fairscale.score` tool
 
 Input: `{ "pubkey": "<base58 Solana address>" }`. Validated as base58 (32-44 chars) at the tool boundary, so an agent-supplied string cannot smuggle `/`, `?`, `#`, or `..` into the request URL.
@@ -119,6 +128,7 @@ With `COVENANT_FAIRSCALE_X402` wired, a keyless read settles FairScale's live 40
 
 - **Challenge** (shape captured live and pinned in tests): `{"error": "Payment required", "accepts": [{ "scheme": "exact", "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "amount": "5000", "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "payTo": "fairAUEuR1SCcHL254Vb3F3XpUWLruJ2a11f6QfANEN", "maxTimeoutSeconds": 60, "extra": { "feePayer": "DeXterR2kQm8AvRHnNPatWkE46TfAcMeBDjb6FySoAb8", "decimals": 6 } }]}`. Credit quotes `500000` ($0.50) against the same wallet. Abbreviated: the live envelope also mirrors `amount` as `maxAmountRequired` (the x402-canonical field the client prefers) and carries a `resource` object.
 - **Accounting**: spend is operator-bounded by the per-read caps alone; worst case for one tool call with trust-gate and credit on is 10000 + 10000 + 600000 atomic ($0.62), $0.51 at live quotes. Each settlement logs at info. The daemon's `ExternalPaymentSettled` feed and digest anchoring are one deferred increment (see `provenance.rs`).
+- **Daemon-path receipt (2026-07-21)**: score + trust-gate settled keyless end to end (covenantd → pinned v2 sidecar → Dexter), 5000 atomic each, funder `AdChcSmDKX57…zqRb` 0.042→0.032 USDC. Mainnet txs `3AnqzTYijnT9Q53CPFBbxzdpT4ELyrFeXXKtSPX9SL4HwHmqfNUyULP7gvoJh85zQUhjtE9zqSwaPUr3UfkpkvES` (score) and `2XBKxPa4Yh2htVnh4xmdZRRxm68ieJ4eZtj7mCBoaGVQtX3ff2PG2ju4bUg6vcNLXsr3aoTyWNzditkjFfhJZsZp` (trust-gate). The v1-envelope rejection previously observed on this exact path is what the sidecar pin fixed. Note external x402 settles do not yet write `~/.covenant/receipts/` — see Accounting.
 - **Guard rails.** The client only accepts an `exact` / Solana-mainnet / USDC option; refuses zero-amount quotes as malformed rather than treating them as free; refuses any quote above the per-read cap before anything is signed; pays once and retries once; a second 401/402 after payment is surfaced, never re-settled. An "insufficient funds" simulation failure is translated into a plain top-up-the-funder message.
 - **Header quirk.** FairScale reads the payment envelope from `payment-signature` (their documented name) and ignores the x402-standard `x-payment`; the client sends both, so it works against FairScale today and any standard-compliant 402 wall later.
 - **Facilitation** is Dexter (`x402.dexter.cash`), the same facilitator Covenant already integrates elsewhere; Dexter fee-pays the settlement transaction.

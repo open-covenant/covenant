@@ -7,7 +7,7 @@
   "engines": { "node": ">=18" },
   "bin": { "bento-guard": "./bento-guard.mjs" },
   "dependencies": {
-    "@bentoguard/sdk": "1.2.8",
+    "@bentoguard/sdk": "1.2.9",
     "bs58": "6.0.0",
     "@solana/web3.js": "1.95.0",
     "tweetnacl": "1.0.3"

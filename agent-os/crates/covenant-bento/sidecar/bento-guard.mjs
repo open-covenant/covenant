@@ -60,11 +60,16 @@ function normalizeRecommendation(raw) {
   }
 }
 
-// protect() returns riskScore normalized to 0-1 (raw_score / 100000 in the
-// SDK); map it to the 0-100 integer scale the rest of the pipeline uses.
-function clampRisk(raw01) {
-  const n = Math.round(Number(raw01 ?? 0) * 100);
-  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+// The SDK does not keep riskScore on one scale across versions: 1.2.8 sent
+// raw_score/100000 (a 0-1 fraction), 1.2.9 forwards the relayer's final_score
+// untouched. Accept the scales seen in the wild (0-1 fraction, 0-100 percent,
+// raw 0-100000) and map onto the 0-100 integer contract, clamping instead of
+// saturating so a scale drift can never masquerade as max risk.
+function clampRisk(raw) {
+  const n = Number(raw ?? 0);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  const scaled = n <= 1 ? n * 100 : n <= 100 ? n : n / 1000;
+  return Math.min(100, Math.max(0, Math.round(scaled)));
 }
 
 function buildOutput(verdict) {
@@ -93,14 +98,20 @@ async function main() {
     const verdict = await protect(req.intent, {
       agentAddress: req.agentAddress,
       timeout,
+      // Since 1.2.9 the verdict arrives over an SSE stream that otherwise
+      // waits POLL_TIMEOUT_MS (5 min) for a decision. Bound it to the same
+      // budget as the rest of the call so we return (or fail closed) before
+      // the daemon's hard-kill margin, never hanging on a silent stream.
+      pollTimeoutMs: timeout,
       autoPollEscalation: false,
       silent: true,
     });
     process.stdout.write(JSON.stringify(buildOutput(verdict)));
   } catch (e) {
-    // protect() throws on a BLOCKED verdict (HIGH_RISK_DETECTED), carrying the
-    // verdict in e.details. That is a real block, not a guard failure, so emit
-    // it as a verdict rather than letting it fall through to fail-closed.
+    // SDK <=1.2.8 threw on a BLOCKED verdict (HIGH_RISK_DETECTED) with the
+    // verdict in e.details; 1.2.9 returns BLOCKED through the normal path
+    // above. Keep the mapping so an older lockfile or a relayer that still
+    // emits the legacy error decodes as a real block, not a guard failure.
     if (e?.code === "HIGH_RISK_DETECTED") {
       const d = e.details && typeof e.details === "object" ? e.details : {};
       process.stdout.write(

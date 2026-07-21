@@ -39,7 +39,7 @@ export default function PositionsPage() {
         <div className="page-container">
           <PositionsClient />
         </div>
-        <SiteFooter className="absolute inset-x-0 bottom-6 z-20" />
+        <SiteFooter variant="minimal" className="absolute inset-x-0 bottom-6 z-20" />
       </main>
     </WalletProvider>
   );

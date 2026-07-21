@@ -79,7 +79,7 @@ export default function Page() {
         </div>
       </div>
 
-      <SiteFooter className="relative z-20 w-full shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 sm:absolute sm:inset-x-0 sm:bottom-[max(1.5rem,env(safe-area-inset-bottom))] sm:w-auto sm:pb-0 sm:pt-0 xl:pr-[31rem]" />
+      <SiteFooter variant="minimal" className="relative z-20 w-full shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 sm:absolute sm:inset-x-0 sm:bottom-[max(1.5rem,env(safe-area-inset-bottom))] sm:w-auto sm:pb-0 sm:pt-0 xl:pr-[31rem]" />
     </main>
   );
 }

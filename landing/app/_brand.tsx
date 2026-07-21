@@ -16,15 +16,15 @@ export const SITE_BUILD_DATE = "2026-05-31";
 // dateModified tracks SITE_BUILD_DATE — only bump that on real content change.
 export const DOCS_PUBLISHED_DATE = "2026-05-13";
 
+// Header nav: the most relevant surfaces only (products, try, learn, buy).
+// Everything else (about, blog, roadmap, partners, stake, ...) lives in the
+// footer so the header stays focused.
 export const NAV_LINKS = [
-  { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
-  { label: "arena", href: "/arena", external: false as const },
+  { label: "guard", href: "/guard", external: false as const },
+  { label: "trading", href: "/trading", external: false as const },
   { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
-  { label: "roadmap", href: "/roadmap", external: false as const },
-  { label: "about", href: "/about", external: false as const },
-  { label: "blog", href: "/blog", external: false as const },
+  { label: "sandbox", href: "https://sandbox.opencovenant.org", external: true as const },
   { label: "buy", href: "/token", external: false as const },
-  { label: "stake", href: "https://stake.opencovenant.org", external: true as const },
 ];
 
 export const FOOTER_LINKS = [
@@ -37,6 +37,72 @@ export const FOOTER_LINKS = [
   { label: "Terms of Service", href: "/terms", external: false as const },
   { label: "Privacy Policy", href: "/privacy", external: false as const },
   { label: "Contact", href: "/contact", external: false as const },
+];
+
+// $CVNT is a fair-launch pump.fun token, no pre-mine and no team allocation.
+export const CVNT_MINT = "2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump";
+export const CVNT_PUMP_URL = `https://pump.fun/coin/${CVNT_MINT}`;
+
+// The open protocols Covenant speaks, shown as chips in the footer brand block.
+export const FOOTER_PROTOCOLS = ["Solana", "x402", "MCP", "A2A"];
+
+export type FooterColumnLink = { label: string; href: string; external?: boolean };
+
+// The structured, multi-column footer. Single source of truth so every page
+// that mounts the full <SiteFooter /> stays in sync. Every href resolves to a
+// real route or an external surface we own.
+export const FOOTER_COLUMNS: { title: string; links: FooterColumnLink[] }[] = [
+  {
+    title: "Product",
+    links: [
+      { label: "Guard", href: "/guard" },
+      { label: "Trading", href: "/trading" },
+      { label: "Agents", href: "/agents" },
+      { label: "Arena", href: "/arena" },
+      { label: "Stake", href: "https://stake.opencovenant.org", external: true },
+      { label: "Token", href: "/token" },
+    ],
+  },
+  {
+    title: "Ecosystem",
+    links: [
+      { label: "Partners", href: "/partners" },
+      { label: "Sandbox", href: "https://sandbox.opencovenant.org", external: true },
+      {
+        label: "MCP Registry",
+        href: "https://registry.modelcontextprotocol.io/v0.1/servers?search=org.opencovenant",
+        external: true,
+      },
+    ],
+  },
+  {
+    title: "Developers",
+    links: [
+      { label: "Docs", href: "https://docs.opencovenant.org", external: true },
+      { label: "API Reference", href: "/docs/http-api" },
+      { label: "SDK", href: "/sdk" },
+      { label: "GitHub", href: GITHUB_URL, external: true },
+    ],
+  },
+  {
+    title: "Legal",
+    links: [
+      { label: "Terms", href: "/terms" },
+      { label: "Privacy", href: "/privacy" },
+      { label: "Security", href: "/security" },
+    ],
+  },
+  {
+    title: "Company",
+    links: [
+      { label: "About", href: "/about" },
+      { label: "Roadmap", href: "/roadmap" },
+      { label: "Blog", href: "/blog" },
+      { label: "Paper", href: "https://doi.org/10.5281/zenodo.20134416", external: true },
+      { label: "Contact", href: "/contact" },
+      { label: "Follow on X", href: X_URL, external: true },
+    ],
+  },
 ];
 
 // Socials live in the right side of the header on sm+ and fold into the

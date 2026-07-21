@@ -47,7 +47,7 @@ export default function DocsLayout({
             {children}
           </article>
 
-          <SiteFooter className="mx-auto mt-24 max-w-[760px] border-t border-neutral-800/80 pt-6" />
+          <SiteFooter variant="minimal" className="mx-auto mt-24 max-w-[760px] border-t border-neutral-800/80 pt-6" />
         </main>
       </div>
     </div>

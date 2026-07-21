@@ -38,7 +38,7 @@ export default function TreasuryPage() {
         <div className="page-container">
           <TreasuryClient />
         </div>
-        <SiteFooter className="absolute inset-x-0 bottom-6 z-20" />
+        <SiteFooter variant="minimal" className="absolute inset-x-0 bottom-6 z-20" />
       </main>
     </WalletProvider>
   );

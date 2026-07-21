@@ -3,7 +3,6 @@ import Link from "next/link";
 import { CopyAddress } from "./CopyAddress";
 import {
   CVNT_MINT,
-  CVNT_PUMP_URL,
   FOOTER_COLUMNS,
   FOOTER_LINKS,
   FOOTER_PROTOCOLS,
@@ -98,23 +97,13 @@ export function SiteFooter({ className, style, variant = "full" }: SiteFooterPro
           ))}
         </div>
 
-        <div className="mt-12 flex flex-col items-start justify-between gap-4 border-t border-neutral-800/80 py-8 sm:flex-row sm:items-center">
-          <div className="flex min-w-0 max-w-full flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-3">
-            <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-neutral-500">$CVNT contract</span>
-            <CopyAddress address={CVNT_MINT} label="Copy the $CVNT contract address" />
-          </div>
-          <a
-            href={CVNT_PUMP_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex shrink-0 items-center gap-2 rounded-md border border-neutral-800/80 px-3 py-2 font-mono text-[12px] text-neutral-300 transition-colors hover:border-neutral-700 hover:text-neutral-100"
-          >
-            View on pump.fun
-          </a>
+        <div className="mt-12 flex flex-col items-center gap-3 border-t border-neutral-800/80 py-8 text-center">
+          <span className="font-mono text-[11px] uppercase tracking-[0.25em] text-neutral-500">$CVNT contract</span>
+          <CopyAddress address={CVNT_MINT} label="Copy the $CVNT contract address" />
         </div>
 
         <div className="pb-8 text-center font-mono text-[11px] text-neutral-600">
-          © 2026 Covenant · Apache-2.0 · not investment advice
+          © 2026 Covenant · Apache-2.0
         </div>
       </div>
     </footer>

@@ -41,7 +41,7 @@ export default function SdkPage() {
   return (
     <>
       <SiteHeader />
-      <main className="mx-auto w-full max-w-4xl px-5 pb-24 pt-14 sm:px-8">
+      <main className="mx-auto w-full max-w-6xl px-5 pb-24 pt-14 sm:px-8">
         <p className={eyebrow}>typescript &middot; solana &middot; x402</p>
         <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">SDK</h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>

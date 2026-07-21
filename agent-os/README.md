@@ -134,6 +134,7 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 | Settlement | `covenant-settlement`, `covenant-stake-keeper`, `covenant-sap-bridge`, `covenant-metaplex`, `covenant-metaplex-signer`, `programs/settlement`, `programs/stake` |
 | Adapters | `covenant-timeline-adapter` |
 | Multichain (Base/EVM) | `covenant-x402-signer-evm`, `covenant-evm-firewall`, `covenant-spend-permission`, `covenant-ens-gateway` |
+| Trading venues | `covenant-robinhood` |
 
 ## Operating Model
 

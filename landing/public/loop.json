@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-07-21T06:33:01.228Z",
+  "updatedAt": "2026-07-21T06:53:05.211Z",
   "branch": "loop/main-track",
   "totals": {
     "events": 12962,
@@ -8,8 +8,8 @@
   },
   "throughput": {
     "last24h": 0,
-    "last7d": 17,
-    "velocity": 2.4
+    "last7d": 16,
+    "velocity": 2.3
   },
   "daily": [
     {

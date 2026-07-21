@@ -13,6 +13,7 @@ pub mod escrow;
 pub mod http;
 pub mod hyre;
 pub mod metaplex;
+pub mod robinhood;
 pub mod reputation;
 pub mod secret;
 pub mod sns;
@@ -1339,6 +1340,7 @@ pub struct Server {
     /// to resolve a call's model for the per-call capability gate and
     /// the provenance audit row.
     acedata: Option<covenant_acedata::AceDataConfig>,
+    robinhood: Option<Arc<robinhood::RobinhoodState>>,
     /// Opt-in Synapse Agent Protocol bridge. `None` when no operator
     /// has wired it in (the default); a built [`SapBridge`] when
     /// `Server::with_sap_bridge` was called at boot. Handlers that
@@ -1398,6 +1400,7 @@ impl Server {
             metaplex: None,
             sns: None,
             acedata: None,
+            robinhood: None,
             sap_bridge: None,
             intent_outcomes: Arc::new(std::sync::Mutex::new(OutcomeStore::default())),
         }
@@ -1566,6 +1569,14 @@ impl Server {
     /// plain registry tools with no AceData-specific governance.
     pub fn with_acedata(mut self, config: covenant_acedata::AceDataConfig) -> Self {
         self.acedata = Some(config);
+        self
+    }
+
+    /// Enable the Robinhood governed-trading profile. The trading key stays in
+    /// the `covenant-robinhood-signer` sidecar; the daemon holds only the
+    /// receipt attestor and the configured policy.
+    pub fn with_robinhood(mut self, state: robinhood::RobinhoodState) -> Self {
+        self.robinhood = Some(Arc::new(state));
         self
     }
 
@@ -4623,6 +4634,9 @@ impl Server {
         if name.starts_with("acedata.") {
             return self.acedata_tool_call(name, arguments, peer).await;
         }
+        if name.starts_with("robinhood.") {
+            return self.robinhood_tool_call(name, arguments).await;
+        }
         if name.starts_with("circuit.") {
             return self.circuit_tool_call(name, arguments, peer).await;
         }
@@ -5007,6 +5021,79 @@ impl Server {
             Err(e) => Response::Error {
                 message: format!("tool: {e}"),
             },
+        }
+    }
+
+    /// Execute a Robinhood tool. The `tool.call.<name>` capability and scope are
+    /// already enforced by [`Self::call_tool`]. Reads hit the API through the
+    /// sidecar-signed client; `place_order` runs the governed trader (policy
+    /// gate plus a signed receipt), then anchors the receipt on-chain.
+    async fn robinhood_tool_call(&self, name: String, arguments: serde_json::Value) -> Response {
+        let Some(state) = self.robinhood.clone() else {
+            return Response::Error {
+                message: "robinhood profile is not enabled on this daemon.".into(),
+            };
+        };
+        let client = state.trader().client();
+        let result: std::result::Result<serde_json::Value, String> = match name.as_str() {
+            "robinhood.account" => client.account().await.map_err(|e| e.to_string()),
+            "robinhood.holdings" => {
+                let codes = robinhood::string_list(&arguments, "asset_codes");
+                let refs: Vec<&str> = codes.iter().map(String::as_str).collect();
+                client.holdings(&refs).await.map_err(|e| e.to_string())
+            }
+            "robinhood.quote" => {
+                let syms = robinhood::string_list(&arguments, "symbols");
+                let refs: Vec<&str> = syms.iter().map(String::as_str).collect();
+                client.best_bid_ask(&refs).await.map_err(|e| e.to_string())
+            }
+            "robinhood.estimated_price" => {
+                let symbol = arguments.get("symbol").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let side = match arguments.get("side").and_then(|v| v.as_str()) {
+                    Some("sell") => covenant_robinhood::Side::Sell,
+                    _ => covenant_robinhood::Side::Buy,
+                };
+                let quantities: Vec<f64> = arguments
+                    .get("quantities")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(serde_json::Value::as_f64).collect())
+                    .unwrap_or_default();
+                client.estimated_price(&symbol, side, &quantities).await.map_err(|e| e.to_string())
+            }
+            "robinhood.cancel_order" => {
+                let id = arguments.get("order_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                client.cancel_order(&id).await.map_err(|e| e.to_string())
+            }
+            "robinhood.place_order" => match robinhood::parse_order(&arguments) {
+                Ok(order) => match state.trader().submit(order).await {
+                    Ok(mut receipt) => {
+                        if let Some(sig) = state.anchor(&receipt).await {
+                            receipt.anchor = Some(sig);
+                        }
+                        state.record(receipt.clone()).await;
+                        serde_json::to_value(&receipt).map_err(|e| e.to_string())
+                    }
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e),
+            },
+            "robinhood.receipts" => {
+                let limit = arguments.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+                serde_json::to_value(state.recent(limit).await).map_err(|e| e.to_string())
+            }
+            "robinhood.reputation" => {
+                let agent = arguments.get("agent").and_then(|v| v.as_str()).unwrap_or("robinhood-agent");
+                let receipts: Vec<_> = state.recent(1000).await.into_iter().map(|s| s.receipt).collect();
+                serde_json::to_value(covenant_robinhood::trading_reputation(agent, &receipts)).map_err(|e| e.to_string())
+            }
+            other => Err(format!("unknown robinhood tool: {other}")),
+        };
+        match result {
+            Ok(value) => Response::ToolResult {
+                content: vec![covenant_mcp::Content::Json { value }],
+                is_error: false,
+            },
+            Err(message) => Response::Error { message: format!("tool: {message}") },
         }
     }
 

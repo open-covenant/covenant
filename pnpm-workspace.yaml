@@ -7,6 +7,8 @@ packages:
   - landing
   - services/proof-gen
   - services/mcp-bridge
+  - services/robinhood-mcp-bridge
+  - services/robinhood-guard-proxy
   - services/hermes-mcp-bridge
   - services/compute-broker
   - services/coding-gateway

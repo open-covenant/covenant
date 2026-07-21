@@ -1744,6 +1744,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-robinhood"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "covenant-metaplex",
+ "ed25519-dalek 2.2.0",
+ "hex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "covenant-router"
 version = "0.1.0"
 dependencies = [
@@ -2021,6 +2039,7 @@ dependencies = [
  "covenant-metaplex",
  "covenant-peer-auth",
  "covenant-permissions",
+ "covenant-robinhood",
  "covenant-router",
  "covenant-runtime",
  "covenant-sap-bridge",
@@ -2030,6 +2049,7 @@ dependencies = [
  "covenant-types",
  "covenant-x402",
  "dotenvy",
+ "ed25519-dalek 2.2.0",
  "futures",
  "reqwest 0.12.28",
  "serde",

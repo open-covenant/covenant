@@ -49,7 +49,7 @@ export default function Page() {
 
       {/* Hero */}
       <section className="px-6 pt-24 sm:pt-28">
-        <div className="mx-auto flex max-w-6xl flex-col items-center gap-6 text-center">
+        <div className="mx-auto flex max-w-7xl flex-col items-center gap-6 text-center">
           <div className="relative aspect-[1168/774] w-full overflow-hidden rounded-lg sm:aspect-auto sm:h-[46vh]">
             <HeroMesh src="/hero-bg.jpg" />
           </div>
@@ -85,7 +85,7 @@ export default function Page() {
       </section>
 
       {/* Eight primitives */}
-      <section className="mx-auto mt-24 max-w-6xl border-t border-neutral-900 px-6 pt-14">
+      <section className="mx-auto mt-24 max-w-7xl border-t border-neutral-900 px-6 pt-14">
         <p className={eyebrow}>eight host-level primitives</p>
         <h3 className={sectionTitle}>One computer, safely shared by humans and agents</h3>
         <div className="mt-8 grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -101,7 +101,7 @@ export default function Page() {
       </section>
 
       {/* Products */}
-      <section className="mx-auto mt-24 max-w-6xl border-t border-neutral-900 px-6 pt-14">
+      <section className="mx-auto mt-24 max-w-7xl border-t border-neutral-900 px-6 pt-14">
         <p className={eyebrow}>what you plug in</p>
         <h3 className={sectionTitle}>Two ways agents meet the real world safely</h3>
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
@@ -121,7 +121,7 @@ export default function Page() {
       </section>
 
       {/* Builds itself */}
-      <section className="mx-auto mt-24 max-w-6xl border-t border-neutral-900 px-6 pt-14">
+      <section className="mx-auto mt-24 max-w-7xl border-t border-neutral-900 px-6 pt-14">
         <p className={eyebrow}>built in the open</p>
         <h3 className={sectionTitle}>The infrastructure builds itself</h3>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
@@ -135,7 +135,7 @@ export default function Page() {
       </section>
 
       {/* Ecosystem */}
-      <section className="mx-auto mt-24 max-w-6xl border-t border-neutral-900 px-6 pt-14">
+      <section className="mx-auto mt-24 max-w-7xl border-t border-neutral-900 px-6 pt-14">
         <p className={eyebrow}>ecosystem</p>
         <h3 className={sectionTitle}>Speaks the protocols agents already use</h3>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
@@ -149,7 +149,7 @@ export default function Page() {
       </section>
 
       {/* CTA */}
-      <section className="mx-auto mt-24 max-w-6xl border-t border-neutral-900 px-6 pt-14">
+      <section className="mx-auto mt-24 max-w-7xl border-t border-neutral-900 px-6 pt-14">
         <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
           <a
             href="https://sandbox.opencovenant.org"

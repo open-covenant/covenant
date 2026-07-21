@@ -68,7 +68,7 @@ export function SiteFooter({ className, style, variant = "full" }: SiteFooterPro
       className={["w-full text-[13px] text-neutral-400", className ?? ""].filter(Boolean).join(" ")}
       style={style}
     >
-      <div className="mx-auto w-full max-w-6xl px-5 sm:px-8">
+      <div className="mx-auto w-full max-w-7xl px-5 sm:px-8">
         <div className="grid gap-10 border-t border-neutral-800/80 pt-12 md:grid-cols-[1.5fr_repeat(5,1fr)]">
           <div className="max-w-xs">
             <div className="flex items-center gap-2.5">

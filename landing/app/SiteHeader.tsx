@@ -26,7 +26,7 @@ export function SiteHeader() {
       className="absolute inset-x-0 top-0 z-20 border-b border-neutral-800/70 bg-[#030303]/72 backdrop-blur-md"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
-      <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-4 px-5 sm:h-20 sm:px-8">
+      <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-4 px-5 sm:h-20 sm:px-8">
         <div className="flex min-w-0 items-center gap-3 sm:gap-6">
           <Link href="/" aria-label="Covenant home" className="shrink-0">
             <Image

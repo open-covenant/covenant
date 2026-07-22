@@ -78,7 +78,7 @@ function SiteJsonLd() {
         name: SITE_NAME,
         alternateName: "The Covenant Project",
         url: SITE_URL,
-        logo: `${SITE_URL}/logomark.svg`,
+        logo: `${SITE_URL}/covenant-logomark.png`,
         description: DESCRIPTION,
         foundingDate: "2026",
         founder: {

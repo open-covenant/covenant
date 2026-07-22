@@ -51,39 +51,39 @@ type Asset = { title: string; note: string; href: string; file: string; kind: st
 
 const ASSETS: Asset[] = [
   {
-    title: "Logo",
-    note: "Primary lockup — mark and wordmark together. Use this by default.",
+    title: "Lockup",
+    note: "Primary lockup — wordmark and tagline together. Use this by default.",
     href: "/logo.svg",
-    file: "logo.svg",
-    kind: "SVG",
-  },
-  {
-    title: "Logomark",
-    note: "The mark on its own. For avatars, favicons, and tight spaces.",
-    href: "/logomark.svg",
-    file: "logomark.svg",
+    file: "covenant-logo.svg",
     kind: "SVG",
   },
   {
     title: "Wordmark",
-    note: "The name set in the brand form, without the mark.",
+    note: "The name on its own, set in the brand form, without the mark.",
     href: "/wordmark.png",
     file: "wordmark.png",
+    kind: "PNG",
+  },
+  {
+    title: "Logomark",
+    note: "The </> mark on its own. For avatars, favicons, and tight spaces.",
+    href: "/covenant-logomark.png",
+    file: "covenant-logomark.png",
     kind: "PNG",
   },
 ];
 
 function AssetCard({ asset }: { asset: Asset }) {
-  const isMark = asset.file === "logomark.svg";
+  const isMark = asset.file === "covenant-logomark.png";
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-neutral-800/80 bg-[#0a0a0a]/60">
       <div className="flex h-40 items-center justify-center border-b border-neutral-800/70 bg-[#050505] px-8">
         <Image
           src={asset.href}
           alt={`Covenant ${asset.title.toLowerCase()}`}
-          width={isMark ? 72 : 260}
-          height={isMark ? 72 : 56}
-          className={isMark ? "h-14 w-auto opacity-95" : "h-auto w-full max-w-[240px] opacity-95"}
+          width={isMark ? 96 : 260}
+          height={isMark ? 96 : 56}
+          className={isMark ? "h-20 w-auto opacity-95" : "h-auto w-full max-w-[240px] opacity-95"}
         />
       </div>
       <div className="flex flex-1 flex-col gap-3 p-4">
@@ -149,8 +149,8 @@ export default function BrandPage() {
                 ))}
               </div>
               <p className="mt-5 text-[12px] leading-relaxed text-neutral-500">
-                The marks are drawn in white for dark surfaces — the way Covenant is meant to be seen.
-                Place them on {" "}
+                The lockup and <span className="font-mono text-neutral-400">{"</>"}</span> mark are drawn
+                in white for dark surfaces — the way Covenant is meant to be seen. Place them on {" "}
                 <span className="font-mono text-neutral-400">#030303</span> through{" "}
                 <span className="font-mono text-neutral-400">#171717</span>. For a light background,
                 ask us for a dark variant rather than recoloring these.
@@ -248,6 +248,7 @@ export default function BrandPage() {
                   { k: "Name", v: <>Always <span className="text-neutral-100">Covenant</span>, capital C, in running text. The lowercase wordmark is the only exception.</> },
                   { k: "Token", v: <>The token ticker is <span className="font-mono text-neutral-100">$CVNT</span>, uppercase, with the dollar sign.</> },
                   { k: "Tagline", v: <span className="text-neutral-100">{TAGLINE}.</span> },
+                  { k: "Mark", v: <>The <span className="font-mono text-neutral-100">{"</>"}</span> logomark stands in for the whole system: <span className="text-neutral-100">human intent</span>, then <span className="text-neutral-100">agent protocol</span>, with code as the medium between them.</> },
                   { k: "Status", v: <><span className="font-mono uppercase tracking-[0.2em] text-neutral-100">{RELEASE_STATUS}</span> — the protocol is live and evolving in the open.</> },
                   { k: "One-liner", v: "Covenant is the operating layer for agentic software: every agent runs under a signed grant, and every action leaves a receipt." },
                 ].map((row) => (

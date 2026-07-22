@@ -53,7 +53,7 @@ export function SiteFooter({ className, style, variant = "full" }: SiteFooterPro
           .join(" ")}
         style={style}
       >
-        <Image src="/logomark.svg" alt="Covenant" width={30} height={15} className="h-auto w-[30px] opacity-70" />
+        <Image src="/covenant-logomark.png" alt="Covenant" width={28} height={28} className="h-7 w-7 object-contain opacity-70" />
         <nav aria-label="Footer" className="contents">
           {FOOTER_LINKS.map((item) => (
             <FooterLink key={item.href} item={item} />
@@ -71,7 +71,7 @@ export function SiteFooter({ className, style, variant = "full" }: SiteFooterPro
       <div className="mx-auto w-full max-w-7xl px-5 sm:px-8">
         <div className="grid gap-10 border-t border-neutral-800/80 pt-12 md:grid-cols-[1.5fr_repeat(5,1fr)]">
           <div className="max-w-xs">
-            <Image src="/logomark.svg" alt="Covenant" width={26} height={13} className="h-auto w-[26px]" />
+            <Image src="/covenant-logomark.png" alt="Covenant" width={26} height={26} className="h-6 w-6 object-contain" />
             <p className="mt-4 text-[12.5px] leading-relaxed text-neutral-500">{TAGLINE}.</p>
             <p className="mt-4 font-mono text-[11px] tracking-wide text-neutral-600">
               {FOOTER_PROTOCOLS.join("  ·  ")}

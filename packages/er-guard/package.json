@@ -1,6 +1,6 @@
 {
   "name": "@covenant-org/er-guard",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Session-reliability keeper for MagicBlock ephemeral rollups: watches delegated accounts and brings them home on idle, max-lifetime, or validator stall.",
   "license": "Apache-2.0",
   "type": "module",

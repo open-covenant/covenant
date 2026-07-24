@@ -11,7 +11,7 @@
 //   KEYPAIRS=~/.config/solana/id.json ER=https://as.magicblock.app node cli.mjs
 //   ACCOUNTS=<pubkey,pubkey> node cli.mjs
 //   DRY_RUN=1 ONCE=1 node cli.mjs        # single decide-and-log pass
-import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { MAGIC_PROGRAM_ID, MAGIC_CONTEXT_ID } from "@magicblock-labs/ephemeral-rollups-sdk";
 import { guard, edSignerFor } from "./guard.mjs";
 import crypto from "node:crypto";
@@ -26,6 +26,7 @@ const num = (v, d) => (Number.isFinite(+v) && v !== undefined && v !== "" ? +v :
 
 const l1 = new Connection(process.env.L1 || "https://api.mainnet-beta.solana.com", "confirmed");
 const erUrl = process.env.ER || "https://as.magicblock.app";
+const topUpLamports = num(process.env.TOPUP_LAMPORTS, 5_000_000);
 
 const accounts = [];
 let tokenSigner = null;
@@ -40,6 +41,9 @@ if (process.env.KEYPAIRS || process.env.KEYPAIR) {
       address: credits,
       label: `credits of ${owner.publicKey.toBase58().slice(0, 8)}…`,
       isActive: (erAi) => (erAi && erAi.data.length >= 48 ? String(erAi.data.readBigUInt64LE(40)) : null),
+      topUp: (l1c) => sendAndConfirmTransaction(l1c, new Transaction().add(SystemProgram.transfer({
+        fromPubkey: owner.publicKey, toPubkey: credits, lamports: topUpLamports,
+      })), [owner], { commitment: "confirmed" }),
       undelegate: (er) => sendAndConfirmTransaction(er, new Transaction().add(new TransactionInstruction({
         programId: SETTLEMENT,
         keys: [
@@ -69,6 +73,7 @@ await guard({
     stallProbes: num(process.env.STALL_PROBES, 3),
     pollMs: num(process.env.POLL_MS, 30_000),
     retryMs: num(process.env.RETRY_MS, 60_000),
+    lamportFloor: num(process.env.LAMPORT_FLOOR, 5_000_000),
   },
   dryRun: flag(process.env.DRY_RUN),
   once: flag(process.env.ONCE),

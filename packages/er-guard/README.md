@@ -27,7 +27,16 @@ DRY_RUN=1 ONCE=1 er-guard    # single decide-and-log pass
 `*tee*` host mints and refreshes the self-serve JWT automatically. Policy via
 `IDLE_MS`, `MAX_LIFETIME_MS`, `STALL_PROBES`, `POLL_MS`, `RETRY_MS`. A quiet run
 means nothing needed action; the guard only logs a delegation, a state change,
-or a recovery.
+a low-lamport top-up, or a recovery.
+
+## Lamports and frequent commits
+
+Each ER-to-L1 commit spends lamports from the delegated account, and it runs dry
+around ten commits. If you checkpoint often (the point of real-time on-chain
+provenance), the account needs topping up. The guard watches each delegated
+account's balance against `LAMPORT_FLOOR` (default 0.005 SOL): in Covenant mode
+it tops up `TOPUP_LAMPORTS` (default 0.005 SOL) from the owner; in watch mode, or
+with no `topUp` wired, it logs the low balance so you can fund it yourself.
 
 ## Library
 

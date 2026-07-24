@@ -36,12 +36,13 @@ const edSignerFor = (keypair) => async (msg) => {
  * opts:
  *   l1                  Connection to Solana L1
  *   erUrl               ER endpoint (a *tee* host auto-mints and refreshes a JWT)
- *   accounts            [{ address, label?, undelegate?, requestUndelegate?, isActive? }]
+ *   accounts            [{ address, label?, undelegate?, requestUndelegate?, isActive?, topUp? }]
  *                         undelegate(er)        cooperative path, owner-signed, program-specific
  *                         requestUndelegate(l1) permissionless path via the owner program's CPI ix
  *                         isActive(erAccountInfo, prev) -> value that changes while the session is live
+ *                         topUp(l1)             add lamports to the delegated account (funds commits)
  *   tokenSigner         { publicKey, sign } for TEE token minting (defaults to none)
- *   policy              { idleMs, maxLifetimeMs, stallProbes, pollMs, retryMs }
+ *   policy              { idleMs, maxLifetimeMs, stallProbes, pollMs, retryMs, lamportFloor }
  *   dryRun, once, log
  */
 export async function guard(opts) {
@@ -50,7 +51,10 @@ export async function guard(opts) {
     policy = {}, dryRun = false, once = false,
     log = (...a) => console.log(new Date().toISOString(), ...a),
   } = opts;
-  const { idleMs = 15 * 60_000, maxLifetimeMs = 30 * 60_000, stallProbes = 3, pollMs = 30_000, retryMs = 60_000 } = policy;
+  const {
+    idleMs = 15 * 60_000, maxLifetimeMs = 30 * 60_000, stallProbes = 3,
+    pollMs = 30_000, retryMs = 60_000, lamportFloor = 5_000_000,
+  } = policy;
   const isTee = /tee\./.test(erUrl);
 
   if (!Array.isArray(accounts) || accounts.length === 0) throw new Error("guard requires a non-empty accounts array");
@@ -90,6 +94,21 @@ export async function guard(opts) {
 
     const t = Date.now();
     if (!st.since) { st.since = t; st.active = t; log(`${short(key)} delegated, watching`); }
+
+    // Each ER->L1 commit spends lamports from the delegated account, and it
+    // runs dry around ten commits. Top up before then so frequent provenance
+    // checkpoints keep landing; warn if no top-up is wired.
+    if (ai.lamports < lamportFloor) {
+      if (acct.topUp && !dryRun && t - (st.topUpAt || 0) >= retryMs) {
+        st.topUpAt = t;
+        try { log(`${short(key)} low lamports (${ai.lamports}), topped up ${await acct.topUp(l1)}`); }
+        catch (e) { log(`${short(key)} top-up failed (${e.message})`); }
+      } else if (!st.lowLamports) {
+        st.lowLamports = true;
+        log(`${short(key)} low lamports (${ai.lamports} < ${lamportFloor})${acct.topUp ? "" : ", no top-up wired"}`);
+      }
+    } else st.lowLamports = false;
+
     const erAi = er ? await er.getAccountInfo(acct.address).catch(() => null) : null;
     const activity = acct.isActive ? acct.isActive(erAi, st.activity) : erAi?.data?.length ? crypto.createHash("sha256").update(erAi.data).digest("hex") : null;
     if (activity !== null && activity !== st.activity) { st.activity = activity; st.active = t; }

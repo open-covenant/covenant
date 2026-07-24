@@ -704,13 +704,15 @@ pub mod settlement {
         Ok(())
     }
 
-    /// Checkpoint the delegated credit account's state back to L1 without
-    /// releasing it. Runs in the ER; the operator finalizes the commit on the
-    /// base layer.
+    /// Checkpoint the delegated credit account's state (including the
+    /// provenance root) back to L1 without releasing it. Permissionless: any
+    /// payer can force the record on-chain, since a commit moves no tokens and
+    /// releases nothing. This is what lets a verifier or the slash authority
+    /// surface an agent's provenance root without the owner's cooperation.
     #[cfg(feature = "ephemeral")]
-    pub fn commit_credits(ctx: Context<CommitCredits>) -> Result<()> {
+    pub fn commit_credits(ctx: Context<CommitCreditsPermissionless>) -> Result<()> {
         MagicIntentBundleBuilder::new(
-            ctx.accounts.owner.to_account_info(),
+            ctx.accounts.payer.to_account_info(),
             ctx.accounts.magic_context.to_account_info(),
             ctx.accounts.magic_program.to_account_info(),
         )
@@ -1391,8 +1393,9 @@ pub struct DelegateCredits<'info> {
     pub pda: UncheckedAccount<'info>,
 }
 
-/// Commit / undelegate the delegated credit account. `#[commit]` injects
-/// `magic_context` and `magic_program`. The owner signs and funds the commit.
+/// Undelegate the delegated credit account back to L1 writability. `#[commit]`
+/// injects `magic_context` and `magic_program`. Owner-gated: returning the
+/// account to L1 is the owner's (or the recovery keeper's) call.
 #[cfg(feature = "ephemeral")]
 #[commit]
 #[derive(Accounts)]
@@ -1403,6 +1406,25 @@ pub struct CommitCredits<'info> {
         mut,
         has_one = owner @ CovenantError::Unauthorized,
         seeds = [b"credits", owner.key().as_ref()],
+        bump = credits.bump,
+    )]
+    pub credits: Account<'info, CreditAccount>,
+}
+
+/// Permissionless commit of the delegated credit account. Any `payer` funds
+/// the checkpoint; the credit PDA is validated against its own stored `owner`,
+/// so no owner signature is needed. A commit only writes the current ER state
+/// to L1 (no token movement, no release), so opening it lets a verifier or
+/// keeper force an agent's provenance root on-chain.
+#[cfg(feature = "ephemeral")]
+#[commit]
+#[derive(Accounts)]
+pub struct CommitCreditsPermissionless<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"credits", credits.owner.as_ref()],
         bump = credits.bump,
     )]
     pub credits: Account<'info, CreditAccount>,

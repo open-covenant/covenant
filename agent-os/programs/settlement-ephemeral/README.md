@@ -6,8 +6,15 @@ feature on, which adds the credit-account delegation lifecycle:
 
 - `delegate_credits` — delegate `[b"credits", owner]` to the MagicBlock delegation
   program. Pass an ER validator pubkey as the first remaining account to pin it.
-- `commit_credits` — checkpoint the delegated balance to L1 without releasing.
+- `commit_credits` — checkpoint the delegated state (balance + provenance root)
+  to L1 without releasing. **Permissionless**: any `payer` funds the commit; the
+  credit PDA is validated against its stored `owner`, so a verifier or keeper can
+  force an agent's provenance root on-chain without the owner. Accounts: `payer`
+  (signer), `credits`, then the `#[commit]`-injected `magic_program` +
+  `magic_context`. Note: each ER commit spends lamports from the account, so top
+  it up if you commit more than ~10 times before undelegating.
 - `undelegate_credits` — commit final balance and return the account to L1.
+  Owner-gated (owner or recovery keeper).
 - `#[ephemeral]` injects the L1 `process_undelegation` callback.
 
 Everything else (token custody, staking, slashing, governance) is unchanged and

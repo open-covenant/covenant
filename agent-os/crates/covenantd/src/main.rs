@@ -241,6 +241,19 @@ async fn main() -> Result<()> {
             tools_vec.extend(added);
         }
     }
+    if let Some((client, cfg)) = blockrun_from_env() {
+        let added = covenant_blockrun::blockrun_tools(Arc::new(client), &cfg);
+        if added.is_empty() {
+            tracing::warn!("blockrun enabled but registered no tools");
+        } else {
+            info!(
+                count = added.len(),
+                base_url = %cfg.base_url,
+                "blockrun trust overlay enabled (x402 pay-per-call; receipts alongside settlement)"
+            );
+            tools_vec.extend(added);
+        }
+    }
     let mcp_cfg = covenant_mcp::config::McpConfigFile::from_path(&secrets_path)
         .with_context(|| format!("parse mcp config in {}", secrets_path.display()))?;
     for srv in mcp_cfg.servers() {
@@ -983,6 +996,75 @@ fn acedata_from_env() -> Option<(
                 None
             }
         },
+    }
+}
+
+/// Build the BlockRun trust overlay from the environment. BlockRun always pays
+/// per call over x402, so there is no API-key mode: the overlay enables only
+/// when the daemon's x402 signer sidecar is configured, and every paid call
+/// signs through it. Off by default.
+///
+/// - `COVENANT_BLOCKRUN_ENABLED` truthy (`1`, `true`, `yes`) turns it on
+/// - `COVENANT_BLOCKRUN_BASE_URL` overrides the API host (optional)
+/// - `COVENANT_BLOCKRUN_ALLOW` comma-separated tool allowlist (optional)
+fn blockrun_from_env() -> Option<(
+    covenant_blockrun::BlockRunClient,
+    covenant_blockrun::BlockRunConfig,
+)> {
+    let enabled = std::env::var("COVENANT_BLOCKRUN_ENABLED")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let mut cfg = covenant_blockrun::BlockRunConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    if let Ok(url) = std::env::var("COVENANT_BLOCKRUN_BASE_URL") {
+        if !url.trim().is_empty() {
+            cfg.base_url = url.trim().to_string();
+        }
+    }
+    if let Ok(list) = std::env::var("COVENANT_BLOCKRUN_ALLOW") {
+        cfg.allow = Some(
+            list.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
+    }
+    if let Ok(v) = std::env::var("COVENANT_BLOCKRUN_MAX_ATOMIC") {
+        if let Ok(n) = v.trim().parse::<u64>() {
+            cfg.max_atomic = n;
+        }
+    }
+    match x402_dispatch_config_from_env() {
+        Some(x402) => {
+            let mut signer = covenantd::x402::SubprocessSigner::new(&x402.signer_binary);
+            for (key, value) in &x402.signer_env {
+                signer = signer.env(key, value);
+            }
+            let client = covenant_blockrun::BlockRunClient::new(
+                cfg.base_url.clone(),
+                std::sync::Arc::new(signer),
+            )
+            .with_max_atomic(cfg.max_atomic());
+            info!(
+                base_url = %cfg.base_url,
+                max_atomic = cfg.max_atomic(),
+                signer = %x402.signer_binary.display(),
+                "blockrun enabled (x402 pay-per-call)"
+            );
+            Some((client, cfg))
+        }
+        None => {
+            tracing::warn!(
+                "COVENANT_BLOCKRUN_ENABLED set but the x402 signer (COVENANT_X402_ENABLED + \
+                 COVENANT_X402_SIGNER_BINARY) is not configured; blockrun disabled"
+            );
+            None
+        }
     }
 }
 

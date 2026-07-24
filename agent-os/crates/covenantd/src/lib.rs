@@ -4626,6 +4626,9 @@ impl Server {
         if name.starts_with("circuit.") {
             return self.circuit_tool_call(name, arguments, peer).await;
         }
+        if name.starts_with("blockrun.") {
+            return self.blockrun_tool_call(name, arguments, peer).await;
+        }
 
         // Validate arguments against the tool's published input schema before
         // invoking it. Back-compatible: only object schemas that declare
@@ -4866,6 +4869,73 @@ impl Server {
                                         .spent_raw
                                         .map(|n| n.to_string())
                                         .unwrap_or_default(),
+                                    receipt_id,
+                                },
+                            };
+                            self.record_peer_event(peer, event).await;
+                        }
+                    }
+                }
+                Response::ToolResult {
+                    content: r.content,
+                    is_error: r.is_error,
+                }
+            }
+            Err(e) => Response::Error {
+                message: format!("tool: {e}"),
+            },
+        }
+    }
+
+    /// Execute a BlockRun tool. `blockrun.call` returns a `{ "receipt": … }`
+    /// block carrying the settlement signature BlockRun issued for the paid
+    /// call; when present, this records a [`SettlementReceipt`] and an
+    /// [`AuditKind::ExternalPaymentSettled`] row against the caller, so the
+    /// receipt lands alongside — never inside — BlockRun's payment flow. Free
+    /// calls and `blockrun.verify` carry no settlement, so nothing is written.
+    async fn blockrun_tool_call(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        peer: &AgentId,
+    ) -> Response {
+        match self.tools.call(&name, arguments).await {
+            Ok(r) => {
+                if !r.is_error {
+                    if let Some(receipt) = extract_blockrun_receipt(&r.content) {
+                        if let Some(sig) = receipt.payment.tx.clone() {
+                            let (chain, cluster) = blockrun_chain(&receipt.payment.network);
+                            let now = epoch_ms();
+                            let receipt_id = Uuid::new_v4();
+                            let settlement = SettlementReceipt {
+                                id: receipt_id,
+                                payer: peer.clone(),
+                                resource: ResourceKind::Tool,
+                                memory_record_id: None,
+                                credits_consumed: 0,
+                                settled_at: now,
+                                chain: Some(chain.clone()),
+                                cluster,
+                                batch_id: None,
+                                merkle_root: None,
+                                tx_sig: Some(sig.clone()),
+                                slot: None,
+                                confirmed_at: Some(now),
+                                onchain_sig: Some(sig),
+                            };
+                            if let Err(e) = self.settlement.record(settlement).await {
+                                warn!(error = %e, "blockrun settlement record failed");
+                            }
+                            let event = AuditEvent {
+                                id: Uuid::new_v4(),
+                                timestamp_ms: now,
+                                issuer: peer.clone(),
+                                kind: AuditKind::ExternalPaymentSettled {
+                                    provider: "blockrun".into(),
+                                    endpoint: receipt.endpoint.clone(),
+                                    network: chain,
+                                    asset: "USDC".into(),
+                                    amount: receipt.payment.amount.clone(),
                                     receipt_id,
                                 },
                             };
@@ -16333,6 +16403,42 @@ fn extract_circuit_provenance(content: &[covenant_mcp::Content]) -> Option<Circu
     None
 }
 
+/// Lift the `{ "receipt": { ... } }` block `covenant_blockrun` appends to a
+/// `blockrun.call` result and parse it into a [`covenant_blockrun::CallReceipt`].
+/// Returns `None` for `blockrun.verify` results and any call that carried no
+/// receipt block — the daemon then records no settlement.
+fn extract_blockrun_receipt(
+    content: &[covenant_mcp::Content],
+) -> Option<covenant_blockrun::CallReceipt> {
+    for block in content {
+        if let covenant_mcp::Content::Json { value } = block {
+            if let Some(r) = value.get("receipt") {
+                if let Ok(receipt) =
+                    serde_json::from_value::<covenant_blockrun::CallReceipt>(r.clone())
+                {
+                    return Some(receipt);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Map an x402 CAIP-2 network id to the settlement `(chain, cluster)` labels.
+/// Sepolia (84532) is checked before mainnet (8453) since the latter is a
+/// prefix of the former.
+fn blockrun_chain(network: &str) -> (String, Option<String>) {
+    if network == "eip155:84532" {
+        ("base".into(), Some("sepolia".into()))
+    } else if network == "eip155:8453" {
+        ("base".into(), Some("mainnet".into()))
+    } else if network.starts_with("solana") {
+        ("solana".into(), Some("mainnet".into()))
+    } else {
+        (network.to_string(), None)
+    }
+}
+
 fn audit_kind_requires_persistence(kind: &AuditKind) -> bool {
     matches!(
         kind,
@@ -16643,6 +16749,59 @@ mod tests {
         let prov = extract_circuit_provenance(&content).expect("circuit block present");
         assert!(prov.payment_tx.is_none());
         assert!(prov.spent_raw.is_none());
+    }
+
+    #[test]
+    fn extract_blockrun_receipt_reads_paid_block() {
+        let content = vec![
+            covenant_mcp::Content::json(serde_json::json!({ "choices": [] })),
+            covenant_mcp::Content::json(serde_json::json!({ "receipt": {
+                "provider": "blockrun",
+                "endpoint": "/v1/chat/completions",
+                "modelRequested": "gpt-4o-mini",
+                "modelServed": "gpt-4o-mini",
+                "verdict": "delivered",
+                "inputSha256": "a".repeat(64),
+                "outputSha256": "b".repeat(64),
+                "payment": {
+                    "network": "eip155:8453",
+                    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                    "amount": "3000",
+                    "amountUsdc": 0.003,
+                    "payTo": "0xe9030014F5DAe217d0A152f02A043567b16c1aBf",
+                    "tx": "0xdeadbeef"
+                }
+            }})),
+        ];
+        let r = extract_blockrun_receipt(&content).expect("receipt present");
+        assert_eq!(r.payment.tx.as_deref(), Some("0xdeadbeef"));
+        assert_eq!(r.endpoint, "/v1/chat/completions");
+        assert_eq!(r.payment.amount, "3000");
+    }
+
+    #[test]
+    fn extract_blockrun_receipt_none_for_verify_result() {
+        let content = vec![covenant_mcp::Content::json(
+            serde_json::json!({ "valid": true, "digest": "x" }),
+        )];
+        assert!(extract_blockrun_receipt(&content).is_none());
+    }
+
+    #[test]
+    fn blockrun_chain_maps_networks() {
+        assert_eq!(
+            blockrun_chain("eip155:8453"),
+            ("base".to_string(), Some("mainnet".to_string()))
+        );
+        assert_eq!(
+            blockrun_chain("eip155:84532"),
+            ("base".to_string(), Some("sepolia".to_string()))
+        );
+        assert_eq!(
+            blockrun_chain("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
+            ("solana".to_string(), Some("mainnet".to_string()))
+        );
+        assert_eq!(blockrun_chain("weird:1"), ("weird:1".to_string(), None));
     }
 
     struct FakeCircuitTool {

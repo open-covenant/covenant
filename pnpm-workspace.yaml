@@ -1,4 +1,5 @@
 packages:
+  - packages/blockrun-ts
   - packages/config
   - packages/sap-bridge
   - packages/sdk

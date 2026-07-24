@@ -23,6 +23,11 @@
 //!   that funds payments. Required.
 //! - `COVENANT_X402_RPC_URL` — Solana RPC for the blockhash + mint
 //!   decimals lookup. Defaults to mainnet-beta.
+//! - `COVENANT_X402_VERSION`: envelope `x402Version` to emit, 1 (default,
+//!   PayAI v1) or 2 (Dexter-style facilitators).
+//! - `COVENANT_X402_NETWORK_VERBATIM`: truthy echoes the challenge's CAIP-2
+//!   `network` verbatim instead of PayAI's short `solana`. Both knobs apply
+//!   to the sponsored flow; the self-paid flow ignores them.
 
 use std::process::ExitCode;
 
@@ -76,12 +81,42 @@ async fn run() -> Result<String, Box<dyn std::error::Error>> {
         .is_some();
 
     if sponsored {
-        let signer = PayaiSolanaSigner::from_keypair_file(&keypair_path, rpc_url)?;
+        let (version, verbatim) = envelope_overrides(
+            std::env::var("COVENANT_X402_VERSION").ok().as_deref(),
+            std::env::var("COVENANT_X402_NETWORK_VERBATIM")
+                .ok()
+                .as_deref(),
+        )?;
+        let signer = PayaiSolanaSigner::from_keypair_file(&keypair_path, rpc_url)?
+            .x402_version(version)
+            .network_verbatim(verbatim);
         Ok(signer.build_payment(&requirement).await?)
     } else {
         let signer = SolanaSigner::from_keypair_file(&keypair_path, rpc_url)?;
         Ok(signer.build_payment(&requirement).await?)
     }
+}
+
+/// Envelope shape overrides for the sponsored flow. Facilitators disagree:
+/// PayAI v1 wants `x402Version: 1` with the short `solana` network, Dexter
+/// validates version 2 with the CAIP-2 network verbatim. The daemon pins these
+/// per provider instance; junk fails the dispatch instead of silently signing
+/// an envelope the facilitator will reject.
+fn envelope_overrides(version: Option<&str>, verbatim: Option<&str>) -> Result<(u8, bool), String> {
+    let version = match version.map(str::trim) {
+        None | Some("") | Some("1") => 1,
+        Some("2") => 2,
+        Some(other) => {
+            return Err(format!(
+                "COVENANT_X402_VERSION must be 1 or 2, got {other:?}"
+            ))
+        }
+    };
+    let verbatim = matches!(
+        verbatim.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    );
+    Ok((version, verbatim))
 }
 
 /// Decode the stdin [`PaymentRequirements`], trimming surrounding whitespace
@@ -109,5 +144,31 @@ mod tests {
             err.contains("decode PaymentRequirements from stdin"),
             "expected context-tagged decode marker, got: {err}"
         );
+    }
+
+    #[test]
+    fn envelope_overrides_default_to_payai_v1() {
+        assert_eq!(envelope_overrides(None, None).unwrap(), (1, false));
+        assert_eq!(envelope_overrides(Some(""), Some("0")).unwrap(), (1, false));
+    }
+
+    #[test]
+    fn envelope_overrides_accept_dexter_v2_verbatim() {
+        assert_eq!(
+            envelope_overrides(Some("2"), Some("true")).unwrap(),
+            (2, true)
+        );
+        assert_eq!(
+            envelope_overrides(Some(" 2 "), Some("YES")).unwrap(),
+            (2, true)
+        );
+    }
+
+    #[test]
+    fn envelope_overrides_reject_junk_version() {
+        // Junk must fail the dispatch, not silently sign a v1 envelope a
+        // v2-validating facilitator will bounce after the quote is consumed.
+        assert!(envelope_overrides(Some("3"), None).is_err());
+        assert!(envelope_overrides(Some("two"), None).is_err());
     }
 }

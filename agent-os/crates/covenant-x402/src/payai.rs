@@ -61,6 +61,8 @@ pub struct PayaiSolanaSigner {
     rpc_url: String,
     http: reqwest::Client,
     max_bytes: usize,
+    network_verbatim: bool,
+    x402_version: u8,
 }
 
 impl PayaiSolanaSigner {
@@ -83,7 +85,25 @@ impl PayaiSolanaSigner {
             rpc_url: rpc_url.into(),
             http,
             max_bytes,
+            network_verbatim: false,
+            x402_version: 1,
         }
+    }
+
+    /// Emit a specific x402 envelope version (default 1; Dexter's
+    /// facilitator validates version 2).
+    pub fn x402_version(mut self, v: u8) -> Self {
+        self.x402_version = v;
+        self
+    }
+
+    /// Echo the challenge's `network` string verbatim in the payment
+    /// envelope instead of PayAI's short `"solana"` form. Dexter's
+    /// facilitator accepts the CAIP-2 form as-is, so verbatim is the
+    /// right choice whenever the facilitator is not PayAI v1.
+    pub fn network_verbatim(mut self, on: bool) -> Self {
+        self.network_verbatim = on;
+        self
     }
 
     /// Loads the funder keypair from a Solana CLI keypair file. The
@@ -212,10 +232,15 @@ impl Signer for PayaiSolanaSigner {
             bincode::serialize(&tx).map_err(|e| X402Error::Sign(format!("serialize tx: {e}")))?;
         let tx_b64 = BASE64.encode(serialized);
 
+        let network = if self.network_verbatim {
+            requirements.network.as_str()
+        } else {
+            short_network(&requirements.network)
+        };
         let envelope = serde_json::json!({
-            "x402Version": 1,
+            "x402Version": self.x402_version,
             "scheme":      requirements.scheme,
-            "network":     short_network(&requirements.network),
+            "network":     network,
             "payload":     { "transaction": tx_b64 },
         });
         Ok(BASE64.encode(envelope.to_string().as_bytes()))

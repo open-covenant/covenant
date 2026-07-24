@@ -42,6 +42,7 @@ covenant-hyre = { path = "../covenant-hyre" }
 covenant-metaplex = { path = "../covenant-metaplex" }
 covenant-sns = { path = "../covenant-sns" }
 covenant-acedata = { path = "../covenant-acedata" }
+covenant-fairscale = { path = "../covenant-fairscale" }
 covenant-circuit = { path = "../covenant-circuit", optional = true }
 covenant-krexa = { path = "../covenant-krexa" }
 anyhow = { workspace = true }

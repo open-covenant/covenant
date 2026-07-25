@@ -22,6 +22,8 @@ pub const DATA_QUERY_TOOL: &str = "circuit.data.query";
 pub const TOKEN_PRICE_TOOL: &str = "circuit.data.token_price";
 pub const MARKET_OVERVIEW_TOOL: &str = "circuit.data.market_overview";
 
+type CircuitOutput = (Value, Option<String>, Option<u64>, Option<String>);
+
 /// Build the Circuit tool set permitted by `cfg.allow`, over shared inference + data
 /// clients. Empty when the config is disabled.
 pub fn circuit_tools(
@@ -75,10 +77,7 @@ fn payment_block(
 
 /// A capability rejection is a result the agent should see, not a transport failure; a
 /// real network break is a hard tool error.
-fn to_result(
-    endpoint: &str,
-    r: crate::Result<(Value, Option<String>, Option<u64>, Option<String>)>,
-) -> ToolCallResult {
+fn to_result(endpoint: &str, r: crate::Result<CircuitOutput>) -> ToolCallResult {
     match r {
         Ok((body, tx, spent, token)) => ToolCallResult::ok(vec![
             Content::json(body),

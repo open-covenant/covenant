@@ -18,6 +18,8 @@
 //! field. MPL Core reads exactly the [`OracleValidation`] bytes there. The
 //! enum layouts below are byte-compatible with `mpl-core` 0.12.
 
+#![allow(unexpected_cfgs)]
+
 use anchor_lang::prelude::*;
 
 declare_id!("2PJFAtPsVzgLrmvj2Hwx7x1DuUXSjgW44qSR35MZshaD");

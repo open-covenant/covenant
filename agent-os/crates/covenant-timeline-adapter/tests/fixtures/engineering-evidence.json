@@ -1,0 +1,100 @@
+{
+  "runId": "covenant.timeline.m3",
+  "contract": {
+    "schema": "covenant.timeline.contract.v0alpha1",
+    "id": "covenant.engineering.v0",
+    "subject": {
+      "kind": "repository",
+      "id": "open-covenant/covenant"
+    },
+    "checkpoints": [
+      {
+        "id": "pause-recorded",
+        "requirements": ["engineering.pause.recorded"]
+      },
+      {
+        "id": "resume-recorded",
+        "requirements": ["engineering.resume.recorded"]
+      },
+      {
+        "id": "review-complete",
+        "requirements": ["engineering.review.passed"]
+      },
+      {
+        "id": "release-ready",
+        "requirements": ["engineering.release.artifact-ready"],
+        "onAccept": {
+          "kind": "covenant.capability.request",
+          "payloadRef": "release.publish"
+        }
+      }
+    ]
+  },
+  "observations": [
+    {
+      "id": "m0-pause",
+      "kind": "covenant.provenance",
+      "producer": "covenant.git",
+      "claims": ["engineering.pause.recorded"],
+      "checkpoint": "pause-recorded",
+      "payload": {
+        "schema": "covenant.provenance.v1",
+        "subject": {
+          "kind": "git_commit",
+          "repository": "open-covenant/covenant",
+          "commit": "1bf183be97f27f69c111af43f4010af05abd56eb"
+        },
+        "task": {
+          "id": "covenant-timeline",
+          "state": "integration-boundary"
+        }
+      }
+    },
+    {
+      "id": "m3-resume",
+      "kind": "covenant.audit-event",
+      "producer": "covenant.audit",
+      "claims": ["engineering.resume.recorded"],
+      "checkpoint": "resume-recorded",
+      "payload": {
+        "repository": "open-covenant/covenant",
+        "pullRequest": 119,
+        "headCommit": "b2bc36f5e3ce4d6ce7ea1848ff122f864502767c",
+        "status": "resumed"
+      }
+    },
+    {
+      "id": "m3-review",
+      "kind": "validation",
+      "producer": "covenant.local",
+      "claims": ["engineering.review.passed"],
+      "checkpoint": "review-complete",
+      "payload": {
+        "checks": [
+          {
+            "command": "cargo test -p covenant-timeline-adapter",
+            "status": "passed"
+          },
+          {
+            "command": "pnpm verify",
+            "repository": "open-covenant/covenant-timeline",
+            "status": "passed"
+          }
+        ]
+      }
+    },
+    {
+      "id": "m3-release",
+      "kind": "package",
+      "producer": "covenant.local",
+      "claims": ["engineering.release.artifact-ready"],
+      "checkpoint": "release-ready",
+      "payload": {
+        "package": "@covenant-org/timeline",
+        "version": "0.0.0-alpha.1",
+        "packDryRun": "passed",
+        "published": false
+      }
+    }
+  ]
+}

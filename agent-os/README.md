@@ -132,6 +132,7 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 | Compositor | `covenant-tui` |
 | Payments | `covenant-x402`, `covenant-x402-signer`, `covenant-hyre`, `covenant-zauth`, `covenant-circuit` |
 | Settlement | `covenant-settlement`, `covenant-stake-keeper`, `covenant-sap-bridge`, `covenant-metaplex`, `covenant-metaplex-signer`, `programs/settlement`, `programs/stake` |
+| Adapters | `covenant-timeline-adapter` |
 | Multichain (Base/EVM) | `covenant-x402-signer-evm`, `covenant-evm-firewall`, `covenant-spend-permission`, `covenant-ens-gateway` |
 
 ## Operating Model

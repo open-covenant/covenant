@@ -90,7 +90,11 @@ fn data_authority(plugin: &Value) -> Option<&str> {
         .get("adapter_config")
         .or_else(|| plugin.get("adapterConfig"))
         .and_then(|c| c.get("data_authority").or_else(|| c.get("dataAuthority")))
-        .or_else(|| plugin.get("data_authority").or_else(|| plugin.get("dataAuthority")))
+        .or_else(|| {
+            plugin
+                .get("data_authority")
+                .or_else(|| plugin.get("dataAuthority"))
+        })
         .and_then(|a| a.get("address"))
         .and_then(Value::as_str)
 }
@@ -331,7 +335,10 @@ mod tests {
         a["external_plugins"][0]["adapter_config"]["data_authority"]["address"] = json!(attacker);
         a["external_plugins"][0]["data"]["validator"] = json!(AUTH);
         let v = verify_attestation(&a, AUTH);
-        assert!(!v.verified, "a record whose data_authority is not Covenant must not verify");
+        assert!(
+            !v.verified,
+            "a record whose data_authority is not Covenant must not verify"
+        );
         assert!(v
             .reasons
             .iter()

@@ -43,7 +43,7 @@ export default function AgentsPage() {
     <main id="main-content" className="min-h-[100dvh] bg-[#030303] text-neutral-200">
       <SiteHeader />
 
-      <div className="mx-auto max-w-5xl px-6 pb-24 pt-28">
+      <div className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <div className="mb-12 flex flex-col gap-3">
           <p className="text-[11px] uppercase tracking-[3px] text-neutral-500">Agent registry</p>
           <h1 className="text-3xl font-light tracking-tight text-white sm:text-4xl">

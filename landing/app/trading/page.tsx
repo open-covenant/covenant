@@ -75,7 +75,7 @@ export default function TradingPage() {
   return (
     <>
       <SiteHeader />
-      <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-14 sm:px-8">
+      <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <p className={eyebrow}>policy &middot; receipts &middot; track record</p>
         <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
           Governed agentic trading

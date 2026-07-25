@@ -76,7 +76,7 @@ export default function RobinhoodPage() {
   return (
     <>
       <SiteHeader />
-      <main className="mx-auto w-full max-w-4xl px-5 pb-24 pt-14 sm:px-8">
+      <main className="mx-auto w-full max-w-7xl px-5 pb-24 pt-[88px] sm:px-8 sm:pt-[120px]">
         <p className={eyebrow}>robinhood chain &middot; usdg &middot; live onchain</p>
         <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">
           Bounded agent spend

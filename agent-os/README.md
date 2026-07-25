@@ -127,11 +127,12 @@ The Linux host, `runsc`, rootfs, and CI adoption contract is maintained internal
 |---|---|
 | Core protocol | `covenant-types`, `covenant-ipc`, `covenant-manifest` |
 | Control plane | `covenantd`, `covenant`, `covenant-sdk`, `covenant-router`, `covenant-runtime` |
-| Trust and policy | `covenant-identity`, `covenant-attestation`, `covenant-evm-signer`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget` |
+| Trust and policy | `covenant-identity`, `covenant-attestation`, `covenant-evm-signer`, `covenant-permissions`, `covenant-peer-auth`, `covenant-audit`, `covenant-budget`, `covenant-krexa` |
 | State and tools | `covenant-memory`, `covenant-tools`, `covenant-llm`, `covenant-mcp`, `covenant-a2a`, `covenant-sns`, `covenant-acedata` |
 | Compositor | `covenant-tui` |
-| Payments | `covenant-x402`, `covenant-x402-signer`, `covenant-hyre`, `covenant-zauth` |
+| Payments | `covenant-x402`, `covenant-x402-signer`, `covenant-hyre`, `covenant-zauth`, `covenant-circuit` |
 | Settlement | `covenant-settlement`, `covenant-stake-keeper`, `covenant-sap-bridge`, `covenant-metaplex`, `covenant-metaplex-signer`, `programs/settlement`, `programs/stake` |
+| Adapters | `covenant-timeline-adapter` |
 | Multichain (Base/EVM) | `covenant-x402-signer-evm`, `covenant-evm-firewall`, `covenant-spend-permission`, `covenant-ens-gateway` |
 
 ## Operating Model

@@ -1895,6 +1895,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "covenant-timeline-adapter"
+version = "0.1.0"
+dependencies = [
+ "covenant-audit",
+ "covenant-ipc",
+ "covenant-types",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
 name = "covenant-tools"
 version = "0.1.0"
 dependencies = [

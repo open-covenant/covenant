@@ -1,0 +1,136 @@
+{
+  "schema": "covenant.timeline.run.v0alpha1",
+  "runId": "covenant.timeline.m3",
+  "contract": {
+    "checkpoints": [
+      {
+        "id": "pause-recorded",
+        "requirements": ["engineering.pause.recorded"]
+      },
+      {
+        "id": "resume-recorded",
+        "requirements": ["engineering.resume.recorded"]
+      },
+      {
+        "id": "review-complete",
+        "requirements": ["engineering.review.passed"]
+      },
+      {
+        "id": "release-ready",
+        "onAccept": {
+          "kind": "covenant.capability.request",
+          "payloadRef": "release.publish"
+        },
+        "requirements": ["engineering.release.artifact-ready"]
+      }
+    ],
+    "id": "covenant.engineering.v0",
+    "schema": "covenant.timeline.contract.v0alpha1",
+    "subject": {
+      "id": "open-covenant/covenant",
+      "kind": "repository"
+    }
+  },
+  "events": [
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-0",
+      "sequence": 0,
+      "type": "evidence.recorded",
+      "evidence": {
+        "id": "m0-pause",
+        "kind": "covenant.provenance",
+        "claims": ["engineering.pause.recorded"],
+        "payloadDigest": "sha256:bd8a4dc0b7352f0470a44bbb5e81968515c27218d296f81470d76b28ca503063",
+        "producer": "covenant.git"
+      }
+    },
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-1",
+      "sequence": 1,
+      "type": "checkpoint.evaluated",
+      "checkpointId": "pause-recorded",
+      "evidenceRefs": ["m0-pause"],
+      "policyRef": "covenant.engineering.v0"
+    },
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-2",
+      "sequence": 2,
+      "type": "evidence.recorded",
+      "evidence": {
+        "id": "m3-resume",
+        "kind": "covenant.audit-event",
+        "claims": ["engineering.resume.recorded"],
+        "payloadDigest": "sha256:410239007593109f7221f8427af93c4c20c48b78cfd672c5402e3ad23e387d15",
+        "producer": "covenant.audit"
+      }
+    },
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-3",
+      "sequence": 3,
+      "type": "checkpoint.evaluated",
+      "checkpointId": "resume-recorded",
+      "evidenceRefs": ["m3-resume"],
+      "policyRef": "covenant.engineering.v0"
+    },
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-4",
+      "sequence": 4,
+      "type": "evidence.recorded",
+      "evidence": {
+        "id": "m3-review",
+        "kind": "validation",
+        "claims": ["engineering.review.passed"],
+        "payloadDigest": "sha256:c8debdea3cbfeba5fa4192c21981505b68a01c3de2a5508df15ae737bb275135",
+        "producer": "covenant.local"
+      }
+    },
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-5",
+      "sequence": 5,
+      "type": "checkpoint.evaluated",
+      "checkpointId": "review-complete",
+      "evidenceRefs": ["m3-review"],
+      "policyRef": "covenant.engineering.v0"
+    },
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-6",
+      "sequence": 6,
+      "type": "evidence.recorded",
+      "evidence": {
+        "id": "m3-release",
+        "kind": "package",
+        "claims": ["engineering.release.artifact-ready"],
+        "payloadDigest": "sha256:37d4fc230f5db226e3f08c2be21a5596574124d21daaae89b9a58ec98bb7e5c1",
+        "producer": "covenant.local"
+      }
+    },
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-7",
+      "sequence": 7,
+      "type": "checkpoint.evaluated",
+      "checkpointId": "release-ready",
+      "evidenceRefs": ["m3-release"],
+      "policyRef": "covenant.engineering.v0"
+    },
+    {
+      "schema": "covenant.timeline.event.v0alpha1",
+      "id": "event-8",
+      "sequence": 8,
+      "type": "receipt.recorded",
+      "receipt": {
+        "id": "receipt/covenant.timeline.m3:release-ready:7",
+        "commandId": "covenant.timeline.m3:release-ready:7",
+        "status": "succeeded",
+        "effectDigest": "sha256:d7c985e61b045935112232060850e2b64c3744ef1f217653aa7317736ba67a46"
+      }
+    }
+  ]
+}

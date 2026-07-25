@@ -15,7 +15,7 @@
 Covenant sits below agent applications and above the host operating system. It owns the state, authority, and accountability concerns that recur across agent frameworks — scoped capabilities, durable memory, runtime isolation, append-only audit, and commit-scoped provenance — so individual frameworks can stop reinventing them.
 
 <!-- METRICS:START -->
-**Status.** Local control plane is real and live-tested (37 Rust crates, ~256k lines, 3478 source-discovered Rust tests including 470 live boundary tests). Production-grade sandboxing for hostile agent code and networked multi-peer operation are roadmap; the Solana settlement program is deployed on mainnet (credits, staking, slashing, on-chain receipt anchoring), but its daemon-driven economic lifecycle is not yet production. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
+**Status.** Local control plane is real and live-tested (39 Rust crates, ~259k lines, 3513 source-discovered Rust tests including 472 live boundary tests). Production-grade sandboxing for hostile agent code and networked multi-peer operation are roadmap; the Solana settlement program is deployed on mainnet (credits, staking, slashing, on-chain receipt anchoring), but its daemon-driven economic lifecycle is not yet production. See [BUILT.md](./BUILT.md) for the explicit honesty boundary.
 <!-- METRICS:END -->
 
 **Multi-chain reach.** The trust layer also projects onto Base mainnet as signed statements any EVM contract verifies with one `ecrecover` — ERC-8004 agent registration, a deployed bond-receipt verifier, a registered EAS reputation schema, and an ENS CCIP-Read gateway (`*.agents.opencovenant.eth`) — while `$CVNT` stays a single Solana mint that is never bridged or wrapped and every per-call fee and bond is chain-local USDC. On-chain reputation writes and funded USDC bonds are registered but not yet exercised, while live x402 sellers settle chain-local USDC on both Solana and Base mainnet. See [docs/multichain-value-capture.md](./docs/multichain-value-capture.md).
@@ -181,8 +181,16 @@ Covenant advances open infrastructure for:
 - capability-scoped delegation across local and remote agents;
 - durable project memory for long-running work;
 - resumable task ownership across interruptions;
+- portable temporal contracts for evidenced checkpoints and replay;
 - policy-aware tool use and sandboxed execution;
 - audit-root attestations, public provenance, and agent coordination economics.
+
+The pre-alpha
+[Covenant Timeline integration](./docs/covenant-timeline.md) now translates
+audit and provenance records into payload-free evidence, maps Timeline commands
+to explicit Covenant capability requests, joins typed outcomes as receipts, and
+exports an independently verifiable four-checkpoint engineering run. Covenant
+contains the adapter, not a fork of the standalone reducer.
 
 ## Citing
 

@@ -24,7 +24,10 @@ struct SubprocessSigner {
 
 #[async_trait]
 impl Signer for SubprocessSigner {
-    async fn build_payment(&self, requirements: &PaymentRequirements) -> covenant_x402::Result<String> {
+    async fn build_payment(
+        &self,
+        requirements: &PaymentRequirements,
+    ) -> covenant_x402::Result<String> {
         let json = serde_json::to_string(requirements)
             .map_err(|e| covenant_x402::X402Error::Sign(e.to_string()))?;
         let mut child = Command::new(&self.bin)

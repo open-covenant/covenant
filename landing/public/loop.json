@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-28T12:07:16.987Z",
+  "updatedAt": "2026-07-28T12:27:21.103Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12971,
-    "tasks": 1521,
+    "events": 12976,
+    "tasks": 1522,
     "integrated": 1522
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1514,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "self_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "multichain-reputation-staging-source-chain-integrity",
+    "state": "self_review",
+    "since": "2026-07-28T12:25:56.666Z"
+  },
   "recent": [
     {
       "at": "2026-07-28T11:52:21.987Z",

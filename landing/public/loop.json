@@ -1,8 +1,8 @@
 {
-  "updatedAt": "2026-07-28T12:47:25.183Z",
+  "updatedAt": "2026-07-28T13:07:29.402Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12981,
+    "events": 12985,
     "tasks": 1523,
     "integrated": 1523
   },
@@ -185,8 +185,9 @@
   ],
   "states": {
     "integrated": 1515,
-    "proposed": 2,
-    "blocked": 6
+    "proposed": 1,
+    "blocked": 6,
+    "self_review": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "multichain-agentcard-published-conformance",
+    "state": "self_review",
+    "since": "2026-07-28T12:59:38.340Z"
+  },
   "recent": [
     {
       "at": "2026-07-28T12:44:34.631Z",

@@ -9,8 +9,15 @@
 //! - `COVENANT_EVM_ISSUER_KEY` — path to the 32-byte secp256k1 issuer
 //!   secret. Loaded through the hardened identity store (`0600`/`0700`),
 //!   created on first use. Required.
-//! - `COVENANT_EVM_CHAIN` — target chain. Only `base-sepolia` (the
-//!   default) is available; mainnet broadcast is gated separately.
+//! - `COVENANT_EVM_CHAIN` — target chain. `base-sepolia` (the default) is
+//!   the only chain signed for autonomously. The Base mainnet aliases
+//!   (`base`, `base-mainnet`, `eip155:8453`) all resolve to one gated
+//!   domain and fail closed without the override below.
+//! - `COVENANT_EVM_ALLOW_MAINNET` — operator override for the mainnet
+//!   gate; must be exactly `1`. Signing here is off-chain and moves no
+//!   funds, but a mainnet-domain attestation is a live artifact Base
+//!   tooling accepts, so producing one stays an operator decision
+//!   (BLOCKERS.md "HELD — multichain-21 attestation").
 //! - `COVENANT_EVM_MODE` — what stdin holds. `audit-root` (the default)
 //!   reads a dual-signed audit-root VC and must be signed by the key that
 //!   signed the VC's EVM proof. `reputation` reads a reputation projection
@@ -22,10 +29,17 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use covenant_attestation::VerifiableCredential;
-use covenant_evm_signer::{parse_reputation_projection, EasAttestationSigner, EasDomain};
+use covenant_evm_signer::{
+    parse_reputation_projection, EasAttestationSigner, EasDomain, EvmSignerError,
+};
 use covenant_identity::Secp256k1IssuerKey;
 
 type BoxError = Box<dyn std::error::Error>;
+
+/// The one chain the sidecar signs for without an operator override.
+const DEFAULT_CHAIN: &str = "base-sepolia";
+/// Operator override for the Base mainnet gate. Must be exactly `1`.
+const ALLOW_MAINNET_ENV: &str = "COVENANT_EVM_ALLOW_MAINNET";
 
 fn main() -> ExitCode {
     match run() {
@@ -48,7 +62,8 @@ fn run() -> Result<String, BoxError> {
     let domain = domain_for(
         std::env::var("COVENANT_EVM_CHAIN")
             .as_deref()
-            .unwrap_or("base-sepolia"),
+            .unwrap_or(DEFAULT_CHAIN),
+        std::env::var(ALLOW_MAINNET_ENV).ok().as_deref(),
     )?;
     let mode = std::env::var("COVENANT_EVM_MODE").unwrap_or_else(|_| "audit-root".into());
 
@@ -76,17 +91,31 @@ fn run() -> Result<String, BoxError> {
 /// Resolve the target chain to its EAS domain. Each chain carries its own
 /// EAS domain version, so an unknown chain is refused rather than silently
 /// retargeted (which would sign under the wrong domain and recover the wrong
-/// signer). Off-chain signing only: the issuer signs the attestation here, it
-/// is never broadcast, so mainnet is not a fund-moving path.
-fn domain_for(chain: &str) -> Result<EasDomain, BoxError> {
-    match chain {
-        "base-sepolia" => Ok(EasDomain::base_sepolia()),
-        "base" | "base-mainnet" => Ok(EasDomain::base_mainnet()),
-        other => Err(format!(
-            "unsupported COVENANT_EVM_CHAIN '{other}': expected 'base-sepolia' or 'base'"
-        )
-        .into()),
+/// signer).
+///
+/// The mainnet gate is keyed on the *resolved* chain id, not the alias
+/// spelling, so `base`, `base-mainnet`, and `eip155:8453` all pass through
+/// the same fail-closed check: unless `allow_mainnet` is exactly `1`
+/// (`COVENANT_EVM_ALLOW_MAINNET=1`), only Base Sepolia's domain resolves.
+/// Off-chain signing moves no funds, but a mainnet-domain attestation is a
+/// live artifact Base tooling accepts, so it stays an operator decision
+/// (BLOCKERS.md "HELD — multichain-21 attestation").
+fn domain_for(chain: &str, allow_mainnet: Option<&str>) -> Result<EasDomain, BoxError> {
+    let domain = match chain {
+        "base-sepolia" => EasDomain::base_sepolia(),
+        "base" | "base-mainnet" | "eip155:8453" => EasDomain::base_mainnet(),
+        other => {
+            return Err(format!(
+                "unsupported COVENANT_EVM_CHAIN '{other}': expected 'base-sepolia' or a \
+                 gated mainnet alias ('base', 'base-mainnet', 'eip155:8453')"
+            )
+            .into())
+        }
+    };
+    if domain.chain_id != EasDomain::base_sepolia().chain_id && allow_mainnet != Some("1") {
+        return Err(Box::new(EvmSignerError::MainnetGated("Base mainnet")));
     }
+    Ok(domain)
 }
 
 #[cfg(test)]
@@ -94,15 +123,65 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Every spelling that resolves to the Base mainnet domain. A gate keyed
+    /// on one alias but not another would be a bypass, so the tests iterate
+    /// all of them; a newly added alias must join the gate to pass.
+    const MAINNET_ALIASES: [&str; 3] = ["base", "base-mainnet", "eip155:8453"];
+
     #[test]
-    fn domain_for_resolves_base_chains_and_rejects_others() {
-        assert_eq!(domain_for("base-sepolia").unwrap().chain_id, 84_532);
-        assert_eq!(domain_for("base").unwrap().chain_id, 8_453);
-        assert_eq!(domain_for("base-mainnet").unwrap().chain_id, 8_453);
-        // An unknown chain is refused, not silently retargeted to a default,
-        // so a caller never signs under the wrong EAS domain.
-        assert!(domain_for("mainnet").is_err());
-        assert!(domain_for("ethereum").is_err());
+    fn the_default_chain_needs_no_override() {
+        // Pins the header doc: `base-sepolia` is the default and the only
+        // chain available without COVENANT_EVM_ALLOW_MAINNET.
+        assert_eq!(domain_for(DEFAULT_CHAIN, None).unwrap().chain_id, 84_532);
+    }
+
+    #[test]
+    fn every_mainnet_alias_fails_closed_without_the_override() {
+        // The gate BLOCKERS.md's mainnet-attestation prerequisite points at.
+        for alias in MAINNET_ALIASES {
+            let err = domain_for(alias, None).unwrap_err();
+            assert!(
+                matches!(
+                    err.downcast_ref::<EvmSignerError>(),
+                    Some(EvmSignerError::MainnetGated(_))
+                ),
+                "{alias} must be MainnetGated, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_override_must_be_exactly_one() {
+        // Fail closed on anything but the documented literal `1`: a typo'd
+        // or truthy-looking value must not open the gate.
+        for weak in ["true", "yes", "0", "", " 1"] {
+            for alias in MAINNET_ALIASES {
+                assert!(
+                    domain_for(alias, Some(weak)).is_err(),
+                    "{alias} must stay gated under override '{weak}'"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overridden_mainnet_aliases_share_one_pinned_domain() {
+        for alias in MAINNET_ALIASES {
+            let d = domain_for(alias, Some("1")).unwrap();
+            assert_eq!(d.chain_id, 8_453, "{alias}");
+            assert_eq!(d.version, "1.0.1", "{alias}");
+        }
+    }
+
+    #[test]
+    fn unknown_chains_are_refused_even_with_the_override() {
+        // The override widens availability to exactly Base mainnet — it is
+        // not a bypass of chain resolution itself. Unknown chains are
+        // refused, not silently retargeted, so a caller never signs under
+        // the wrong EAS domain.
+        for chain in ["mainnet", "ethereum", "eip155:1", ""] {
+            assert!(domain_for(chain, Some("1")).is_err(), "{chain}");
+        }
     }
 
     #[test]

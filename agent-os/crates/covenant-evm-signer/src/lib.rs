@@ -78,7 +78,7 @@ pub enum EvmSignerError {
     Signature(String),
     #[error("reputation projection is invalid: {0}")]
     Reputation(String),
-    #[error("on-chain relaying to {0} is operator-gated; only Base Sepolia is autonomous")]
+    #[error("signing for {0} is operator-gated (set COVENANT_EVM_ALLOW_MAINNET=1 to override); only Base Sepolia is autonomous")]
     MainnetGated(&'static str),
     #[error("attestation payload is {len} bytes, over the {max}-byte relay bound")]
     PayloadTooLarge { len: usize, max: usize },

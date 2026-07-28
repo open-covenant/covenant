@@ -9,9 +9,12 @@
 //! - **Sweep** (default 1h): read SOL balance of the creator wallet, compute
 //!   a configurable split (default 25/25/30/20 stakers/buylock/treasury/subsidy),
 //!   and route each leg. Stakers fold into the staking program via
-//!   `deposit_sol_fees`. Buy-and-lock is a stub in v1 (logs and skips —
-//!   Jupiter swap + `deposit_buylock_cvnt` lands in v1.1). Treasury and
-//!   subsidy are plain SOL transfers.
+//!   `deposit_sol_fees`. Buy-and-lock swaps its SOL cut to CVNT through
+//!   Jupiter and locks the received amount via `deposit_buylock_cvnt`;
+//!   below `min_buylock_lamports` it defers to the next sweep. Treasury
+//!   and subsidy are plain SOL transfers. Legs run independently — a
+//!   failing leg is logged and retried next cycle, never aborting the
+//!   sweep.
 //! - **Accrue** (default 6h): permissionlessly fold any orphaned
 //!   `pending_sol_lamports` into the per-weight accumulator. Belt-and-suspenders
 //!   because `deposit_sol_fees` already folds inline; this catches missed folds.

@@ -63,8 +63,9 @@ bound to the agent's Solana address (its ed25519 public key):
 { "name": "DID", "endpoint": "did:pkh:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:<pubkey>", "version": "v1" }
 ```
 
-`agentId` is `0` until the agent is registered on-chain; the caller supplies the
-real `agentId` and `<CovenantRegistry>` address once the registry exists.
+`agentId` is `0` when the registry mints no numeric id — a Solana home registry
+identifies the agent by its pubkey, the `did:pkh` subject — and carries the
+ERC-721 tokenId for registries that do (see the published card below).
 
 ## Signing
 
@@ -93,11 +94,54 @@ let vk = covenant_identity::verifying_key_from_bytes(id.pubkey_bytes())?;
 doc.verify(&vk)?;
 ```
 
+## The published Covenant Foundation card
+
+The Covenant Foundation agent is registered in the ERC-8004 IdentityRegistry on
+Base mainnet (`agentId 58403`, registry `0x8004A169…a432`; see
+`agent-os/evm/deployments.json`), and that registration's `agentURI` serves
+`https://opencovenant.org/agents/covenant-foundation.json`.
+
+The canonical content of that document is produced by
+`covenant_identity::covenant_foundation_card()` and emitted by:
+
+```bash
+cd agent-os && cargo run -p covenant-identity --example generate_agent_card
+```
+
+The card preserves the agent's identity across both chains: the Solana
+identity pubkey as the `did:pkh` service subject, the MPL Core home registry
+in CAIP-2 genesis form, and the Base ERC-721 registration as a second
+`registrations` entry:
+
+```
+"registrations": [
+  { "agentId": 0, "agentRegistry": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d" },
+  { "agentId": 58403, "agentRegistry": "eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432" }
+]
+```
+
+The home entry keeps `agentId: 0`: MPL Core mints no numeric tokenId, so the
+Solana identity is keyed by the agent's pubkey (the `did:pkh` subject), and the
+entry is a Covenant convention pointing at the home registry rather than an
+on-chain ERC-8004 registration. The Base entry is the on-chain ERC-721
+registration.
+
+A golden fixture
+(`agent-os/crates/covenant-identity/tests/fixtures/covenant-foundation.unsigned.json`)
+pins the generator's output byte-for-byte in the crate's tests, and
+`agent-os/scripts/validate-agentcard-conformance.mjs` (run by `validate.sh`)
+checks both the fixture and the live served file against the dual-shape rules,
+reporting any divergence field by field. Because the registered `agentURI`
+serves whatever sits at that path, replacing the live file — and signing the
+card with the Foundation identity key (`signatures`) — is a deliberate,
+reviewed release step, not an automated write. That review also covers the
+assertions the regenerated card adds over the previously served file
+(`x402Support`, `supportedTrust`).
+
 ## Scope
 
-Generation, signing, and verification are **local only** and implemented today.
-Publishing the document to a public `/.well-known/agent-registration.json`
-endpoint or registering the agent in an on-chain ERC-8004 registry is **planned**
-and tracked under the multichain roadmap (registry deployment is operator-gated).
+Generation, signing, and verification are **local only**. Signing the
+published card and replacing the served file are operator steps; registering
+in further on-chain registries remains tracked under the multichain roadmap.
 
 [`AgentRegistration`]: ../agent-os/crates/covenant-identity/src/registration.rs

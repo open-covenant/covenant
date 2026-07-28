@@ -1,0 +1,120 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "protocolVersion": "0.3.0",
+  "name": "Covenant Foundation Agent",
+  "description": "The Covenant Foundation's production agent, running on covenantd, the open-source agent operating system for accountable autonomy. Every action it takes passes a scoped capability check, debits an enforced budget, and is recorded in an append-only, hash-chained audit log. Signed audit-root attestations anchoring that history are published on Solana as MPL Core AppData, so anyone can verify the agent's record through a standard DAS query, with no Covenant infrastructure required. Identity, permissions, and a tamper-evident audit trail: trust you can check, not claim.",
+  "url": "https://opencovenant.org",
+  "version": "0.1.0",
+  "capabilities": {},
+  "defaultInputModes": [
+    "text/plain",
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "text/plain",
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "identity",
+      "name": "Agent identity",
+      "description": "Canonical ed25519 agent identity, anchored on Solana as an MPL Core asset.",
+      "tags": [
+        "identity",
+        "solana"
+      ]
+    },
+    {
+      "id": "capabilities",
+      "name": "Scoped capabilities",
+      "description": "Every action passes a scoped capability check with enforced budgets.",
+      "tags": [
+        "authorization",
+        "governance"
+      ]
+    },
+    {
+      "id": "audit-attestation",
+      "name": "Audit-root attestation",
+      "description": "Signed audit-root attestations over the append-only, hash-chained audit log, verifiable via a standard DAS query.",
+      "tags": [
+        "audit",
+        "attestation",
+        "solana"
+      ]
+    },
+    {
+      "id": "operator-console",
+      "name": "Operator console",
+      "description": "Web console for operating the agent in the sandbox environment.",
+      "tags": [
+        "console"
+      ]
+    },
+    {
+      "id": "mcp-tools",
+      "name": "MCP tools",
+      "description": "Daemon-mediated MCP tool execution under capability enforcement.",
+      "tags": [
+        "mcp",
+        "tools"
+      ]
+    },
+    {
+      "id": "audit-log",
+      "name": "Audit log",
+      "description": "Append-only, hash-chained record of every governed action.",
+      "tags": [
+        "audit"
+      ]
+    },
+    {
+      "id": "documentation",
+      "name": "Documentation",
+      "description": "Covenant protocol and operator documentation.",
+      "tags": [
+        "docs"
+      ]
+    }
+  ],
+  "image": "https://opencovenant.org/agents/covenant-agent-1024.png",
+  "services": [
+    {
+      "name": "A2A",
+      "endpoint": "https://opencovenant.org",
+      "version": "0.3.0"
+    },
+    {
+      "name": "DID",
+      "endpoint": "did:pkh:solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:4XtUrwvPWAzMGnsKenMpTMATXN3e2quJV11Jg2dab2dc",
+      "version": "v1"
+    },
+    {
+      "name": "web",
+      "endpoint": "https://opencovenant.org"
+    },
+    {
+      "name": "web",
+      "endpoint": "https://sandbox.opencovenant.org"
+    },
+    {
+      "name": "web",
+      "endpoint": "https://docs.opencovenant.org"
+    }
+  ],
+  "x402Support": true,
+  "active": true,
+  "registrations": [
+    {
+      "agentId": 0,
+      "agentRegistry": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d"
+    },
+    {
+      "agentId": 58403,
+      "agentRegistry": "eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+    }
+  ],
+  "supportedTrust": [
+    "reputation"
+  ]
+}

@@ -24,9 +24,9 @@
 //! future spec revision surfaces as a failing test, not a silently
 //! unparseable card.
 //!
-//! Generation, signing, and verification are local only. Publishing to a
-//! public `/.well-known` endpoint or an on-chain registry is out of scope
-//! here (tracked under multichain-20).
+//! Generation, signing, and verification are local only. The published
+//! Covenant Foundation card is built by [`crate::foundation`]; signing it
+//! and replacing the served file remain operator steps.
 //!
 //! [`AgentCard`]: https://github.com/a2aproject/A2A
 
@@ -103,8 +103,10 @@ pub struct RegistrationParams<'a> {
     /// `registry_caip2`. The `agentRegistry` field is
     /// `<registry_caip2>:<registry_address>`.
     pub registry_address: &'a str,
-    /// ERC-8004 numeric `agentId` (the ERC-721 tokenId). Zero until the
-    /// agent is registered on-chain (multichain-20).
+    /// ERC-8004 numeric `agentId` (the ERC-721 tokenId). Zero when the
+    /// home registry mints no numeric id — a Solana registry identifies
+    /// the agent by pubkey, the `did:pkh` subject — or until the agent is
+    /// registered in a registry that does.
     pub agent_id: u64,
     /// Whether the agent accepts x402 payments (ERC-8004 `x402Support`).
     pub x402_support: bool,
@@ -116,6 +118,10 @@ pub struct RegistrationParams<'a> {
     pub skills: &'a [Skill],
     /// Endpoints appended after the derived A2A and DID service entries.
     pub extra_services: &'a [Service],
+    /// Registrations appended after the derived home-registry entry, for an
+    /// agent also registered in other registries (e.g. an ERC-8004 ERC-721
+    /// registry on an EVM chain alongside the Solana home registry).
+    pub extra_registrations: &'a [Registration],
 }
 
 impl<'a> RegistrationParams<'a> {
@@ -144,6 +150,7 @@ impl<'a> RegistrationParams<'a> {
             supported_trust: DEFAULT_SUPPORTED_TRUST,
             skills: &[],
             extra_services: &[],
+            extra_registrations: &[],
         }
     }
 }
@@ -279,10 +286,12 @@ impl AgentRegistration {
             services,
             x402_support: params.x402_support,
             active: params.active,
-            registrations: vec![Registration {
+            registrations: std::iter::once(Registration {
                 agent_id: params.agent_id,
                 agent_registry,
-            }],
+            })
+            .chain(params.extra_registrations.iter().cloned())
+            .collect(),
             supported_trust: params
                 .supported_trust
                 .iter()
@@ -519,6 +528,23 @@ mod tests {
             "agentRegistry must use the CAIP-2 genesis form, got {registry}"
         );
         assert!(!registry.contains("mainnet"), "must not use a network name");
+    }
+
+    #[test]
+    fn extra_registrations_follow_the_home_registry_entry() {
+        let base = Registration {
+            agent_id: 58_403,
+            agent_registry: "eip155:8453:0x8004A169FB4a3325136EB29fA0ceB6D2e539a432".into(),
+        };
+        let mut params = sample_params();
+        params.extra_registrations = std::slice::from_ref(&base);
+        let doc = AgentRegistration::build(&test_pubkey_b58(), &params);
+        // The home registry stays first — its CAIP-2 prefix also names the
+        // did:pkh chain — and appended registries keep their own ids intact.
+        assert_eq!(doc.registrations.len(), 2);
+        assert_eq!(doc.registrations[0].agent_id, 0);
+        assert!(doc.registrations[0].agent_registry.starts_with("solana:"));
+        assert_eq!(doc.registrations[1], base);
     }
 
     #[test]

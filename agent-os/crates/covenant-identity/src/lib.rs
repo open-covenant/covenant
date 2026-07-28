@@ -15,6 +15,12 @@
 mod binding;
 pub use binding::{BindingError, IdentityBinding, Secp256k1IssuerKey};
 
+mod foundation;
+pub use foundation::{
+    covenant_foundation_card, FOUNDATION_BASE_AGENT_ID, FOUNDATION_BASE_REGISTRY,
+    FOUNDATION_PUBKEY_BASE58, FOUNDATION_SOLANA_REGISTRY,
+};
+
 mod registration;
 pub use registration::{
     AgentRegistration, Capabilities, CardSignature, Registration, RegistrationError,

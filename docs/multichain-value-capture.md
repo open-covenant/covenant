@@ -25,8 +25,13 @@ The invariant has a tripwire, not just prose:
 runs in `validate.sh --scripts` and fails the build when the canonical mint's
 literal address, a named off-Solana bridge primitive (Wormhole NTT, LayerZero
 OFT, xERC20, a `wCVNT`), or a payment surface that has dropped its USDC
-denomination appears in a cross-chain crate (`covenant-attestation`,
-`covenant-evm-signer`, `covenant-x402`, `covenant-x402-signer`, `agent-os/evm`).
+denomination appears in a cross-chain root (`covenant-attestation`,
+`covenant-evm-signer`, `covenant-x402`, `covenant-x402-signer`,
+`covenant-x402-signer-evm`, `covenant-ens-gateway`, `covenant-evm-firewall`,
+`covenant-identity`, `covenant-hyre`, `covenant-zauth`, `agent-os/evm`). The
+Solana-native `programs/` tree is additionally scanned for bridge primitives
+only — the canonical mint is legitimate at home, but bridging FROM Solana is
+still bridging.
 It carries an always-on self-test (`--self-test`) proving each detector fires on
 a known-bad fixture while staying quiet on the shipped prose — these crates
 advertise "no bridge required" and name the Solana-side `sap-bridge`, and neither

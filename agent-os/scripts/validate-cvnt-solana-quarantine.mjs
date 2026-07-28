@@ -19,6 +19,9 @@ Solana-canonical and never leaves it. Concretely:
   (C) the per-call payment surfaces (agent bond, EVM x402) still denominate in
       chain-local USDC, never $CVNT.
 
+Solana-native roots (programs/) are scanned for (B) only: the canonical mint
+is legitimate at home, but bridging FROM Solana is still bridging.
+
 A run also executes an embedded self-test proving each detector fires on a
 known-bad fixture and stays quiet on the real prose these crates ship (which
 legitimately says "no bridge" and names the Solana "sap-bridge"). Pass
@@ -40,18 +43,31 @@ if (unknown.length > 0) {
 const CVNT_MINT = "2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump";
 
 // Cross-chain surfaces $CVNT must never touch. The per-call payment crates
-// (covenant-x402, covenant-x402-signer) are included whole: x402 fees are USDC
-// on every chain, so the mint has no business anywhere in them. This is an
-// allowlist: a new EVM/cross-chain crate is not scanned until it is added here,
-// so extend this list whenever the trust layer reaches a new chain.
+// (covenant-x402, covenant-x402-signer, covenant-x402-signer-evm) are included
+// whole: x402 fees are USDC on every chain, so the mint has no business
+// anywhere in them. This is an allowlist: a new EVM/cross-chain crate is not
+// scanned until it is added here, so extend this list whenever the trust layer
+// reaches a new chain.
 const QUARANTINE_ROOTS = [
   "crates/covenant-attestation",
   "crates/covenant-evm-signer",
   "crates/covenant-x402",
   "crates/covenant-x402-signer",
+  "crates/covenant-x402-signer-evm",
+  "crates/covenant-ens-gateway",
+  "crates/covenant-evm-firewall",
+  "crates/covenant-identity",
   "crates/covenant-hyre",
   "crates/covenant-zauth",
   "evm",
+];
+
+// Solana-native roots where the canonical mint is legitimate (it is the
+// token's home — programs/stake/DEPLOY.md documents the mint address and its
+// renounced authority), but off-Solana bridge primitives are still banned:
+// bridging FROM Solana is bridging. These get check (B) only, never check (A).
+const BRIDGE_ONLY_ROOTS = [
+  "programs",
 ];
 
 const SCAN_EXTENSIONS = new Set([".rs", ".toml", ".sol", ".md", ".json"]);
@@ -76,11 +92,12 @@ const BRIDGE_TERMS = [
 const USDC_SURFACES = [
   "crates/covenant-attestation/src/bond.rs",
   "crates/covenant-x402/src/evm.rs",
+  "crates/covenant-x402-signer-evm/src/main.rs",
 ];
 
-function scanText(label, text) {
+function scanText(label, text, { mint = true } = {}) {
   const violations = [];
-  if (text.includes(CVNT_MINT)) {
+  if (mint && text.includes(CVNT_MINT)) {
     violations.push(
       `${label}: references the canonical $CVNT mint ${CVNT_MINT}; $CVNT is Solana-canonical and must not appear in a cross-chain surface`,
     );
@@ -132,6 +149,7 @@ const SELFTEST_GOOD = [
   "//! Wraps a Covenant audit-chain root as a portable, dual-signed VC.",
   "//! the same value the sap-bridge anchors on Solana, made verifiable off-chain.",
   "let usdc = base_usdc(); // per-call fees are always USDC via x402",
+  'tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),',
 ];
 
 function runSelfTest() {
@@ -148,6 +166,20 @@ function runSelfTest() {
       failures.push(`self-test: good fixture #${index} was falsely flagged: ${found.join("; ")}`);
     }
   });
+  // Pin the per-root check split: Solana-native roots legitimately name the
+  // canonical mint (programs/stake/DEPLOY.md), so the bridge-only scan must
+  // stay quiet on it while the full scan fires; bridge primitives must fire
+  // under both.
+  const mintProse = `| $CVNT mint (Token-2022) | \`${CVNT_MINT}\` |`;
+  if (!scanText("selftest:split-full", mintProse).some((v) => /canonical \$CVNT mint/.test(v))) {
+    failures.push("self-test: full scan did not flag the mint literal");
+  }
+  if (scanText("selftest:split-bridge-only", mintProse, { mint: false }).length > 0) {
+    failures.push("self-test: bridge-only scan falsely flagged Solana-native mint prose");
+  }
+  if (!scanText("selftest:split-bridge-term", "route it through an xERC20 lockbox", { mint: false }).some((v) => /token-bridge primitive/.test(v))) {
+    failures.push("self-test: bridge-only scan did not flag a bridge primitive");
+  }
   if (usdcMissing("denominated in USDC")) {
     failures.push("self-test: USDC-present fixture reported as missing USDC");
   }
@@ -187,6 +219,19 @@ for (const root of QUARANTINE_ROOTS) {
   }
 }
 
+for (const root of BRIDGE_ONLY_ROOTS) {
+  const absRoot = join(agentOsRoot, root);
+  if (!existsSync(absRoot)) {
+    errors.push(`${root}: bridge-only quarantine root does not exist (rename or drop it from the guard)`);
+    continue;
+  }
+  for (const abs of collectFiles(absRoot, [])) {
+    scanned += 1;
+    const rel = relative(agentOsRoot, abs);
+    errors.push(...scanText(rel, readFileSync(abs, "utf8"), { mint: false }));
+  }
+}
+
 for (const surface of USDC_SURFACES) {
   const abs = join(agentOsRoot, surface);
   if (!existsSync(abs)) {
@@ -205,5 +250,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `validate-cvnt-solana-quarantine: ok (${scanned} cross-chain files, ${QUARANTINE_ROOTS.length} roots, ${USDC_SURFACES.length} USDC surfaces)`,
+  `validate-cvnt-solana-quarantine: ok (${scanned} files, ${QUARANTINE_ROOTS.length} full roots, ${BRIDGE_ONLY_ROOTS.length} bridge-only roots, ${USDC_SURFACES.length} USDC surfaces)`,
 );

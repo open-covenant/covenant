@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-28T11:47:13.215Z",
+  "updatedAt": "2026-07-28T12:07:16.987Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12966,
+    "events": 12971,
     "tasks": 1521,
-    "integrated": 1521
+    "integrated": 1522
   },
   "throughput": {
-    "last24h": 0,
-    "last7d": 0,
-    "velocity": 0
+    "last24h": 1,
+    "last7d": 1,
+    "velocity": 0.1
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-28",
-      "count": 0
+      "count": 1
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-28",
-      "total": 1521
+      "total": 1522
     }
   ],
   "states": {
-    "integrated": 1513,
+    "integrated": 1514,
     "proposed": 1,
-    "blocked": 6,
-    "in_progress": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-quarantine-roots-evm-crate-coverage",
-    "state": "in_progress",
-    "since": "2026-07-28T11:45:12.333Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-28T11:52:21.987Z",
+      "task": "multichain-quarantine-roots-evm-crate-coverage",
+      "note": "Committing guard extension + docs sync to loop/main-track"
+    },
     {
       "at": "2026-07-19T23:57:48.480Z",
       "task": "dist-homebrew-doc-formula-command-accuracy",
@@ -315,11 +315,6 @@
       "at": "2026-07-14T04:29:00.675Z",
       "task": "reputation-read-denial-state-coverage",
       "note": "Committing test coverage + metrics bump to loop/main-track."
-    },
-    {
-      "at": "2026-07-14T01:15:25.748Z",
-      "task": "nix-head-flake-channel",
-      "note": "Landed on loop/main-track as 7501450f (flake.nix +85, docs/source-install.md +38) and pushed to origin (1156b852..7501450f). Public surface "
     }
   ]
 }

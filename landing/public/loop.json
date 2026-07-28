@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-28T13:07:29.402Z",
+  "updatedAt": "2026-07-28T13:27:33.753Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12985,
+    "events": 12989,
     "tasks": 1523,
-    "integrated": 1523
+    "integrated": 1524
   },
   "throughput": {
-    "last24h": 2,
-    "last7d": 2,
-    "velocity": 0.3
+    "last24h": 3,
+    "last7d": 3,
+    "velocity": 0.4
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-28",
-      "count": 2
+      "count": 3
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-28",
-      "total": 1523
+      "total": 1524
     }
   ],
   "states": {
-    "integrated": 1515,
+    "integrated": 1516,
     "proposed": 1,
-    "blocked": 6,
-    "self_review": 1
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-agentcard-published-conformance",
-    "state": "self_review",
-    "since": "2026-07-28T12:59:38.340Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-28T13:18:59.575Z",
+      "task": "multichain-agentcard-published-conformance",
+      "note": "Committed e9a29e44 and pushed to loop/main-track: foundation card builder + golden + conformance gate + doc; live-card swap recorded for ope"
+    },
     {
       "at": "2026-07-28T12:44:34.631Z",
       "task": "multichain-reputation-staging-source-chain-integrity",
@@ -315,11 +315,6 @@
       "at": "2026-07-14T06:35:34.990Z",
       "task": "pay-x402-invalid-method-coverage",
       "note": "Landed fdea0d20 (lib.rs + README metrics sync); resolves overseer 3476/3477 drift note — count was dirty-tree, HEAD now 3477."
-    },
-    {
-      "at": "2026-07-14T05:30:37.794Z",
-      "task": "escrow-release-denial-state-coverage",
-      "note": "Landed 1e927890 + PUSHED to origin/loop/main-track. 4 inline tests covering record_escrow_release cap/not-configured/disabled + prove_comple"
     }
   ]
 }

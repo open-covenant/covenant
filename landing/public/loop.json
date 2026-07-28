@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-07-28T11:27:09.262Z",
+  "updatedAt": "2026-07-28T11:47:13.215Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12962,
-    "tasks": 1520,
+    "events": 12966,
+    "tasks": 1521,
     "integrated": 1521
   },
   "throughput": {
@@ -186,7 +186,8 @@
   "states": {
     "integrated": 1513,
     "proposed": 1,
-    "blocked": 6
+    "blocked": 6,
+    "in_progress": 1
   },
   "areas": [
     {
@@ -214,7 +215,11 @@
       "count": 62
     }
   ],
-  "inFlight": null,
+  "inFlight": {
+    "task": "multichain-quarantine-roots-evm-crate-coverage",
+    "state": "in_progress",
+    "since": "2026-07-28T11:45:12.333Z"
+  },
   "recent": [
     {
       "at": "2026-07-19T23:57:48.480Z",

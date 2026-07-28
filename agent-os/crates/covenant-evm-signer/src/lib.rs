@@ -35,7 +35,8 @@ use serde_json::{json, Value};
 
 pub use eip712::{recover_address, AttestMessage, EasDomain, DOMAIN_NAME, OFFCHAIN_VERSION};
 pub use reputation::{
-    parse_reputation_projection, reputation_schema_uid, ReputationProjection, ReputationScore,
+    attest_calldata, attest_selector, parse_reputation_projection, reputation_schema_uid,
+    ReputationProjection, ReputationScore, ATTEST_SIGNATURE, RELAY_MAX_DATA_BYTES,
     REPUTATION_SCHEMA, SOLANA_MAINNET_CAIP2,
 };
 pub use resolver::{

@@ -22,7 +22,7 @@
 
 use serde_json::Value;
 
-use crate::eth::{self, hex_decode_32, word_u256};
+use crate::eth::{self, hex_decode_32, word_address, word_u256};
 use crate::uid::schema_uid;
 use crate::EvmSignerError;
 
@@ -239,6 +239,59 @@ pub fn reputation_schema_uid() -> [u8; 32] {
     schema_uid(REPUTATION_SCHEMA, &eth::ZERO_ADDRESS, true)
 }
 
+/// EAS v1.3.0's `attest` function: one `AttestationRequest` struct —
+/// `(bytes32 schema, (address recipient, uint64 expirationTime, bool
+/// revocable, bytes32 refUID, bytes data, uint256 value))`. The selector is
+/// derived from this string, never hard-coded, so a signature typo cannot
+/// survive the pinned-selector test.
+pub const ATTEST_SIGNATURE: &str = "attest((bytes32,(address,uint64,bool,bytes32,bytes,uint256)))";
+
+/// Hard bound on the encoded schema-data payload a staged relay transaction
+/// may carry, mirrored into the staged artifact's `policy.maxDataBytes`. The
+/// bound is enforced at build time: oversized calldata is refused here, not
+/// discovered at submission.
+pub const RELAY_MAX_DATA_BYTES: usize = 512;
+
+/// The 4-byte selector of [`ATTEST_SIGNATURE`].
+pub fn attest_selector() -> [u8; 4] {
+    eth::keccak256(ATTEST_SIGNATURE.as_bytes())[..4]
+        .try_into()
+        .expect("4-byte slice")
+}
+
+/// Build the full unsigned `attest` calldata for a reputation projection —
+/// every byte from the same encoder the off-chain attestation uses, so a
+/// staged transaction can never diverge from what [`encode_data`] signs.
+///
+/// The request carries no recipient and no value; `expirationTime` mirrors
+/// the projection's expiry so the bound is identical on the EAS envelope and
+/// inside the schema data. Offsets are fixed by the shape: the request
+/// struct at `0x20`, its `AttestationRequestData` at `0x40` past the schema
+/// word, and the `bytes data` at `0xc0` past the six-word request-data head.
+pub fn attest_calldata(projection: &ReputationProjection) -> Result<Vec<u8>, EvmSignerError> {
+    let data = encode_data(projection)?;
+    if data.len() > RELAY_MAX_DATA_BYTES {
+        return Err(EvmSignerError::PayloadTooLarge {
+            len: data.len(),
+            max: RELAY_MAX_DATA_BYTES,
+        });
+    }
+    let mut call = Vec::with_capacity(4 + 10 * 32 + data.len());
+    call.extend_from_slice(&attest_selector());
+    call.extend_from_slice(&word_u256(0x20));
+    call.extend_from_slice(&reputation_schema_uid());
+    call.extend_from_slice(&word_u256(0x40));
+    call.extend_from_slice(&word_address(&eth::ZERO_ADDRESS));
+    call.extend_from_slice(&word_u256(projection.expiry_unix));
+    call.extend_from_slice(&word_u256(1));
+    call.extend_from_slice(&[0u8; 32]);
+    call.extend_from_slice(&word_u256(0xc0));
+    call.extend_from_slice(&word_u256(0));
+    call.extend_from_slice(&word_u256(data.len() as u64));
+    call.extend_from_slice(&data);
+    Ok(call)
+}
+
 /// Parse a reputation projection from the wire JSON the sidecar and the relay
 /// staging binary both read. Accepts camelCase (the default) with snake_case
 /// fallbacks; the score and its decimal scale are read together so the two can
@@ -433,6 +486,88 @@ mod tests {
             "0x84738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc39"
         );
         assert_ne!(reputation_schema_uid(), crate::covenant_schema_uid());
+    }
+
+    #[test]
+    fn attest_selector_is_derived_and_pinned() {
+        // keccak256("attest((bytes32,(address,uint64,bool,bytes32,bytes,uint256)))")[..4],
+        // the value the Base Sepolia dry-run confirmed the live predeploy accepts.
+        // A drifted signature string changes this and fails here, not on-chain.
+        assert_eq!(eth::hex_encode(&attest_selector()), "f17325e7");
+    }
+
+    #[test]
+    fn attest_calldata_wraps_encode_data_verbatim() {
+        // The staged transaction's schema bytes must be the exact encoder
+        // output — the invariant whose violation this task exists to fix:
+        // hand-assembled calldata froze a corrupt source_chain the encoder
+        // could never produce.
+        let p = projection();
+        let call = attest_calldata(&p).unwrap();
+        let data = encode_data(&p).unwrap();
+
+        assert_eq!(&call[..4], &attest_selector());
+        let word = |i: usize| &call[4 + i * 32..4 + (i + 1) * 32];
+        assert_eq!(word(0), &word_u256(0x20)); // AttestationRequest offset
+        assert_eq!(word(1), &reputation_schema_uid());
+        assert_eq!(word(2), &word_u256(0x40)); // AttestationRequestData offset
+        assert_eq!(word(3), &word_address(&eth::ZERO_ADDRESS));
+        assert_eq!(word(4), &word_u256(p.expiry_unix));
+        assert_eq!(word(5), &word_u256(1)); // revocable
+        assert_eq!(word(6), &[0u8; 32]); // refUID
+        assert_eq!(word(7), &word_u256(0xc0)); // bytes offset
+        assert_eq!(word(8), &word_u256(0)); // value
+        assert_eq!(word(9), &word_u256(data.len() as u64));
+        assert_eq!(&call[4 + 10 * 32..], &data);
+        assert_eq!(call.len(), 4 + 10 * 32 + data.len());
+    }
+
+    #[test]
+    fn attest_calldata_matches_the_staged_golden() {
+        // The exact bytes staged for operator submission
+        // (autonomy/multichain/staging/reputation-attest-base-sepolia.json),
+        // pasted from the first stage_reputation_attest example run — never
+        // hand-assembled. validate-reputation-staging.mjs pins the same hex,
+        // binding the crate encoder and the staging gate to identical bytes.
+        let call = attest_calldata(&ReputationProjection::new(
+            ReputationScore::from_ratio(95, 100, 4).unwrap(),
+            SOLANA_MAINNET_CAIP2,
+            [0xAB; 32],
+            1_700_000_000,
+            1_800_000_000,
+        ))
+        .unwrap();
+        assert_eq!(
+            eth::hex_0x(&call),
+            "0xf17325e7000000000000000000000000000000000000000000000000000000000000002084738ec346cd136dddd5b09e8df18a3c5cfb2603aaf5a68758c0149aa406cc3900000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006b49d2000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000251c0000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000006b49d20000000000000000000000000000000000000000000000000000000000000000a0abababababababababababababababababababababababababababababababab0000000000000000000000000000000000000000000000000000000000000027736f6c616e613a3565796b7434557346763850384e4a64545245705931767a714b715a4b76647000000000000000000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn attest_calldata_bounds_the_payload() {
+        // 321 padded source_chain bytes push the encoded data past the
+        // 512-byte relay bound; the builder must refuse, not stage it.
+        let mut p = projection();
+        p.source_chain = "solana:".to_string() + &"x".repeat(340);
+        match attest_calldata(&p) {
+            Err(EvmSignerError::PayloadTooLarge { len, max }) => {
+                assert!(len > max);
+                assert_eq!(max, RELAY_MAX_DATA_BYTES);
+            }
+            other => panic!("expected PayloadTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attest_calldata_propagates_projection_validation() {
+        // An unanchored projection must fail at build time exactly as the
+        // off-chain path does; the relay is not a validation bypass.
+        let mut p = projection();
+        p.solana_attestation_pda = [0u8; 32];
+        assert!(matches!(
+            attest_calldata(&p),
+            Err(EvmSignerError::Reputation(_))
+        ));
     }
 
     #[test]

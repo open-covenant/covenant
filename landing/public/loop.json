@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-28T13:27:33.753Z",
+  "updatedAt": "2026-07-28T13:47:37.930Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12989,
-    "tasks": 1523,
-    "integrated": 1524
+    "events": 12998,
+    "tasks": 1524,
+    "integrated": 1525
   },
   "throughput": {
-    "last24h": 3,
-    "last7d": 3,
-    "velocity": 0.4
+    "last24h": 4,
+    "last7d": 4,
+    "velocity": 0.6
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-28",
-      "count": 3
+      "count": 4
     }
   ],
   "cumulative": [
@@ -180,11 +180,11 @@
     },
     {
       "date": "07-28",
-      "total": 1524
+      "total": 1525
     }
   ],
   "states": {
-    "integrated": 1516,
+    "integrated": 1517,
     "proposed": 1,
     "blocked": 6
   },
@@ -216,6 +216,11 @@
   ],
   "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-28T13:46:20.356Z",
+      "task": "multichain-evm-signer-mainnet-gate-and-blockers-hygiene",
+      "note": "Committed 1bcd09a2 and pushed to loop/main-track: fail-closed mainnet gate in main.rs::domain_for keyed on resolved chain id (base|base-main"
+    },
     {
       "at": "2026-07-28T13:18:59.575Z",
       "task": "multichain-agentcard-published-conformance",
@@ -310,11 +315,6 @@
       "at": "2026-07-14T07:05:32.461Z",
       "task": "extend-sign-release-artifacts-to-sign-scope-and-audit-root",
       "note": "Shipping workflow + audit-reports README + keys README update on loop/main-track."
-    },
-    {
-      "at": "2026-07-14T06:35:34.990Z",
-      "task": "pay-x402-invalid-method-coverage",
-      "note": "Landed fdea0d20 (lib.rs + README metrics sync); resolves overseer 3476/3477 drift note — count was dirty-tree, HEAD now 3477."
     }
   ]
 }

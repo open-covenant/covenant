@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-07-28T12:27:21.103Z",
+  "updatedAt": "2026-07-28T12:47:25.183Z",
   "branch": "loop/main-track",
   "totals": {
-    "events": 12976,
-    "tasks": 1522,
-    "integrated": 1522
+    "events": 12981,
+    "tasks": 1523,
+    "integrated": 1523
   },
   "throughput": {
-    "last24h": 1,
-    "last7d": 1,
-    "velocity": 0.1
+    "last24h": 2,
+    "last7d": 2,
+    "velocity": 0.3
   },
   "daily": [
     {
@@ -94,7 +94,7 @@
     },
     {
       "date": "07-28",
-      "count": 1
+      "count": 2
     }
   ],
   "cumulative": [
@@ -180,14 +180,13 @@
     },
     {
       "date": "07-28",
-      "total": 1522
+      "total": 1523
     }
   ],
   "states": {
-    "integrated": 1514,
-    "proposed": 1,
-    "blocked": 6,
-    "self_review": 1
+    "integrated": 1515,
+    "proposed": 2,
+    "blocked": 6
   },
   "areas": [
     {
@@ -215,12 +214,13 @@
       "count": 62
     }
   ],
-  "inFlight": {
-    "task": "multichain-reputation-staging-source-chain-integrity",
-    "state": "self_review",
-    "since": "2026-07-28T12:25:56.666Z"
-  },
+  "inFlight": null,
   "recent": [
+    {
+      "at": "2026-07-28T12:44:34.631Z",
+      "task": "multichain-reputation-staging-source-chain-integrity",
+      "note": "Committed cc941367 and pushed to loop/main-track: calldata builder + golden-pinned tests, deterministic regenerator example, decode-validato"
+    },
     {
       "at": "2026-07-28T11:52:21.987Z",
       "task": "multichain-quarantine-roots-evm-crate-coverage",
@@ -315,11 +315,6 @@
       "at": "2026-07-14T05:30:37.794Z",
       "task": "escrow-release-denial-state-coverage",
       "note": "Landed 1e927890 + PUSHED to origin/loop/main-track. 4 inline tests covering record_escrow_release cap/not-configured/disabled + prove_comple"
-    },
-    {
-      "at": "2026-07-14T04:29:00.675Z",
-      "task": "reputation-read-denial-state-coverage",
-      "note": "Committing test coverage + metrics bump to loop/main-track."
     }
   ]
 }

@@ -181,16 +181,27 @@ Covenant advances open infrastructure for:
 - capability-scoped delegation across local and remote agents;
 - durable project memory for long-running work;
 - resumable task ownership across interruptions;
-- portable temporal contracts for evidenced checkpoints and replay;
+- reproducible temporal state, correction, and proof-carrying replay;
 - policy-aware tool use and sandboxed execution;
 - audit-root attestations, public provenance, and agent coordination economics.
 
-The pre-alpha
-[Covenant Timeline integration](./docs/covenant-timeline.md) now translates
-audit and provenance records into payload-free evidence, maps Timeline commands
-to explicit Covenant capability requests, joins typed outcomes as receipts, and
-exports an independently verifiable four-checkpoint engineering run. Covenant
-contains the adapter, not a fork of the standalone reducer.
+The [Covenant Timeline integration](./docs/covenant-timeline.md) applies the
+standalone Timeline kernel to release chronology. Its checked
+`v0.1.0-alpha.1` run persists across a process restart, records an authoritative
+timestamp correction without rewriting the earlier state, and verifies
+proof-carrying conclusions at three historical record cuts with the exact
+published package `@covenant-org/timeline@0.0.0-alpha.2`. The original
+`v0alpha1` checkpoint adapter remains available as a compatibility surface.
+
+This is a shadow audit, not a release gate or a grant of authority. Timeline's
+preregistered frontier-model benchmark did not pass its standalone
+model-memory accuracy gate: it beat bounded narrative memory but did not beat
+stateless full-context structured extraction, producing a recorded decision of
+`kill`. Covenant uses the integration for deterministic temporal state,
+correction, replay, and proof verification—not as evidence that Timeline
+improves model accuracy. The
+[complete benchmark result](https://github.com/open-covenant/covenant-timeline/releases/tag/model-eval-v1-gpt-5.6-sol-2026-07-31)
+is public.
 
 ## Citing
 

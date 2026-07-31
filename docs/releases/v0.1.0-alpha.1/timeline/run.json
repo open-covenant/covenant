@@ -1,0 +1,113 @@
+{
+  "schema": "covenant.timeline.run.v0alpha3",
+  "contract": {
+    "schema": "covenant.timeline.contract.v0alpha3",
+    "id": "covenant.release.v0.1.0-alpha.1.temporal.v1",
+    "subject": {
+      "kind": "release",
+      "id": "open-covenant/covenant/v0.1.0-alpha.1"
+    },
+    "axes": [
+      {
+        "id": "unix-ms",
+        "kind": "metric",
+        "unit": "millisecond",
+        "origin": "unix.epoch"
+      }
+    ],
+    "contexts": [
+      {
+        "id": "actual",
+        "mode": "actual"
+      }
+    ]
+  },
+  "events": [
+    {
+      "type": "point.declared",
+      "schema": "covenant.timeline.event.v0alpha3",
+      "id": "event.release-publication-point",
+      "sequence": 0,
+      "point": {
+        "id": "artifacts-published",
+        "contextId": "actual",
+        "axisId": "unix-ms"
+      }
+    },
+    {
+      "type": "point.declared",
+      "schema": "covenant.timeline.event.v0alpha3",
+      "id": "event.tagged-commit-readiness-point",
+      "sequence": 1,
+      "point": {
+        "id": "tagged-commit-readiness-recorded",
+        "contextId": "actual",
+        "axisId": "unix-ms"
+      }
+    },
+    {
+      "type": "coordinate.asserted",
+      "schema": "covenant.timeline.event.v0alpha3",
+      "id": "event.release-publication-provisional",
+      "sequence": 2,
+      "assertion": {
+        "id": "release.publication.provisional.v1",
+        "contextId": "actual",
+        "pointId": "artifacts-published",
+        "coordinate": {
+          "minimum": 1779957192000,
+          "maximum": 1779957192000
+        },
+        "evidenceRefs": [
+          "sha256:496bd6b7c248a87198d380484ee45c23a435b2cc87dd34b97b98457e9605d815"
+        ]
+      }
+    },
+    {
+      "type": "coordinate.asserted",
+      "schema": "covenant.timeline.event.v0alpha3",
+      "id": "event.tagged-commit-readiness",
+      "sequence": 3,
+      "assertion": {
+        "id": "release.tagged-commit-readiness.v1",
+        "contextId": "actual",
+        "pointId": "tagged-commit-readiness-recorded",
+        "coordinate": {
+          "minimum": 1779957705698,
+          "maximum": 1779957705698
+        },
+        "evidenceRefs": [
+          "sha256:f9ecfc04d23045ffdfc16f09e6c4a8114b29911f4be4c94c4696b7769810e30a"
+        ]
+      }
+    },
+    {
+      "type": "coordinate.asserted",
+      "schema": "covenant.timeline.event.v0alpha3",
+      "id": "event.release-publication-authoritative",
+      "sequence": 4,
+      "assertion": {
+        "id": "release.publication.github.v1",
+        "contextId": "actual",
+        "pointId": "artifacts-published",
+        "coordinate": {
+          "minimum": 1779957345000,
+          "maximum": 1779957345000
+        },
+        "evidenceRefs": [
+          "sha256:e56a615638a030c2506949f77eca1af9f0a4b356dc7d2e42cbe4ea413b97e8f4"
+        ]
+      }
+    },
+    {
+      "type": "assertion.retracted",
+      "schema": "covenant.timeline.event.v0alpha3",
+      "id": "event.release-publication-reconciled",
+      "sequence": 5,
+      "assertionId": "release.publication.provisional.v1",
+      "evidenceRefs": [
+        "sha256:e56a615638a030c2506949f77eca1af9f0a4b356dc7d2e42cbe4ea413b97e8f4"
+      ]
+    }
+  ]
+}

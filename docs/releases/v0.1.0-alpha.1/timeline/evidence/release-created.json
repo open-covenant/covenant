@@ -1,0 +1,17 @@
+{
+  "schema": "covenant.release-temporal-observation.v1",
+  "id": "release-created",
+  "repository": "open-covenant/covenant",
+  "release": "v0.1.0-alpha.1",
+  "tagCommit": "94e7af53c2224aa40762c2061ac96cab34950b71",
+  "source": {
+    "kind": "github-release",
+    "field": "createdAt",
+    "url": "https://github.com/open-covenant/covenant/releases/tag/v0.1.0-alpha.1"
+  },
+  "fact": {
+    "kind": "release.created",
+    "occurredAt": "2026-05-28T08:33:12Z",
+    "coordinateMs": 1779957192000
+  }
+}

@@ -4,6 +4,31 @@ All notable changes to Covenant are documented here. Format follows [Keep a Chan
 
 Unreleased work is summarized in [`ROADMAP.md`](./ROADMAP.md).
 
+## [Unreleased]
+
+### Added
+
+- A Covenant Timeline `v0alpha3` shadow audit for the public
+  `v0.1.0-alpha.1` release. The workflow persists state across two processes,
+  preserves a provisional publication timestamp, records GitHub's authoritative
+  timestamp as a correction, binds every observation to the tagged commit, and
+  verifies proof receipts at the initial, inconsistent, and reconciled record
+  cuts.
+- A separate Node verifier pinned to
+  `@covenant-org/timeline@0.0.0-alpha.2`, with direct verification of stored
+  receipts and checks for evidence binding, source-byte drift, altered temporal
+  state, package identity, and proof validity.
+
+### Changed
+
+- Timeline documentation now separates deterministic replay and verification
+  from release authority, evidence authenticity, safety claims, and model
+  accuracy. The original `v0alpha1` checkpoint adapter remains available for
+  compatibility.
+- Timeline state writes now reject concurrent writers, preserve no-overwrite
+  initialization, cap untrusted JSON inputs, and persist through atomic,
+  synchronized file replacement.
+
 ## [0.1.0-alpha.1] - 2026-05-28
 
 First tagged release. The daemon, CLI, and operator console are usable end-to-end; signed releases are produced from CI with cosign keyless OIDC.

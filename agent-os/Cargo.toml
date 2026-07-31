@@ -87,4 +87,4 @@ borsh = { version = "1", features = ["derive"] }
 futures = "0.3"
 libc = "0.2"
 crossterm = { version = "0.28", features = ["event-stream"] }
-ratatui = "0.28"
+ratatui = "0.30"

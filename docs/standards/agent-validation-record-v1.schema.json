@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:mpl-agent:validation-record:v1",
+  "title": "MPL Agent Validation Record v1",
+  "description": "Proposed JSON payload for a validator-authored MPL Core AppData record about a MIP-014 agent identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "schema", "subject", "validator", "hashAlg", "responseHash", "recordedAt"],
+  "properties": {
+    "type": {
+      "const": "mpl.agent.validation-record.v1"
+    },
+    "schema": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "subject": {
+      "$ref": "#/$defs/subject"
+    },
+    "validator": {
+      "$ref": "#/$defs/solanaPublicKey"
+    },
+    "hashAlg": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "responseHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "tag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "recordedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "extensions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9.-]*$"
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "solanaPublicKey": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 44,
+      "pattern": "^[1-9A-HJ-NP-Za-km-z]+$",
+      "description": "Base58 text which must decode to exactly 32 bytes. JSON Schema enforces the alphabet and bounds; conforming verifiers also enforce decoded length."
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registryProgram", "asset"],
+      "properties": {
+        "registryProgram": {
+          "$ref": "#/$defs/solanaPublicKey"
+        },
+        "asset": {
+          "$ref": "#/$defs/solanaPublicKey"
+        },
+        "registration": {
+          "$ref": "#/$defs/solanaPublicKey"
+        }
+      }
+    }
+  }
+}

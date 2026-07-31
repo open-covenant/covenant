@@ -1,0 +1,649 @@
+{
+  "fixtureKind": "synthetic-off-chain-conformance",
+  "recordType": "mpl.agent.validation-record.v1",
+  "expectedValidator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+  "expectedSchema": "org.opencovenant.audit-chain.v1",
+  "expectedRegistryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+  "supportedHashAlgorithms": ["sha256-chain-v1"],
+  "vectors": [
+    {
+      "name": "valid record is selected after an unrelated AppData adapter",
+      "valid": true,
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "2DFzvjzBJEu8DFVebF1Njyyg9A5GnsmmTZiYTqfWSeJN"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2DFzvjzBJEu8DFVebF1Njyyg9A5GnsmmTZiYTqfWSeJN"
+              }
+            },
+            "data": {
+              "type": "agent-registration-v1",
+              "name": "Example agent"
+            }
+          },
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "9CngPv5WcGn1wUiKUE3B55DGpnkkTrwp1Fm3wfQF6QXq"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM",
+                "registration": "HEgJCEiSgHR8vCDhBMQ8X6dc5hxpbtGXvztaWuWTTDs"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "tag": "audit",
+              "recordedAt": 1700000000,
+              "extensions": {
+                "org.opencovenant": {
+                  "releaseScope": "audit"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "top-level adapter authority cannot impersonate the data authority",
+      "valid": false,
+      "reasonIncludes": "no AppData adapter matches",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "DAmWUX5hyn8Phq6NL4wT6khaPA4Ej2PQ3puxth6Kfaxo"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "agent application AppData is not a validation record",
+      "valid": false,
+      "reasonIncludes": "no AppData adapter matches",
+      "asset": {
+        "id": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "2DFzvjzBJEu8DFVebF1Njyyg9A5GnsmmTZiYTqfWSeJN"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2DFzvjzBJEu8DFVebF1Njyyg9A5GnsmmTZiYTqfWSeJN"
+              }
+            },
+            "data": {
+              "type": "agent-registration-v1",
+              "name": "Example agent"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "payload validator must mirror the pinned data authority",
+      "valid": false,
+      "reasonIncludes": "validator does not match",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "9CngPv5WcGn1wUiKUE3B55DGpnkkTrwp1Fm3wfQF6QXq"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "DAmWUX5hyn8Phq6NL4wT6khaPA4Ej2PQ3puxth6Kfaxo",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "response hash must be 32-byte lowercase hex",
+      "valid": false,
+      "reasonIncludes": "responseHash",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "9CngPv5WcGn1wUiKUE3B55DGpnkkTrwp1Fm3wfQF6QXq"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "DEADBEEF",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown profile is rejected even under the expected validator",
+      "valid": false,
+      "reasonIncludes": "no AppData adapter matches",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "9CngPv5WcGn1wUiKUE3B55DGpnkkTrwp1Fm3wfQF6QXq"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.example.untrusted.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "unsupported commitment algorithm is rejected",
+      "valid": false,
+      "reasonIncludes": "unsupported hashAlg",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "9CngPv5WcGn1wUiKUE3B55DGpnkkTrwp1Fm3wfQF6QXq"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-merkle",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "subject registry program must match the pinned MIP-014 program",
+      "valid": false,
+      "reasonIncludes": "registryProgram does not match",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "9CngPv5WcGn1wUiKUE3B55DGpnkkTrwp1Fm3wfQF6QXq"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "DAmWUX5hyn8Phq6NL4wT6khaPA4Ej2PQ3puxth6Kfaxo",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "conflicting DAS casing aliases are rejected",
+      "valid": false,
+      "reasonIncludes": "ambiguous duplicate aliases",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "authority": {
+              "address": "9CngPv5WcGn1wUiKUE3B55DGpnkkTrwp1Fm3wfQF6QXq"
+            },
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "response_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Owner data authority cannot satisfy an Address authority pin",
+      "valid": false,
+      "reasonIncludes": "data authority type is not Address",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Owner",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpdateAuthority data authority cannot satisfy an Address authority pin",
+      "valid": false,
+      "reasonIncludes": "data authority type is not Address",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "UpdateAuthority",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "data authority without a discriminant is rejected",
+      "valid": false,
+      "reasonIncludes": "data authority type is not Address",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "conflicting adapter config aliases are rejected",
+      "valid": false,
+      "reasonIncludes": "adapter_config and adapterConfig",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "adapterConfig": {
+              "schema": "Json",
+              "dataAuthority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "conflicting data authority aliases are rejected",
+      "valid": false,
+      "reasonIncludes": "data_authority and dataAuthority",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              },
+              "dataAuthority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown top-level payload fields are rejected",
+      "valid": false,
+      "reasonIncludes": "unknown top-level field",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000,
+              "unexpected": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing required payload fields are rejected",
+      "valid": false,
+      "reasonIncludes": "recordedAt",
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "non-string profile, algorithm, and tag values are rejected",
+      "valid": false,
+      "reasonIncludes": "expectedSchema is not a valid profile identifier",
+      "options": {
+        "expectedSchema": 123,
+        "supportedHashAlgorithms": [1]
+      },
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": 123,
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": 1,
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "tag": 2,
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "malformed algorithm policy returns an invalid verdict",
+      "valid": false,
+      "reasonIncludes": "supportedHashAlgorithms is not a non-empty algorithm list",
+      "options": {
+        "supportedHashAlgorithms": {}
+      },
+      "asset": {
+        "id": "3uzUKsZZVUriCKALVX2TbJoYEfrA2gJRcU3obXS2RNvv",
+        "interface": "MplCoreAsset",
+        "external_plugins": [
+          {
+            "type": "AppData",
+            "adapter_config": {
+              "schema": "Json",
+              "data_authority": {
+                "type": "Address",
+                "address": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf"
+              }
+            },
+            "data": {
+              "type": "mpl.agent.validation-record.v1",
+              "schema": "org.opencovenant.audit-chain.v1",
+              "subject": {
+                "registryProgram": "1DREGFgysWYxLnRnKQnwrxnJQeSMk2HmGaC6whw2B2p",
+                "asset": "6ZqKjsDKPJCJFujjHuAvtYo7NhH9ndVWmvvQM5MHcrsM"
+              },
+              "validator": "2bNPaGwzmJgxBEV6w3jaJmnpMPBtHv6qZmkg3QwJm6Xf",
+              "hashAlg": "sha256-chain-v1",
+              "responseHash": "9a3c2a1afe5bc5ca8fd9534eabbb9ab7fd10a7f9e644631e551d519cd649ee8a",
+              "recordedAt": 1700000000
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

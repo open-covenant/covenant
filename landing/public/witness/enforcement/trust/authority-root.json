@@ -1,0 +1,23 @@
+{
+  "payload": {
+    "schema": "covenant.agent-safety-authority-root.v1",
+    "authority": {
+      "role": "authority_root",
+      "algorithm": "ed25519",
+      "key_id": "sha256:a78d9c10ed648e260a730abcb0456aaaff56a4c639e38f0daa0e3b6495b6ba62",
+      "public_key_b64u": "Yzha5BSZL1YmrmBaricBBhtD10JxrW3MLkOpM5Az7dI"
+    },
+    "witness_schema": "covenant.agent-safety-witness.v2",
+    "run_id": "w009-w011-20260731-v2",
+    "issued_at": "2026-07-31T08:37:17.000Z",
+    "expires_at": "2026-08-07T08:37:17.000Z",
+    "role_manifest_sha256": "sha256:f1cd5e6b827e2cd99cc137e6b3250b7927d5726edca121be592d4bca4b05128f"
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "domain": "covenant.agent-safety-authority-policy.v1",
+    "signer_role": "authority_root",
+    "key_id": "sha256:a78d9c10ed648e260a730abcb0456aaaff56a4c639e38f0daa0e3b6495b6ba62",
+    "value_b64u": "51tubzbGRH_bue-Kqx0O1RdYcYM9i_xr0CQmY5TxJRQ3j1xh77h4UnVWQCtoRvhNfn1uTL0lg0ZueZRnMZHyBw"
+  }
+}

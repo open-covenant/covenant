@@ -1,0 +1,42 @@
+{
+  "payload": {
+    "schema": "covenant.agent-safety-role-manifest.v1",
+    "run_id": "w009-w011-20260731-v2",
+    "issued_at": "2026-07-31T08:37:17.000Z",
+    "expires_at": "2026-08-07T08:37:17.000Z",
+    "evidence_mode": "standalone_reference_harness",
+    "roles": {
+      "agent": {
+        "role": "agent",
+        "algorithm": "ed25519",
+        "key_id": "sha256:7bef1c2eccd5bce84013a633b47039827e1fbb292086e9e6efed1399654fe2ca",
+        "public_key_b64u": "dj_JhRXeC3zegBLpkSybB_GU9L4Dr5m4h53zjUmipqo"
+      },
+      "approver": {
+        "role": "approver",
+        "algorithm": "ed25519",
+        "key_id": "sha256:36c1d4f3847c3cc1dcc8899e23e8c895c624c5526128da2e2ce078da1fc588d7",
+        "public_key_b64u": "7Ccjo40VqMVfBNwF924CUhm3TT1ysLm-tvWE5AaPQBs"
+      },
+      "enforcer": {
+        "role": "enforcer",
+        "algorithm": "ed25519",
+        "key_id": "sha256:8a1bcb585fdd4884bc49d7612b1009aa0d63afbe13d0f8cf164ad2e84bbc99d4",
+        "public_key_b64u": "z74Eso1sC0UoGGFzSq6tV6FpwnPmFFKCGMpic5-T0-k"
+      },
+      "verifier": {
+        "role": "verifier",
+        "algorithm": "ed25519",
+        "key_id": "sha256:e7bc9460063872e996a787778fb42ad2ae984e9072733376d87243ac633fcdae",
+        "public_key_b64u": "pf_tBXVIkkyDQf9XeiP7dKBvxuJ87wBE_Fnpgw35-aM"
+      }
+    }
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "domain": "covenant.agent-safety-role-manifest.v1",
+    "signer_role": "authority_root",
+    "key_id": "sha256:a78d9c10ed648e260a730abcb0456aaaff56a4c639e38f0daa0e3b6495b6ba62",
+    "value_b64u": "E2gy21dCWmTj_jBuTkqP9ZHYz_wcrwHqiHLfLxi-MXB8xEspRZFQMd6kJw9Hj7_7RGX-eSpLDYdTZ2BDZFa-AA"
+  }
+}

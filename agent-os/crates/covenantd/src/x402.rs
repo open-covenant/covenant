@@ -16,13 +16,11 @@
 //!
 //! ## Scope
 //!
-//! This is the accounting layer only. It does not query chain settlement or
-//! finality, and the records must not be treated as that proof. It signs
-//! nothing: the
-//! [`covenant_x402::Signer`] is supplied by the caller. The real
-//! Solana funding-key signer, its `solana` feature wiring, and a
-//! live dispatch endpoint land in a separate, separately-reviewed
-//! change — anything that moves real USDC is kept out of this slice.
+//! This is an experimental accounting helper only. It does not query chain
+//! settlement or finality, and the records must not be treated as that proof.
+//! The daemon's production dispatch is parked because this helper has neither
+//! a transaction-bound authorization nor a durable prepayment reservation and
+//! idempotency record. It must not be wired to a funding key until both exist.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -41,12 +39,12 @@ use covenant_settlement::Settlement;
 use covenant_types::{AgentId, ResourceKind, SettlementReceipt};
 use covenant_x402::{Capability, Client, PaymentRequirements, Signer, X402Error};
 
-/// Opt-in switch for the daemon's outbound x402 surface. `enabled`
-/// defaults to `false` so a daemon with no operator opt-in never
-/// makes paid calls. When `enabled` is true, `signer_binary` must
-/// point at a runnable `covenant-x402-signer` and `signer_env`
-/// should carry the funding-key path + RPC URL the sidecar reads
-/// from its environment.
+/// Stable failure returned by every daemon-owned legacy outbound-payment path.
+/// An environment opt-in or an embedded [`X402Config`] must not bypass it.
+pub const LEGACY_OUTBOUND_PARKED: &str = "legacy daemon outbound x402 is parked: transaction-bound authorization and a durable prepayment reservation/idempotency record are required before signing";
+
+/// Configuration retained for lower-level tests and future replacement of the
+/// parked daemon path. `enabled` does not make daemon dispatch reachable.
 #[derive(Debug, Clone, Default)]
 pub struct X402Config {
     pub enabled: bool,
@@ -306,6 +304,9 @@ pub struct PaymentRecord<'a> {
     pub network: &'a str,
     pub asset: &'a str,
     pub amount: &'a str,
+    pub pay_to: &'a str,
+    pub scheme: &'a str,
+    pub fee_payer: Option<&'a str>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -316,6 +317,8 @@ pub enum X402DaemonError {
     NoCapacity,
     #[error("payer budget would be exceeded by this call")]
     BudgetExceeded,
+    #[error("paid x402 calls must consume at least one credit")]
+    ZeroCredits,
     #[error("payment: {0}")]
     Payment(#[from] X402Error),
     #[error("budget: {0}")]
@@ -351,6 +354,10 @@ pub async fn record_paid_call(
     call: &PaidCall<'_>,
     payment: &PaymentRecord<'_>,
 ) -> Result<Uuid, X402DaemonError> {
+    if call.credits == 0 {
+        return Err(X402DaemonError::ZeroCredits);
+    }
+
     let receipt_id = Uuid::new_v4();
     let now = epoch_ms();
 
@@ -390,6 +397,9 @@ pub async fn record_paid_call(
                 network: payment.network.to_string(),
                 asset: payment.asset.to_string(),
                 amount: payment.amount.to_string(),
+                pay_to: Some(payment.pay_to.to_string()),
+                scheme: Some(payment.scheme.to_string()),
+                fee_payer: payment.fee_payer.map(str::to_string),
                 receipt_id,
             },
         })
@@ -419,13 +429,14 @@ pub struct PaidOutcome {
     pub receipt_id: Option<Uuid>,
 }
 
-/// Pre-checks budget, runs the 402-then-pay loop, and records the
-/// local accounting on a successful response after a paid retry.
+/// Pre-checks budget, runs the 402-then-pay loop, and records local accounting
+/// on a successful response after a paid retry.
 ///
-/// The budget is checked read-only *before* paying so the daemon does
-/// not spend USDC for an agent that cannot afford the credits. The
-/// debit happens after a successful paid retry. A free (non-402) success is
-/// returned without any debit or receipt. Chain settlement remains outside
+/// This helper remains testable but is not safe for production payment
+/// execution: its read-only budget check and post-response debit are not one
+/// durable reservation, and it has no transaction-bound authorization or
+/// idempotency key. The daemon refuses to call it. A future integration must
+/// replace that split before signing. Chain settlement also remains outside
 /// this function's evidence boundary.
 pub async fn pay_and_record(
     ctx: &SettlementContext<'_>,
@@ -437,6 +448,9 @@ pub async fn pay_and_record(
 ) -> Result<PaidOutcome, X402DaemonError> {
     if !config.enabled {
         return Err(X402DaemonError::Disabled);
+    }
+    if call.credits == 0 {
+        return Err(X402DaemonError::ZeroCredits);
     }
 
     match ctx.budget.would_exceed(payer, call.credits).await {
@@ -464,6 +478,12 @@ pub async fn pay_and_record(
                     network: &requirement.network,
                     asset: &requirement.asset,
                     amount: &requirement.amount,
+                    pay_to: &requirement.pay_to,
+                    scheme: &requirement.scheme,
+                    fee_payer: requirement
+                        .extra
+                        .as_ref()
+                        .and_then(|extra| extra.fee_payer.as_deref()),
                 };
                 match record_paid_call(ctx, payer, call, &payment).await {
                     Ok(id) => Some(id),
@@ -486,24 +506,11 @@ pub async fn pay_and_record(
     })
 }
 
-/// Maximum paid-call response body the daemon will buffer into memory. The
-/// endpoint that answered the paid request is untrusted, so a hostile or
-/// compromised one must not be able to exhaust a worker with an unbounded
-/// success body — the memory-axis ceiling mirroring the x402 client's bounded
-/// 402-challenge read.
-const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-
-/// Read a paid-call response body into a string, refusing anything past
-/// [`MAX_RESPONSE_BYTES`]. [`PaidOutcome::response`] is handed back unread by
-/// the x402 client, so the daemon — not the client — bounds it here.
-pub(crate) async fn read_response_body(resp: Response) -> Result<String, X402DaemonError> {
-    read_capped(resp, MAX_RESPONSE_BYTES).await
-}
-
 /// The `Content-Length` check rejects an oversized declared body before it is
 /// streamed; the running accumulation check is the real guard, since the
-/// header is optional and endpoint-controlled. The body is forwarded as an
-/// opaque string, so the bounded bytes are decoded lossily.
+/// header is optional and endpoint-controlled. Retained for lower-level tests
+/// of the experimental response path.
+#[cfg(test)]
 async fn read_capped(mut resp: Response, max: usize) -> Result<String, X402DaemonError> {
     if let Some(len) = resp.content_length() {
         if len > max as u64 {
@@ -554,6 +561,9 @@ mod tests {
             amount: "80000",
             network: "solana:mainnet",
             asset: "usdc-sol",
+            pay_to: "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+            scheme: "exact",
+            fee_payer: Some("PayAiSponsor111111111111111111111111111111"),
         }
     }
 
@@ -590,11 +600,23 @@ mod tests {
                 receipt_id: rid,
                 amount,
                 provider,
+                pay_to,
+                scheme,
+                fee_payer,
                 ..
             } => {
                 assert_eq!(*rid, receipt_id);
                 assert_eq!(amount, "80000");
                 assert_eq!(provider, "xona");
+                assert_eq!(
+                    pay_to.as_deref(),
+                    Some("9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA")
+                );
+                assert_eq!(scheme.as_deref(), Some("exact"));
+                assert_eq!(
+                    fee_payer.as_deref(),
+                    Some("PayAiSponsor111111111111111111111111111111")
+                );
             }
             other => panic!("unexpected audit kind: {other:?}"),
         }
@@ -629,6 +651,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_rejects_zero_credit_paid_call_without_writes() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(2);
+        budget.set_capacity(&payer, 5).await.unwrap();
+        let ctx = SettlementContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let mut call = sample_call();
+        call.credits = 0;
+
+        let err = record_paid_call(&ctx, &payer, &call, &sample_payment())
+            .await
+            .expect_err("zero-credit paid calls must fail closed");
+
+        assert!(matches!(err, X402DaemonError::ZeroCredits));
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 5);
+    }
+
+    #[tokio::test]
     async fn pay_and_record_refuses_when_disabled() {
         let settlement = InMemorySettlement::new();
         let audit = InMemoryAuditLog::new();
@@ -644,7 +693,7 @@ mod tests {
         let err = pay_and_record(
             &ctx,
             &X402Config::default(),
-            &Client::new(reqwest::Client::new()),
+            &Client::new(),
             &covenant_x402::MockSigner,
             &payer,
             &sample_call(),
@@ -774,7 +823,7 @@ mod tests {
         let err = pay_and_record(
             &ctx,
             &config,
-            &Client::new(reqwest::Client::new()),
+            &Client::new(),
             &covenant_x402::MockSigner,
             &payer,
             &sample_call(),
@@ -786,6 +835,44 @@ mod tests {
         // The pre-check is read-only: a refusal must not spend or record.
         assert!(settlement.recent(10).await.unwrap().is_empty());
         assert!(audit.recent(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pay_and_record_rejects_zero_credits_before_network_or_signing() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(4);
+        budget.set_capacity(&payer, 5).await.unwrap();
+        let ctx = SettlementContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let config = X402Config {
+            enabled: true,
+            ..Default::default()
+        };
+        let mut call = sample_call();
+        call.credits = 0;
+
+        let err = pay_and_record(
+            &ctx,
+            &config,
+            &Client::new(),
+            &covenant_x402::MockSigner,
+            &payer,
+            &call,
+        )
+        .await
+        .expect_err("zero-credit call must be rejected before reaching the endpoint");
+
+        assert!(matches!(err, X402DaemonError::ZeroCredits));
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 5);
     }
 
     #[tokio::test]
@@ -810,7 +897,7 @@ mod tests {
         let err = pay_and_record(
             &ctx,
             &config,
-            &Client::new(reqwest::Client::new()),
+            &Client::new(),
             &covenant_x402::MockSigner,
             &payer,
             &sample_call(),
@@ -844,7 +931,10 @@ mod tests {
             "amount": "80000",
             "amountUsdc": 0.08,
             "payTo": "AnyPubkey",
-            "scheme": "exact"
+            "scheme": "exact",
+            "extra": {
+                "feePayer": "PayAiSponsor111111111111111111111111111111"
+            }
         }]);
         Mock::given(method("GET"))
             .and(path("/paid"))
@@ -875,7 +965,7 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let capability = Capability {
             provider: "xona".into(),
             network: "solana:mainnet".into(),
@@ -927,10 +1017,24 @@ mod tests {
         .expect("paid response");
         assert!(paid_outcome.receipt_id.is_some());
         let events = audit.recent(10).await.unwrap();
-        assert!(matches!(
-            &events[0].kind,
-            AuditKind::ExternalPaymentSettled { amount, .. } if amount == "80000"
-        ));
+        match &events[0].kind {
+            AuditKind::ExternalPaymentSettled {
+                amount,
+                pay_to,
+                scheme,
+                fee_payer,
+                ..
+            } => {
+                assert_eq!(amount, "80000");
+                assert_eq!(pay_to.as_deref(), Some("AnyPubkey"));
+                assert_eq!(scheme.as_deref(), Some("exact"));
+                assert_eq!(
+                    fee_payer.as_deref(),
+                    Some("PayAiSponsor111111111111111111111111111111")
+                );
+            }
+            other => panic!("unexpected audit kind: {other:?}"),
+        }
         assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
     }
 

@@ -1303,11 +1303,9 @@ pub struct Server {
     /// — they go through the storage traits — so unit tests that don't
     /// exercise rotation leave this `None`.
     home: Option<PathBuf>,
-    /// Opt-in outbound x402 dispatch config. None when no operator
-    /// has wired up the funding-key sidecar; in that state every
-    /// `Request::PayX402` returns a "not configured" error and no
-    /// USDC is ever spent.
-    x402_dispatch: Option<Arc<x402::X402Config>>,
+    /// Legacy outbound x402 config retained for compatibility and tests. The
+    /// daemon handler is parked even when this is `Some` and enabled.
+    _x402_dispatch: Option<Arc<x402::X402Config>>,
     /// Opt-in spend-authorization surface. None when no operator has
     /// enabled it; in that state every `Request::AuthorizeSpend` returns a
     /// "not configured" error and no spend is ever authorized.
@@ -1390,7 +1388,7 @@ impl Server {
             stream_tracker: Arc::new(stream_tracker::StreamTracker::new()),
             subprocess_tracker: Arc::new(covenant_runtime::SubprocessTracker::new()),
             home: None,
-            x402_dispatch: None,
+            _x402_dispatch: None,
             spend_authz: None,
             escrow: None,
             secret_source: None,
@@ -1492,12 +1490,10 @@ impl Server {
         self
     }
 
-    /// Wire the outbound x402 dispatch config. Without this, every
-    /// `Request::PayX402` returns a "not configured" error and no
-    /// paid call leaves the daemon. The daemon's `main` calls this
-    /// after [`Server::new`] when the operator has opted in via env.
+    /// Retain a legacy outbound x402 config for embedded tests. This does not
+    /// unpark [`Request::PayX402`] or Hyre payment execution.
     pub fn with_x402_dispatch(mut self, config: x402::X402Config) -> Self {
-        self.x402_dispatch = Some(Arc::new(config));
+        self._x402_dispatch = Some(Arc::new(config));
         self
     }
 
@@ -1528,11 +1524,9 @@ impl Server {
         self
     }
 
-    /// Enable the Hyre provider profile. Advertises one `hyre.*` MCP
-    /// tool per catalog endpoint and routes their calls through the
-    /// outbound x402 path. Requires [`Self::with_x402_dispatch`] for
-    /// the funding-key sidecar; without it a `hyre.*` call returns a
-    /// "not configured" error.
+    /// Install a Hyre catalog for embedded tests. The daemon binary does not
+    /// advertise it while legacy outbound x402 execution is parked, and tool
+    /// execution remains fail-closed even when installed programmatically.
     pub fn with_hyre(mut self, state: hyre::HyreState) -> Self {
         self.hyre = Some(Arc::new(state));
         self
@@ -4865,6 +4859,9 @@ impl Server {
                                         .spent_raw
                                         .map(|n| n.to_string())
                                         .unwrap_or_default(),
+                                    pay_to: None,
+                                    scheme: None,
+                                    fee_payer: None,
                                     receipt_id,
                                 },
                             };
@@ -4927,52 +4924,21 @@ impl Server {
         }
     }
 
-    /// Execute a Hyre tool on the caller's behalf. The `tool.call.<name>`
-    /// capability and scope are already enforced by [`Self::call_tool`];
-    /// this binds the caller as payer and runs the resolved call through
-    /// the outbound x402 path, so the budget debit, settlement receipt,
-    /// and audit event land against the agent that invoked the tool.
+    /// Refuse Hyre execution while daemon-owned outbound payments are parked.
     async fn hyre_tool_call(
         &self,
         name: String,
         arguments: serde_json::Value,
         peer: &AgentId,
     ) -> Response {
-        let Some(state) = self.hyre.clone() else {
+        let Some(_state) = self.hyre.clone() else {
             return Response::Error {
                 message: "hyre provider is not enabled on this daemon.".into(),
             };
         };
-        let Some(x402) = self.x402_dispatch.clone() else {
-            return Response::Error {
-                message: "hyre requires the x402 funding-key sidecar. \
-                          Wire it via Server::with_x402_dispatch and restart."
-                    .into(),
-            };
-        };
-
-        let executor = Arc::new(hyre::DaemonHyreExecutor::new(
-            self.settlement.clone(),
-            self.audit.clone(),
-            self.budget.clone(),
-            x402,
-            self.identity.agent_id(),
-            peer.clone(),
-        ));
-        let Some(tool) = covenant_hyre::hyre_tool(&state.catalog, &state.config, &name, executor)
-        else {
-            return Response::Error {
-                message: format!("unknown hyre tool: {name}"),
-            };
-        };
-        match tool.call(arguments).await {
-            Ok(r) => Response::ToolResult {
-                content: r.content,
-                is_error: r.is_error,
-            },
-            Err(e) => Response::Error {
-                message: format!("tool: {e}"),
-            },
+        let _ = (name, arguments, peer);
+        Response::Error {
+            message: x402::LEGACY_OUTBOUND_PARKED.into(),
         }
     }
 
@@ -6783,30 +6749,24 @@ impl Server {
         }
     }
 
-    /// Dispatch an outbound x402 paid call on the peer's behalf.
+    /// Refuse the legacy daemon-owned outbound x402 path.
     ///
-    /// Gated by the `x402.outbound.pay` capability. Builds a
-    /// [`x402::SubprocessSigner`] from the daemon's
-    /// [`x402::X402Config`] (the funding key never enters the daemon
-    /// process), runs the 402-then-pay loop, and records the linked
-    /// budget debit + settlement receipt + audit event on success.
-    /// The receipt id surfaces back to the caller for join-keys.
-    ///
-    /// v1: the receipt amount is recorded as the operator-authorized
-    /// `per_call_cap`, not the live signed amount. A follow-up that
-    /// surfaces the chosen [`covenant_x402::PaymentRequirements`]
-    /// from `request_paid` will tighten that to the exact amount.
+    /// Authentication and provider scope are still checked so unauthorized
+    /// probes retain their established errors and audit trail. Every otherwise
+    /// admissible call stops before config parsing, signer construction, or
+    /// network I/O. Re-enabling requires transaction-bound authorization plus
+    /// a durable prepayment reservation and idempotency record.
     #[allow(clippy::too_many_arguments)]
     async fn pay_x402(
         &self,
         provider: String,
-        endpoint: String,
-        method: String,
-        body: Option<serde_json::Value>,
-        network: String,
-        asset: String,
-        per_call_cap: String,
-        credits: u64,
+        _endpoint: String,
+        _method: String,
+        _body: Option<serde_json::Value>,
+        _network: String,
+        _asset: String,
+        _per_call_cap: String,
+        _credits: u64,
         peer: &AgentId,
     ) -> Response {
         let check = self
@@ -6860,91 +6820,8 @@ impl Server {
             }
         }
 
-        let Some(config) = self.x402_dispatch.clone() else {
-            return Response::Error {
-                message: "x402 dispatch is not configured on this daemon. \
-                          Wire the funding-key sidecar via Server::with_x402_dispatch \
-                          and restart."
-                    .into(),
-            };
-        };
-        if !config.enabled {
-            return Response::Error {
-                message: "x402 dispatch is disabled in this daemon's config.".into(),
-            };
-        }
-
-        let http_method = match method.parse::<reqwest::Method>() {
-            Ok(m) => m,
-            Err(_) => {
-                return Response::Error {
-                    message: format!("invalid HTTP method: {method:?}"),
-                }
-            }
-        };
-        let per_call_cap_u: u128 = match per_call_cap.parse() {
-            Ok(n) => n,
-            Err(_) => {
-                return Response::Error {
-                    message: format!(
-                        "invalid per_call_cap (must be decimal u128): {per_call_cap:?}"
-                    ),
-                }
-            }
-        };
-
-        let mut signer = x402::SubprocessSigner::new(&config.signer_binary);
-        for (k, v) in &config.signer_env {
-            signer = signer.env(k.clone(), v.clone());
-        }
-
-        let capability = covenant_x402::Capability {
-            provider: provider.clone(),
-            network: network.clone(),
-            asset: asset.clone(),
-            per_call_cap: per_call_cap_u,
-        };
-        let call = x402::PaidCall {
-            provider: &provider,
-            endpoint: &endpoint,
-            method: http_method,
-            capability,
-            body: body.as_ref(),
-            credits,
-        };
-
-        let issuer = self.identity.agent_id();
-        let context = x402::SettlementContext {
-            settlement: self.settlement.as_ref(),
-            audit: self.audit.as_ref(),
-            budget: self.budget.as_ref(),
-            issuer: &issuer,
-        };
-
-        let client = covenant_x402::Client::new(covenant_x402::http_client());
-        let outcome =
-            match x402::pay_and_record(&context, &config, &client, &signer, peer, &call).await {
-                Ok(outcome) => outcome,
-                Err(e) => {
-                    return Response::Error {
-                        message: format!("x402 dispatch failed: {e}"),
-                    }
-                }
-            };
-        let status = outcome.response.status().as_u16();
-        let body_text = match x402::read_response_body(outcome.response).await {
-            Ok(t) => t,
-            Err(e) => {
-                return Response::Error {
-                    message: format!("read upstream body: {e}"),
-                }
-            }
-        };
-        let receipt_id = outcome.receipt_id.unwrap_or_else(Uuid::nil);
-        Response::X402Paid {
-            receipt_id,
-            status,
-            body: body_text,
+        Response::Error {
+            message: x402::LEGACY_OUTBOUND_PARKED.into(),
         }
     }
 
@@ -24680,6 +24557,9 @@ required = {caps:?}
                         network: "base-sepolia".into(),
                         asset: "USDC".into(),
                         amount: "10000".into(),
+                        pay_to: None,
+                        scheme: None,
+                        fee_payer: None,
                         receipt_id: shared,
                     },
                 })
@@ -24703,6 +24583,9 @@ required = {caps:?}
                         network: "base-sepolia".into(),
                         asset: "USDC".into(),
                         amount: "10000".into(),
+                        pay_to: None,
+                        scheme: None,
+                        fee_payer: None,
                         receipt_id: Uuid::nil(),
                     },
                 })
@@ -27782,6 +27665,9 @@ required = {caps:?}
                     network: "base-sepolia".into(),
                     asset: "USDC".into(),
                     amount: "10000".into(),
+                    pay_to: None,
+                    scheme: None,
+                    fee_payer: None,
                     receipt_id: Uuid::nil(),
                 },
             })
@@ -27857,6 +27743,9 @@ required = {caps:?}
                     // Human-readable units instead of atomic; fails parse::<u128>().
                     // receipt_id is valid so only the amount arm fires.
                     amount: "0.08".into(),
+                    pay_to: None,
+                    scheme: None,
+                    fee_payer: None,
                     receipt_id: Uuid::new_v4(),
                 },
             })
@@ -27965,6 +27854,9 @@ required = {caps:?}
                     network: "base-sepolia".into(),
                     asset: "USDC".into(),
                     amount: "10000".into(),
+                    pay_to: None,
+                    scheme: None,
+                    fee_payer: None,
                     receipt_id,
                 },
             })
@@ -29199,6 +29091,9 @@ required = {caps:?}
                     network: "base-sepolia".into(),
                     asset: "USDC".into(),
                     amount: "10000".into(),
+                    pay_to: None,
+                    scheme: None,
+                    fee_payer: None,
                     receipt_id,
                 },
             })
@@ -43936,6 +43831,9 @@ required = {caps:?}
             network: "base-sepolia".into(),
             asset: "USDC".into(),
             amount: "10000".into(),
+            pay_to: None,
+            scheme: None,
+            fee_payer: None,
             receipt_id: Uuid::new_v4(),
         };
         let tampered_id = Uuid::new_v4();
@@ -49300,52 +49198,9 @@ required = {caps:?}
         );
     }
 
-    /// Full Hyre path: capability gate → executor → 402-then-pay loop
-    /// (against the live Hyre challenge shape) → budget debit +
-    /// settlement receipt + audit event. The signer is a shell script
-    /// standing in for the funding-key sidecar, so no real USDC moves.
-    #[cfg(unix)]
+    /// A programmatically installed legacy config must not revive Hyre payment.
     #[tokio::test]
-    async fn hyre_tool_call_pays_and_records_end_to_end() {
-        use std::os::unix::fs::PermissionsExt;
-        use wiremock::matchers::{header_exists, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        const LIVE_402: &str = r#"{
-            "error":"X-PAYMENT header is required",
-            "accepts":[{"scheme":"exact","network":"solana","maxAmountRequired":"10000",
-                "payTo":"7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC",
-                "asset":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-                "maxTimeoutSeconds":60,"extra":{"feePayer":"2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"}}],
-            "x402Version":1
-        }"#;
-
-        let upstream = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/defi/tvl"))
-            .respond_with(ResponseTemplate::new(402).set_body_string(LIVE_402))
-            .up_to_n_times(1)
-            .mount(&upstream)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/defi/tvl"))
-            .and(header_exists("x-payment"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": { "tvl": 1 }, "signal": "low_yield", "confidence": 0.9,
-                "sources": ["DeFiLlama"], "latency_ms": 7, "timestamp": "2026-05-26T00:00:00Z"
-            })))
-            .mount(&upstream)
-            .await;
-
-        let dir = tempfile::tempdir().unwrap();
-        let signer = dir.path().join("signer.sh");
-        std::fs::write(
-            &signer,
-            "#!/bin/sh\ncat >/dev/null\nprintf 'x402-mock-header'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
-
+    async fn hyre_tool_call_is_parked_without_accounting_writes() {
         let settlement = Arc::new(InMemorySettlement::new());
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let budget = Arc::new(covenant_budget::InMemoryLedger::new());
@@ -49353,7 +49208,6 @@ required = {caps:?}
 
         let cfg = covenant_hyre::HyreConfig {
             enabled: true,
-            base_url: upstream.uri(),
             ..Default::default()
         };
         let catalog = covenant_hyre::HyreCatalog::from_vendored(&cfg).unwrap();
@@ -49375,7 +49229,7 @@ required = {caps:?}
         )
         .with_x402_dispatch(x402::X402Config {
             enabled: true,
-            signer_binary: signer,
+            signer_binary: "/nonexistent-signer".into(),
             signer_env: vec![],
         })
         .with_hyre(hyre::HyreState::new(catalog, cfg));
@@ -49397,43 +49251,17 @@ required = {caps:?}
             .await;
 
         match resp {
-            Response::ToolResult { content, is_error } => {
-                assert!(!is_error, "expected success, got {content:?}");
-                let data = content
-                    .iter()
-                    .find_map(|c| match c {
-                        covenant_mcp::Content::Json { value } => Some(value.clone()),
-                        _ => None,
-                    })
-                    .expect("json content");
-                assert_eq!(data["data"]["tvl"], 1);
-            }
-            other => panic!("expected ToolResult, got {other:?}"),
+            Response::Error { message } => assert_eq!(message, x402::LEGACY_OUTBOUND_PARKED),
+            other => panic!("expected parked Error, got {other:?}"),
         }
-
-        let receipts = settlement.recent(10).await.unwrap();
-        assert_eq!(receipts.len(), 1, "one settlement receipt");
-        assert_eq!(receipts[0].resource, covenant_types::ResourceKind::Tool);
-        assert_eq!(receipts[0].credits_consumed, 1, "$0.01 → 1 credit");
-
-        let events = audit.recent(20).await.unwrap();
-        let settled = events
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(!audit
+            .recent(20)
+            .await
+            .unwrap()
             .iter()
-            .find_map(|e| match &e.kind {
-                AuditKind::ExternalPaymentSettled {
-                    provider, amount, ..
-                } => Some((provider.clone(), amount.clone())),
-                _ => None,
-            })
-            .expect("ExternalPaymentSettled audit event");
-        assert_eq!(settled.0, "hyre");
-        assert_eq!(settled.1, "10000", "records the live atomic amount");
-
-        assert_eq!(
-            budget.tokens_remaining(&peer).await.unwrap(),
-            999,
-            "1 credit debited from the caller"
-        );
+            .any(|event| { matches!(event.kind, AuditKind::ExternalPaymentSettled { .. }) }));
+        assert_eq!(budget.tokens_remaining(&peer).await.unwrap(), 1000);
     }
 
     #[tokio::test]
@@ -65792,36 +65620,28 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
-    async fn pay_x402_rejects_when_not_configured() {
-        // Capability is granted, but no dispatch config wired — the
-        // daemon must refuse rather than silently spending or
-        // returning a generic error.
+    async fn pay_x402_is_parked_without_legacy_config() {
         let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()));
         grant_action(&s, "x402.outbound.pay").await;
         let resp = s.op_respond(pay_x402_req()).await;
         match resp {
-            Response::Error { message } => assert!(
-                message.contains("not configured"),
-                "error must say 'not configured' so the operator knows to call with_x402_dispatch: {message}"
-            ),
+            Response::Error { message } => assert_eq!(message, x402::LEGACY_OUTBOUND_PARKED),
             other => panic!("expected Error, got: {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn pay_x402_rejects_when_disabled() {
-        // Capability granted + dispatch wired but `enabled: false`.
-        // The operator might have temporarily disabled outbound
-        // payments; the daemon must honour that flag.
+    async fn pay_x402_is_parked_even_with_legacy_config() {
         let s = server_with_audit(Arc::new(covenant_audit::InMemoryAuditLog::new()))
-            .with_x402_dispatch(x402::X402Config::default());
+            .with_x402_dispatch(x402::X402Config {
+                enabled: true,
+                signer_binary: std::path::PathBuf::from("/nonexistent-signer"),
+                signer_env: vec![],
+            });
         grant_action(&s, "x402.outbound.pay").await;
         let resp = s.op_respond(pay_x402_req()).await;
         match resp {
-            Response::Error { message } => assert!(
-                message.contains("disabled"),
-                "error must clearly say 'disabled' so the operator knows to flip the flag: {message}"
-            ),
+            Response::Error { message } => assert_eq!(message, x402::LEGACY_OUTBOUND_PARKED),
             other => panic!("expected Error, got: {other:?}"),
         }
     }
@@ -66294,14 +66114,11 @@ budget_credits_per_hour = {credits}
             "a scope-denied egress must emit CapabilityScopeRejected: {events:?}"
         );
 
-        // Positive control: the granted provider ("xona") clears the scope gate
-        // and the dispatch fails further down (no budget capacity), proving the
-        // gate is not a blanket deny — the error must NOT be a scope rejection.
-        if let Response::Error { message } = s.op_respond(pay_x402_req()).await {
-            assert!(
-                !message.contains("capability scope"),
-                "the granted provider must clear the scope gate: {message}"
-            );
+        // Positive control: the granted provider clears the scope gate, then
+        // reaches the unconditional parked boundary before signing.
+        match s.op_respond(pay_x402_req()).await {
+            Response::Error { message } => assert_eq!(message, x402::LEGACY_OUTBOUND_PARKED),
+            other => panic!("expected parked Error, got: {other:?}"),
         }
     }
 

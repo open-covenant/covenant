@@ -1415,7 +1415,8 @@ struct CallToolBody {
 /// HTTP body shape for `POST /x402/pay`. Mirrors the [`Request::PayX402`]
 /// fields except for the `kind` discriminator (the HTTP layer fills
 /// that in). `per_call_cap` is a decimal string so atomic u128
-/// amounts above JSON's 53-bit integer ceiling survive the wire.
+/// amounts above JSON's 53-bit integer ceiling survive the wire. The daemon
+/// currently accepts the shape only to return the parked-path error.
 #[derive(Deserialize)]
 struct PayX402Body {
     provider: String,

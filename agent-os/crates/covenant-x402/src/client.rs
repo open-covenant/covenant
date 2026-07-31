@@ -41,8 +41,9 @@ pub fn http_client() -> reqwest::Client {
 fn http_client_with_timeout(timeout: Duration) -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("static x402 HTTP client configuration must be valid")
 }
 
 /// Outbound x402 client.
@@ -55,8 +56,9 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(http: reqwest::Client) -> Self {
-        Self::with_limits(http, MAX_RESPONSE_BYTES)
+    /// Build a paid client with the crate's timeout and no-redirect policy.
+    pub fn new() -> Self {
+        Self::with_limits(http_client(), MAX_RESPONSE_BYTES)
     }
 
     fn with_limits(http: reqwest::Client, max_bytes: usize) -> Self {
@@ -137,6 +139,12 @@ impl Client {
             req = req.header("x-payment", h);
         }
         Ok(req.send().await?)
+    }
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -276,7 +284,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(402).set_delay(Duration::from_secs(30)))
             .mount(&server)
             .await;
-        let client = Client::new(http_client_with_timeout(Duration::from_millis(50)));
+        let client = Client::with_limits(
+            http_client_with_timeout(Duration::from_millis(50)),
+            MAX_RESPONSE_BYTES,
+        );
         let err = client
             .request_paid(
                 Method::POST,
@@ -291,6 +302,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paid_client_never_follows_redirects() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/start"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/sink"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/sink"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let client = Client::new();
+        let err = client
+            .request_paid(
+                Method::GET,
+                &format!("{}/start", server.uri()),
+                None,
+                &cap("solana:mainnet", "usdc-sol", 100_000),
+                &MockSigner,
+            )
+            .await
+            .expect_err("redirects must not be followed");
+
+        assert!(
+            matches!(err, X402Error::UnexpectedStatus(302)),
+            "redirect response must surface to the caller, got {err:?}"
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
     async fn oversized_challenge_body_is_rejected_instead_of_buffered() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -298,7 +344,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(402).set_body_string("a".repeat(4096)))
             .mount(&server)
             .await;
-        let client = Client::with_limits(reqwest::Client::new(), 64);
+        let client = Client::with_limits(http_client(), 64);
         let err = client
             .request_paid(
                 Method::POST,
@@ -344,7 +390,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let signer = MockSigner;
 
@@ -386,7 +432,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let signer = MockSigner;
 
@@ -418,7 +464,7 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let outcome = client
             .request_paid(
@@ -447,7 +493,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(500).set_body_string("upstream error"))
             .mount(&server)
             .await;
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let err = client
             .request_paid(
@@ -478,7 +524,7 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let client = Client::new(reqwest::Client::new());
+        let client = Client::new();
         let c = cap("solana:mainnet", "usdc-sol", 100_000);
         let err = client
             .request_paid(

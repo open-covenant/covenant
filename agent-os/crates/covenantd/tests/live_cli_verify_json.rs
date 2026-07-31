@@ -6104,6 +6104,9 @@ async fn live_cli_verify_json_reports_audit_external_payment_settled_receipt_id_
             network: "base-sepolia".into(),
             asset: "USDC".into(),
             amount: "10000".into(),
+            pay_to: None,
+            scheme: None,
+            fee_payer: None,
             receipt_id: Uuid::nil(),
         },
     };

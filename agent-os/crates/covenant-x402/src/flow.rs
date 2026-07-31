@@ -179,11 +179,7 @@ mod tests {
         let catalog = Catalog::new(entries);
 
         let resp = catalog
-            .discover_and_pay(
-                &Client::new(reqwest::Client::new()),
-                &MockSigner,
-                &req("img", 100_000),
-            )
+            .discover_and_pay(&Client::new(), &MockSigner, &req("img", 100_000))
             .await
             .expect("paid");
         assert_eq!(resp.status(), 200);
@@ -193,11 +189,7 @@ mod tests {
     async fn unknown_slug_is_no_match() {
         let catalog = Catalog::new(vec![]);
         let err = catalog
-            .discover_and_pay(
-                &Client::new(reqwest::Client::new()),
-                &MockSigner,
-                &req("missing", 100_000),
-            )
+            .discover_and_pay(&Client::new(), &MockSigner, &req("missing", 100_000))
             .await
             .expect_err("no entry");
         assert!(matches!(err, X402Error::NoMatch));
@@ -216,11 +208,7 @@ mod tests {
         .unwrap()];
         let catalog = Catalog::new(entries);
         let err = catalog
-            .discover_and_pay(
-                &Client::new(reqwest::Client::new()),
-                &MockSigner,
-                &req("pricey", 100_000),
-            )
+            .discover_and_pay(&Client::new(), &MockSigner, &req("pricey", 100_000))
             .await
             .expect_err("over cap");
         assert!(matches!(err, X402Error::NoMatch));
@@ -243,11 +231,7 @@ mod tests {
         .unwrap()];
         let catalog = Catalog::new(entries);
         let resp = catalog
-            .discover_and_pay(
-                &Client::new(reqwest::Client::new()),
-                &MockSigner,
-                &req("atcap", 100_000),
-            )
+            .discover_and_pay(&Client::new(), &MockSigner, &req("atcap", 100_000))
             .await
             .expect("at-cap advertised price must pass pre-flight and pay");
         assert_eq!(resp.status(), 200);
@@ -277,7 +261,7 @@ mod tests {
         request.server_title = Some("Xona");
 
         let resp = catalog
-            .discover_and_pay(&Client::new(reqwest::Client::new()), &MockSigner, &request)
+            .discover_and_pay(&Client::new(), &MockSigner, &request)
             .await
             .expect("paid via Xona entry");
         assert_eq!(resp.status(), 200);

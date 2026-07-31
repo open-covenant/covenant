@@ -610,15 +610,23 @@ pub enum AuditKind {
     /// returned a matching 402, the client sent a payment header, and the
     /// retry returned success. It does not query or prove chain settlement or
     /// finality. `amount`, `network`, and `asset` are copied from the selected
-    /// live challenge requirement rather than the caller's cap; `receipt_id`
-    /// joins the local receipt and budget debit. `endpoint` is the called URL
-    /// for operator triage.
+    /// live challenge requirement rather than the caller's cap; `pay_to`,
+    /// `scheme`, and `fee_payer` retain the remaining selected requirement
+    /// fields when available. They are optional so pre-migration JSONL rows
+    /// still deserialize. `receipt_id` joins the local receipt and budget
+    /// debit. `endpoint` is the called URL for operator triage.
     ExternalPaymentSettled {
         provider: String,
         endpoint: String,
         network: String,
         asset: String,
         amount: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pay_to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fee_payer: Option<String>,
         receipt_id: Uuid,
     },
     /// The daemon decided a pre-spend authorization request from an

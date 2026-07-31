@@ -1,24 +1,19 @@
 //! Live integration test: spawns covenantd against a tempdir HOME and drives
-//! `Request::PayX402` over the raw IPC socket, pinning the fail-closed
-//! input-validation guard on the daemon's sole outbound-spend trigger.
+//! `Request::PayX402` over the raw IPC socket, pinning the fail-closed parked
+//! boundary on the daemon's legacy outbound-spend trigger.
 //!
 //! The handler gates in strict order — the `x402.outbound.pay` capability,
-//! then a configured + enabled x402 dispatch, then a valid HTTP method, and
-//! only then `per_call_cap.parse::<u128>()` (covenantd/src/lib.rs:5153). A
-//! malformed cap returns `Response::Error { "invalid per_call_cap ..." }`
-//! *before* the subprocess signer is constructed or any network call is made.
+//! then the unconditional parked boundary. A granted call returns the stable
+//! parked reason before config parsing, signer construction, or network I/O.
 //! Every other `Request` variant is exercised over the socket; PayX402's only
 //! coverage is in-crate unit tests (capability/config branches) and a borsh
 //! round-trip, none of which pin the cap-parse contract over the wire.
 //!
 //! Mirrors the two-step gate proof in `live_ipc_flush_receipts.rs`: an
 //! ungranted send must be rejected by the capability gate first, and only
-//! after the grant does the cap-parse become the rejecting gate.
+//! after the grant does the parked boundary become the rejecting gate.
 //!
-//! Hermetic — x402 dispatch is enabled from env alone (`COVENANT_X402_ENABLED`
-//! and a `/bin/true` signer binary so `x402_dispatch_config_from_env` resolves
-//! `Some`); the malformed-cap path short-circuits before the signer is even
-//! constructed, so no real signer, Solana RPC, or x402 endpoint is touched.
+//! Hermetic — the old environment opt-in is set but ignored.
 //! `#[ignore]`'d. Run with
 //! `cargo test -p covenantd --test live_ipc_pay_x402_invalid_cap -- --ignored live_`.
 
@@ -122,8 +117,8 @@ fn malformed_pay(per_call_cap: &str) -> Request {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with x402 enabled + drives Request::PayX402 over the socket, pinning the capability gate then the per_call_cap u128 parse rejection"]
-async fn live_ipc_pay_x402_rejects_malformed_per_call_cap() {
+#[ignore = "live: spawns covenantd with the legacy x402 env + proves IPC PayX402 remains parked"]
+async fn live_ipc_pay_x402_rejects_ungranted_then_parked() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut child = spawn_daemon(
         home.path(),
@@ -161,32 +156,13 @@ async fn live_ipc_pay_x402_rejects_malformed_per_call_cap() {
         other => panic!("expected Response::CapabilityGranted, got {other:?}"),
     }
 
-    // Step 3 — capability, config, and method gates now all clear, so the
-    // per_call_cap parse is the rejecting gate. It must fail closed (no signer
-    // spawn, no network) with the cap-specific message echoing the bad value.
+    // Step 3 — after the grant, even a malformed payload stops at the parked
+    // boundary before the cap is parsed.
     match req(&mut stream, malformed_pay("not_a_number")).await {
         Response::Error { message } => {
-            assert!(
-                message.contains("invalid per_call_cap (must be decimal u128)"),
-                "a malformed cap must be rejected by the u128 parse gate: {message:?}"
-            );
-            assert!(
-                message.contains("not_a_number"),
-                "the error must echo the offending cap value: {message:?}"
-            );
+            assert_eq!(message, covenantd::x402::LEGACY_OUTBOUND_PARKED)
         }
-        other => panic!("expected Response::Error for a malformed cap, got {other:?}"),
-    }
-
-    // A value past u128::MAX proves the gate is a real numeric parse, not an
-    // is-empty / is-ascii-digit check that a 40-digit string would slip past.
-    let overflow = "9".repeat(40);
-    match req(&mut stream, malformed_pay(&overflow)).await {
-        Response::Error { message } => assert!(
-            message.contains("invalid per_call_cap (must be decimal u128)"),
-            "a cap past u128::MAX must fail the same parse gate: {message:?}"
-        ),
-        other => panic!("expected Response::Error for an overflow cap, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);

@@ -426,12 +426,10 @@ pub enum Request {
         #[serde(default = "default_recent_limit")]
         limit: usize,
     },
-    /// Make an outbound x402 paid call. Capability-gated by
-    /// `x402.outbound.pay`; the daemon resolves the chosen requirement
-    /// against `per_call_cap` and shells out to the configured
-    /// `covenant-x402-signer` sidecar for signing. Authoritative
-    /// accounting (budget debit + settlement receipt + audit event)
-    /// lands on success.
+    /// Legacy outbound x402 request shape. The daemon preserves the
+    /// `x402.outbound.pay` capability and provider-scope gates, then refuses
+    /// this request before signing until transaction-bound authorization and a
+    /// durable prepayment reservation/idempotency record exist.
     ///
     /// `per_call_cap` is the atomic amount string (decimal u128) to
     /// avoid JSON's 53-bit integer limit. `credits` is the USD-pegged

@@ -1,10 +1,9 @@
 //! Payment signing trait.
 //!
-//! The x402 client doesn't know how to sign Solana transactions or
-//! produce the `x-payment` header value. Real signing lives in the
-//! daemon, which owns the funding key. This module exposes a
-//! [`Signer`] trait the daemon implements and a [`MockSigner`] for
-//! tests in this crate.
+//! The x402 client doesn't know how to sign Solana transactions or produce the
+//! `x-payment` header value. This module exposes a [`Signer`] trait for explicit
+//! lower-level callers and a [`MockSigner`] for tests. The production daemon's
+//! outbound payment path is parked and does not construct these signers.
 
 use async_trait::async_trait;
 
@@ -26,8 +25,7 @@ pub trait Signer: Send + Sync {
 ///
 /// Returns a header value of the form `mock:{network}:{amount}`.
 /// The real client loop is what's under test here; the signer's job
-/// is covered by integration tests in the daemon once the Solana
-/// signer lands.
+/// is covered separately by lower-level signer tests.
 pub struct MockSigner;
 
 #[async_trait]

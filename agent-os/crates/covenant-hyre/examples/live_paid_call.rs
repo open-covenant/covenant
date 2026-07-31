@@ -18,7 +18,7 @@ use std::process::Stdio;
 
 use async_trait::async_trait;
 use covenant_hyre::config::{HyreConfig, PAY_TO, SOLANA_NETWORK, USDC_MINT};
-use covenant_hyre::{execute_paid, PaidRequest};
+use covenant_hyre::{execute_paid, http_client, PaidRequest};
 use covenant_x402::{PaymentRequirements, Result as X402Result, Signer, X402Error};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -89,7 +89,7 @@ async fn main() {
         PER_CALL_CAP as f64 / 1e6
     );
 
-    let http = reqwest::Client::new();
+    let http = http_client();
 
     println!("\n--- step 1: fetch the unpaid 402 challenge (free) ---");
     let probe = http.get(&url).send().await.expect("GET");
@@ -157,7 +157,7 @@ async fn main() {
             .unwrap_or(0),
     };
 
-    let out = match execute_paid(&http, &signer, &plan).await {
+    let out = match execute_paid(&signer, &plan).await {
         Ok(o) => o,
         Err(e) => {
             eprintln!("\nFAIL: {e}");
@@ -165,26 +165,31 @@ async fn main() {
         }
     };
     println!("status:        {}", out.status);
-    println!("paid_amount:   {:?} atomic USDC", out.paid_amount);
+    println!(
+        "attempted_amount: {:?} atomic USDC (settlement unknown)",
+        out.attempted_amount
+    );
     println!("response body: {}", &out.body[..out.body.len().min(1000)]);
 
-    if let Some(amount) = out.paid_amount {
+    if let Some(amount) = out.attempted_amount {
         if (200..300).contains(&out.status) {
             println!(
-                "\nOK — paid {amount} atomic USDC against {}.",
+                "\nThe signed retry for {amount} atomic USDC returned success from {}.",
                 chosen.pay_to
             );
-            println!("Look at Hyre's response headers for an x-payment-response hop if you need the on-chain sig.");
+            println!(
+                "Settlement remains unknown here; reconcile the facilitator result and chain before retrying."
+            );
         } else {
             println!(
-                "\nFAIL — Hyre returned {} after we paid. Investigate.",
+                "\nHyre returned {} after the signed retry. Settlement is unknown; reconcile before any retry.",
                 out.status
             );
             std::process::exit(2);
         }
     } else {
         println!(
-            "\nNo payment recorded — Hyre returned {} on the first GET (free).",
+            "\nNo payment header was sent — Hyre returned {} on the first GET.",
             out.status
         );
     }

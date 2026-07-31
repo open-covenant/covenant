@@ -11,9 +11,10 @@
 //! The bridge is the key, not a chain message. The secp256k1 issuer key
 //! that signed the VC's EVM proof signs the EAS attestation, and
 //! [`EasAttestationSigner::attest`] refuses to proceed unless the key it
-//! holds is the one the VC's proof recovers to. So a single `ecrecover`
-//! authenticates both artifacts, with no bridge and no gas: an off-chain
-//! attestation is a signature, not a transaction.
+//! holds is the one the VC's proof recovers to. A single `ecrecover` therefore
+//! checks that the same configured key signed both artifacts.
+//! It does not identify the publisher or validate the statement. An off-chain attestation
+//! is a signature, not a transaction.
 //!
 //! [`EasAttestationSigner::attest_reputation`] is an experimental format utility
 //! for a caller-supplied score and Solana account reference. It does not verify
@@ -188,7 +189,8 @@ impl EasAttestationSigner {
     /// Sign an experimental caller-supplied score projection as an EAS
     /// off-chain statement. Unlike [`Self::attest`], there is no input
     /// credential or audit proof to verify. Recovering the configured issuer
-    /// authenticates only the publisher and exact supplied bytes.
+    /// proves only that this key signed the exact supplied bytes; associating
+    /// that key with a publisher is external to this crate.
     ///
     /// The attestation carries no EVM `recipient`. Its
     /// `solana_attestation_pda` is an opaque caller-supplied reference: this

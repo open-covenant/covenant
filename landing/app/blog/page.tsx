@@ -31,13 +31,13 @@ const POSTS: Post[] = [
     slug: "covenant-is-now-multichain",
     date: "7 July 2026",
     title: "Covenant is now multi-chain. The token isn't.",
-    dek: "Selected registrations and signed statements are readable on Base while $CVNT stays a single Solana mint. ecrecover authenticates the configured publisher and bytes, not claim truth.",
+    dek: "Selected registrations and signed statements are readable on Base while $CVNT stays a single Solana mint. ecrecover proves only that a configured address signed the bytes; it does not establish publisher identity or claim truth.",
   },
   {
     slug: "covenant-payai",
     date: "31 July 2026",
     title: "Correction: what payment evidence proves",
-    dek: "Settlement proves funds moved. A seller-signed receipt proves the seller signed a statement. Neither proves delivery, quality, or reputation.",
+    dek: "A chain-confirmed transfer proves funds moved. A seller-signed receipt proves only that its signing key signed a statement. Neither proves delivery, quality, or reputation.",
   },
 ];
 

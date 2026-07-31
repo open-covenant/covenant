@@ -2,8 +2,8 @@
 //! statement. This module is a format/projection utility and is not wired into
 //! covenantd publication. The caller supplies the score, source-chain label,
 //! and Solana account reference; this code does not verify an anchor, identity,
-//! event completeness, or reputation. `ecrecover` authenticates only the
-//! configured EVM publisher and signed bytes.
+//! event completeness, or reputation. `ecrecover` verifies only that the
+//! configured EVM key signed the exact bytes; key attribution is external.
 //!
 //! The schema is modeled on [Human Passport]'s score attestation: a
 //! `score`/`score_decimals` pair, so a fractional score survives as an

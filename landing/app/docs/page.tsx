@@ -68,7 +68,7 @@ const TILES = [
   {
     href: "/multichain",
     title: "Multi-chain signed evidence",
-    body: "How selected registrations, scores, and receipt statements project onto Base, where ecrecover authenticates the publisher and bytes—not claim truth.",
+    body: "How selected registrations, scores, and receipt statements project onto Base, where ecrecover proves only that a configured address signed the bytes—not publisher identity or claim truth.",
   },
   {
     href: "/provenance",
@@ -143,8 +143,8 @@ export default function DocsIndexPage() {
         runner work, live Linux sandbox coverage, and a documented Linux runner
         setup. Selected signed-evidence components are deployed on Base mainnet:
         an ERC-8004 registration, bond-receipt verifier, EAS score schema, and
-        ENS CCIP-Read resolution. <code>ecrecover</code> authenticates a
-        configured publisher and the signed bytes; it does not establish the
+        ENS CCIP-Read resolution. <code>ecrecover</code> proves that a configured
+        address signed the bytes; it does not establish publisher identity or the
         underlying claim. $CVNT stays a single Solana mint. Distributed
         settlement, cross-chain enforcement, installers, additional-language SDK
         publication (Python and Rust-crate), release-scope and audit-root

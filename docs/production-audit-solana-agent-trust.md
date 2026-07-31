@@ -21,8 +21,8 @@ auditable. They cannot replace the enforcement boundary.
 
 ## Verified Current State
 
-- The Solana x402 seller was corrected and redeployed from commit `ed21fb49`.
-  Live discovery, OpenAPI, and the encoded Payment-Required route description
+- The Solana x402 seller was corrected in draft PR #130 and the same bounded
+  copy was observed on the live service. Discovery, OpenAPI, and the encoded Payment-Required route description
   now call the service bounded evidence and explicitly deny identity,
   reputation, claim-truth, W009/W011, and settlement-finality inferences.
 - The public landing deployment still serves the previous x402 documentation
@@ -35,11 +35,20 @@ auditable. They cannot replace the enforcement boundary.
 
 ## Critical Issues (P0 - Block Production Claims)
 
-- [x] Remove identity, reputation, delivery, and generalized verification
-  overclaims from repository source and the deployed x402 seller.
+- [ ] Complete removal of identity, reputation, delivery, and generalized
+  verification overclaims from repository source. The deployed x402 seller is
+  corrected; repository-wide source review remains a merge gate.
 - [ ] Deploy the corrected landing-site copy. The current public docs deployment
   still contains the superseded identity-passport, settlement-reputation, TDX,
   and never-charged language.
+- [ ] Resolve the seller-base dependency advisory before production deployment.
+  `npm audit --omit=dev` reports two affected production dependency nodes, one
+  high and one moderate, both originating from `axios@1.16.0` in the
+  `@coinbase/x402` -> `@coinbase/cdp-sdk` chain. As of 31 July 2026, the latest
+  CDP SDK still pins that Axios version and `npm audit fix --dry-run` makes no
+  change. Do not force an unvalidated override beneath the exact SDK pin:
+  upgrade when the upstream graph permits it, or independently qualify and test
+  a replacement before enabling facilitator-backed production traffic.
 - [x] Stop server-side fetching of an onchain-controlled registration URI. The
   previous HTTPS-only fetch still allowed SSRF through private resolution,
   redirects, or rebinding.
@@ -48,6 +57,23 @@ auditable. They cannot replace the enforcement boundary.
 - [x] Mark the existing spend-authorization endpoint as advisory. The caller
   supplies the proposed cap and budget units, the result is not transaction
   bound, and no signer consumes it.
+- [ ] Define and enforce a `wallet.spend.authorize` scope. The permissions
+  grammar has no wallet namespace today, so its capability does not bind
+  provider, network, asset, recipient, cap, nonce, or final transaction; with
+  peer self-grants it is not an approval boundary at all.
+- [x] Park every daemon-reachable outbound x402 payment path, including direct
+  `PayX402`, Hyre paid execution, Circuit paid tools, and AceData's keyless
+  fallback. The reusable clients and explicit manual tooling remain available
+  for development, but the production daemon does not move funds through them.
+- [x] Park the peer-reachable SAP publish, audit-root, and attestation handlers.
+  They now fail before bridge, network, or signer access.
+- [x] Park daemon-owned Metaplex and SNS funded tools. They are filtered from
+  discovery and refused before capability, sidecar, RPC, or key access; the
+  lower-level clients remain explicit development surfaces.
+- [ ] Treat AceData and Hermes API calls as externally billed operations. The
+  daemon has no durable provider-credit reservation or hard monetary budget;
+  AceData currently records zero local cost, and a Hermes budget may be absent
+  or disabled. Model or tool scope is not spend policy.
 - [x] Park the standalone MIP draft. Metaplex already has unfinished validation
   and reputation programs in its official `mpl-agent` repository; creating a
   parallel Covenant standard is premature.
@@ -58,15 +84,38 @@ auditable. They cannot replace the enforcement boundary.
 - [ ] Do not describe W009 or W011 as production enforcement until the production
   signer and action executor require the checks. The signed devnet witness is a
   standalone reference harness only.
-- [ ] Do not enable an automatic retry after a paid-resource error or timeout
-  until settlement is reconciled on chain. Resource delivery and payment
-  finality are separate outcomes.
+- [ ] Replace peer self-grants with operator-authorized delegation. Every
+  authenticated peer can currently ask the daemon to sign an arbitrary action
+  for itself with empty scope, so a capability is not evidence of operator
+  approval.
+- [ ] Stop passing the daemon environment and host `HOME` into trusted-local
+  agent subprocesses. The current allowlist still includes credential-bearing
+  `COVENANT_*` values, signer paths, keyed RPC URLs, and the daemon data
+  directory. Use an explicit non-secret allowlist, an isolated home/user
+  boundary, and a broker for every signer or billing credential.
+- [x] Clear ambient environment inheritance for external stdio MCP servers.
+  They now receive only `PATH` and explicitly configured per-server variables;
+  same-user filesystem access and deliberately configured secrets remain
+  outside that fix.
+- [x] Park funded SAP and Metaplex automatic anchor drivers. Their legacy flags
+  now produce a warning and the production binary starts no driver.
+- [x] Disable redirects for signed payment retries so a custom payment header
+  cannot be forwarded to another origin.
+- [x] Reject zero-credit outbound payment requests and record the selected live
+  requirement rather than only the caller's cap. This path remains parked.
+- [x] Remove automatic retry after a paid-resource error or timeout. The
+  automatic retry remains removed while daemon-owned outbound payment is
+  parked; any future re-enable requires onchain settlement reconciliation
+  because resource delivery and payment finality are separate outcomes.
 
 ## High Priority (P1 - Required Before Wallet Launch)
 
 - [x] Define a strict, canonical `PaymentIntentV1`, trusted local policy, stable
   denial reasons, and an advisory receipt whose wire contract cannot claim
   signer enforcement.
+- [x] Reject JSON numeric fields above JavaScript's exact integer range during
+  deserialization, hashing, evaluation, and receipt serialization so Rust and
+  the published schemas accept the same documents.
 - [x] Distinguish free first-response success from a 402 payment-header retry in
   the legacy outbound client, and record the exact selected live requirement
   rather than the caller's per-call cap. This still does not prove settlement.
@@ -93,6 +142,10 @@ auditable. They cannot replace the enforcement boundary.
   recovery and an explicit multi-process or distributed ownership model.
 - [ ] Keep the key in a genuinely isolated signer boundary with authenticated IPC
   and an allowlisted request contract. A subprocess alone is not isolation.
+- [x] Clear the SAP worker environment and make key access command-specific.
+  The payer key is available only to payer-authorized commands, the verifier
+  key only to verifier attestation, and read/status/stats commands receive no
+  keys. Same-user filesystem access remains outside this process-level fix.
 - [ ] Propagate untrusted-input provenance as typed runtime data from ingestion to
   the proposed action. A supplied event label or post-hoc log scan does not
   establish causality or completeness.
@@ -112,7 +165,7 @@ auditable. They cannot replace the enforcement boundary.
 - [ ] Replace DAS-only authority matching with direct Core account decoding or a
   cryptographic account proof. Preserve provider, slot, commitment, and coverage
   metadata on every observation.
-- [ ] Separate evidence schemas by meaning: registration, publisher-authenticated
+- [ ] Separate evidence schemas by meaning: registration, publisher-key-signed
   statement, payment observation, buyer acceptance, delivery assertion, and
   third-party evaluation. Do not aggregate them into a universal trust score.
 - [ ] Version public endpoint semantics. Keep the legacy PayAI heuristic clearly
@@ -120,6 +173,8 @@ auditable. They cannot replace the enforcement boundary.
 - [x] Pin publisher-signature verification to an externally supplied expected
   key and reject attacker self-signatures and malformed key material in both
   x402 seller implementations.
+- [x] Reject ephemeral Base seller attestors on Base mainnet or in production;
+  the explicit development override is limited to non-production test networks.
 - [x] Make the legacy witness verifier sign the verdict and refutations as well
   as the root. The page remains yellow because its key is self-published beside
   the statement, and its Solana cards inspect manifests rather than RPC.
@@ -138,15 +193,21 @@ auditable. They cannot replace the enforcement boundary.
   outcomes without logging secrets or full sensitive payloads.
 - [ ] Establish key rotation and revocation documents for authority, approver,
   enforcer, and verifier roles.
+- [x] Require a commit-scoped verifier public key for every accepted v2 artifact
+  and treat the global key file only as a latest-key compatibility pointer.
+  Missing commit keys are red, and commit-scoped files are write-once unless an
+  interrupted run resumes with byte-identical content. These keys remain
+  self-published and therefore yellow, not external trust roots.
 
 ## Security Assessment
 
-The immediate SSRF issues were real W011 violations: an untrusted URI reported
-by the chain/indexer reached a server-side network fetch, and the passport page
-derived another server-side fetch target from forwarded host headers. The fixes
-remove the registration-document fetch and use only configured internal site
-URLs. Reintroducing arbitrary URI fetching requires resolved-IP private-range
-rejection,
+The immediate SSRF issues violated the design rule expressed by W011: an
+untrusted URI reported by the chain/indexer reached a server-side network
+fetch, and the passport page derived another server-side fetch target from
+forwarded host headers. The fixes remove the registration-document fetch and
+use only configured internal site URLs. This was a W011-class failure, not
+evidence that the production runtime implemented general taint enforcement.
+Reintroducing arbitrary URI fetching requires resolved-IP private-range rejection,
 redirect revalidation or disabled redirects, port restrictions, response
 limits, rebinding-resistant connection behavior, and tests against IPv4, IPv6,
 and encoded-address bypasses.
@@ -216,8 +277,8 @@ malicious challenge handling, and end-to-end x402 v2 settlement reconciliation.
 
 ## Action Plan
 
-1. Merge the public-truth and advisory-preflight changes without calling them
-   enforcement.
+1. Merge the public-truth, parked-payment, and advisory-preflight changes without
+   calling them enforcement.
 2. Publish the devnet witness in a separate draft PR with its standalone-harness
    boundary in the title, README, verifier output, and PR body.
 3. Implement the signer-bound intent consumer as the next isolated milestone.

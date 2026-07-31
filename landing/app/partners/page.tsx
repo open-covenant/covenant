@@ -137,10 +137,10 @@ export default function PartnersPage() {
         </h2>
 
         <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
-          Covenant is open infrastructure, not a walled garden. It speaks open protocols, so any
-          compliant client or chain interoperates, and it carries first-class integrations with
-          products across the agent ecosystem. Every integration runs under the same signed
-          permissions and tamper-evident audit log as the rest of the system.
+          Covenant is open infrastructure with adapters for selected protocols and products across the
+          agent ecosystem. Each adapter has its own boundary. A live label means the stated integration
+          surface is shipped; it does not mean every external call is capability-controlled, audited, or
+          payment-enforced.
         </p>
 
         {/* Protocols & standards */}
@@ -150,8 +150,8 @@ export default function PartnersPage() {
             <h2 className={headingTitle}>Protocols &amp; standards</h2>
           </div>
           <p className={`mb-8 max-w-2xl ${paragraph}`}>
-            The open standards Covenant speaks natively. No bespoke partnership required: any
-            compliant tool, agent, or chain interoperates out of the box.
+            Selected open standards and protocols for which Covenant ships an adapter. Compatibility is
+            limited to the documented surface for each adapter.
           </p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
             {PROTOCOLS.map((item) => (

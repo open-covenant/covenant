@@ -20,12 +20,12 @@
     "observed_at_ms": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 18446744073709551615
+      "maximum": 9007199254740991
     },
     "expires_at_ms": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 18446744073709551615
+      "maximum": 9007199254740991
     }
   },
   "$defs": {
@@ -98,7 +98,7 @@
         "compute_unit_price_micro_lamports": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 18446744073709551615
+          "maximum": 9007199254740991
         },
         "transaction_profile": { "const": "sponsored_v0_static_v1" }
       }

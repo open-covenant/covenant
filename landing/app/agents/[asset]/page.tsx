@@ -260,10 +260,10 @@ export default async function AgentPassportPage({
                       ? "yellow"
                       : "gray"
               }
-              label="Covenant-authored records"
+              label="Publisher-reported records"
               detail={
                 p.records == null
-                  ? "The validation-record lookup could not complete just now."
+                  ? "The historical AppData commitment lookup could not complete just now."
                   : p.records.hasMatchingRecord
                     ? `The configured DAS provider reports ${p.records.count} record${p.records.count === 1 ? "" : "s"} with the expected Covenant envelope naming this asset${p.records.latest?.recordedAt ? `, latest dated ${new Date(p.records.latest.recordedAt * 1000).toISOString().slice(0, 10)}` : ""}. This structural match does not prove the claim, completeness of the record set, or agent safety.`
                     : p.records.truncated
@@ -275,7 +275,7 @@ export default async function AgentPassportPage({
                   ? solscanAccountUrl(p.records.latest.asset)
                   : undefined
               }
-              evidenceLabel="Validation record"
+              evidenceLabel="Historical AppData commitment"
             />
           )}
           {p.gate?.gated && (
@@ -302,12 +302,12 @@ export default async function AgentPassportPage({
                 state={p.attestation.matchesExpectedEnvelope ? "yellow" : "red"}
               />
               <span className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
-                Validation record
+                Historical AppData commitment
               </span>
             </div>
             <p className="mt-3 text-[13px] font-light leading-relaxed text-neutral-400">
               {p.attestation.matchesExpectedEnvelope
-                ? "The configured DAS provider reports AppData with the expected Covenant authority, validation type, schema, and response-hash shape. This is a structural match over indexer output, not proof that the claim is true."
+                ? "The configured DAS provider reports AppData with the expected Covenant authority, historical application type tag, schema, and response-hash shape. This is a structural match over indexer output, not proof that the claim is true."
                 : `The reported AppData does not match the expected Covenant record envelope: ${p.attestation.reasons.join("; ")}.`}
             </p>
             <dl className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -320,7 +320,7 @@ export default async function AgentPassportPage({
               )}
               {p.attestation.authority && (
                 <Field
-                  label="Validator"
+                  label="Configured data authority"
                   value={p.attestation.authority}
                   href={solscanAccountUrl(p.attestation.authority)}
                 />

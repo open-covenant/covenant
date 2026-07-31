@@ -1,7 +1,7 @@
 {
   "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   "name": "Covenant Foundation Agent",
-  "description": "Covenant's registered reference agent. Its Metaplex asset and selected Covenant-authored audit-root records are publicly readable. Those records identify the reported publisher and make payload changes detectable; they do not prove that every runtime action was mediated, that an underlying claim is true, or that the agent is safe.",
+  "description": "Covenant's registered reference agent. Its Metaplex asset and selected publisher-reported audit-root records are publicly readable. Those records name a reported publisher and make payload changes detectable under an externally pinned key; they do not prove publisher identity, that every runtime action was mediated, that an underlying claim is true, or that the agent is safe.",
   "image": "https://opencovenant.org/agents/covenant-agent-1024.png",
   "active": true,
   "registrations": [

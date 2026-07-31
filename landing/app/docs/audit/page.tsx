@@ -13,14 +13,15 @@ export default function AuditPage() {
       />
       <h1>Audit log</h1>
       <p>
-        Every state-changing surface in Covenant emits an{" "}
-        <code>AuditEvent</code> to the append-only log at{" "}
-        <code>$COVENANT_HOME/audit/events.jsonl</code>. The log is the
-        ground truth: operators read it directly,{" "}
+        Recognized action-audited and authorization-audited Covenant paths emit{" "}
+        <code>AuditEvent</code> records to the append-only log at{" "}
+        <code>$COVENANT_HOME/audit/events.jsonl</code>. The log is the local
+        system of record for those recorded events: operators read it directly,{" "}
         <code>covenant verify</code> cross-checks it against the other
         state files, <code>covenant audit verify</code> checks the local
         hash-chain sidecar, and the <code>covenant audit recent</code>{" "}
-        route reads from the same file.
+        route reads from the same file. Coverage is operation-specific; parked
+        and unaudited paths are not made auditable merely because the log exists.
       </p>
 
       <h2>Event envelope</h2>

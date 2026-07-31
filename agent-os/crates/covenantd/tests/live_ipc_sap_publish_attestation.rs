@@ -1,33 +1,8 @@
-//! Live integration test: spawns covenantd against a tempdir HOME and drives
-//! `Request::SapPublishAttestation` over the raw IPC socket, pinning the success
-//! `Response::SapPublishedAttestation { attestation_pda, attester, agent_pda,
-//! signature }` frame plus the disabled-bridge and malformed-root-hash
-//! `Response::Error` frames.
-//!
-//! `sap_publish_attestation` (covenantd/src/lib.rs:1369) publishes a cross-party
-//! attestation through the SAP bridge: it calls `require_enabled`, pre-validates
-//! `root_hash_hex` (64 lowercase hex chars; covenant-sap-bridge attestation.rs:36)
-//! before any subprocess, drives the worker's `attest-agent` command (signed by
-//! the separately-keyed verifier), and relays the worker envelope into the
-//! response. The verb is covered at the bridge level by `covenant-sap-bridge`'s
-//! worker tests, but is never exercised over the Unix socket the CLI is built
-//! on; this pins that wire contract.
-//!
-//! `PublishedAttestation` is `#[serde(rename_all = "camelCase")]`, so the worker
-//! emits `{"attestationPda","attester","agentPda","signature"}`. Note the
-//! response `agent_pda` is relayed from the worker's `agentPda`, NOT echoed from
-//! the request, so the success test uses a request `agent_pda` distinct from the
-//! worker sentinel to catch a handler that echoes the input instead of relaying
-//! the receipt. `main.rs:310` always wires the bridge, so the reachable
-//! fail-closed path over the socket is `BridgeError::Disabled` ("synapse bridge
-//! is disabled"), not the unit-test-only "not wired" arm.
-//!
-//! Hermetic — no network, no Solana RPC, no real signer or verifier keypair.
-//! The success and malformed-root tests enable the bridge and point
-//! `COVENANT_SAP_WORKER_CMD` at a shell stub that drains stdin and prints a
-//! fixed success envelope, exactly as `live_ipc_sap_publish_agent.rs` does; the
-//! disabled test spawns the daemon with the bridge left off. `#[ignore]`'d. Run
-//! with `cargo test -p covenantd --test live_ipc_sap_publish_attestation -- --ignored live_`.
+//! Live integration coverage for the parked `SapPublishAttestation`
+//! compatibility request. It pins the same stable refusal with the bridge on
+//! or off and before root validation or verifier-worker invocation. Hermetic
+//! and ignored; run with `cargo test -p covenantd --test
+//! live_ipc_sap_publish_attestation -- --ignored live_`.
 
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use std::os::unix::fs::PermissionsExt;
@@ -96,11 +71,8 @@ async fn spawn_daemon(home: &Path, env: &[(&str, &str)]) -> Child {
     child
 }
 
-/// Write an executable shell-stub worker into `home` and spawn covenantd with
-/// the SAP bridge enabled and pointed at it. The stub drains stdin (so the
-/// daemon's `write_all` + `shutdown` never hits a broken pipe) and prints the
-/// `attest-agent` success envelope as its last stdout line — `data` carries the
-/// camelCase `PublishedAttestation` shape `worker::invoke` parses. No verifier.
+/// Spawn with an enabled bridge and a worker that would return success if the
+/// parked daemon boundary accidentally invoked it.
 async fn spawn_with_stub_worker(home: &Path) -> Child {
     let stub = home.join("sap-worker.sh");
     std::fs::write(
@@ -162,41 +134,17 @@ fn attestation_request(root_hash_hex: String) -> Request {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with a stub SAP worker + drives Request::SapPublishAttestation over the socket, pinning Response::SapPublishedAttestation"]
-async fn live_ipc_sap_publish_attestation_returns_published_receipt() {
+#[ignore = "live: proves SapPublishAttestation is parked before an enabled success worker"]
+async fn live_ipc_sap_publish_attestation_is_parked_before_worker_invocation() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut child = spawn_with_stub_worker(home.path()).await;
 
     let mut stream = authenticated_stream(home.path()).await;
     match req(&mut stream, attestation_request(valid_root_hash_hex())).await {
-        Response::SapPublishedAttestation {
-            attestation_pda,
-            attester,
-            agent_pda,
-            signature,
-        } => {
-            // Distinct sentinels across all four fields: a handler that swaps
-            // any pair, drops a camelCase key, or echoes the request agent_pda
-            // (AgentPdaInput999) instead of relaying the worker's agentPda fails
-            // an assert and ships a silently wrong attestation receipt.
-            assert_eq!(
-                attestation_pda, "AttestationPda111",
-                "attestation_pda must relay the worker envelope's attestationPda verbatim"
-            );
-            assert_eq!(
-                attester, "Attester222",
-                "attester must relay the worker envelope's attester verbatim"
-            );
-            assert_eq!(
-                agent_pda, "AgentPda333",
-                "agent_pda must relay the worker envelope's agentPda, not echo the request input"
-            );
-            assert_eq!(
-                signature, "AttestationSig444",
-                "signature must relay the worker envelope's signature verbatim"
-            );
+        Response::Error { message } => {
+            assert_eq!(message, covenantd::SAP_DIRECT_PUBLISH_PARKED)
         }
-        other => panic!("expected Response::SapPublishedAttestation, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);
@@ -205,8 +153,8 @@ async fn live_ipc_sap_publish_attestation_returns_published_receipt() {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with the SAP bridge disabled + asserts Request::SapPublishAttestation flattens onto Response::Error"]
-async fn live_ipc_sap_publish_attestation_rejects_disabled_bridge() {
+#[ignore = "live: proves SapPublishAttestation returns the same parked error with SAP disabled"]
+async fn live_ipc_sap_publish_attestation_is_parked_before_bridge_state() {
     let home = tempfile::tempdir().expect("tempdir");
     // No COVENANT_SAP_ENABLED: main.rs still wires the bridge (lib.rs:310), so
     // require_enabled is what rejects, not the unit-test-only "not wired" arm.
@@ -215,12 +163,9 @@ async fn live_ipc_sap_publish_attestation_rejects_disabled_bridge() {
     let mut stream = authenticated_stream(home.path()).await;
     match req(&mut stream, attestation_request(valid_root_hash_hex())).await {
         Response::Error { message } => {
-            assert!(
-                message.contains("disabled"),
-                "a disabled bridge must surface as the fail-closed Disabled error, got: {message}"
-            );
+            assert_eq!(message, covenantd::SAP_DIRECT_PUBLISH_PARKED);
         }
-        other => panic!("expected Response::Error, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);
@@ -229,8 +174,8 @@ async fn live_ipc_sap_publish_attestation_rejects_disabled_bridge() {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with a stub SAP worker + asserts a malformed root_hash_hex flattens onto Response::Error before any worker round-trip"]
-async fn live_ipc_sap_publish_attestation_rejects_malformed_root_hash() {
+#[ignore = "live: proves SapPublishAttestation is parked before root validation"]
+async fn live_ipc_sap_publish_attestation_parks_before_root_validation() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut child = spawn_with_stub_worker(home.path()).await;
 
@@ -239,12 +184,9 @@ async fn live_ipc_sap_publish_attestation_rejects_malformed_root_hash() {
     let mut stream = authenticated_stream(home.path()).await;
     match req(&mut stream, attestation_request("zz".repeat(32))).await {
         Response::Error { message } => {
-            assert!(
-                message.contains("root_hash_hex must be"),
-                "a non-hex root must be rejected by the pre-worker hex guard, got: {message}"
-            );
+            assert_eq!(message, covenantd::SAP_DIRECT_PUBLISH_PARKED);
         }
-        other => panic!("expected Response::Error, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);

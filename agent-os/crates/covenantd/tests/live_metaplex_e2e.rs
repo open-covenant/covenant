@@ -21,6 +21,7 @@
 
 use covenant_ipc::{read_frame, write_frame, Request, Response};
 use serde_json::json;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::net::UnixStream;
@@ -344,31 +345,25 @@ async fn live_covenantd_metaplex_attest_writes_to_devnet() {
     let _ = child.kill().await;
 }
 
-/// Live, env-gated: proves the autonomous Metaplex anchor driver end to
-/// end through the real daemon — an audit row lands in the chain, the
-/// driver notices the changed root on its next tick, and a confirmed MPL
-/// Core AppData attestation comes back from the signer sidecar. Forwards
-/// COVENANT_METAPLEX_CLUSTER / COVENANT_METAPLEX_COLLECTION when set, so
-/// the same test proves devnet or mainnet.
+/// Starts the real daemon with the legacy automatic-anchor flag and a signer
+/// spy. A changed audit root must not invoke the signer or persist anchor state.
 #[tokio::test]
-#[ignore = "live+funded: drives the daemon's auto-attest driver to an on-chain mint"]
-async fn live_covenantd_metaplex_auto_attest_anchors_changed_root() {
-    let (Ok(signer_bin), Ok(keypair), Ok(rpc)) = (
-        std::env::var("COVENANT_METAPLEX_SIGNER_BIN"),
-        std::env::var("COVENANT_METAPLEX_KEYPAIR"),
-        std::env::var("COVENANT_METAPLEX_RPC_URL"),
-    ) else {
-        eprintln!(
-            "skip: set COVENANT_METAPLEX_SIGNER_BIN + COVENANT_METAPLEX_KEYPAIR + \
-             COVENANT_METAPLEX_RPC_URL (funded key) to run this"
-        );
-        return;
-    };
-    let cluster =
-        std::env::var("COVENANT_METAPLEX_CLUSTER").unwrap_or_else(|_| "devnet".to_string());
-    let collection = std::env::var("COVENANT_METAPLEX_COLLECTION").unwrap_or_default();
-
+#[ignore = "spawns the real daemon to verify the parked startup boundary"]
+async fn live_covenantd_metaplex_auto_attest_is_parked_before_signer() {
     let home = tempfile::tempdir().expect("tempdir");
+    let marker = home.path().join("signer-invoked");
+    let signer = home.path().join("signer-spy.sh");
+    std::fs::write(
+        &signer,
+        format!("#!/bin/sh\n: > '{}'\nexit 97\n", marker.display()),
+    )
+    .expect("write signer spy");
+    let mut permissions = std::fs::metadata(&signer)
+        .expect("signer spy metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&signer, permissions).expect("make signer spy executable");
+
     let port = pick_free_port();
     let exe = env!("CARGO_BIN_EXE_covenantd");
     let mut cmd = Command::new(exe);
@@ -376,19 +371,17 @@ async fn live_covenantd_metaplex_auto_attest_anchors_changed_root() {
         .env("HOME", home.path())
         .env("COVENANT_HTTP_PORT", port.to_string())
         .env("COVENANT_METAPLEX_ENABLED", "true")
-        .env("COVENANT_METAPLEX_CLUSTER", &cluster)
-        .env("COVENANT_METAPLEX_SIGNER_BIN", &signer_bin)
-        .env("COVENANT_METAPLEX_KEYPAIR", &keypair)
-        .env("COVENANT_METAPLEX_RPC_URL", &rpc)
+        .env("COVENANT_METAPLEX_DAS_URL", "http://127.0.0.1:1")
+        .env("COVENANT_METAPLEX_SIGNER_BIN", &signer)
+        .env("COVENANT_METAPLEX_KEYPAIR", home.path().join("unused.json"))
+        .env("COVENANT_METAPLEX_RPC_URL", "http://127.0.0.1:1")
+        .env("COVENANT_METAPLEX_ALLOWED_TOOLS", "attest.audit_root")
         .env("COVENANT_METAPLEX_AUTO_ATTEST", "1")
-        .env("COVENANT_METAPLEX_ATTEST_INTERVAL_SECS", "2")
+        .env("COVENANT_METAPLEX_ATTEST_INTERVAL_SECS", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
-    if !collection.is_empty() {
-        cmd.env("COVENANT_METAPLEX_COLLECTION", &collection);
-    }
     let mut child = cmd.spawn().expect("spawn covenantd");
 
     let sock = home.path().join("sock");
@@ -398,8 +391,8 @@ async fn live_covenantd_metaplex_auto_attest_anchors_changed_root() {
     }
     let operator_token = read_operator_token(home.path()).await;
 
-    // Any audited action moves the audit-integrity root off empty; a
-    // capability grant is the cheapest one.
+    // Move the audit root away from genesis so the old driver would have tried
+    // the signer on its next tick.
     let mut stream = authenticated_operator(&sock, &operator_token).await;
     match req(
         &mut stream,
@@ -415,23 +408,14 @@ async fn live_covenantd_metaplex_auto_attest_anchors_changed_root() {
         other => panic!("grant failed: {other:?}"),
     }
 
-    // The driver persists the root only after the signer confirms the
-    // on-chain write, so the file appearing IS the proof of anchor.
-    let last_root_file = home.path().join("metaplex-last-attested-root");
-    let mut anchored = None;
-    for _ in 0..60 {
-        if let Ok(s) = std::fs::read_to_string(&last_root_file) {
-            let trimmed = s.trim().to_string();
-            // The genesis all-zeros root must never be anchored; wait for
-            // a real one produced by the audited grant above.
-            if trimmed.len() == 64 && !trimmed.bytes().all(|b| b == b'0') {
-                anchored = Some(trimmed);
-                break;
-            }
-        }
-        sleep(Duration::from_millis(1000)).await;
-    }
+    sleep(Duration::from_millis(1_500)).await;
+    assert!(
+        !marker.exists(),
+        "parked automatic anchor invoked the signer"
+    );
+    assert!(
+        !home.path().join("metaplex-last-attested-root").exists(),
+        "parked automatic anchor persisted state"
+    );
     let _ = child.kill().await;
-    let root = anchored.expect("auto-attest driver never anchored a root on-chain");
-    eprintln!("auto-anchored audit root: {root} (cluster {cluster})");
 }

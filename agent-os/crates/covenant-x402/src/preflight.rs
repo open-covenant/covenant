@@ -25,6 +25,32 @@ const JSON_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 pub enum PreflightError {
     #[error("canonical JSON: {0}")]
     CanonicalJson(#[from] serde_json::Error),
+    #[error("{field} exceeds the JSON safe-integer maximum: {value}")]
+    JsonSafeInteger { field: &'static str, value: u64 },
+}
+
+mod json_safe_u64 {
+    use super::JSON_SAFE_INTEGER;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+        if *value > JSON_SAFE_INTEGER {
+            return Err(serde::ser::Error::custom(format!(
+                "integer exceeds JSON safe-integer maximum {JSON_SAFE_INTEGER}"
+            )));
+        }
+        serializer.serialize_u64(*value)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        let value = u64::deserialize(deserializer)?;
+        if value > JSON_SAFE_INTEGER {
+            return Err(serde::de::Error::custom(format!(
+                "integer exceeds JSON safe-integer maximum {JSON_SAFE_INTEGER}"
+            )));
+        }
+        Ok(value)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +123,7 @@ pub struct SolanaPaymentV1 {
     pub destination_ata: String,
     pub memo: String,
     pub compute_unit_limit: u32,
+    #[serde(with = "json_safe_u64")]
     pub compute_unit_price_micro_lamports: u64,
     pub transaction_profile: TransactionProfile,
 }
@@ -108,7 +135,9 @@ pub struct PaymentIntentV1 {
     pub protocol: ProtocolBindingV1,
     pub request: RequestBindingV1,
     pub payment: SolanaPaymentV1,
+    #[serde(with = "json_safe_u64")]
     pub observed_at_ms: u64,
+    #[serde(with = "json_safe_u64")]
     pub expires_at_ms: u64,
 }
 
@@ -155,7 +184,9 @@ pub struct PaymentPolicyV1 {
     pub allowed_fee_payers: Vec<String>,
     pub routes: Vec<PaymentRouteV1>,
     pub max_compute_unit_limit: u32,
+    #[serde(with = "json_safe_u64")]
     pub max_compute_unit_price_micro_lamports: u64,
+    #[serde(with = "json_safe_u64")]
     pub max_intent_lifetime_ms: u64,
     pub transaction_profile: TransactionProfile,
     pub require_exact_amount: TrueFlag,
@@ -251,15 +282,18 @@ pub struct PreflightReceiptV1 {
     pub policy_sha256: String,
     pub outcome: PreflightOutcome,
     pub reason_codes: Vec<PreflightReasonCode>,
+    #[serde(with = "json_safe_u64")]
     pub evaluated_at_ms: u64,
     pub enforcement: AdvisoryEnforcementV1,
 }
 
 pub fn payment_intent_hash(intent: &PaymentIntentV1) -> Result<String, PreflightError> {
+    ensure_intent_safe_integers(intent)?;
     canonical_hash(INTENT_HASH_DOMAIN, intent)
 }
 
 pub fn payment_policy_hash(policy: &PaymentPolicyV1) -> Result<String, PreflightError> {
+    ensure_policy_safe_integers(policy)?;
     canonical_hash(POLICY_HASH_DOMAIN, policy)
 }
 
@@ -268,6 +302,10 @@ pub fn evaluate_preflight(
     policy: &PaymentPolicyV1,
     evaluated_at_ms: u64,
 ) -> Result<PreflightReceiptV1, PreflightError> {
+    ensure_intent_safe_integers(intent)?;
+    ensure_policy_safe_integers(policy)?;
+    ensure_safe_integer("evaluated_at_ms", evaluated_at_ms)?;
+
     let mut reasons = Vec::new();
     let policy_valid = validate_policy(policy);
     if !policy_valid {
@@ -406,6 +444,30 @@ pub fn evaluate_preflight(
         evaluated_at_ms,
         enforcement: AdvisoryEnforcementV1::default(),
     })
+}
+
+fn ensure_safe_integer(field: &'static str, value: u64) -> Result<(), PreflightError> {
+    if value > JSON_SAFE_INTEGER {
+        return Err(PreflightError::JsonSafeInteger { field, value });
+    }
+    Ok(())
+}
+
+fn ensure_intent_safe_integers(intent: &PaymentIntentV1) -> Result<(), PreflightError> {
+    ensure_safe_integer(
+        "payment.compute_unit_price_micro_lamports",
+        intent.payment.compute_unit_price_micro_lamports,
+    )?;
+    ensure_safe_integer("observed_at_ms", intent.observed_at_ms)?;
+    ensure_safe_integer("expires_at_ms", intent.expires_at_ms)
+}
+
+fn ensure_policy_safe_integers(policy: &PaymentPolicyV1) -> Result<(), PreflightError> {
+    ensure_safe_integer(
+        "max_compute_unit_price_micro_lamports",
+        policy.max_compute_unit_price_micro_lamports,
+    )?;
+    ensure_safe_integer("max_intent_lifetime_ms", policy.max_intent_lifetime_ms)
 }
 
 /// Replays a receipt's evaluation against the policy it names by hash.

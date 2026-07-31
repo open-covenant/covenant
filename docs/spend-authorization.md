@@ -219,7 +219,7 @@ chain, on both approve and deny, carrying `provider`, `network`, `asset`,
 `amount`, `credits`, `destination`, payer identity, `approved`, `reason`, and
 `decision_id`. A settlement adds one `spend_settled` row carrying a
 validated `decision_id` plus the `receipt_id` and caller-reported `tx_sig`. The
-daemon proves the local accounting join to the stored approval; it does not
+daemon checks and records the local accounting join to the stored approval; it does not
 prove that the transaction exists, matches the report, or paid the authorized
 destination on chain.
 Read them with `covenant audit recent` or `GET /audit/recent`, and verify local

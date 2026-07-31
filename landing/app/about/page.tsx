@@ -58,10 +58,11 @@ const SECTIONS: Section[] = [
     body: (
       <p className={paragraph}>
         Operations routed through implemented Covenant daemon boundaries can
-        require a capability: a cryptographically signed permission slip
-        (ed25519) that names an action, can be narrowed to a scope, expires, and
-        can be revoked. The daemon checks it when that operation is requested.
-        This does not constrain actions an agent can perform outside Covenant or
+        require a daemon-signed capability record that names an action, may carry
+        scope, expires, and can be revoked. Today an authenticated peer can
+        request that record for itself without separate operator approval, so
+        its signature is a dispatch token—not proof of human approval or W009
+        enforcement. It also does not constrain actions outside Covenant or
         replace operating-system isolation.
       </p>
     ),
@@ -74,10 +75,11 @@ const SECTIONS: Section[] = [
       <p className={paragraph}>
         Implemented audited paths record events such as identity issuance,
         capability checks, and settlement decisions in an append-only hash
-        chain. Later modification breaks the chain. Coverage depends on the
-        operation using an audited Covenant path; the log does not prove that a
-        compromised writer included every event or that all host activity passed
-        through it.
+        chain. Unmatched later edits break local verification. A same-host
+        writer can still replace or roll back both the log and its sidecar.
+        Coverage depends on the operation using an audited Covenant path; the
+        log does not prove that a compromised writer included every event or
+        that all host activity passed through it.
       </p>
     ),
   },
@@ -89,8 +91,9 @@ const SECTIONS: Section[] = [
       <p className={paragraph}>
         Covenant is built the same way it asks you to run agents. An autonomous engineering loop
         picks a scoped task, writes the code, reviews its own changes, runs the tests, and commits to
-        a public repository, around the clock, under a neutral automation identity, with provenance
-        on every privileged change. The terminal on the{" "}
+        a public repository, around the clock, under a neutral automation identity. Covered
+        repository changes can carry commit-scoped provenance artifacts; that evidence is not
+        universal proof of every privileged action. The terminal on the{" "}
         <a href="https://opencovenant.org" className={linkClass}>
           home page
         </a>{" "}
@@ -137,8 +140,8 @@ const SECTIONS: Section[] = [
         settlement program is live on mainnet, while its daemon-driven
         per-intent lifecycle is not yet production. Selected signed evidence is
         also projected to Base mainnet without moving $CVNT off Solana. An EVM
-        can authenticate the publisher and bytes with <code>ecrecover</code>;
-        that does not establish claim truth. On-chain score writes and funded
+        can verify that a configured key signed the bytes with <code>ecrecover</code>;
+        that does not identify the publisher or establish claim truth. On-chain score writes and funded
         bonds are not yet exercised. The line between done, experimental, and
         planned is documented in BUILT.md and throughout the docs. If a claim is
         not true yet, we do not make it.
@@ -170,10 +173,11 @@ export default function AboutPage() {
 
         <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
           AI agents are starting to act on your computer: running code, moving money, touching your
-          files. Covenant is the layer that lets them do that safely. It gives people and agents a
-          small set of host-level controls (intent, runtime, memory, identity, permissions, comms, a
-          compositor, and settlement) so they can share one machine without having to trust each
-          other. It runs where your work runs, not behind someone else&apos;s API.
+          files. Covenant mediates operations routed through implemented daemon paths using intent,
+          runtime, memory, identity, capability, communication, compositor, and settlement
+          components. Trusted-local agents still run as the host user and share its filesystem,
+          environment, and ambient trust boundary. Covenant runs where your work runs, not behind
+          someone else&apos;s API.
         </p>
 
         <ol className="relative mt-16 sm:mt-24">

@@ -5,14 +5,14 @@ import { SiteHeader } from "../../SiteHeader";
 export const metadata: Metadata = {
   title: "Correction: what payment evidence proves",
   description:
-    "A correction to Covenant's June 2026 PayAI experiment: settlement proves funds moved, not delivery, quality, or reputation.",
+    "A correction to Covenant's June 2026 PayAI experiment: a chain-confirmed transfer proves funds moved, not delivery, quality, or reputation.",
   alternates: { canonical: "/blog/covenant-payai" },
   openGraph: {
     type: "article",
     url: "https://opencovenant.org/blog/covenant-payai",
     title: "Correction: what payment evidence proves",
     description:
-      "Settlement proves funds moved. A seller-signed receipt proves the seller signed a statement. Neither proves delivery or quality.",
+      "A chain-confirmed transfer proves funds moved. A seller-signed receipt proves the seller signed a statement. Neither proves delivery or quality.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "Correction: what payment evidence proves",
     description:
-      "Settlement and signed statements are evidence, not proof of work or reputation.",
+      "Chain-confirmed transfers and signed statements are evidence, not proof of work or reputation.",
     images: "/twitter-image.jpg",
   },
 };
@@ -48,8 +48,8 @@ export default function CovenantPayaiPost() {
         </h1>
 
         <p className="mt-6 max-w-2xl text-pretty text-lg font-light leading-relaxed text-neutral-300 sm:text-xl">
-          Settlement and signed statements are evidence. They are not proof of
-          delivery or quality.
+          Chain-confirmed transfers and signed statements are evidence. They are
+          not proof of delivery or quality.
         </p>
 
         <article className="prose-docs mt-12 max-w-2xl">
@@ -57,16 +57,18 @@ export default function CovenantPayaiPost() {
           <p>
             The June 2026 version of this post inferred &ldquo;jobs&rdquo; and
             &ldquo;reputation&rdquo; from public payment activity. That
-            inference was too strong. A settlement proves that funds moved. It
-            does not prove why they moved, whether an x402 job existed, or
-            whether delivery was correct.
+            inference was too strong. A chain-confirmed transfer proves that
+            funds moved. It does not prove why they moved, whether an x402 job
+            existed, or whether delivery was correct.
           </p>
           <p>
             A seller-signed receipt proves that the seller signed a particular
             statement. It can bind a payment identifier, resource, or output
             digest to that statement, but it is not independent proof that the
             service was delivered or that the output was useful. A signature
-            authenticates the publisher and signed bytes; it does not make the
+            proves possession of the corresponding key and detects changed
+            bytes. Publisher attribution requires an expected key pinned through
+            a trusted external channel, and the signature does not make the
             statement true.
           </p>
           <h2>What the experiment actually demonstrated</h2>
@@ -77,9 +79,10 @@ export default function CovenantPayaiPost() {
           <ul>
             <li>
               <strong>A seller-signed statement.</strong> The seller can sign a
-              canonical payload that references a settlement and an output
-              digest. A verifier can authenticate the seller&apos;s key and
-              detect payload changes.
+              canonical payload that references a reported transfer and an
+              output digest. A verifier with an independently pinned expected
+              key can detect payload changes and attribute the signature to that
+              key.
             </li>
             <li>
               <strong>Bounded transfer observations.</strong> Covenant can
@@ -98,7 +101,7 @@ export default function CovenantPayaiPost() {
             Covenant is retiring the public reputation interpretation and
             keeping the underlying artifacts only as experimental payment
             evidence. Public descriptions now distinguish observed transfers,
-            publisher-authenticated statements, and independently established
+            publisher-key-signed statements, and independently established
             delivery evidence.
           </p>
           <p>

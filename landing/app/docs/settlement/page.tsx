@@ -185,16 +185,18 @@ curl -s '127.0.0.1:8421/receipts/recent?limit=20&since_ms=1714938000000' | jq`}<
       <p>
         Distinct from the internal receipt flush above, the agent-to-service
         payment rail over HTTP 402 (x402) is live. The daemon has a legacy-v1
-        outbound signer for metered resources, while Covenant operates a
+        outbound signer path that is parked pending transaction-bound approval
+        and crash-safe prepayment reservation, while Covenant operates a
         deployed x402-v2 seller that settles in USDC on Solana mainnet. Its paid
-        endpoints return registration lookups, Covenant-authored signed
-        statements, bounded PayAI-linked transfer observations, and
-        enclave-verification results, with the seller&rsquo;s signing key
-        published at <code>/.well-known/x402</code>. A signature authenticates
-        Covenant as publisher; registration and payment observations do not
-        prove identity, delivery, quality, or reputation. Covenant also operates
-        an escrow service and an Ephemeral-Rollup credit facilitator. This is a
-        separate concern from anchoring internal resource receipts: the payment
+        endpoints return registration observations, publisher-signed
+        caller-supplied statements, bounded PayAI-linked transfer observations,
+        and seller-reported DCAP-monitor results. A signature proves only that
+        bytes were signed by the accompanying key; Covenant attribution requires
+        an expected key pinned through a trusted external channel. Registration,
+        payment, and monitor observations do not prove identity, delivery,
+        quality, reputation, or enclave origin. Covenant also operates an escrow
+        service and an Ephemeral-Rollup credit facilitator. This is a separate
+        concern from anchoring internal resource receipts: the inbound payment
         rail being live does not make the receipt flush production.
       </p>
 

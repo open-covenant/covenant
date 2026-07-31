@@ -51,9 +51,9 @@ Read-side HTTP routes accept optional query parameters that mirror the correspon
 
 ## Provenance Query
 
-IPC `Request::QueryProvenance` is the operator-visible provenance view: it returns every privileged action in a window, projected from the capability family of audit kinds (`CapabilityCheck`, `CapabilityGranted`, `CapabilityGrantRejected`, `CapabilityRevoked`, `CapabilityScopeRejected`, `CapabilityRevokeRejected`) into uniform `PrivilegedAction` rows answering "who acted, under which signed rule, who approved it, and how it resolved". It is gated on the **operator identity** (mirroring `Request::VerifyAuditIntegrity`), not scoped to the caller's own audit feed, because the response carries the global hash-chain verdict and a cross-actor view. Non-operator callers receive `Response::Error`.
+IPC `Request::QueryProvenance` is the operator-visible provenance view: it returns recorded capability-family actions in a window, projected from `CapabilityCheck`, `CapabilityGranted`, `CapabilityGrantRejected`, `CapabilityRevoked`, `CapabilityScopeRejected`, and `CapabilityRevokeRejected` into uniform `PrivilegedAction` rows. It does not cover other audit kinds or host actions. It is gated on the **operator identity** (mirroring `Request::VerifyAuditIntegrity`), not scoped to the caller's own audit feed, because the response carries the global hash-chain verdict and a cross-actor view. Non-operator callers receive `Response::Error`.
 
-The daemon verifies the audit hash-chain in the same call and returns the verdict as `Response::ProvenanceActions.integrity` (an `AuditIntegrityReport`), so a provenance answer is always chain-backed and can never silently read tampered rows. `scanned` reports how many in-window events were examined, making the cost and coverage of the answer visible.
+The daemon verifies local hash-chain consistency in the same call and returns the verdict as `Response::ProvenanceActions.integrity` (an `AuditIntegrityReport`). A failed check is surfaced with the response. This does not prove event completeness or detect a coherent log-and-sidecar rewrite by code with the same filesystem authority. `scanned` reports how many in-window events were examined, making the cost and query coverage visible.
 
 Filters compose conjunctively: `since_ms`/`until_ms` bound the window inclusively (absent ends stay open); `actor`, `approver`, and `outcome` are exact matches; `rule` matches a base58 signature prefix so an operator can paste a short fragment from an audit row. `limit` bounds the result to the most recent matching rows in chronological order (defaulting to `default_recent_limit`), keeping a large audit log from streaming an unbounded result. Each `PrivilegedAction` carries `event_id`, `timestamp_ms`, `kind`, `actor`, `action`, `approver`, `rule`, and `outcome`, where `outcome` is one of `authorized`, `denied`, `granted`, `grant_rejected`, `revoked`, `revoke_noop`, `scope_rejected`, or `revoke_rejected`. This iteration exposes the query over IPC only; there is no HTTP route or CLI verb yet.
 
@@ -286,7 +286,7 @@ The envelope source-of-truth lives at `intent_result_json` in `agent-os/crates/c
 
 Because the trace is published live with no backfill, a client follows a specific in-flight intent by subscribing while the run is still working. A Hermes-routed intent dispatches asynchronously: `POST /intent` returns an `intent_result` with `status: "running"` and the `intent_id` immediately, then the run streams its trace from a background task, so the client takes that id and opens `GET /intents/:id/events` before the frames it wants are flushed. The path id is a hard filter, not a hint — each subscriber receives only frames whose `StreamedTrace.intent_id` equals its path parameter, so one intent's trace never appears on another intent's stream even though every subscriber reads the same daemon-wide broadcast. The full path — asynchronous dispatch, broadcast subscription, per-intent filtering, and the SSE header trio (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`) — is exercised end to end over HTTP by `agent-os/crates/covenantd/tests/live_http_intent_events_sse.rs` (opt-in, requires `COVENANT_LIVE_TRACE=1`), which stands up an in-process Hermes gateway, drives a `tool.started` trace through one intent, and asserts a concurrent stream subscribed to a different id stays empty.
 
-`POST /x402/pay` (HTTP-only spend trigger) forwards a `PayX402Body` to the same `Request::PayX402` the unix socket serves, so a caller that can only reach the gateway can still drive the daemon's sole outbound payment. The handler fails closed in a fixed gate order before any funds move: the `x402.outbound.pay` capability, then the grant's destination scope, then a configured-and-enabled dispatch sidecar, then a valid HTTP method, and only then the `per_call_cap` decimal-`u128` parse — a malformed or over-`u128::MAX` cap is rejected before the signer subprocess is constructed or any network call is made. A daemon-level rejection surfaces over HTTP as a `200` response whose body is `{"kind": "error", ...}`, not a `4xx`, so clients route on the envelope `kind` rather than the status line. The capability-gate-then-cap-parse ordering is exercised end to end over the gateway by `agent-os/crates/covenantd/tests/live_http_x402_pay_fail_closed.rs` (opt-in; enables dispatch from env with a `/bin/true` signer so the path is hermetic), which asserts an ungranted call is rejected by name on the capability gate and, after the grant, a malformed and an over-`u128::MAX` cap are both rejected by the parse gate — mirroring the socket-side `live_ipc_pay_x402_invalid_cap.rs` across the HTTP boundary.
+`POST /x402/pay` forwards a `PayX402Body` to the same legacy `Request::PayX402` the unix socket serves, but it cannot currently drive a payment. The handler checks `x402.outbound.pay`, then the grant's provider scope, and returns `LEGACY_OUTBOUND_PARKED` for every otherwise admissible call before config parsing, signer construction, or network I/O. A daemon-level rejection surfaces over HTTP as a `200` response whose body is `{"kind": "error", ...}`, not a `4xx`, so clients route on the envelope `kind` rather than the status line. The fail-closed HTTP and IPC tests assert that capability and scope denials remain attributable while no legacy environment opt-in reaches a funding key.
 
 `covenant capabilities recent [-n|--limit <N>] --json` emits a peer-scoped view of recent signed capabilities. Envelope shape:
 
@@ -294,7 +294,7 @@ Because the trace is published live with no backfill, a client follows a specifi
 - `limit` (u64): the request limit echoed back from `-n`/`--limit` (default `10`, see `main.rs:3811`). Pinned at the type level by the schema test (`main.rs:7523-7526`) — JSON consumers must never receive a string here.
 - `capabilities` (array of `SignedCapability`): the filtered live capabilities. Each element has shape `{capability: Capability, signature: <base58>}` where `Capability` is defined at `agent-os/crates/covenant-types/src/lib.rs:224` (fields: `subject`, `action`, `scope`, `granted_by`, `expires_at`) and `SignedCapability` is defined at `agent-os/crates/covenant-permissions/src/lib.rs:58`. The `signature` field is the base58 encoding of the 64-byte ed25519 signature (per the `sig_b58` serde module at `lib.rs:64-84`), never the raw byte array. Pinned as an array by `main.rs:7527-7530` — never null or a string.
 
-The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:15839-15855`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
+The daemon applies a **peer-visibility filter** before returning the list (see `recent_capabilities` at `agent-os/crates/covenantd/src/lib.rs:15387-15403`): only capabilities whose `subject.pubkey` or `granted_by.pubkey` matches the requesting peer's pubkey are included. JSON consumers must not assume this is a global registry dump — operator and delegated callers see a different slice of the same store.
 
 Top-level keys are pinned to exactly these three by the test at `agent-os/crates/covenant/src/main.rs:7506` (`capability_list_json_pins_top_level_schema`), which exercises both a populated single-capability case and an empty list.
 
@@ -708,23 +708,23 @@ The envelope source-of-truth lives at `memory_backfill_json` in `agent-os/crates
 
 ### SAP privileged publishing envelopes
 
-The `covenant sap` subcommands drive the daemon's SAP bridge — the Solana-side surface that reports bridge config, publishes the daemon's own agent identity, anchors audit roots, and records cross-party attestations on-chain. All four `--json` envelopes belong to the unversioned `kind` subfamily. They are privileged: `sap publish`, `sap attest-root`, and `sap attest-agent` require a configured signer (`COVENANT_SAP_KEYPAIR`), and the emitted PDAs and signatures name real on-chain state. Each is pinned by the same `*_pins_top_level_schema` plus `*_renders_stable_shape` invariant as the rest of this section, and by `agent-os/scripts/validate-cli-envelope-docs.mjs`.
+The `covenant sap` subcommands expose bridge status and legacy write-command compatibility. `sap status` is read-only. The current daemon unconditionally refuses `sap publish`, `sap attest-root`, and `sap attest-agent` with `direct SAP publishing is parked: scoped authorization and action-specific audit evidence are required before bridge invocation`; those requests cannot reach the bridge worker, RPC, or signer. The success envelopes below remain pinned for wire compatibility with older peers and fixtures, but the current daemon does not emit them for direct requests. Legacy automatic-anchor code is also not started by the production binary, even when its configuration flag is set.
 
 `covenant sap status --json` reports the SAP bridge config the daemon resolved at boot. Envelope shape:
 
 - `kind`: literal string `"sap_status"`. Pinned at the value level by `main.rs:11618` (`sap_status_json_pins_top_level_schema` asserts `value["kind"].as_str() == Some("sap_status")`).
-- `enabled` (bool): whether the bridge is on; `false` (the default) means any SAP-backed request returns `Response::Error`. Pinned as a JSON boolean — never `0`/`1` or a string.
+- `enabled` (bool): whether SAP configuration was opted in at boot. This is not a liveness or write-reachability signal; direct publishing and automatic anchors remain parked for either value. Pinned as a JSON boolean — never `0`/`1` or a string.
 - `cluster` (string): the resolved Solana cluster name.
 - `program_id` (string): base58 SAP program ID.
 - `rpc_url` (string): the resolved RPC endpoint.
 - `explorer_url` (string): the resolved explorer base URL.
-- `has_signer` (bool): whether a signer keypair (`COVENANT_SAP_KEYPAIR`) is configured. `false` means the publish and attest paths fail while status and read paths still work. Pinned as a JSON boolean.
+- `has_signer` (bool): whether a signer keypair (`COVENANT_SAP_KEYPAIR`) is configured. This is a configuration observation only; either value leaves direct publication parked. Pinned as a JSON boolean.
 
 Top-level keys are pinned to exactly these seven by the test at `agent-os/crates/covenant/src/main.rs:11786` (`sap_status_json_pins_top_level_schema`), exercised against an enabled-with-signer shape and a disabled-no-signer shape.
 
 The envelope source-of-truth lives at `sap_status_json` in `agent-os/crates/covenant/src/main.rs:11993`. Two unit tests at `main.rs:11767` (`sap_status_json_renders_stable_shape`) and `main.rs:11786` (`sap_status_json_pins_top_level_schema`) enforce the top-level key set; the second test's failure message names this document as the forcing function for docs/emitter drift. Without `--json`, the same response prints one `key: value` line per field.
 
-`covenant sap publish --manifest <file> --json` publishes the daemon's agent through the SAP bridge and returns the resulting on-chain identity. Envelope shape:
+`covenant sap publish --manifest <file> --json` is a parked legacy request. An older peer may return this compatibility success envelope:
 
 - `kind`: literal string `"sap_published_agent"`.
 - `agent_pda` (string): base58 program-derived address of the published agent record.
@@ -734,7 +734,7 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `sap_published_agent_json` in `agent-os/crates/covenant/src/main.rs:12012`. Two unit tests at `main.rs:11849` (`sap_published_agent_json_renders_stable_shape`) and `main.rs:11857` (`sap_published_agent_json_pins_top_level_schema`) enforce the top-level key set. Without `--json`, the same response prints `agent_pda` and `signature` on two separate lines.
 
-`covenant sap attest-root --root <hex> [--target/--subject/--scope] --json` anchors an audit root to the SAP ledger. Envelope shape:
+`covenant sap attest-root --root <hex> [--target/--subject/--scope] --json` is a parked legacy request. An older peer may return this compatibility success envelope:
 
 - `kind`: literal string `"sap_published_audit_root"`.
 - `ledger_pda` (string): base58 PDA of the ledger record the root was anchored to.
@@ -744,7 +744,7 @@ Top-level keys are pinned to exactly these three by the test at `agent-os/crates
 
 The envelope source-of-truth lives at `sap_published_audit_root_json` in `agent-os/crates/covenant/src/main.rs:12020`. Two unit tests at `main.rs:11889` (`sap_published_audit_root_json_renders_stable_shape`) and `main.rs:11897` (`sap_published_audit_root_json_pins_top_level_schema`) enforce the top-level key set. Without `--json`, the same response prints `ledger_pda` and `signature` on two separate lines.
 
-`covenant sap attest-agent --agent-pda <pda> --root <hex> [--type --expires] --json` records a cross-party attestation binding an agent to an audit root through the verifier. Envelope shape:
+`covenant sap attest-agent --agent-pda <pda> --root <hex> [--type --expires] --json` is a parked legacy request. An older peer may return this compatibility success envelope:
 
 - `kind`: literal string `"sap_published_attestation"`.
 - `attestation_pda` (string): base58 PDA of the attestation record.

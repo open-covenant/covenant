@@ -1,9 +1,10 @@
-// Covenant-signed statement over caller-supplied data. A verifier recomputes
+// Seller-key-signed statement over caller-supplied data. A verifier recomputes
 // sha256(canonical(payload)), prepends the domain, and checks the signature
-// against the published pubkey. A passing signature authenticates Covenant as
-// publisher and detects payload changes; it does not establish that the claim
-// is true. Ed25519 is chain-agnostic, so the recipe is independent of where the
-// payment settled.
+// against an expected pubkey pinned through a trusted external channel. A
+// passing signature proves possession of that key and detects payload changes;
+// a key served beside the statement does not independently establish Covenant
+// attribution or claim truth. Ed25519 is chain-agnostic, so the recipe is
+// independent of where the payment settled.
 
 import {
   createPrivateKey,
@@ -18,13 +19,13 @@ import bs58 from "bs58";
 
 const DOMAIN = 'covenant.attest.v1\n';
 
-// Published so a consumer can authenticate the publisher and signed bytes:
-// pin the pubkey, recompute the digest, and check the signature.
+// Published for discovery. A consumer must obtain the expected key through a
+// separately trusted channel, then recompute the digest and check the signature.
 export const ATTEST_DOMAIN = DOMAIN.trimEnd();
 export const ATTEST_CANONICALIZATION = 'JSON, recursively key-sorted, no insignificant whitespace, UTF-8';
 export const ATTEST_VERIFY_RECIPE =
   `digest = sha256(canonical(payload)) as lowercase hex; message = "${DOMAIN.trimEnd()}\\n" + digest; ` +
-  'ed25519-verify base58-decoded signature_b58 over the UTF-8 message against the published pubkey.';
+  'ed25519-verify base58-decoded signature_b58 over the UTF-8 message against an externally pinned expected pubkey.';
 
 function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);

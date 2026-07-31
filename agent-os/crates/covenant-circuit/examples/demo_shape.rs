@@ -74,12 +74,10 @@ async fn main() {
         .allow_host(host);
     let ledger = Arc::new(SpendLedger::new());
     let payer = Arc::new(MockCircPayer::new());
-    let http = reqwest::Client::new();
-
-    let inference = Inference::new(http.clone(), payer.clone(), cap.clone(), ledger.clone())
+    let inference = Inference::new(payer.clone(), cap.clone(), ledger.clone())
         .with_base_url(format!("{}/v1", server.uri()));
-    let data = DataClient::new(http, payer.clone(), cap.clone(), ledger.clone())
-        .with_base_url(server.uri());
+    let data =
+        DataClient::new(payer.clone(), cap.clone(), ledger.clone()).with_base_url(server.uri());
 
     println!("== Circuit x Covenant — integration shape (offline, mock settlement) ==\n");
 

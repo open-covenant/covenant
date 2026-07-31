@@ -166,9 +166,10 @@ export default function RobinhoodPage() {
           <p className={`${paragraph} mt-3 max-w-2xl`}>
             The contract enforces the grant&apos;s numeric, provider, expiry,
             and state-transition rules for the funds it holds. A quality-gated
-            release additionally requires the configured attestor&apos;s
-            signature, but that signature authenticates the verdict; it does not
-            prove that the off-chain evaluation was correct. Grants without the
+            release additionally requires the configured attestor&apos;s signature.
+            That signature proves the configured key signed the verdict; it does
+            not establish the verdict&apos;s truth or prove that the off-chain
+            evaluation was correct. Grants without the
             quality gate use the separate spender-or-gateway release path.
           </p>
           <p className={`${paragraph} mt-6`}>

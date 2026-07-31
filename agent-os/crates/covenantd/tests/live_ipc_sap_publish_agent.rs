@@ -1,22 +1,8 @@
-//! Live integration test: spawns covenantd against a tempdir HOME and drives
-//! `Request::SapPublishAgent` over the raw IPC socket, pinning the success
-//! `Response::SapPublishedAgent { agent_pda, signature }` frame and the
-//! malformed-manifest `Response::Error` frame.
-//!
-//! The SAP publish path is covered at the bridge level by
-//! `covenant-sap-bridge/tests/worker_roundtrip.rs` (Rust → worker envelope
-//! mapping) and the socket carries `Request::SapStatus` in
-//! `live_ipc_sap_status.rs`, but the publish verb is never exercised over the
-//! Unix socket the CLI is built on. This pins that wire contract: the receipt
-//! an operator reads back after registering the daemon as a SAP agent.
-//!
-//! Hermetic — no network, no Solana RPC, no real signer. The daemon resolves
-//! its bridge config from env at boot, so we enable the bridge and point
-//! `COVENANT_SAP_WORKER_CMD` at a shell stub that drains stdin and prints a
-//! fixed success envelope, exactly as `worker_roundtrip.rs` does. The stub is
-//! written as a single-token executable path because `COVENANT_SAP_WORKER_CMD`
-//! is split on whitespace, which would tear apart a `sh -c '<script>'` value.
-//! `#[ignore]`'d. Run with
+//! Live integration coverage for the parked `SapPublishAgent` compatibility
+//! request. The enabled-bridge case points at a success stub, so receiving the
+//! stable refusal proves the daemon returned before invoking the worker. Bad
+//! input is refused by the same boundary before parsing. Hermetic and ignored;
+//! run with
 //! `cargo test -p covenantd --test live_ipc_sap_publish_agent -- --ignored live_`.
 
 use covenant_ipc::{read_frame, write_frame, Request, Response};
@@ -86,11 +72,8 @@ async fn spawn_daemon(home: &Path, env: &[(&str, &str)]) -> Child {
     child
 }
 
-/// Write an executable shell-stub worker into `home` and spawn covenantd with
-/// the SAP bridge enabled and pointed at it. The stub drains stdin (so the
-/// daemon's `write_all` + `shutdown` never hits a broken pipe) and prints a
-/// fixed success envelope as its last stdout line — the shape `worker::invoke`
-/// parses. No network, no signer.
+/// Spawn with an enabled bridge and a worker that would return success if the
+/// parked daemon boundary accidentally invoked it.
 async fn spawn_with_stub_worker(home: &Path) -> Child {
     let stub = home.join("sap-worker.sh");
     std::fs::write(
@@ -135,8 +118,8 @@ async fn authenticated_stream(home: &Path) -> UnixStream {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd with a stub SAP worker + drives Request::SapPublishAgent over the socket, pinning Response::SapPublishedAgent"]
-async fn live_ipc_sap_publish_agent_returns_published_receipt() {
+#[ignore = "live: proves SapPublishAgent is parked before an enabled success worker"]
+async fn live_ipc_sap_publish_agent_is_parked_before_worker_invocation() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut child = spawn_with_stub_worker(home.path()).await;
 
@@ -154,23 +137,10 @@ async fn live_ipc_sap_publish_agent_returns_published_receipt() {
     )
     .await
     {
-        Response::SapPublishedAgent {
-            agent_pda,
-            signature,
-        } => {
-            // Distinct sentinels: a handler that swaps the two fields, or maps
-            // the worker's data{agentPda,signature} to the wrong response field,
-            // fails one assert and ships a silently wrong receipt to callers.
-            assert_eq!(
-                agent_pda, "AgentPda111",
-                "agent_pda must relay the worker envelope's agentPda verbatim"
-            );
-            assert_eq!(
-                signature, "PublishSig222",
-                "signature must relay the worker envelope's signature verbatim"
-            );
+        Response::Error { message } => {
+            assert_eq!(message, covenantd::SAP_DIRECT_PUBLISH_PARKED)
         }
-        other => panic!("expected Response::SapPublishedAgent, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);
@@ -179,8 +149,8 @@ async fn live_ipc_sap_publish_agent_returns_published_receipt() {
 }
 
 #[tokio::test]
-#[ignore = "live: spawns covenantd + asserts a malformed Request::SapPublishAgent manifest flattens onto Response::Error"]
-async fn live_ipc_sap_publish_agent_rejects_malformed_manifest() {
+#[ignore = "live: proves SapPublishAgent is parked before manifest parsing"]
+async fn live_ipc_sap_publish_agent_parks_before_manifest_validation() {
     let home = tempfile::tempdir().expect("tempdir");
     let mut child = spawn_with_stub_worker(home.path()).await;
 
@@ -194,14 +164,9 @@ async fn live_ipc_sap_publish_agent_rejects_malformed_manifest() {
     .await
     {
         Response::Error { message } => {
-            // Pins that the manifest parse failure flattens onto Error before
-            // any worker spawn — the stub is never invoked on this path.
-            assert!(
-                message.contains("invalid manifest JSON"),
-                "malformed manifest must surface the parse error, got: {message}"
-            );
+            assert_eq!(message, covenantd::SAP_DIRECT_PUBLISH_PARKED);
         }
-        other => panic!("expected Response::Error, got {other:?}"),
+        other => panic!("expected parked Response::Error, got {other:?}"),
     }
 
     drop(stream);

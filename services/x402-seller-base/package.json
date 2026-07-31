@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Public Covenant x402 seller on Base: agents pay per call in USDC (EIP-3009) to obtain a Covenant-signed statement over caller-supplied data. The signature authenticates Covenant as publisher, not the truth of the claim.",
+  "description": "Public Covenant x402 seller on Base: agents pay per call in USDC (EIP-3009) for a signed statement over caller-supplied data. Consumers must pin the expected signing key through a trusted external channel.",
   "scripts": {
     "build": "rm -rf dist *.tsbuildinfo && tsc -p tsconfig.build.json",
     "start": "node dist/server.js",

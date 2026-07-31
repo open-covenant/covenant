@@ -95,9 +95,11 @@ function canonical(value: unknown): string {
 }
 
 // Anchor 4 validates a closed, signed statement that binds the root, verdict,
-// refutations, event count, and signing key. The key is published in the same
-// mutable repository, so a valid signature is self-consistent attribution, not
-// an externally pinned trust root or independent verdict.
+// refutations, event count, and signing key. Every accepted v2 artifact must
+// also publish a commit-scoped copy of that key. Both live in the same mutable
+// repository, so a valid signature is self-consistency, not an external trust
+// root, publisher identity, or independent verdict. The global latest-key
+// pointer is deliberately not a historical key.
 export function checkAnchor4VerifierSig(
   repoRoot: string,
   sha: string,
@@ -115,24 +117,6 @@ export function checkAnchor4VerifierSig(
     const att = JSON.parse(
       readFileSync(join(repoRoot, "attestations", `${sha}.json`), "utf8"),
     ) as Record<string, unknown>;
-    const pubkeyPath = join(
-      repoRoot,
-      "landing",
-      "public",
-      "witness",
-      "verifier-pubkey.txt",
-    );
-    if (!existsSync(pubkeyPath)) {
-      return {
-        key: "verifier_sig",
-        label: "Self-published verifier statement",
-        state: "yellow",
-        detail:
-          "Verifier signature present but its self-published key is missing.",
-      };
-    }
-    const pubkey = readFileSync(pubkeyPath, "utf8").trim();
-    const sig = readFileSync(sigPath, "utf8").trim();
     const statement = parseStatement(att.verifier_statement);
     const steps = Array.isArray(att.steps) ? att.steps : null;
     if (
@@ -140,15 +124,42 @@ export function checkAnchor4VerifierSig(
       att.audit_root_hex !== statement.audit_root_hex ||
       att.event_count !== statement.event_count ||
       !steps ||
-      steps.length !== statement.event_count ||
-      statement.verifier_pubkey !== pubkey
+      steps.length !== statement.event_count
     ) {
       return {
         key: "verifier_sig",
         label: "Self-published verifier statement",
         state: "red",
         detail:
-          "Verifier artifact is legacy or malformed, or its signed statement does not bind the published root, event count, steps, and self-published key.",
+          "Verifier artifact is legacy or malformed, or its signed statement does not bind the published root and event count.",
+      };
+    }
+    const versionedPubkeyPath = join(
+      repoRoot,
+      "landing",
+      "public",
+      "witness",
+      "verifier-keys",
+      `${sha}.txt`,
+    );
+    if (!existsSync(versionedPubkeyPath)) {
+      return {
+        key: "verifier_sig",
+        label: "Self-published verifier statement",
+        state: "red",
+        detail:
+          "The v2 statement has no commit-scoped self-published key. Its embedded key cannot authenticate its own trust root.",
+      };
+    }
+    const pubkey = readFileSync(versionedPubkeyPath, "utf8").trim();
+    const sig = readFileSync(sigPath, "utf8").trim();
+    if (statement.verifier_pubkey !== pubkey) {
+      return {
+        key: "verifier_sig",
+        label: "Self-published verifier statement",
+        state: "red",
+        detail:
+          "The signed statement does not match its commit-scoped self-published key.",
       };
     }
     const message = Buffer.from(`${DOMAIN}\n${canonical(statement)}`, "utf8");
@@ -177,7 +188,7 @@ export function checkAnchor4VerifierSig(
       key: "verifier_sig",
       label: "Self-published verifier statement",
       state: "yellow",
-      detail: `The closed v2 statement is internally consistent and signed under self-published key ${pubkey.slice(0, 12)}…. Because the key ships beside the artifact, this is attribution—not an externally pinned trust root, semantic validation, completeness proof, runtime mediation, or W009/W011 enforcement.`,
+      detail: `The closed v2 statement is internally consistent under self-published key ${pubkey.slice(0, 12)}…. Because the key ships beside the artifact, this proves key possession and byte consistency. It is not an externally pinned trust root, publisher identity, semantic validation, completeness proof, runtime mediation, or W009/W011 enforcement.`,
     };
   } catch {
     return {

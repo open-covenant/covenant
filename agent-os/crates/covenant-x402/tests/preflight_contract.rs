@@ -1,6 +1,6 @@
 use covenant_x402::preflight::{
     evaluate_preflight, payment_intent_hash, verify_preflight_receipt, PaymentIntentV1,
-    PaymentPolicyV1, PreflightOutcome, PreflightReceiptV1,
+    PaymentPolicyV1, PreflightError, PreflightOutcome, PreflightReceiptV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -9,6 +9,7 @@ const INTENT: &str = include_str!("fixtures/preflight-v1/intent.json");
 const POLICY: &str = include_str!("fixtures/preflight-v1/policy.json");
 const RECEIPT: &str = include_str!("fixtures/preflight-v1/advisory-receipt.json");
 const EVALUATED_AT_MS: u64 = 1_785_456_001_000;
+const JSON_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 fn intent() -> PaymentIntentV1 {
     serde_json::from_str(INTENT).expect("intent fixture")
@@ -105,6 +106,63 @@ fn receipt_cannot_claim_signer_enforcement() {
 }
 
 #[test]
+fn wire_contract_rejects_integers_above_the_published_schema_maximum() {
+    let above = serde_json::json!(JSON_SAFE_INTEGER + 1);
+
+    for path in ["observed_at_ms", "expires_at_ms"] {
+        let mut value: serde_json::Value = serde_json::from_str(INTENT).unwrap();
+        value[path] = above.clone();
+        assert!(
+            serde_json::from_value::<PaymentIntentV1>(value).is_err(),
+            "intent accepted out-of-schema {path}"
+        );
+    }
+
+    let mut intent_value: serde_json::Value = serde_json::from_str(INTENT).unwrap();
+    intent_value["payment"]["compute_unit_price_micro_lamports"] = above.clone();
+    assert!(serde_json::from_value::<PaymentIntentV1>(intent_value).is_err());
+
+    for path in [
+        "max_compute_unit_price_micro_lamports",
+        "max_intent_lifetime_ms",
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(POLICY).unwrap();
+        value[path] = above.clone();
+        assert!(
+            serde_json::from_value::<PaymentPolicyV1>(value).is_err(),
+            "policy accepted out-of-schema {path}"
+        );
+    }
+
+    let mut receipt_value: serde_json::Value = serde_json::from_str(RECEIPT).unwrap();
+    receipt_value["evaluated_at_ms"] = above;
+    assert!(serde_json::from_value::<PreflightReceiptV1>(receipt_value).is_err());
+}
+
+#[test]
+fn programmatic_out_of_schema_values_cannot_emit_a_receipt() {
+    let mut invalid = intent();
+    invalid.observed_at_ms = JSON_SAFE_INTEGER + 1;
+
+    assert!(matches!(
+        evaluate_preflight(&invalid, &policy(), EVALUATED_AT_MS),
+        Err(PreflightError::JsonSafeInteger {
+            field: "observed_at_ms",
+            value
+        }) if value == JSON_SAFE_INTEGER + 1
+    ));
+    assert!(serde_json::to_value(&invalid).is_err());
+
+    assert!(matches!(
+        evaluate_preflight(&intent(), &policy(), JSON_SAFE_INTEGER + 1),
+        Err(PreflightError::JsonSafeInteger {
+            field: "evaluated_at_ms",
+            value
+        }) if value == JSON_SAFE_INTEGER + 1
+    ));
+}
+
+#[test]
 fn receipt_verification_detects_tampering() {
     let mut receipt = evaluate_preflight(&intent(), &policy(), EVALUATED_AT_MS).unwrap();
     receipt.intent.payment.transfer_amount = "80001".into();
@@ -125,5 +183,28 @@ fn published_schemas_are_valid_json_and_closed_at_the_root() {
             "https://json-schema.org/draft/2020-12/schema"
         );
         assert_eq!(schema["additionalProperties"], false);
+        assert_schema_numeric_bounds_are_js_safe(&schema);
+    }
+}
+
+fn assert_schema_numeric_bounds_are_js_safe(value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let Some(maximum) = fields.get("maximum").and_then(serde_json::Value::as_u64) {
+                assert!(
+                    maximum <= JSON_SAFE_INTEGER,
+                    "schema numeric maximum {maximum} exceeds JavaScript's exact integer range"
+                );
+            }
+            for child in fields.values() {
+                assert_schema_numeric_bounds_are_js_safe(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                assert_schema_numeric_bounds_are_js_safe(child);
+            }
+        }
+        _ => {}
     }
 }

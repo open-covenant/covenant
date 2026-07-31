@@ -5,7 +5,7 @@ import { GITHUB_URL } from "../_brand";
 
 const TITLE = "Security";
 const DESCRIPTION =
-  "How to report a vulnerability in Covenant, what's in scope, and the security posture: Apache-2.0 source, hash-chained audit, and on-chain attestation anyone can verify.";
+  "How to report a vulnerability in Covenant, what's in scope, and the current trusted-local security boundary.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -29,9 +29,10 @@ export default function SecurityPage() {
         <h1 className="mt-4 text-2xl font-extralight tracking-[0.18em] text-neutral-50 sm:text-3xl">Security</h1>
         <p className={`${paragraph} mt-5 max-w-2xl`}>
           Covenant governs agents that hold keys and move value, so its security model is the product, not
-          a footnote. The source is Apache-2.0 and public, every privileged action is hash-chained into a
-          signed audit, and audit roots are anchored on-chain where anyone can verify them. The point is
-          that you never have to take our word for it.
+          a footnote. The source is Apache-2.0 and public. Defined Covenant paths record selected events in
+          a local hash chain, which supports local hash-chain consistency checks. It does not prove event
+          completeness, prevent a same-user process from bypassing Covenant, or turn a separately published
+          commitment into proof that the underlying event was true.
         </p>
 
         <section className="mt-12">
@@ -69,9 +70,10 @@ export default function SecurityPage() {
         <section className="mt-12">
           <p className={eyebrow}>posture &middot; verify it as a property</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>
-            A reckless action is refused before it reaches a wallet, a malicious signature is rejected
-            before it is signed, and every permitted action settles with a receipt anyone can check. The
-            mechanics are documented:{" "}
+            Capability checks, audit rows, and receipts apply only to their defined Covenant paths; the
+            current release does not mediate every host action. Daemon-owned funded routes without durable,
+            exact authorization are parked. The published W009/W011 work is a standalone devnet reference,
+            not production wallet enforcement. Evaluate each boundary in its own documentation:{" "}
             <a className={link} href="/docs/security">
               runtime sandbox and gateway
             </a>

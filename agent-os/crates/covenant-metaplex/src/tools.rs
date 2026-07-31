@@ -1,13 +1,13 @@
 //! MCP tool surface for the Metaplex profile.
 //!
-//! Two families, both named `metaplex.*` and gated by the daemon's
-//! `tool.call.metaplex.*` capabilities:
+//! Two retained families, both named `metaplex.*`:
 //!
 //! - read tools (`metaplex.das.*`) run DAS queries through a
 //!   [`crate::das::DasClient`]. No keys, no spend.
 //! - write tools (`metaplex.attest.*`, `metaplex.identity.*`) hand a
-//!   [`SignerRequest`] to a [`MetaplexSigner`] (the daemon drives the
-//!   signer sidecar). The minting key never enters this crate.
+//!   [`SignerRequest`] to a supplied [`MetaplexSigner`]. They remain available
+//!   to explicit development callers, but the production daemon filters and
+//!   refuses these names before constructing a signer.
 //!
 //! [`metaplex_specs`] lists the enabled tools for `tools/list`;
 //! [`metaplex_tool`] resolves one by name for dispatch. Both honour
@@ -38,9 +38,9 @@ const READ_SLUGS: &[&str] = &[
 ];
 const WRITE_SLUGS: &[&str] = &["attest.audit_root", "identity.register"];
 
-/// The write side of the profile: hand a built request to whatever holds
-/// the minting key. The daemon's implementation drives the
-/// `covenant-metaplex-signer` subprocess; tests can stand in.
+/// The lower-level write interface: hand a built request to whatever holds the
+/// minting key. Production daemon dispatch does not supply an implementation;
+/// explicit development callers and tests may do so.
 #[async_trait]
 pub trait MetaplexSigner: Send + Sync {
     async fn sign(&self, request: SignerRequest) -> Result<SignerResponse, String>;
@@ -422,6 +422,7 @@ mod tests {
             das_url: "https://das.example".into(),
             rpc_url: "https://api.devnet.solana.com".into(),
             signer_binary: "/bin/covenant-metaplex-signer".into(),
+            per_action_cap_lamports: 20_000_000,
             ..Default::default()
         }
     }

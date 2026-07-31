@@ -10,12 +10,13 @@
 //! { "ok": false, "error": "<message>", "name": "<ErrorName>" }
 //! ```
 //!
-//! The worker resolves its own config (cluster, RPC, program id) and
-//! its signer (`COVENANT_SAP_KEYPAIR`) from the environment, which it
-//! inherits from this process — so the Rust [`Config`] and the worker
-//! stay consistent as long as both read the same `COVENANT_SAP_*`
-//! variables.
+//! The worker receives a minimal environment: canonical config resolved by
+//! Rust plus an allowlist of runtime paths, the one signer path needed by the
+//! requested command, and the stats path. It never inherits the daemon's
+//! ambient environment.
 
+use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
 use std::process::Stdio;
 
 use serde::de::DeserializeOwned;
@@ -45,6 +46,106 @@ struct Envelope {
 /// any legitimate payload while still capping a flood — the memory-axis
 /// sibling of the wall-clock timeout.
 const MAX_WORKER_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// Ambient values the worker genuinely needs and Rust cannot derive from
+/// [`Config`]. Signer values are paths, not key bytes. Only the signer class
+/// required by the selected command crosses the boundary; read-only commands
+/// receive neither signer path. The stats path is resolved in Rust, so neither
+/// `HOME` nor `COVENANT_HOME` crosses the process boundary. `env_clear`
+/// prevents accidental environment disclosure; it is not filesystem isolation
+/// from another process running as the same OS user.
+const PAYER_KEY_ENV: &str = "COVENANT_SAP_KEYPAIR";
+const VERIFIER_KEY_ENV: &str = "COVENANT_SAP_VERIFIER_KEYPAIR";
+
+fn signer_env_for_command(command: &str) -> Option<&'static str> {
+    match command {
+        "publish-agent" | "update-agent" | "attest-root" => Some(PAYER_KEY_ENV),
+        "attest-agent" => Some(VERIFIER_KEY_ENV),
+        _ => None,
+    }
+}
+
+fn worker_environment<I>(
+    config: &Config,
+    command: &str,
+    ambient: I,
+) -> Result<Vec<(OsString, OsString)>>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    let ambient = ambient.into_iter().collect::<Vec<_>>();
+    let stats_path = worker_stats_path(&ambient)?;
+    let signer_env = signer_env_for_command(command).map(OsStr::new);
+    let mut env = ambient
+        .into_iter()
+        .filter(|(key, _)| key == OsStr::new("PATH") || signer_env == Some(key.as_os_str()))
+        .collect::<Vec<_>>();
+    env.extend([
+        (
+            OsString::from("COVENANT_SOLANA_CLUSTER"),
+            OsString::from(config.cluster.as_str()),
+        ),
+        (
+            OsString::from("COVENANT_SAP_ENABLED"),
+            OsString::from(if config.enabled { "true" } else { "false" }),
+        ),
+        (
+            OsString::from("COVENANT_SAP_PROGRAM_ID"),
+            OsString::from(&config.program_id),
+        ),
+        (
+            OsString::from("COVENANT_SAP_RPC_URL"),
+            OsString::from(&config.rpc_url),
+        ),
+        (
+            OsString::from("COVENANT_SAP_EXPLORER_URL"),
+            OsString::from(&config.explorer_url),
+        ),
+        (
+            OsString::from("COVENANT_SAP_STATS_PATH"),
+            stats_path.into_os_string(),
+        ),
+    ]);
+    Ok(env)
+}
+
+fn worker_stats_path(ambient: &[(OsString, OsString)]) -> Result<PathBuf> {
+    let value = |key: &str| {
+        ambient
+            .iter()
+            .find(|(candidate, _)| candidate == OsStr::new(key))
+            .map(|(_, value)| value)
+            .filter(|value| !os_value_is_blank(value))
+            .map(|value| trim_os_value(value))
+    };
+
+    if let Some(path) = value("COVENANT_SAP_STATS_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(home) = value("COVENANT_HOME") {
+        return Ok(PathBuf::from(home).join("sap-rpc-stats.json"));
+    }
+    if let Some(home) = value("HOME") {
+        return Ok(PathBuf::from(home)
+            .join(".covenant")
+            .join("sap-rpc-stats.json"));
+    }
+    Err(BridgeError::Invalid(
+        "SAP worker stats path requires COVENANT_SAP_STATS_PATH, COVENANT_HOME, or HOME".into(),
+    ))
+}
+
+fn os_value_is_blank(value: &OsStr) -> bool {
+    value.to_str().is_some_and(|value| value.trim().is_empty())
+}
+
+fn trim_os_value(value: &OsStr) -> OsString {
+    value
+        .to_str()
+        .map(str::trim)
+        .map(OsString::from)
+        .unwrap_or_else(|| value.to_os_string())
+}
 
 /// Reads up to `max` bytes from a worker stream, reporting whether the stream
 /// had more to give. `take` stops the read at the cap instead of buffering an
@@ -91,6 +192,8 @@ where
     let mut cmd = Command::new(program);
     cmd.args(parts)
         .arg(command)
+        .env_clear()
+        .envs(worker_environment(config, command, std::env::vars_os())?)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -212,6 +315,169 @@ where
 mod tests {
     use super::*;
     use crate::config::Cluster;
+
+    #[test]
+    fn worker_environment_is_allowlisted_and_config_is_canonical() {
+        let mut config = Config::disabled(Cluster::Mainnet);
+        config.enabled = true;
+        config.program_id = "canonical-program".into();
+        config.rpc_url = "https://canonical.example/rpc".into();
+        config.explorer_url = "https://canonical.example/explorer".into();
+
+        let env = worker_environment(
+            &config,
+            "publish-agent",
+            [
+                (OsString::from("PATH"), OsString::from("/usr/bin")),
+                (
+                    OsString::from("COVENANT_SAP_KEYPAIR"),
+                    OsString::from("/keys/funder.json"),
+                ),
+                (
+                    OsString::from("COVENANT_SAP_VERIFIER_KEYPAIR"),
+                    OsString::from("/keys/verifier.json"),
+                ),
+                (
+                    OsString::from("COVENANT_SAP_RPC_URL"),
+                    OsString::from("https://ambient.example/rpc"),
+                ),
+                (
+                    OsString::from("COVENANT_SAP_STATS_PATH"),
+                    OsString::from("/var/lib/covenant/sap-stats.json"),
+                ),
+                (
+                    OsString::from("COVENANT_HOME"),
+                    OsString::from("/var/lib/covenant"),
+                ),
+                (OsString::from("HOME"), OsString::from("/users/operator")),
+                (
+                    OsString::from("UNRELATED_DAEMON_SECRET"),
+                    OsString::from("must-not-leak"),
+                ),
+            ],
+        )
+        .expect("worker environment")
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            env.get(OsStr::new("PATH")),
+            Some(&OsString::from("/usr/bin"))
+        );
+        assert_eq!(
+            env.get(OsStr::new("COVENANT_SAP_KEYPAIR")),
+            Some(&OsString::from("/keys/funder.json"))
+        );
+        assert!(!env.contains_key(OsStr::new("COVENANT_SAP_VERIFIER_KEYPAIR")));
+        assert_eq!(
+            env.get(OsStr::new("COVENANT_SAP_RPC_URL")),
+            Some(&OsString::from("https://canonical.example/rpc")),
+            "resolved Rust config must override ambient config"
+        );
+        assert_eq!(
+            env.get(OsStr::new("COVENANT_SOLANA_CLUSTER")),
+            Some(&OsString::from("mainnet"))
+        );
+        assert_eq!(
+            env.get(OsStr::new("COVENANT_SAP_ENABLED")),
+            Some(&OsString::from("true"))
+        );
+        assert_eq!(
+            env.get(OsStr::new("COVENANT_SAP_STATS_PATH")),
+            Some(&OsString::from("/var/lib/covenant/sap-stats.json"))
+        );
+        assert!(!env.contains_key(OsStr::new("HOME")));
+        assert!(!env.contains_key(OsStr::new("COVENANT_HOME")));
+        assert!(
+            !env.contains_key(OsStr::new("UNRELATED_DAEMON_SECRET")),
+            "ambient daemon secrets must not cross the worker boundary"
+        );
+    }
+
+    #[test]
+    fn worker_environment_derives_stats_path_without_forwarding_home() {
+        let config = Config::disabled(Cluster::Devnet);
+        let env = worker_environment(
+            &config,
+            "find-agent",
+            [
+                (
+                    OsString::from("COVENANT_HOME"),
+                    OsString::from("  /var/lib/covenant  "),
+                ),
+                (OsString::from("HOME"), OsString::from("/users/operator")),
+            ],
+        )
+        .expect("worker environment")
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            env.get(OsStr::new("COVENANT_SAP_STATS_PATH")),
+            Some(&OsString::from("/var/lib/covenant/sap-rpc-stats.json"))
+        );
+        assert!(!env.contains_key(OsStr::new("HOME")));
+        assert!(!env.contains_key(OsStr::new("COVENANT_HOME")));
+    }
+
+    #[test]
+    fn worker_environment_separates_signers_by_command() {
+        let config = Config::disabled(Cluster::Devnet);
+        let ambient = || {
+            [
+                (OsString::from("PATH"), OsString::from("/usr/bin")),
+                (
+                    OsString::from(PAYER_KEY_ENV),
+                    OsString::from("/keys/payer.json"),
+                ),
+                (
+                    OsString::from(VERIFIER_KEY_ENV),
+                    OsString::from("/keys/verifier.json"),
+                ),
+                (
+                    OsString::from("COVENANT_SAP_STATS_PATH"),
+                    OsString::from("/var/lib/covenant/sap-stats.json"),
+                ),
+            ]
+        };
+
+        for command in ["publish-agent", "update-agent", "attest-root"] {
+            let env = worker_environment(&config, command, ambient())
+                .expect("payer command environment")
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert!(env.contains_key(OsStr::new(PAYER_KEY_ENV)), "{command}");
+            assert!(!env.contains_key(OsStr::new(VERIFIER_KEY_ENV)), "{command}");
+        }
+
+        let env = worker_environment(&config, "attest-agent", ambient())
+            .expect("verifier command environment")
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert!(!env.contains_key(OsStr::new(PAYER_KEY_ENV)));
+        assert!(env.contains_key(OsStr::new(VERIFIER_KEY_ENV)));
+
+        for command in [
+            "find-agent",
+            "describe-agent",
+            "find-by-protocol",
+            "status",
+            "stats",
+            "unknown",
+        ] {
+            let env = worker_environment(&config, command, ambient())
+                .expect("non-signing command environment")
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert!(!env.contains_key(OsStr::new(PAYER_KEY_ENV)), "{command}");
+            assert!(!env.contains_key(OsStr::new(VERIFIER_KEY_ENV)), "{command}");
+            assert_eq!(
+                env.get(OsStr::new("COVENANT_SAP_STATS_PATH")),
+                Some(&OsString::from("/var/lib/covenant/sap-stats.json")),
+                "{command}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn invoke_rejects_empty_worker_command() {

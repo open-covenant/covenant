@@ -652,9 +652,10 @@ pub enum Request {
     },
     VerifyAuditIntegrity,
     /// Build a chain-inclusion proof for one audit event (operator only).
-    /// Proves the event is folded into the audit root the SAP bridge anchors
-    /// on-chain. The response carries the proof, or `None` when the id is
-    /// unknown.
+    /// Proves the event is folded into the current local audit root. A caller
+    /// can compare that root with a separately published commitment, if one
+    /// exists; the daemon's automatic SAP anchor is parked. The response
+    /// carries the proof, or `None` when the id is unknown.
     ProveAuditInclusion {
         event_id: Uuid,
     },
@@ -836,28 +837,24 @@ pub enum Request {
     /// bridge wired in, [`Response::SapStatus`] is returned with
     /// `enabled = false`.
     SapStatus,
-    /// Publish an agent through the SAP bridge. The manifest travels
-    /// as a JSON string to keep the IPC surface decoupled from the
-    /// bridge crate's types — the daemon parses it into
-    /// `covenant_sap_bridge::identity::AgentManifest` before invoking
-    /// the worker. Failures surface as [`Response::Error`].
+    /// Legacy SAP agent-publication request retained for wire compatibility.
+    /// The daemon refuses it before parsing the manifest or invoking the
+    /// bridge, RPC, or signer.
     SapPublishAgent {
         manifest_json: String,
     },
-    /// Anchor a Covenant audit root into the SAP ledger (the self-anchored,
-    /// append-only provenance trail). The 32-byte root travels as 64-char
-    /// lowercase hex; the daemon stamps the on-chain envelope's timestamp
-    /// itself. Failures surface as [`Response::Error`].
+    /// Legacy SAP audit-root publication request retained for wire
+    /// compatibility. The daemon refuses it before bridge, RPC, or signer
+    /// access.
     SapPublishAuditRoot {
         root_hash_hex: String,
         release_target: String,
         release_subject: String,
         release_scope: String,
     },
-    /// Cross-party attestation of an agent + audit root via SAP's
-    /// `create_attestation`, signed by the separately-keyed verifier
-    /// (`COVENANT_SAP_VERIFIER_KEYPAIR`). The program rejects
-    /// self-attestation, so the verifier must differ from the agent owner.
+    /// Legacy SAP attestation request retained for wire compatibility. The
+    /// daemon refuses it before reading the separately configured verifier
+    /// key or contacting the bridge.
     SapPublishAttestation {
         agent_pda: String,
         root_hash_hex: String,
@@ -1203,18 +1200,17 @@ pub enum Response {
         completion_rate_bps: u32,
         computed_audit_root_hex: String,
     },
-    /// Snapshot of the SAP bridge config as the daemon resolved it at
-    /// boot. `enabled = false` means the bridge is off (default) and
-    /// any SAP-backed request will return [`Response::Error`].
+    /// Snapshot of the SAP bridge config as the daemon resolved it at boot.
+    /// `enabled` is configuration state, not write reachability: direct SAP
+    /// publishing and automatic anchors are parked for either value.
     SapStatus {
         enabled: bool,
         cluster: String,
         program_id: String,
         rpc_url: String,
         explorer_url: String,
-        /// Whether the worker has a signer configured
-        /// (`COVENANT_SAP_KEYPAIR`). False means publish / update
-        /// paths will fail; status and read paths still work.
+        /// Whether `COVENANT_SAP_KEYPAIR` is configured. This does not make a
+        /// daemon write path reachable while SAP publishing is parked.
         has_signer: bool,
     },
     SapPublishedAgent {

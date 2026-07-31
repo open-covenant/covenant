@@ -3,7 +3,7 @@ import { buildDocsMetadata, buildDocsJsonLd } from "../_meta";
 const META_ARGS = [
   "multichain",
   "Multi-chain signed evidence",
-  "Selected Covenant registrations and signed statements are readable on Base while $CVNT stays on Solana. ecrecover authenticates the publisher and bytes, not claim truth.",
+  "Selected Covenant registrations and signed statements are readable on Base while $CVNT stays on Solana. ecrecover verifies a configured signing address, not publisher identity or claim truth.",
 ] as const;
 export const metadata = buildDocsMetadata(...META_ARGS);
 
@@ -18,8 +18,9 @@ export default function MultichainPage() {
       <p>
         Selected Covenant registrations, schemas, and signed statements are
         readable on Base. <strong>$CVNT stays a single Solana mint.</strong>{" "}
-        What crosses is publisher-authenticated data, not proof that an
-        underlying identity, score, delivery, or bond claim is true.
+        What crosses is data signed under configured keys, not independent proof
+        of publisher identity or that an underlying identity, score, delivery,
+        or bond claim is true.
       </p>
 
       <h2>The problem: going multi-chain usually means moving the token</h2>
@@ -31,8 +32,8 @@ export default function MultichainPage() {
       </p>
       <p>
         Signed evidence does not require moving the protocol token. A signature
-        can attribute bytes to a configured publisher without bridging value; it
-        cannot turn a claim into a fact.
+        can bind bytes to a configured key without bridging value; it cannot
+        identify the publisher or turn a claim into a fact.
       </p>
 
       <h2>The design: project signed evidence, not the token</h2>
@@ -56,8 +57,9 @@ export default function MultichainPage() {
           projections; the source of truth does not move.
         </li>
         <li>
-          <strong>Value stays chain-local.</strong> Per-call payment is USDC on
-          the chain of the call, never $CVNT.
+          <strong>Value stays chain-local.</strong> The Solana/Base evidence
+          surfaces described here use local USDC, never $CVNT. Other integrations
+          can use their own settlement assets.
         </li>
       </ul>
 
@@ -73,8 +75,9 @@ export default function MultichainPage() {
       <p>
         Selected cross-chain artifacts are signed by that issuer key. A consumer
         recovers the signer with one <code>ecrecover</code> and checks it
-        against Covenant&apos;s published issuer address. That authenticates the
-        publisher and signed bytes, not the claim or real-world operator.
+        against the configured address recorded for this projection. That proves
+        the configured address signed the bytes, not the claim, publisher
+        identity, or real-world operator.
       </p>
 
       <h2>Live on Base mainnet</h2>
@@ -102,9 +105,9 @@ export default function MultichainPage() {
           schema does not prove reputation.
         </li>
         <li>
-          <strong>Bond verifier.</strong> A contract that authenticates a
-          Covenant USDC bond receipt with one <code>ecrecover</code>. No bridge,
-          no light client, no Solana read on the path.
+          <strong>Bond verifier.</strong> A contract that checks a USDC bond
+          statement against a configured address with one <code>ecrecover</code>.
+          No bridge, no light client, no Solana read on the path.
         </li>
         <li>
           <strong>Provenance record.</strong> A signed audit-root statement
@@ -200,9 +203,10 @@ $CVNT mint (Solana only)     2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump`}</cod
       </ul>
 
       <p>
-        <strong>A key check authenticates a publisher, not a claim.</strong> The
-        token and its market stay on Solana; selected signed evidence can be
-        consumed elsewhere under local policy.
+        <strong>A key check proves possession of a key, not publisher identity or
+        a claim.</strong> The token and its market stay on Solana; selected signed
+        evidence can be consumed elsewhere under local policy only after the
+        consumer establishes its own trusted key mapping.
       </p>
     </>
   );

@@ -4,7 +4,7 @@ import { SiteHeader } from "../SiteHeader";
 
 const TITLE = "Agent trading policy demo";
 const DESCRIPTION =
-  "A dry-run policy evaluation with Covenant-authored Solana records. It does not prove live brokerage enforcement, execution, or trading performance.";
+  "A dry-run policy evaluation with publisher-signed Solana records. It does not prove live brokerage enforcement, execution, or trading performance.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -89,8 +89,9 @@ export default function TradingPage() {
         </p>
         <p className={`${paragraph} mt-4 max-w-2xl`}>
           The demo evaluates four proposed orders against one local policy and
-          publishes Covenant-authored records for those results. The records
-          authenticate the publisher and bytes. They do not prove that a live
+          publishes records signed under the configured publisher key for those
+          results. The signatures prove that key signed the bytes, not who controls
+          it. They do not prove that a live
           venue was mediated, that the input history is complete, or that the
           decisions represent trading performance.
         </p>
@@ -103,7 +104,7 @@ export default function TradingPage() {
             },
             {
               title: "The receipt",
-              body: "Each sample result has a Covenant-authored signed record. A valid signature detects changed bytes and attributes the record; it does not prove a real order or policy enforcement.",
+              body: "Each sample result has a publisher-signed record. A valid signature detects changed bytes under an expected pinned key; it does not independently establish Covenant attribution, a real order, or policy enforcement.",
             },
             {
               title: "The record",

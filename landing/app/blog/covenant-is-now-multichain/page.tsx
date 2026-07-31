@@ -5,14 +5,14 @@ import { SiteHeader } from "../../SiteHeader";
 export const metadata: Metadata = {
   title: "Covenant is now multi-chain. The token isn't.",
   description:
-    "Selected Covenant registrations and signed statements are readable on Base while $CVNT stays on Solana. ecrecover authenticates the publisher, not claim truth.",
+    "Selected Covenant registrations and signed statements are readable on Base while $CVNT stays on Solana. ecrecover proves only that a configured address signed the bytes, not publisher identity or claim truth.",
   alternates: { canonical: "/blog/covenant-is-now-multichain" },
   openGraph: {
     type: "article",
     url: "https://opencovenant.org/blog/covenant-is-now-multichain",
     title: "Covenant is now multi-chain. The token isn't.",
     description:
-      "Selected registrations and publisher-authenticated statements are readable on Base while $CVNT stays on Solana.",
+      "Selected registrations and statements signed under configured keys are readable on Base while $CVNT stays on Solana.",
     images: [
       {
         url: "/og/covenant-is-now-multichain.png",
@@ -61,8 +61,9 @@ export default function MultichainLaunchPost() {
           <p>
             Selected Covenant registrations, schemas, and signed statements are
             readable on Base. $CVNT stays a single Solana mint.{" "}
-            <code>ecrecover</code> can authenticate the configured publisher and
-            bytes; it does not prove the underlying identity, score, or claim.
+            <code>ecrecover</code> can prove that a configured address signed the
+            bytes; it does not establish the publisher&apos;s identity or prove the
+            underlying score or claim.
           </p>
 
           <h2>Going multi-chain usually means moving the token</h2>
@@ -74,28 +75,31 @@ export default function MultichainLaunchPost() {
           </p>
           <p>
             Signed evidence does not require moving the protocol token. A
-            signature can attribute bytes to a configured publisher without
-            bridging value, but it cannot turn a claim into a fact.
+            signature can bind bytes to a configured key without bridging
+            value, but it cannot identify the publisher or turn a claim into a
+            fact.
           </p>
 
           <h2>Project signed evidence, not the token</h2>
           <p>
             Covenant treats configured Solana identity and audit-root records as
             canonical references for this projection. Base holds registrations
-            and signed statements, never the token. Consumers authenticate the
-            publisher and then apply their own policy to the claim. Per-call
+            and signed statements, never the token. Consumers verify a
+            configured signing key and then apply their own policy to the claim.
+            Key attribution is a separate trust decision. Per-call
             value stays chain-local: USDC on the chain of the call, never $CVNT.
           </p>
 
-          <h2>An issuer key an EVM can authenticate</h2>
+          <h2>An issuer key an EVM can verify</h2>
           <p>
             Verifying a Solana signature on an EVM costs about 2 million gas,
             enough to make cross-chain verification pointless. So Covenant gives
             each identity a second key on the curve Ethereum already speaks,
             which an EVM recovers with a plain ecrecover at around 3 thousand
             gas. Covenant records associate that issuer with the configured
-            Solana identifier. Recovering the published key authenticates the
-            signed bytes, not the real-world operator or truth of the statement.
+            Solana identifier. Recovering the configured key proves only that
+            the corresponding private key signed the bytes, not who controls it
+            or whether the statement is true.
           </p>
 
           <h2>What is live on Base today</h2>
@@ -111,8 +115,10 @@ export default function MultichainLaunchPost() {
           <p>
             opencovenant.eth and the per-agent CCIP-Read names resolve to
             configured Solana addresses. These are pointers, not proof of who
-            controls or operates an agent. Agents can pay and charge per call in
-            USDC on Base over x402 using EIP-3009 authorization.
+            controls or operates an agent. Covenant operates a Base x402-v2
+            seller that can charge callers per request in USDC using EIP-3009
+            authorization. Reusable outbound primitives exist, but the
+            production daemon does not currently make Base x402 payments.
           </p>
 
           <h2>$CVNT never leaves Solana</h2>
@@ -132,10 +138,10 @@ export default function MultichainLaunchPost() {
           </p>
 
           <p>
-            A key check authenticates a publisher, not a claim. The token and
-            its market stay on Solana; selected signed evidence can be consumed
-            elsewhere. The architecture and Base mainnet address sheet, with how
-            to check every claim yourself, are in the{" "}
+            A key check proves key possession, not publisher identity or claim
+            truth. The token and its market stay on Solana; selected signed
+            evidence can be consumed elsewhere. The architecture and Base mainnet
+            address sheet, with how to check every claim yourself, are in the{" "}
             <a href="/docs/multichain">multi-chain signed-evidence</a> docs.
           </p>
         </article>

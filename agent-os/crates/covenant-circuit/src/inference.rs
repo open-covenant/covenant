@@ -85,12 +85,22 @@ pub struct Inference {
 
 impl Inference {
     pub fn new(
-        http: reqwest::Client,
         payer: Arc<dyn CircPayer>,
         cap: CircuitCapability,
         ledger: Arc<SpendLedger>,
     ) -> Self {
-        Self::from_x402(X402::new(http, payer, cap, ledger))
+        Self::from_x402(X402::new(payer, cap, ledger))
+    }
+
+    pub fn with_client_builder(
+        builder: reqwest::ClientBuilder,
+        payer: Arc<dyn CircPayer>,
+        cap: CircuitCapability,
+        ledger: Arc<SpendLedger>,
+    ) -> Result<Self> {
+        Ok(Self::from_x402(X402::with_client_builder(
+            builder, payer, cap, ledger,
+        )?))
     }
 
     pub fn from_x402(x402: X402) -> Self {

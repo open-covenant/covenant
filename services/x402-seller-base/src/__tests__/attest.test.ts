@@ -8,7 +8,8 @@
 // Note: the signature scheme is ed25519, which has no public-key recovery
 // (ecrecover is a secp256k1/EVM concept). The signer-binding property tested here
 // is the ed25519 equivalent: the attestation carries pubkey_b58, it must equal
-// the attestor's published key, and verification must fail under any other key.
+// an expected key pinned outside the response, and verification must fail under
+// any other key.
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -23,6 +24,7 @@ import {
   type Attestation,
 } from "../attest.js";
 import { makeAttestHandler } from "../attest-route.js";
+import { mayUseEphemeralAttestor } from "../attestor-policy.js";
 
 describe("attestation round-trip", () => {
   const attestor = Attestor.generate();
@@ -84,7 +86,7 @@ describe("attestation round-trip", () => {
     );
   });
 
-  test("signature forged by another key fails against the published pubkey", () => {
+  test("signature forged by another key fails against the expected pubkey", () => {
     const att = attestor.attest("subject", "claim", 1);
     const forged = Attestor.generate().attest("subject", "claim", 1);
     assert.equal(
@@ -96,7 +98,7 @@ describe("attestation round-trip", () => {
     );
   });
 
-  test("self-signed data from another key fails the pinned publisher check", () => {
+  test("self-signed data from another key fails the pinned-key check", () => {
     const forged = Attestor.generate().attest("subject", "claim", 1);
     assert.equal(verifyAttestation(forged, attestor.pubkeyB58), false);
   });
@@ -131,6 +133,20 @@ describe("Attestor key material", () => {
       () => new Attestor([...Array(32).fill(7), ...Array(32).fill(9)]),
       /public half does not match/,
     );
+  });
+});
+
+describe("ephemeral attestor policy", () => {
+  test("requires explicit testnet development opt-in", () => {
+    assert.equal(mayUseEphemeralAttestor("base-sepolia", "development", "true"), true);
+    assert.equal(mayUseEphemeralAttestor("base-sepolia", "development", undefined), false);
+  });
+
+  test("cannot be overridden on mainnet or in production", () => {
+    assert.equal(mayUseEphemeralAttestor("base", "development", "true"), false);
+    assert.equal(mayUseEphemeralAttestor("EIP155:8453", "development", "true"), false);
+    assert.equal(mayUseEphemeralAttestor("base-sepolia", "production", "true"), false);
+    assert.equal(mayUseEphemeralAttestor("base-sepolia", " Production ", "true"), false);
   });
 });
 

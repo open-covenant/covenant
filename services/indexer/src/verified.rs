@@ -1,12 +1,13 @@
-//! Covenant Verified: independent, Covenant-signed attestations over
-//! zauth's public directory.
+//! Covenant-observed endpoint probes over zauth's public directory.
 //!
 //! zauth lists and health-monitors x402 endpoints. For each one we probe
 //! it ourselves (free, unpaid 402), record liveness + a valid x402
-//! challenge + the on-chain terms it advertises, and emit an Ed25519
-//! attestation anyone can verify with our published issuer key. zauth's
-//! directory says "listed + health-monitored"; this adds an independent
-//! "Covenant Verified" signal alongside it.
+//! challenge + the payment terms it advertises, and emit a publisher-key-signed
+//! observation. A consumer must pin the expected key through a channel outside
+//! this response. The signature then proves key possession and exact bytes, not
+//! Covenant identity, endpoint ownership, settlement, delivery, or claim truth.
+//! This probe is performed separately from zauth's health monitor.
+//! It is not an independent attestation authority.
 //!
 //! The signing/canonicalization here is a deliberate, self-contained
 //! mirror of `covenant_zauth::attest`. The indexer is a standalone crate
@@ -103,8 +104,8 @@ impl VerifiedState {
         tokio::spawn(async move {
             loop {
                 match me.refresh().await {
-                    Ok(n) => info!(count = n, "covenant-verified: attested directory"),
-                    Err(e) => warn!(error = %e, "covenant-verified: refresh failed"),
+                    Ok(n) => info!(count = n, "covenant-observed: probed directory"),
+                    Err(e) => warn!(error = %e, "covenant-observed: refresh failed"),
                 }
                 tokio::time::sleep(REFRESH_INTERVAL).await;
             }
@@ -417,8 +418,9 @@ fn attest(
     Ok(att)
 }
 
-/// Verify a Covenant Verified attestation's Ed25519 signature against the
-/// issuer pubkey (hex, 32-byte). Strict (rejects malleable signatures).
+/// Verify an endpoint observation's Ed25519 signature against a caller-pinned
+/// key (hex, 32-byte). Strict (rejects malleable signatures). This checks bytes
+/// and key possession only; it does not establish publisher identity.
 pub fn verify_attestation(json: &str, issuer_pubkey_hex: &str) -> bool {
     let Ok(att) = serde_json::from_str::<EndpointAttestation>(json) else {
         return false;

@@ -12,10 +12,10 @@ name = "covenantd"
 path = "src/main.rs"
 
 [features]
-# Registers the Circuit tools with an in-process funding payer that settles in
-# $CVNT (or CIRC). Pulls the solana dep tree via covenant-circuit/solana, so it
-# stays off the default daemon build and behind this feature.
-circuit = ["dep:covenant-circuit", "covenant-circuit/solana"]
+# Retains the legacy feature name and client types for build compatibility, but
+# does not pull the Solana payer. The daemon ignores the old env opt-in and
+# never registers or invokes paid Circuit tools.
+circuit = ["dep:covenant-circuit"]
 
 [dependencies]
 covenant-types = { path = "../covenant-types" }
@@ -34,14 +34,14 @@ covenant-router = { path = "../covenant-router" }
 covenant-runtime = { path = "../covenant-runtime" }
 covenant-sap-bridge = { path = "../covenant-sap-bridge" }
 covenant-settlement = { path = "../covenant-settlement" }
-# Default features only — the solana signer + its dep tree stay out of
-# the daemon's default build; the on-chain funding payer is pulled only by
-# the `circuit` feature (covenant-circuit/solana), never by default.
+# Client-only x402 dependency. Daemon-owned signer dispatch remains parked.
 covenant-x402 = { path = "../covenant-x402" }
 covenant-hyre = { path = "../covenant-hyre" }
 covenant-metaplex = { path = "../covenant-metaplex" }
 covenant-sns = { path = "../covenant-sns" }
 covenant-acedata = { path = "../covenant-acedata" }
+# Client-only compatibility dependency. Runtime paths never construct a payer
+# or register Circuit tools; the `solana` feature is deliberately not enabled.
 covenant-circuit = { path = "../covenant-circuit", optional = true }
 covenant-krexa = { path = "../covenant-krexa" }
 anyhow = { workspace = true }

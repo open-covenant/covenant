@@ -37,4 +37,4 @@ passing.
 ## See also
 
 - [Covenant x402](./x402.md) — the payment layer zauth discovers and monitors.
-- [Hyre x402 Provider](./hyre-integration.md) — a paid provider on the outbound path.
+- [Hyre x402 Provider](./hyre-integration.md) — lower-level provider profile; daemon-owned payment is parked.

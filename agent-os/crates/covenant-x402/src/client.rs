@@ -32,8 +32,8 @@ pub struct PaidRequestOutcome {
 /// avoid aborting a legitimate payment after funds may be committed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The reqwest client the daemon should drive [`Client::request_paid`]
-/// with — bounded so an unresponsive endpoint cannot block a worker.
+/// A bounded, redirect-free client for explicit manual or development use of
+/// [`Client::request_paid`]. Daemon-owned outbound payments are parked.
 pub fn http_client() -> reqwest::Client {
     http_client_with_timeout(REQUEST_TIMEOUT)
 }

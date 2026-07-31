@@ -4,9 +4,6 @@ use crate::capability::{CircuitCapability, SpendLedger};
 use crate::payer::{CircPayer, TokenTransfer};
 use crate::{circ, CircuitError, Result};
 
-/// Server errors worth one free retry after the token is already spent.
-const TRANSIENT: [u16; 5] = [429, 500, 502, 503, 504];
-
 /// The classic SPL Token program, for quotes that name it instead of Token-2022.
 const CLASSIC_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
@@ -158,9 +155,11 @@ pub struct Paid {
     pub quote: Option<PaymentQuote>,
 }
 
-/// The x402 pay-and-retry engine. Composed into [`crate::Inference`] and
-/// [`crate::DataClient`] so one payer, capability, and ledger bound every call an agent
-/// makes under a grant.
+/// The explicit x402 pay-and-retry engine. Composed into [`crate::Inference`] and
+/// [`crate::DataClient`] so one payer, capability, and process-local ledger bind every
+/// call. This engine does not provide a durable prepayment reservation, crash-safe
+/// idempotency, or daemon authorization; callers must not treat it as production daemon
+/// enforcement.
 #[derive(Clone)]
 pub struct X402 {
     http: reqwest::Client,
@@ -174,18 +173,34 @@ pub struct X402 {
 
 impl X402 {
     pub fn new(
-        http: reqwest::Client,
         payer: Arc<dyn CircPayer>,
         cap: CircuitCapability,
         ledger: Arc<SpendLedger>,
     ) -> Self {
-        Self {
+        Self::with_client_builder(reqwest::Client::builder(), payer, cap, ledger)
+            .expect("static Circuit HTTP client configuration must be valid")
+    }
+
+    /// Construct with caller-selected HTTP settings while forcing redirects
+    /// off. The x402 challenge and paid retry must stay on the capability-
+    /// checked URL; following a redirect could escape the allowed origin or
+    /// forward payment material to a different endpoint.
+    pub fn with_client_builder(
+        builder: reqwest::ClientBuilder,
+        payer: Arc<dyn CircPayer>,
+        cap: CircuitCapability,
+        ledger: Arc<SpendLedger>,
+    ) -> Result<Self> {
+        let http = builder
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        Ok(Self {
             http,
             payer,
             cap,
             ledger,
             pay_mint: None,
-        }
+        })
     }
 
     /// Settle in the token with this mint when the 402 lists it under `acceptedTokens`.
@@ -216,8 +231,8 @@ impl X402 {
         rb
     }
 
-    /// Run one request through the loop: hit the endpoint, and on a 402 enforce the
-    /// capability, settle the CIRC, and retry with the payment signature.
+    /// Run one explicit request through the loop: hit the endpoint, and on a 402 enforce
+    /// the library-local capability, settle the CIRC, and retry with the payment signature.
     pub async fn send(&self, req: PaidRequest) -> Result<Paid> {
         // Host allowlist is checked before the first byte leaves — the grant names the
         // hosts it may talk to at all, paid or free.
@@ -262,12 +277,10 @@ impl X402 {
             }
         };
 
-        // Retry with the payment signature; one free retry on a transient server error,
-        // since the CIRC is already spent either way.
-        let mut resp = self.build(&req, Some(&sig)).send().await?;
-        if TRANSIENT.contains(&resp.status().as_u16()) {
-            resp = self.build(&req, Some(&sig)).send().await?;
-        }
+        // Send the paid request exactly once. A retry after the transfer needs
+        // an endpoint-defined idempotency contract; this generic client has no
+        // such contract and must not duplicate side effects speculatively.
+        let resp = self.build(&req, Some(&sig)).send().await?;
         finish(resp, Some(sig), Some(quote)).await
     }
 }

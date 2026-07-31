@@ -114,14 +114,20 @@ async fn main() -> Result<(), SdkError> {
       </p>
 
       <h2>5. Verify what happened</h2>
-      <p>Every call left a tamper-evident trail. Inspect and verify it:</p>
+      <p>
+        The Covenant paths exercised above should have recorded the capability
+        grant and tool call. Inspect the local trail and verify its chain
+        consistency:
+      </p>
       <pre>
         <code>{`covenant audit recent -n 10
 covenant audit verify`}</code>
       </pre>
       <p>
         You should see the capability grant and the tool call recorded, and the
-        chain <Link href="/audit-integrity">verify</Link> clean.
+        chain <Link href="/audit-integrity">verify</Link> clean. A clean result
+        means the supplied local files are mutually consistent; it does not
+        prove that every host action was mediated or recorded.
       </p>
 
       <h2>Where to go next</h2>

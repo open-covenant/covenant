@@ -38,8 +38,9 @@ export default function Page() {
           Covenant is an open, local-first coordination layer for agentic
           software. It gives humans and agents eight host-level primitives
           (intent, runtime, memory, identity, permissions, communication, a
-          compositor, and on-chain settlement) for coordinating on one computer
-          with explicit capability and audit boundaries. Try the{" "}
+          compositor, and settlement) for coordinating on one computer with
+          explicit capability and audit boundaries. Settlement is currently
+          local-first, with separately deployed onchain components. Try the{" "}
           <a href="https://sandbox.opencovenant.org">interactive sandbox</a>,
           read the{" "}
           <a href="https://docs.opencovenant.org/concepts">

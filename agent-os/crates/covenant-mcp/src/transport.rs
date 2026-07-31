@@ -228,6 +228,23 @@ type Pending = Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, JsonRpcEr
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn stdio_command(command: &str, args: &[String], env: &BTreeMap<String, String>) -> Command {
+    let mut cmd = Command::new(command);
+    cmd.args(args)
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if !env.contains_key("PATH") {
+        if let Some(path) = std::env::var_os("PATH") {
+            cmd.env("PATH", path);
+        }
+    }
+    cmd.envs(env);
+    cmd
+}
+
 pub struct StdioMcpClient {
     stdin: Mutex<ChildStdin>,
     pending: Pending,
@@ -259,20 +276,15 @@ impl StdioMcpClient {
         Self::spawn_with_env(command, args, &BTreeMap::new()).await
     }
 
-    /// Spawn `command` with explicit environment overrides for this server.
-    /// The child still inherits the daemon environment.
+    /// Spawn `command` with the exact configured environment for this server.
+    /// The daemon environment is cleared; only `PATH` is retained when the
+    /// caller did not supply one explicitly.
     pub async fn spawn_with_env(
         command: &str,
         args: &[String],
         env: &BTreeMap<String, String>,
     ) -> Result<Arc<Self>, McpClientError> {
-        let mut cmd = Command::new(command);
-        cmd.args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        cmd.envs(env);
+        let mut cmd = stdio_command(command, args, env);
         let mut child = cmd.spawn()?;
 
         let stdin = child.stdin.take().ok_or(McpClientError::Closed)?;
@@ -482,6 +494,21 @@ impl McpClient for MockMcpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stdio_server_receives_only_explicit_environment_and_path() {
+        let env = BTreeMap::from([("MCP_EXPLICIT".to_string(), "present".to_string())]);
+        let output = stdio_command("/usr/bin/env", &[], &env)
+            .output()
+            .await
+            .expect("run env");
+        assert!(output.status.success());
+        let actual = String::from_utf8(output.stdout).expect("utf8 environment");
+        assert!(actual.lines().any(|line| line == "MCP_EXPLICIT=present"));
+        assert!(actual.lines().any(|line| line.starts_with("PATH=")));
+        assert!(!actual.lines().any(|line| line.starts_with("HOME=")));
+        assert!(!actual.lines().any(|line| line.starts_with("COVENANT_")));
+    }
 
     #[test]
     fn json_rpc_request_serialises_with_jsonrpc_2() {

@@ -33,7 +33,7 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "what-is-covenant",
     q: "What is Covenant?",
-    a: "Covenant is an open, local-first operating layer that lets people and software agents safely share one computer. It runs as a local daemon and exposes eight host-level primitives: intent, runtime, memory, identity, permissions, comms, a compositor, and settlement.",
+    a: "Covenant is an open, local-first operating layer for coordinating people and software agents on one computer under a trusted-local boundary. It runs as a local daemon and exposes eight host-level primitives: intent, runtime, memory, identity, permissions, comms, a compositor, and settlement. It does not isolate hostile code running as the same host user.",
   },
   {
     id: "open-source",
@@ -48,12 +48,12 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "blockchain",
     q: "Does Covenant require a blockchain?",
-    a: "No. Covenant runs fully locally and records settlement receipts to a local ledger by default. The Solana settlement program is live on mainnet, but the daemon anchors receipts locally by default; chain fields stay empty unless the on-chain flush is configured.",
+    a: "No. Covenant runs fully locally and records selected settlement receipts in a local ledger. The Solana settlement program is deployed on mainnet, but its daemon-driven onchain receipt lifecycle is not production; current local receipt chain fields remain empty.",
   },
   {
     id: "multi-chain",
     q: "Does Covenant work across chains?",
-    a: "Selected signed evidence is projected to Base mainnet while $CVNT remains a single Solana mint. The foundation agent has an ERC-8004 registration, and a bond-receipt verifier, EAS score schema, and ENS CCIP-Read gateway are deployed. ecrecover authenticates the configured publisher and signed bytes; it does not establish claim truth. Per-call fees and bonds are chain-local USDC. On-chain score writes and funded bonds are not yet exercised.",
+    a: "Selected signed evidence is projected to Base mainnet while $CVNT remains a single Solana mint. The foundation agent has an ERC-8004 registration, and a bond-receipt verifier, EAS score schema, and ENS CCIP-Read gateway are deployed. ecrecover proves only that a configured address signed the bytes; it does not establish publisher identity or claim truth. The Solana and Base evidence and bond surfaces use chain-local USDC; other integrations define their own assets. On-chain score writes and funded bonds are not yet exercised.",
   },
   {
     id: "eight-primitives",

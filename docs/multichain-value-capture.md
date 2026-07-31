@@ -2,10 +2,12 @@
 
 Covenant projects selected registrations, score schemas, and signed statements
 to other chains — alongside x402 payments over EIP-3009 USDC — without issuing
-a token on any of them. A signature authenticates the configured publisher and
-bytes, not the underlying claim. `$CVNT` stays Solana-canonical. This document records how the
-token accrues value under that constraint and which parts of the model exist in
-code today versus which require on-chain upgrade authority and are deferred.
+a token on any of them. A signature proves that bytes were signed by the
+configured key; publisher attribution still depends on the trusted mapping to
+that key, and the signature does not prove the underlying claim. `$CVNT` stays
+Solana-canonical. This document records how the token accrues value under that
+constraint and which parts of the model exist in code today versus which
+require on-chain upgrade authority and are deferred.
 
 ## The invariant
 
@@ -13,14 +15,16 @@ code today versus which require on-chain upgrade authority and are deferred.
    `2mNVZ6aEjrGwiUVCfz7XGWpiXuWzgBDoznwE579upump` is never bridged, wrapped, or
    re-minted on another chain. No Wormhole NTT, no LayerZero OFT, no xERC20
    lockbox, no `wCVNT`.
-2. **Per-call payments are chain-local USDC.** Every metered call settles in the
-   USDC of the chain it runs on, via x402 (`covenant-x402`: EIP-3009 on EVM, SPL
-   on Solana). A per-call path denominated in `$CVNT` would force the token onto
-   other chains and break the gasless facilitator flow, so it is prohibited.
-3. **Bonds are chain-local USDC.** A configured agent bond is posted in the USDC
-   of the chain where its receipt is consumed (`covenant-attestation`'s signed
-   bond statement). The signature attributes the statement; consumers must
-   verify funding and apply their own policy.
+2. **The Solana/Base evidence payment surfaces use chain-local USDC.** The x402
+   sellers and outbound formats described in this document use EIP-3009 USDC on
+   Base and SPL USDC on Solana. This is not a repository-wide denomination rule:
+   other integrations can use their own settlement assets. No per-call path may
+   bridge or wrap `$CVNT`.
+3. **The Solana/Base bond format is chain-local USDC.** A configured bond on
+   these evidence surfaces is stated in the USDC of the chain where its receipt
+   is consumed (`covenant-attestation`'s signed bond statement). The signature
+   proves possession of the configured key; consumers must independently pin
+   that key, verify funding, and apply their own policy.
 
 The invariant has a tripwire, not just prose:
 [`agent-os/scripts/validate-cvnt-solana-quarantine.mjs`](../agent-os/scripts/validate-cvnt-solana-quarantine.mjs)

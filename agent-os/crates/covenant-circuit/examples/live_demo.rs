@@ -55,12 +55,13 @@ async fn main() {
     }
 
     let ledger = Arc::new(SpendLedger::new());
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .expect("http client");
-
-    let mut engine = X402::new(http, payer.clone(), cap, ledger.clone());
+    let mut engine = X402::with_client_builder(
+        reqwest::Client::builder().timeout(Duration::from_secs(120)),
+        payer.clone(),
+        cap,
+        ledger.clone(),
+    )
+    .expect("http client");
     if let Some(mint) = pay_token.clone() {
         engine = engine.with_pay_mint(mint);
     }

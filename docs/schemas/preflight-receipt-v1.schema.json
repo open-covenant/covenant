@@ -54,7 +54,7 @@
     "evaluated_at_ms": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 18446744073709551615
+      "maximum": 9007199254740991
     },
     "enforcement": {
       "type": "object",

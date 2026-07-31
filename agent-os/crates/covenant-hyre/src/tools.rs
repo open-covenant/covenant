@@ -6,12 +6,11 @@
 //! that don't want the structured surface — both fall out of the same
 //! generator.
 //!
-//! A tool never makes a network call itself. It marshals arguments
-//! into a [`PaidRequest`] and hands it to a [`PaidExecutor`] the daemon
-//! supplies. The executor owns the x402 client, the funding-key signer
-//! (a sidecar), and the budget/settlement/audit accounting. Keeping
-//! that behind a trait is what lets this crate stay free of funding
-//! keys and of the daemon's subsystem types.
+//! A tool never makes a network call itself. It marshals arguments into a
+//! [`PaidRequest`] and hands it to a [`PaidExecutor`]. The production daemon
+//! does not advertise these tools or provide an executor. Explicit development
+//! callers remain responsible for signer custody, authorization, reservation,
+//! settlement reconciliation, and accounting.
 
 use std::sync::Arc;
 
@@ -62,9 +61,8 @@ pub struct PaidResponse {
     pub receipt_id: Option<String>,
 }
 
-/// The daemon's paid-call seam. Implemented over the x402 client +
-/// signer sidecar + settlement accounting; mocked in this crate's
-/// tests.
+/// Lower-level paid-call seam retained for development clients and tests.
+/// The production daemon adapter is parked and does not execute it.
 #[async_trait]
 pub trait PaidExecutor: Send + Sync {
     async fn execute(&self, req: PaidRequest) -> std::result::Result<PaidResponse, String>;

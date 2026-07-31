@@ -74,8 +74,9 @@ describe("checkAnchor4VerifierSig", () => {
   ) => {
     const attDir = join(root, "attestations");
     const witnessDir = join(root, "landing", "public", "witness");
+    const keyDir = join(witnessDir, "verifier-keys");
     mkdirSync(attDir, { recursive: true });
-    mkdirSync(witnessDir, { recursive: true });
+    mkdirSync(keyDir, { recursive: true });
     writeFileSync(
       join(attDir, `${sha}.json`),
       JSON.stringify({
@@ -87,6 +88,7 @@ describe("checkAnchor4VerifierSig", () => {
       }),
     );
     writeFileSync(join(attDir, `${sha}.verifier.sig`), sign(privateKey, value));
+    writeFileSync(join(keyDir, `${sha}.txt`), x);
     writeFileSync(join(witnessDir, "verifier-pubkey.txt"), x);
   };
 
@@ -96,7 +98,7 @@ describe("checkAnchor4VerifierSig", () => {
     expect(result.detail).toContain("No v2 verifier statement");
   });
 
-  it("reports a valid pass as self-published attribution, never green", () => {
+  it("reports a valid pass as self-consistency, never green", () => {
     const root = mkRoot();
     const { x, privateKey } = keypair();
     writeFixture(root, "pass", x, privateKey);
@@ -106,6 +108,35 @@ describe("checkAnchor4VerifierSig", () => {
       state: "yellow",
     });
     expect(result.detail).toContain("not an externally pinned trust root");
+  });
+
+  it("keeps historical artifacts valid after the latest-key pointer rotates", () => {
+    const root = mkRoot();
+    const first = keypair();
+    const second = keypair();
+    writeFixture(root, "first", first.x, first.privateKey);
+    writeFixture(root, "second", second.x, second.privateKey);
+
+    expect(checkAnchor4VerifierSig(root, "first").state).toBe("yellow");
+    expect(checkAnchor4VerifierSig(root, "second").state).toBe("yellow");
+  });
+
+  it("rejects a v2 artifact without its commit-scoped key", () => {
+    const root = mkRoot();
+    const first = keypair();
+    const second = keypair();
+    writeFixture(root, "old", first.x, first.privateKey);
+    rmSync(
+      join(root, "landing", "public", "witness", "verifier-keys", "old.txt"),
+    );
+    writeFileSync(
+      join(root, "landing", "public", "witness", "verifier-pubkey.txt"),
+      second.x,
+    );
+
+    const result = checkAnchor4VerifierSig(root, "old");
+    expect(result.state).toBe("red");
+    expect(result.detail).toContain("no commit-scoped self-published key");
   });
 
   it("reports a signed refutation as red", () => {

@@ -26,7 +26,7 @@ use crate::{circ, CircuitError, Result};
 /// so a plain `transfer_checked` settles them exactly — then submits and confirms. The mint,
 /// program, and decimals come from the quote, so the same funder pays whichever token the
 /// engine selected. The funding key lives only here. Enable with the crate's `solana`
-/// feature.
+/// feature for an explicit integration; covenantd does not construct this payer.
 pub struct SolanaCircPayer {
     rpc: Arc<RpcClient>,
     funder: Arc<Keypair>,

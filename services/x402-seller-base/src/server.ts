@@ -2,9 +2,10 @@
  * Covenant evidence x402 seller on Base.
  *
  * Agents pay per call in USDC (EIP-3009 transferWithAuthorization) to obtain a
- * Covenant-signed ed25519 statement over caller-supplied data:
+ * Seller-key-signed ed25519 statement over caller-supplied data:
  *   POST /x402/attest  a statement over a { subject, claim } pair. Its signature
- *                      authenticates Covenant as publisher, not claim truth.
+ *                      proves possession of an externally pinned expected key,
+ *                      not Covenant attribution or claim truth by itself.
  *
  * `@x402/express` issues the 402 challenge via a locally-registered (signer-less)
  * EVM exact scheme, then verifies and settles through the Coinbase-hosted x402
@@ -24,7 +25,8 @@
  *   X402_SYNC_FACILITATOR   "false" to skip the boot supported-kinds fetch (default on)
  *   COVENANT_ATTEST_KEYPAIR 32-byte seed or 64-byte seed+pubkey JSON array
  *   COVENANT_ALLOW_EPHEMERAL_ATTESTOR
- *                           explicit "true" opt-in for a restart-rotating dev key
+ *                           explicit "true" opt-in for a restart-rotating
+ *                           testnet development key; ignored in production/mainnet
  */
 import express, { type Request, type Response } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
@@ -34,6 +36,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { Attestor, ATTEST_DOMAIN, ATTEST_CANONICALIZATION, ATTEST_VERIFY_RECIPE } from "./attest.js";
 import { makeAttestHandler } from "./attest-route.js";
+import { mayUseEphemeralAttestor } from "./attestor-policy.js";
 
 // The EIP-712 domain (name, version) is the token's own, not ours: the buyer's
 // wallet signs the transferWithAuthorization against it and the facilitator
@@ -103,14 +106,14 @@ if (process.env.COVENANT_ATTEST_KEYPAIR) {
     JSON.parse(process.env.COVENANT_ATTEST_KEYPAIR) as number[],
   );
 } else {
-  const allowEphemeral =
-    process.env.COVENANT_ALLOW_EPHEMERAL_ATTESTOR === "true";
-  if (
-    (NET === "base" || process.env.NODE_ENV === "production") &&
-    !allowEphemeral
-  ) {
+  const allowEphemeral = mayUseEphemeralAttestor(
+    NET,
+    process.env.NODE_ENV,
+    process.env.COVENANT_ALLOW_EPHEMERAL_ATTESTOR,
+  );
+  if (!allowEphemeral) {
     throw new Error(
-      "COVENANT_ATTEST_KEYPAIR is required on Base mainnet and in production; set COVENANT_ALLOW_EPHEMERAL_ATTESTOR=true only for an explicitly ephemeral development deployment",
+      "COVENANT_ATTEST_KEYPAIR is required; an ephemeral key needs explicit opt-in and is never allowed on Base mainnet or in production",
     );
   }
   attestor = Attestor.generate();
@@ -143,7 +146,7 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
     version: 1,
     resources: [`${base}/x402/attest`],
     instructions:
-      "Covenant evidence x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 statement over a caller-supplied { subject, claim } pair (POST /x402/attest). Pin the key below to authenticate Covenant as publisher and detect payload changes; the signature does not establish claim truth.",
+      "Covenant evidence x402 seller on Base. Pay USDC via EIP-3009 to obtain an ed25519 statement over a caller-supplied { subject, claim } pair (POST /x402/attest). The key below is discovery metadata, not an independent trust anchor. Obtain and pin the expected Covenant key through a trusted external channel; a valid signature then proves possession of that key and detects payload changes, not claim truth.",
     attestation: {
       algorithm: "ed25519",
       publicKey: attestor.pubkeyB58,
@@ -185,7 +188,7 @@ const gate = (amount: string, description: string, extensions: Record<string, un
 const routes: RoutesConfig = {
   "POST /x402/attest": gate(
     PRICE,
-    "Create a Covenant-signed ed25519 statement over caller-supplied data.",
+    "Create an ed25519 statement over caller-supplied data under the seller-configured key.",
     declareDiscoveryExtension({
       input: {
         subject: "0x5fA1d0C0bfFE257a20027C523093F941834f5D66",

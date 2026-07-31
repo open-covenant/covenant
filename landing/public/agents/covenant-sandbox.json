@@ -1,7 +1,7 @@
 {
   "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   "name": "Covenant Coding Sandbox",
-  "description": "Covenant's public coding sandbox. Its Metaplex asset and selected Covenant-authored audit-root records are publicly readable. Those records identify the reported publisher and make payload changes detectable; they do not prove that every tool call or file write was recorded, that an underlying claim is true, or that the agent is safe. A Core Oracle plugin can gate configured asset lifecycle events; it does not gate general agent execution.",
+  "description": "Covenant's public coding sandbox. Its Metaplex asset and selected publisher-reported audit-root records are publicly readable. Those records name a reported publisher and make payload changes detectable under an externally pinned key; they do not prove publisher identity, that every tool call or file write was recorded, that an underlying claim is true, or that the agent is safe. A Core Oracle plugin can gate configured asset lifecycle events; it does not gate general agent execution.",
   "image": "https://opencovenant.org/agents/covenant-agent-1024.png",
   "active": true,
   "registrations": [

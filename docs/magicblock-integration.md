@@ -43,8 +43,9 @@ Covenant's monitor requests and locally DCAP-checks a quote from each configured
 ER, then writes an issuer-authored `er-verified` credential to the Solana
 Attestation Service, keyed to the router's validator address
 ([`services/er-registry`](../services/er-registry)). A resolver can use that
-credential as a routing-policy input. The credential authenticates Covenant as
-issuer; an account read does not independently reproduce the DCAP verification.
+credential as a routing-policy input. Its signature proves possession of the
+issuer key; attributing that key to Covenant requires a separately trusted pin,
+and an account read does not independently reproduce the DCAP verification.
 
 ```js
 import { Connection } from "@solana/web3.js";
@@ -139,13 +140,16 @@ builder or agent can consume directly:
   keeper: cooperatively undelegates your accounts on idle, max-lifetime, or a
   validator stall, and documents what dlp 3.1.0's permissionless
   `RequestUndelegation` actually requires from your program.
-- **Trust MCP** (`https://mcp.opencovenant.org/mcp`) — zero-install for any MCP
-  agent: `covenant_verified_ers`, `covenant_verify_enclave` (live DCAP check),
-  `covenant_er_provenance`.
+- **Trust MCP** (`https://mcp.opencovenant.org/mcp`) — provider-backed lookup
+  tools for MCP clients: `covenant_verified_ers`, `covenant_verify_enclave`,
+  `covenant_er_provenance`. A tool response is not independent DCAP evidence;
+  consumers must reproduce quote verification and challenge binding before
+  treating it as an enclave claim.
 - **Paid enclave verification** —
-  `GET https://covenant-x402-seller.onrender.com/x402/er/enclave/{validator}`
-  (x402, USDC on Solana): a fresh Covenant-signed DCAP verification, optionally
-  binding an agent and its provenance root into the quote challenge.
+  `GET https://x402-seller.opencovenant.org/x402/er/enclave/{validator}`
+  (x402, USDC on Solana) returns a publisher-key-signed result over a retrieved
+  quote. The signature proves possession of that key, not Covenant identity,
+  quote freshness, independent DCAP validation, or runtime provenance.
 
 ## Try it
 

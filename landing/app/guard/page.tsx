@@ -33,18 +33,18 @@ const cmdBlock =
 const CHECKS: { title: string; tool: string; body: string }[] = [
   {
     title: "Settlement activity",
-    tool: "covenant_reputation",
+    tool: "covenant_reputation (legacy name)",
     body: "Returns bounded public USDC transfer observations and coverage metadata. The legacy score is a heuristic, not proof of jobs, delivery, quality, or reputation.",
   },
   {
     title: "Registration",
-    tool: "covenant_agent_passport",
+    tool: "covenant_agent_passport (legacy name)",
     body: "Checks whether the supplied asset has a MIP-014 registration, belongs to the Covenant collection, and carries a record attributed to Covenant by the configured data source. Registration and record authorship do not prove who operates the agent or whether a claim is true.",
   },
   {
     title: "Signature",
     tool: "covenant_verify",
-    body: "Checks whether a payload matches a signature under the published Covenant key. A passing signature authenticates Covenant as publisher; it does not validate the claim.",
+    body: "Checks whether a payload matches a signature under an expected key pinned outside the response. A passing signature proves possession of that key and detects changed bytes; it does not establish Covenant attribution or validate the claim.",
   },
 ];
 
@@ -106,10 +106,11 @@ export default function GuardPage() {
           <p className={eyebrow}>limits</p>
           <p className={`${paragraph} mt-3 max-w-2xl`}>
             Chain and indexer data can be stale, incomplete, or misleading.
-            Registration is not real-world identity; a settlement is not proof
-            of delivery; and a signature proves authorship, not truth. The tools
-            return the underlying observations so callers can apply their own
-            policy.
+            Registration is not real-world identity; a bounded transfer
+            observation is not proof of delivery; and a signature proves
+            possession of a key, not the signer&rsquo;s identity or the truth of a
+            claim. The tools return the underlying observations so callers can
+            apply their own policy.
           </p>
         </section>
 

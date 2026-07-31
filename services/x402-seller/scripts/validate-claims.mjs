@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const files = [
+  'src/attest.ts',
   'src/server.ts',
   'src/passport.ts',
   'src/reputation.ts',
@@ -19,14 +20,19 @@ const forbidden = [
   'never charged',
   "proving that agent's on-chain record",
   'independently-verifiable statement',
+  'publisher-authenticated',
+  'authenticates the publisher',
+  'against the published pubkey',
 ];
 
 const required = [
   'do not prove identity',
   'not reputation',
   'Resource delivery and settlement are separate',
-  'not claim truth',
+  'not proof of publisher identity or claim truth',
   'are not fetched',
+  'expected pubkey pinned through a trusted external channel',
+  'discovery metadata, not a trust anchor',
 ];
 
 const failures = [

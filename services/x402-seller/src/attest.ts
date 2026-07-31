@@ -1,5 +1,6 @@
-// Publisher-signed statement over arbitrary caller data. The signature binds
-// the publisher and exact bytes; it does not establish that a claim is true.
+// Key-signed statement over arbitrary caller data. Verification proves that
+// the expected key signed the exact bytes; publisher identity requires an
+// external trust binding, and the signature does not make the claim true.
 
 import {
   createPrivateKey,
@@ -18,7 +19,7 @@ export const ATTEST_CANONICALIZATION =
   'JSON, recursively key-sorted, no insignificant whitespace, UTF-8';
 export const ATTEST_VERIFY_RECIPE =
   `digest = sha256(canonical(payload)) as lowercase hex; message = "${DOMAIN.trimEnd()}\\n" + digest; ` +
-  'ed25519-verify base58-decoded signature_b58 over the UTF-8 message against the published pubkey.';
+  'ed25519-verify base58-decoded signature_b58 over the UTF-8 message against an expected pubkey pinned through a trusted external channel; treat the key served by this service as discovery metadata, not a trust anchor.';
 
 function canonical(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);

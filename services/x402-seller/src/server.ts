@@ -159,7 +159,7 @@ const routes: RoutesConfig = {
   ),
   'POST /x402/attest': gate(
     '5000',
-    'Create a publisher-signed statement over caller data. The signature authenticates the publisher and bytes, not the claim.',
+    'Create a key-signed statement over caller data. With an externally pinned expected key, the signature verifies exact bytes; it does not independently identify the publisher or make the claim true.',
     declareDiscoveryExtension({
       input: {
         subject: '9sFJ95mZsBTGqTEBkcbmsx2V8RQiZ5iQACCLPLE61aWH',

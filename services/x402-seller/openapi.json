@@ -10,7 +10,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "x-guidance": "The passport and reputation path names are retained for compatibility. The passport response contains configured-provider structural observations; the reputation response contains only a bounded fee-payer-associated USDC transfer summary. A publisher signature authenticates the publisher and exact bytes after its key is pinned through a trusted channel; it does not make a claim true. Resource delivery and settlement are separate x402 outcomes, so reconcile settlement before retrying after errors."
+    "x-guidance": "The passport and reputation path names are retained for compatibility. The passport response contains configured-provider structural observations; the reputation response contains only a bounded fee-payer-associated USDC transfer summary. With an expected key pinned through a trusted external channel, a signature verifies that key signed the exact payload digest; it does not independently identify a publisher or make a claim true. Resource delivery and settlement are separate x402 outcomes, so reconcile settlement before retrying after errors."
   },
   "servers": [
     {
@@ -21,7 +21,7 @@
     "/.well-known/x402": {
       "get": {
         "operationId": "discovery",
-        "summary": "Fetch x402 discovery: resources and the attestation public key.",
+        "summary": "Fetch x402 resources and key-discovery metadata; this response is not a trust anchor.",
         "tags": ["meta"],
         "responses": {
           "200": {
@@ -115,7 +115,7 @@
         },
         "responses": {
           "200": {
-            "description": "Publisher-authenticated statement; signature does not establish claim truth",
+            "description": "Key-signed statement; verify against an expected key pinned through a trusted external channel",
             "content": {
               "application/json": {
                 "schema": {
@@ -341,7 +341,7 @@
           "pubkey_b58",
           "signature_b58"
         ],
-        "description": "Publisher-authenticated statement: digest = sha256(canonical(payload)) lowercase hex, where canonical is JSON with recursively sorted keys and no insignificant whitespace (UTF-8); message = domain + \"\\n\" + digest; verify the Ed25519 signature against a publisher key pinned through a trusted external channel. The signature authenticates the publisher and exact bytes, not claim truth.",
+        "description": "Key-signed statement: digest = sha256(canonical(payload)) lowercase hex, where canonical is JSON with recursively sorted keys and no insignificant whitespace (UTF-8); message = domain + \"\\n\" + digest. Verify against an expected key pinned through a trusted external channel. A valid signature proves that key signed the exact payload digest; this service's self-published key is discovery metadata, not proof of publisher identity or claim truth.",
         "properties": {
           "alg": {
             "type": "string",
@@ -470,7 +470,7 @@
           },
           "attestation": {
             "type": ["object", "null"],
-            "description": "Verification metadata. Pin publicKey through a trusted external channel; this mutable discovery response cannot pin itself.",
+            "description": "Key-discovery metadata, not a trust anchor. Pin publicKey through a trusted external channel; this mutable response cannot bind the key to a publisher identity.",
             "properties": {
               "algorithm": {
                 "type": "string"

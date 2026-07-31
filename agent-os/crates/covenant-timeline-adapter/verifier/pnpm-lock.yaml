@@ -1,0 +1,39 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@covenant-org/timeline':
+        specifier: 0.0.0-alpha.2
+        version: 0.0.0-alpha.2
+
+packages:
+
+  '@covenant-org/timeline@0.0.0-alpha.2':
+    resolution: {integrity: sha512-CTBTg2nvnJfwKpj4wyzYF07x6h3FJKClBkMz0+mCmrh2+3itccBLii9yKTf6vAH/qT/iGVPaHo40AAuahtemSQ==}
+    engines: {node: ^22.0.0 || ^24.0.0}
+    hasBin: true
+
+  canonicalize@3.0.0:
+    resolution: {integrity: sha512-yYLfHyDMIXRyRqsKBRLX023riFLpXY2YOfdtqKXZRZy9qsfOJ9U+4F9YZL7MEzL5+ziN2x2nlBvY/Voi3EBljA==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  jsonc-parser@3.3.1:
+    resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
+
+snapshots:
+
+  '@covenant-org/timeline@0.0.0-alpha.2':
+    dependencies:
+      canonicalize: 3.0.0
+      jsonc-parser: 3.3.1
+
+  canonicalize@3.0.0: {}
+
+  jsonc-parser@3.3.1: {}

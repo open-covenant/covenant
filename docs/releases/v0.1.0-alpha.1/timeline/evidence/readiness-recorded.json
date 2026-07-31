@@ -1,0 +1,20 @@
+{
+  "schema": "covenant.release-temporal-observation.v1",
+  "id": "readiness-recorded",
+  "repository": "open-covenant/covenant",
+  "release": "v0.1.0-alpha.1",
+  "tagCommit": "94e7af53c2224aa40762c2061ac96cab34950b71",
+  "source": {
+    "kind": "release-evidence",
+    "field": "readiness.generated_at",
+    "path": "docs/releases/v0.1.0-alpha.1/evidence.json",
+    "sha256": "aca4d4767380d0a9244b827e5cf4959af81719f45e2703612ad66052b3995b39"
+  },
+  "fact": {
+    "kind": "release.readiness-recorded",
+    "occurredAt": "2026-05-28T08:41:45.698Z",
+    "coordinateMs": 1779957705698,
+    "commit": "94e7af53c2224aa40762c2061ac96cab34950b71",
+    "ready": true
+  }
+}

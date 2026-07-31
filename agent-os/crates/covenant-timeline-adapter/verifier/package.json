@@ -1,0 +1,19 @@
+{
+  "name": "covenant-timeline-release-verifier",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.31.0",
+  "engines": {
+    "node": "^22.0.0 || ^24.0.0",
+    "pnpm": "^10.0.0"
+  },
+  "scripts": {
+    "test": "node --test verify.test.mjs",
+    "verify:fixture": "node verify.mjs --run ../../../../docs/releases/v0.1.0-alpha.1/timeline/run.json --evidence-dir ../../../../docs/releases/v0.1.0-alpha.1/timeline/evidence --repository-root ../../../.. --report ../../../../docs/releases/v0.1.0-alpha.1/timeline/verification.json",
+    "generate:fixture": "node verify.mjs --generate --run ../../../../docs/releases/v0.1.0-alpha.1/timeline/run.json --evidence-dir ../../../../docs/releases/v0.1.0-alpha.1/timeline/evidence --repository-root ../../../.."
+  },
+  "dependencies": {
+    "@covenant-org/timeline": "0.0.0-alpha.2"
+  }
+}

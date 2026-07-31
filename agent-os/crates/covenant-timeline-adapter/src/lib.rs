@@ -3,6 +3,8 @@ use covenant_ipc::{Request, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod release;
+
 pub const TIMELINE_REVISION: &str = "88da86d3dce4be33320f93db0ba4f4fc7c0643cf";
 pub const CONTRACT_SCHEMA: &str = "covenant.timeline.contract.v0alpha1";
 pub const EVENT_SCHEMA: &str = "covenant.timeline.event.v0alpha1";

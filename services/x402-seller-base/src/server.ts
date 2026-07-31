@@ -1,17 +1,17 @@
 /**
- * Covenant Trust x402 seller on Base.
+ * Covenant evidence x402 seller on Base.
  *
  * Agents pay per call in USDC (EIP-3009 transferWithAuthorization) to obtain a
- * Covenant-signed ed25519 attestation over a claim:
- *   POST /x402/attest  a Covenant-signed, independently-verifiable attestation
- *                      over a { subject, claim } pair.
+ * Covenant-signed ed25519 statement over caller-supplied data:
+ *   POST /x402/attest  a statement over a { subject, claim } pair. Its signature
+ *                      authenticates Covenant as publisher, not claim truth.
  *
  * `@x402/express` issues the 402 challenge via a locally-registered (signer-less)
  * EVM exact scheme, then verifies and settles through the Coinbase-hosted x402
  * facilitator, which pays L2 gas and settles the USDC transfer on Base. Revenue
- * lands at payTo. If the facilitator cannot settle, the middleware fails closed:
- * the buyer is never charged and the resource is never released. A handler that
- * returns >= 400 also cancels settlement, so a malformed request is free.
+ * lands at payTo. Resource delivery and settlement are separate. On a facilitator
+ * error, resource error, or timeout, inspect the facilitator response and confirm
+ * the transaction or recipient balance on chain before retrying.
  *
  * Env (Render vars):
  *   PORT                    listen port (Render injects it)
@@ -22,8 +22,9 @@
  *   CDP_API_KEY_ID          Coinbase CDP key id, enables authed Base mainnet settle
  *   CDP_API_KEY_SECRET      Coinbase CDP key secret
  *   X402_SYNC_FACILITATOR   "false" to skip the boot supported-kinds fetch (default on)
- *   COVENANT_ATTEST_KEYPAIR 64-byte JSON array seed; an ephemeral key is generated
- *                           and its pubkey logged when this is unset
+ *   COVENANT_ATTEST_KEYPAIR 32-byte seed or 64-byte seed+pubkey JSON array
+ *   COVENANT_ALLOW_EPHEMERAL_ATTESTOR
+ *                           explicit "true" opt-in for a restart-rotating dev key
  */
 import express, { type Request, type Response } from "express";
 import { paymentMiddlewareFromConfig } from "@x402/express";
@@ -96,11 +97,26 @@ if (!/^0x[0-9a-fA-F]{40}$/.test(PAY_TO)) {
   process.exit(1);
 }
 
-const attestor = process.env.COVENANT_ATTEST_KEYPAIR
-  ? new Attestor(JSON.parse(process.env.COVENANT_ATTEST_KEYPAIR) as number[])
-  : Attestor.generate();
-if (!process.env.COVENANT_ATTEST_KEYPAIR) {
-  console.warn(`COVENANT_ATTEST_KEYPAIR unset, generated ephemeral attestation key ${attestor.pubkeyB58}`);
+let attestor: Attestor;
+if (process.env.COVENANT_ATTEST_KEYPAIR) {
+  attestor = new Attestor(
+    JSON.parse(process.env.COVENANT_ATTEST_KEYPAIR) as number[],
+  );
+} else {
+  const allowEphemeral =
+    process.env.COVENANT_ALLOW_EPHEMERAL_ATTESTOR === "true";
+  if (
+    (NET === "base" || process.env.NODE_ENV === "production") &&
+    !allowEphemeral
+  ) {
+    throw new Error(
+      "COVENANT_ATTEST_KEYPAIR is required on Base mainnet and in production; set COVENANT_ALLOW_EPHEMERAL_ATTESTOR=true only for an explicitly ephemeral development deployment",
+    );
+  }
+  attestor = Attestor.generate();
+  console.warn(
+    `ephemeral development attestation key generated: ${attestor.pubkeyB58}`,
+  );
 }
 
 const app = express();
@@ -127,7 +143,7 @@ app.get("/.well-known/x402", (req: Request, res: Response) => {
     version: 1,
     resources: [`${base}/x402/attest`],
     instructions:
-      "Covenant Trust x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 attestation over a { subject, claim } pair (POST /x402/attest). Pin the attestation key below to verify responses without trusting this server.",
+      "Covenant evidence x402 seller on Base. Pay USDC via EIP-3009 to obtain a Covenant-signed ed25519 statement over a caller-supplied { subject, claim } pair (POST /x402/attest). Pin the key below to authenticate Covenant as publisher and detect payload changes; the signature does not establish claim truth.",
     attestation: {
       algorithm: "ed25519",
       publicKey: attestor.pubkeyB58,
@@ -162,16 +178,19 @@ const gate = (amount: string, description: string, extensions: Record<string, un
   description,
   mimeType: "application/json",
   serviceName: "Covenant",
-  tags: ["covenant", "trust", "attestation", "agent", "base"],
+  tags: ["covenant", "evidence", "signed-statement", "agent", "base"],
   extensions,
 });
 
 const routes: RoutesConfig = {
   "POST /x402/attest": gate(
     PRICE,
-    "Create a Covenant-signed ed25519 attestation over a claim.",
+    "Create a Covenant-signed ed25519 statement over caller-supplied data.",
     declareDiscoveryExtension({
-      input: { subject: "0x5fA1d0C0bfFE257a20027C523093F941834f5D66", claim: { delivered: true } },
+      input: {
+        subject: "0x5fA1d0C0bfFE257a20027C523093F941834f5D66",
+        claim: { reported_delivered: true },
+      },
       inputSchema: {
         properties: { subject: { type: "string" }, claim: {} },
         required: ["subject", "claim"],
@@ -193,9 +212,9 @@ app.use(
   ),
 );
 
-// Paid, reached only after a verified payment. Returning >= 400 cancels
-// settlement, so a bad request is never charged. Handler lives in
-// attest-route.ts so tests can hit it without the payment middleware.
+// Payment-gated route, reached after middleware verification. Tests call
+// attest-route.ts directly without the middleware.
+// A handler error is not evidence that settlement failed; confirm on chain before retrying.
 app.post("/x402/attest", makeAttestHandler(attestor));
 
 app.listen(PORT, () => {

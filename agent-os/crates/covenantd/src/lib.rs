@@ -1313,8 +1313,8 @@ pub struct Server {
     /// "not configured" error and no spend is ever authorized.
     spend_authz: Option<Arc<spend_authz::SpendAuthzConfig>>,
     /// Opt-in escrow surface. When `None` the daemon never issued a
-    /// completion proof; `Request::ProveCompletion` returns a "not
-    /// configured" error and no release signal is ever produced.
+    /// escrow statement; `Request::ProveCompletion` returns a "not
+    /// configured" error otherwise.
     escrow: Option<Arc<escrow::EscrowConfig>>,
     /// Opt-in secret broker backend. `None` when no operator has wired a
     /// secret source; in that state every `Request::GetSecret` returns a
@@ -1511,12 +1511,11 @@ impl Server {
         self
     }
 
-    /// Enable the escrow surface. Once wired, an authenticated peer holding
-    /// `escrow.completion.prove` can ask the daemon to issue a signed
-    /// completion proof an external escrow releases against, and a peer
-    /// holding `escrow.release.record` can report the release back into the
-    /// audit chain. Covenant holds no funds. Opt-in and off by default,
-    /// mirroring [`Self::with_spend_authz`].
+    /// Enable the escrow completion-statement surface. Once wired, an
+    /// authenticated peer holding `escrow.completion.prove` can ask the daemon
+    /// to sign a local dispatch observation plus caller-supplied context. The
+    /// legacy release reporter remains parked and writes no state. Opt-in and
+    /// off by default, mirroring [`Self::with_spend_authz`].
     pub fn with_escrow(mut self, config: escrow::EscrowConfig) -> Self {
         self.escrow = Some(Arc::new(config));
         self
@@ -6911,9 +6910,6 @@ impl Server {
             method: http_method,
             capability,
             body: body.as_ref(),
-            amount: per_call_cap.clone(),
-            network: network.clone(),
-            asset: asset.clone(),
             credits,
         };
 
@@ -7168,23 +7164,11 @@ impl Server {
         }
     }
 
-    async fn record_escrow_release(&self, facts: escrow::ReleaseFacts, peer: &AgentId) -> Response {
-        let check = self
-            .check_capabilities(
-                "escrow:release".into(),
-                vec!["escrow.release.record".into()],
-                peer,
-            )
-            .await;
-        if !check.passed {
-            return Response::Error {
-                message: "recording an escrow release requires capability \
-                          \"escrow.release.record\". Grant it with \
-                          `covenant capabilities grant escrow.release.record`."
-                    .into(),
-            };
-        }
-
+    async fn record_escrow_release(
+        &self,
+        _facts: escrow::ReleaseFacts,
+        _peer: &AgentId,
+    ) -> Response {
         let Some(config) = self.escrow.clone() else {
             return Response::Error {
                 message: "the escrow surface is not configured on this daemon. \
@@ -7198,14 +7182,7 @@ impl Server {
             };
         }
 
-        let issuer = self.identity.agent_id();
-        let context = escrow::ReleaseContext {
-            settlement: self.settlement.as_ref(),
-            audit: self.audit.as_ref(),
-            issuer: &issuer,
-        };
-
-        match escrow::record_escrow_release(&context, config.as_ref(), peer, &facts).await {
+        match escrow::record_escrow_release(config.as_ref()) {
             Ok(recorded_at) => Response::EscrowReleased {
                 recorded_at: recorded_at.to_string(),
             },
@@ -66013,10 +65990,22 @@ budget_credits_per_hour = {credits}
         let budget = Arc::new(covenant_budget::InMemoryLedger::new());
         let s = server_with_audit_and_budget(audit.clone(), budget)
             .with_spend_authz(spend_authz::SpendAuthzConfig { enabled: true });
+        grant_action(&s, "wallet.spend.authorize").await;
         grant_action(&s, "wallet.spend.settle").await;
 
-        let expected_decision = uuid::Uuid::from_u128(0x0abc);
-        match s.op_respond(settle_spend_req()).await {
+        let expected_decision = match s.op_respond(authorize_spend_req()).await {
+            Response::SpendAuthorized {
+                approved: true,
+                decision_id,
+                ..
+            } => decision_id,
+            other => panic!("expected approved authorization, got: {other:?}"),
+        };
+        let mut settle = settle_spend_req();
+        if let Request::SettleSpend { decision_id, .. } = &mut settle {
+            *decision_id = expected_decision;
+        }
+        match s.op_respond(settle).await {
             Response::SpendSettled {
                 receipt_id,
                 decision_id,
@@ -66134,10 +66123,9 @@ budget_credits_per_hour = {credits}
     }
 
     #[tokio::test]
-    async fn escrow_loop_prove_verify_release_reputation_end_to_end() {
-        // The exact path Orbserv's escrow drives over the gateway: a worker run
-        // exists in the chain, prove derives + signs against it, the escrow
-        // verifies the opaque blob, releases, and reputation reflects the loop.
+    async fn escrow_prove_is_domain_separated_and_release_reporting_is_parked() {
+        // A worker run exists in the chain, prove derives and signs against it,
+        // and the legacy release reporter fails closed without adding state.
         use base64::Engine as _;
         let audit = Arc::new(covenant_audit::InMemoryAuditLog::new());
         let job = Uuid::from_u128(0x7a5c);
@@ -66145,7 +66133,6 @@ budget_credits_per_hour = {credits}
         let s =
             server_with_audit(audit.clone()).with_escrow(escrow::EscrowConfig { enabled: true });
         grant_action(&s, "escrow.completion.prove").await;
-        grant_action(&s, "escrow.release.record").await;
         grant_action(&s, "reputation.read").await;
 
         let worker = "0x7A4D3Ae53E9F96599143e1BF057ba11A7e09Ab3E";
@@ -66170,9 +66157,12 @@ budget_credits_per_hour = {credits}
             .decode(&proof_blob)
             .unwrap();
         let bundle: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        let domain = bundle["domain"].as_str().unwrap();
+        assert_eq!(domain, escrow::ESCROW_COMPLETION_DOMAIN);
+        let signed_message = format!("{domain}{}", bundle["proof_json"].as_str().unwrap());
         covenant_identity::verify_b58(
             bundle["signer_pubkey_b58"].as_str().unwrap(),
-            bundle["proof_json"].as_str().unwrap().as_bytes(),
+            signed_message.as_bytes(),
             bundle["signature_b58"].as_str().unwrap(),
         )
         .expect("escrow must be able to verify the proof blob");
@@ -66183,17 +66173,27 @@ budget_credits_per_hour = {credits}
         assert!(proof.validation_passed);
         assert_eq!(proof.proof_id, decision_id);
 
-        // 3. Release against the proof; a retry is idempotent.
-        match s.op_respond(escrow_release_req(decision_id, worker)).await {
-            Response::EscrowReleased { recorded_at } => assert!(!recorded_at.is_empty()),
-            other => panic!("expected EscrowReleased, got: {other:?}"),
-        }
-        match s.op_respond(escrow_release_req(decision_id, worker)).await {
-            Response::EscrowReleased { .. } => {}
-            other => panic!("expected EscrowReleased, got: {other:?}"),
-        }
+        let audit_rows_before_release = audit.recent(32).await.unwrap().len();
 
-        // 4. Reputation reflects the loop: one proof, one pass, one release.
+        // 3. Release reporting is parked even when the escrow surface is on.
+        match s.op_respond(escrow_release_req(decision_id, worker)).await {
+            Response::Error { message } => assert!(
+                message.contains("release reporting is disabled"),
+                "error must state the parked boundary: {message}"
+            ),
+            other => panic!("expected Error, got: {other:?}"),
+        }
+        assert_eq!(
+            audit.recent(32).await.unwrap().len(),
+            audit_rows_before_release,
+            "a release report must not add an audit row"
+        );
+        assert!(
+            s.settlement.recent(32).await.unwrap().is_empty(),
+            "a release report must not add a settlement receipt"
+        );
+
+        // 4. The legacy heuristic sees the statement but no release.
         match s
             .op_respond(Request::GetReputation {
                 worker_pubkey: worker.into(),
@@ -66211,13 +66211,13 @@ budget_credits_per_hour = {credits}
                 assert_eq!(proofs_total, 1);
                 assert_eq!(validations_passed, 1);
                 assert_eq!(validations_failed, 0);
-                assert_eq!(releases, 1);
+                assert_eq!(releases, 0);
                 assert_eq!(completion_rate_bps, 10_000);
             }
             other => panic!("expected Reputation, got: {other:?}"),
         }
 
-        // One proof row and exactly one release row (idempotent retry).
+        // The completion statement is retained; no release row was admitted.
         let kinds: Vec<_> = audit
             .recent(32)
             .await
@@ -66237,8 +66237,8 @@ budget_credits_per_hour = {credits}
                 .iter()
                 .filter(|k| matches!(k, covenant_audit::AuditKind::EscrowReleased { .. }))
                 .count(),
-            1,
-            "release must be idempotent on decision_id"
+            0,
+            "parked release reporting must never emit EscrowReleased"
         );
     }
 

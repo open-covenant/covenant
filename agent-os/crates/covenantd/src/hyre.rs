@@ -25,7 +25,7 @@ use covenant_x402::Capability;
 use serde_json::Value;
 use tracing::warn;
 
-use crate::x402::{record_paid_call, PaidCall, SettlementContext, X402Config};
+use crate::x402::{record_paid_call, PaidCall, PaymentRecord, SettlementContext, X402Config};
 
 /// Materialised Hyre catalog plus its config, built once at daemon
 /// startup and shared behind an `Arc`. Rebuilt out of band when the
@@ -120,9 +120,6 @@ impl PaidExecutor for DaemonHyreExecutor {
                     method,
                     capability,
                     body: req.body.as_ref(),
-                    amount: amount.clone(),
-                    network: req.network.clone(),
-                    asset: req.asset.clone(),
                     credits: req.credits,
                 };
                 let ctx = SettlementContext {
@@ -131,7 +128,18 @@ impl PaidExecutor for DaemonHyreExecutor {
                     budget: self.budget.as_ref(),
                     issuer: &self.issuer,
                 };
-                match record_paid_call(&ctx, &self.payer, &call).await {
+                match record_paid_call(
+                    &ctx,
+                    &self.payer,
+                    &call,
+                    &PaymentRecord {
+                        network: &req.network,
+                        asset: &req.asset,
+                        amount,
+                    },
+                )
+                .await
+                {
                     Ok(id) => Some(id),
                     Err(e) => {
                         // Payment already settled on-chain; failing to record

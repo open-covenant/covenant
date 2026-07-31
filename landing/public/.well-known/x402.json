@@ -7,7 +7,7 @@
     "alg": "ed25519",
     "chain": "solana:mainnet",
     "publicKey": "2RGbcfmFxXicvqe3Vb4TEFkFEJJ3agbSrw7UTdRYQD8p",
-    "use": "Signs Covenant attestations and on-chain provenance anchors. A signature from this key is Covenant's.",
-    "verify": "Recompute the signed payload hash and check the ed25519 signature against this public key."
+    "use": "Authenticates statements published by Covenant and selected provenance commitments. A valid signature proves publication under this key, not that the signed claim is true.",
+    "verify": "Recompute the signed payload hash and verify the ed25519 signature against this published key."
   }
 }

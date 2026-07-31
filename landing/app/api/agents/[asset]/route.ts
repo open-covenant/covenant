@@ -1,13 +1,12 @@
-// /api/agents/[asset]: server-side verification for the agent passport.
+// /api/agents/[asset]: server-side observations for an agent record.
 //
-// Three independent facts, each checked against the chain this request:
-//   1. the Core asset itself (DAS getAsset),
+// Three provider-backed observations are collected for each request:
+//   1. the Core asset as reported by the configured DAS provider,
 //   2. the 014 Registry binding (the ["agent_identity", asset] PDA under
 //      the registry program, derived here, fetched over plain RPC),
-//   3. the Covenant attestation AppData and its on-chain write authority.
-// The witness-chain recomputation deliberately does NOT happen here: the
-// browser fetches the published event chain and recomputes the root
-// itself, so the proof never depends on this server saying so.
+//   3. Covenant validation-record AppData as reported by the configured DAS.
+// These are configured-provider observations, not account proofs or a
+// recomputed witness chain.
 
 import { NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
@@ -19,17 +18,39 @@ import {
 import { readAuditGate, type AuditGate } from "@/app/agents/_gate";
 import {
   appData,
-  findAccountability,
-  verifyAttestation,
-  type Accountability,
-  type Verdict,
+  findValidationRecords,
+  inspectValidationRecord,
+  type RecordObservation,
+  type ValidationRecordLookup,
 } from "@/app/agents/_attest";
 import { rpc, isAssetNotFound } from "@/app/agents/_rpc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export type AgentPassport = {
+function objects(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> =>
+          Boolean(item) && typeof item === "object",
+      )
+    : [];
+}
+
+function hasRegistryBinding(info: unknown, asset: PublicKey): boolean {
+  if (!info || typeof info !== "object") return false;
+  const value = (info as { value?: unknown }).value;
+  if (!value || typeof value !== "object") return false;
+  const account = value as { owner?: unknown; data?: unknown };
+  if (account.owner !== AGENT_IDENTITY_PROGRAM || !Array.isArray(account.data))
+    return false;
+  const [encoded, encoding] = account.data;
+  if (typeof encoded !== "string" || encoding !== "base64") return false;
+  const bytes = Buffer.from(encoded, "base64");
+  return bytes.length === 40 && bytes.subarray(8).equals(asset.toBuffer());
+}
+
+export type AgentRecordResponse = {
   asset: {
     id: string;
     name: string;
@@ -42,13 +63,15 @@ export type AgentPassport = {
   };
   registry: {
     pda: string;
-    registered: boolean;
+    /** null means the configured RPC could not answer. */
+    registered: boolean | null;
     /** AgentIdentity external plugin found on the asset itself. */
     identityPlugin: boolean;
     registrationUri: string | null;
   };
-  /** If this asset is itself a validation record, its verification verdict. */
-  attestation: Verdict | null;
+  /** Structural observation when this asset is itself a validation record. */
+  attestation: RecordObservation | null;
+  /** Registration documents are not server-fetched because their URI is untrusted. */
   doc: {
     name: string;
     image: string | null;
@@ -57,46 +80,9 @@ export type AgentPassport = {
   } | null;
   /** Covenant audit gate (Core Oracle plugin), when the asset carries one. */
   gate: AuditGate | null;
-  /** Validation records that name this asset as subject (agent accountability). */
-  accountability: Accountability | null;
+  /** DAS-reported validation records that name this asset as subject. */
+  records: ValidationRecordLookup | null;
 };
-
-const MAX_DOC_BYTES = 256 * 1024;
-
-// docUri is an on-chain-controlled URL, so the fetch is hostile by default:
-// https-only, a 4s timeout, and a hard byte ceiling so a doc can't make us
-// buffer unbounded. No egress allowlist: doc URIs are arbitrary by design.
-async function fetchDoc(docUri: string, assetId: string): Promise<AgentPassport["doc"]> {
-  if (!docUri.startsWith("https://")) return null;
-  try {
-    const res = await fetch(docUri, { signal: AbortSignal.timeout(4000) });
-    if (!res.ok || !res.body) return null;
-    if (Number(res.headers.get("content-length")) > MAX_DOC_BYTES) return null;
-    const reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.length;
-      if (total > MAX_DOC_BYTES) {
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(value);
-    }
-    const d = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-    const registrations = (d["registrations"] ?? []) as Array<Record<string, unknown>>;
-    return {
-      name: String(d["name"] ?? ""),
-      image: typeof d["image"] === "string" ? d["image"] : null,
-      description: typeof d["description"] === "string" ? d["description"] : null,
-      listsThisAsset: registrations.some((r) => r["agentId"] === assetId),
-    };
-  } catch {
-    return null;
-  }
-}
 
 export async function GET(
   _req: Request,
@@ -131,55 +117,54 @@ export async function GET(
   const content = (das["content"] ?? {}) as Record<string, unknown>;
   const metadata = (content["metadata"] ?? {}) as Record<string, unknown>;
   const ownership = (das["ownership"] ?? {}) as Record<string, unknown>;
-  const authorities = (das["authorities"] ?? []) as Array<Record<string, unknown>>;
-  const grouping = (das["grouping"] ?? []) as Array<Record<string, unknown>>;
-  const externalPlugins = (das["external_plugins"] ?? []) as Array<Record<string, unknown>>;
+  const authorities = objects(das["authorities"]);
+  const grouping = objects(das["grouping"]);
+  const externalPlugins = objects(das["external_plugins"]);
 
   const collection =
     (grouping.find((g) => g["group_key"] === "collection")?.["group_value"] as
       | string
       | undefined) ?? null;
 
-  // The 014 Registry PDA and the registration-doc target derive synchronously
-  // from the asset; their on-chain/https reads run together below.
+  // The 014 Registry PDA derives synchronously from the asset.
   const [pda] = PublicKey.findProgramAddressSync(
     [Buffer.from("agent_identity"), assetPk.toBytes()],
     new PublicKey(AGENT_IDENTITY_PROGRAM),
   );
 
-  const identityPlugin = externalPlugins.find((p) => p["type"] === "AgentIdentity");
-  const registrationUri =
-    ((identityPlugin?.["adapter_config"] as Record<string, unknown> | undefined)?.[
-      "uri"
-    ] as string | undefined) ?? null;
+  const identityPlugin = externalPlugins.find(
+    (plugin) => plugin["type"] === "AgentIdentity",
+  );
+  const adapterConfig = identityPlugin?.["adapter_config"];
+  const reportedUri =
+    adapterConfig && typeof adapterConfig === "object"
+      ? (adapterConfig as Record<string, unknown>)["uri"]
+      : null;
+  const registrationUri = typeof reportedUri === "string" ? reportedUri : null;
 
-  // If the asset itself is a Covenant validation record (carries AppData), verify
-  // it. Agents have no AppData on themselves; an agent's record lives on a
-  // separate asset, surfaced via accountability below. Pure, no RPC.
-  const attestation = appData(das) ? verifyAttestation(das, COVENANT_DATA_AUTHORITY) : null;
+  // If the asset itself carries AppData, inspect the DAS-reported envelope.
+  // Agents normally have no AppData on themselves; their records are separate
+  // assets surfaced via the records lookup below.
+  const attestation = appData(das)
+    ? inspectValidationRecord(das, COVENANT_DATA_AUTHORITY)
+    : null;
 
   const jsonUri = (content["json_uri"] as string | undefined) ?? "";
-  const docUri = registrationUri ?? jsonUri;
-
-  // Registry binding, registration doc, audit gate, and accountability are all
-  // independent once the asset resolves. Read them concurrently. Each keeps its
-  // own fallback so one slow or failed read never sinks the whole passport.
-  const [registered, doc, gate, accountability] = await Promise.all([
+  // Registration URIs are controlled by on-chain input. Do not fetch them from
+  // this server: even HTTPS URLs and redirects can target private infrastructure.
+  const [registered, gate, records] = await Promise.all([
     rpc("getAccountInfo", [pda.toBase58(), { encoding: "base64" }])
-      .then(
-        (info) =>
-          (info as { value: { owner: string } | null } | null)?.value?.owner ===
-          AGENT_IDENTITY_PROGRAM,
-      )
-      .catch(() => false),
-    fetchDoc(docUri, assetPk.toBase58()),
+      .then((info) => hasRegistryBinding(info, assetPk))
+      .catch(() => null as boolean | null),
     readAuditGate(rpc, externalPlugins, assetPk),
-    findAccountability(rpc, assetPk.toBase58(), COVENANT_DATA_AUTHORITY).catch(
-      () => null as Accountability | null,
-    ),
+    findValidationRecords(
+      rpc,
+      assetPk.toBase58(),
+      COVENANT_DATA_AUTHORITY,
+    ).catch(() => null as ValidationRecordLookup | null),
   ]);
 
-  const passport: AgentPassport = {
+  const record: AgentRecordResponse = {
     asset: {
       id: assetPk.toBase58(),
       name: String(metadata["name"] ?? ""),
@@ -197,13 +182,13 @@ export async function GET(
       registrationUri,
     },
     attestation,
-    doc,
+    doc: null,
     gate,
-    accountability,
+    records,
   };
 
-  // Embeds the live gate verdict + accountability; never serve a stale verdict.
-  return NextResponse.json(passport, {
+  // Includes current provider observations; do not serve a stale response.
+  return NextResponse.json(record, {
     headers: { "Cache-Control": "no-store" },
   });
 }

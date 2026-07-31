@@ -245,12 +245,64 @@ export default function BrandPage() {
             <Section label="06" title="Name & voice">
               <dl className="flex flex-col divide-y divide-neutral-900 border-y border-neutral-900">
                 {[
-                  { k: "Name", v: <>Always <span className="text-neutral-100">Covenant</span>, capital C, in running text. The lowercase wordmark is the only exception.</> },
-                  { k: "Token", v: <>The token ticker is <span className="font-mono text-neutral-100">$CVNT</span>, uppercase, with the dollar sign.</> },
-                  { k: "Tagline", v: <span className="text-neutral-100">{TAGLINE}.</span> },
-                  { k: "Mark", v: <>The <span className="font-mono text-neutral-100">{"</>"}</span> logomark stands in for the whole system: <span className="text-neutral-100">human intent</span>, then <span className="text-neutral-100">agent protocol</span>, with code as the medium between them.</> },
-                  { k: "Status", v: <><span className="font-mono uppercase tracking-[0.2em] text-neutral-100">{RELEASE_STATUS}</span> — the protocol is live and evolving in the open.</> },
-                  { k: "One-liner", v: "Covenant is the operating layer for agentic software: every agent runs under a signed grant, and every action leaves a receipt." },
+                  {
+                    k: "Name",
+                    v: (
+                      <>
+                        Always{" "}
+                        <span className="text-neutral-100">Covenant</span>,
+                        capital C, in running text. The lowercase wordmark is
+                        the only exception.
+                      </>
+                    ),
+                  },
+                  {
+                    k: "Token",
+                    v: (
+                      <>
+                        The token ticker is{" "}
+                        <span className="font-mono text-neutral-100">
+                          $CVNT
+                        </span>
+                        , uppercase, with the dollar sign.
+                      </>
+                    ),
+                  },
+                  {
+                    k: "Tagline",
+                    v: <span className="text-neutral-100">{TAGLINE}.</span>,
+                  },
+                  {
+                    k: "Mark",
+                    v: (
+                      <>
+                        The{" "}
+                        <span className="font-mono text-neutral-100">
+                          {"</>"}
+                        </span>{" "}
+                        logomark stands in for the whole system:{" "}
+                        <span className="text-neutral-100">human intent</span>,
+                        then{" "}
+                        <span className="text-neutral-100">agent protocol</span>
+                        , with code as the medium between them.
+                      </>
+                    ),
+                  },
+                  {
+                    k: "Status",
+                    v: (
+                      <>
+                        <span className="font-mono uppercase tracking-[0.2em] text-neutral-100">
+                          {RELEASE_STATUS}
+                        </span>{" "}
+                        — the protocol is live and evolving in the open.
+                      </>
+                    ),
+                  },
+                  {
+                    k: "One-liner",
+                    v: "Covenant is a local control plane for agentic software: implemented daemon operations can require signed capabilities and emit audit evidence.",
+                  },
                 ].map((row) => (
                   <div key={row.k} className="grid grid-cols-1 gap-1 py-4 sm:grid-cols-[128px_1fr] sm:gap-6">
                     <dt className="font-mono text-[11px] uppercase tracking-[0.2em] text-neutral-500">{row.k}</dt>

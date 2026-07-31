@@ -1,16 +1,22 @@
 # Spend Authorization
 
-The daemon can act as the spending policy for an external agent wallet. A
-wallet that holds its own keys (an OrbWallet, for example) asks the daemon
-to approve a spend before it signs. The daemon checks the caller's
-capability, a per-call cap, and the payer's budget, records the verdict in
-the audit chain, and answers approve or deny. No funds move and no
-settlement receipt is written. It is a decision, not a payment. Settlement
-accounting, the budget debit and receipt after a payment lands, is the
-separate outbound path documented with the x402 surface.
+> **Current status: advisory preflight, not signer enforcement.** The
+> authenticated caller supplies the proposed network, asset, amount, per-call
+> cap, credits, and destination. The returned decision is not bound to
+> transaction bytes, and the signer does not require or consume it. Keep an
+> independent wallet policy and do not treat `approved: true` as a W009-style
+> signing authorization.
 
-This is a daemon capability, not a wallet-specific one. Any wallet that can
-make an authenticated HTTP call before it signs can use it.
+An external wallet can ask the daemon for an advisory spend decision before it
+signs. The daemon checks that the caller holds the endpoint capability, compares
+the caller-supplied amount with the caller-supplied cap, consults an optional
+budget bucket, records the verdict in the audit chain, and answers approve or
+deny. No funds move and no settlement receipt is written. Settlement accounting,
+the budget debit, and the receipt after a payment lands are handled separately
+by the `/spend/settle` report described below.
+
+This is a daemon endpoint, not a wallet enforcement boundary. Any wallet that
+can make an authenticated HTTP call can use it, skip it, or ignore its result.
 
 ## Enable it
 
@@ -67,8 +73,8 @@ token is minted at `$COVENANT_HOME/peers/operator.token` on first start.
 | `network` | string | CAIP-2 network the wallet intends to settle on (e.g. `eip155:8453` for Base, `solana:<genesis>` for Solana). |
 | `asset` | string | Token contract (EVM) or mint (Solana) the spend is denominated in. |
 | `amount` | string | Atomic amount as a decimal string. A string, not a number, so u128 values above JSON's 53-bit integer ceiling survive the wire. |
-| `per_call_cap` | string | Maximum atomic amount one spend may request, as a decimal string. The bound the caller is enforcing for this call. |
-| `credits` | number | USD-pegged budget the spend would consume. Derive it from `amount` the same way the x402 path derives the credits it debits. |
+| `per_call_cap` | string | Caller-supplied maximum atomic amount for this request. It is not taken from the granted capability in the current implementation. |
+| `credits` | number | Caller-supplied budget units the spend would consume. The daemon does not independently derive this value from `amount`. |
 | `destination` | string, optional | Pay-to address, recorded on the audit row for triage. |
 
 ### Response
@@ -85,8 +91,8 @@ On a deny:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `approved` | bool | The verdict. Sign only when `true`. |
-| `decision_id` | uuid | Minted on every call (approve and deny). Keep it: a later settlement receipt can join back to the authorization that allowed the spend. |
+| `approved` | bool | Advisory verdict. It is never sufficient by itself to sign; the wallet must still validate and authorize the final transaction. |
+| `decision_id` | uuid | Minted on every call (approve and deny). Settlement accepts it only when the stored decision was approved for the same payer and spend facts. |
 | `reason` | string, optional | Present only on a deny. Operator-readable, safe to surface to the user. |
 
 A policy deny is a `spend_authorized` response with `approved: false`, not
@@ -100,11 +106,13 @@ A spend is approved only if these hold. Otherwise it is denied with the
 first failing reason.
 
 1. The caller holds `wallet.spend.authorize`.
-2. `amount` parses as a decimal u128 and is `<= per_call_cap`.
-3. The payer's budget would not be exceeded by `credits`. A payer with no
+2. `amount` parses as a decimal u128 and is `<=` the caller-supplied
+   `per_call_cap`.
+3. The payer's budget would not be exceeded by the caller-supplied `credits`. A payer with no
    configured budget bucket has no cumulative ceiling, so this check
-   applies only once a budget is set; the per-call cap and the capability
-   always apply. The check reads the budget and never debits.
+   applies only once a budget is set. Inside this endpoint, the caller-supplied
+   per-call cap and endpoint capability always apply. The check reads the budget
+   and never debits.
 
 The `network` and `asset` are recorded on the audit row. Binding the
 allowed chains, assets, and per-call cap into the granted capability per
@@ -120,23 +128,27 @@ fail-closed.
 2. Before signing, `POST /spend/authorize` with the spend's `network`,
    `asset`, `amount`, the `per_call_cap` you enforce, and the `credits`
    it costs.
-3. On `approved: true`, sign and submit. On `approved: false`, abort and
-   surface `reason`.
+3. Independently validate the final transaction and apply the wallet's own
+   policy. Sign only when both that policy and the advisory response allow it.
+   On `approved: false`, abort and surface `reason`.
 4. Keep `decision_id` with the transaction.
-5. Once the payment lands on-chain, `POST /spend/settle` with that
-   `decision_id` and the settled facts (see below). This is optional but
-   it is what closes the loop: it records the receipt and joins the
-   payment back to its authorization in the audit chain.
+5. After independently confirming the payment on-chain, the caller may
+   `POST /spend/settle` with that `decision_id` and the reported facts (see
+   below). The daemon requires the stored decision to be approved for the same
+   authenticated payer and exact provider, network, asset, amount, and credits.
+   It does not inspect or confirm the transaction on chain.
 
-Set the wallet's own spending policy to mirror these bounds as a hard
-floor. The daemon is the authority; the wallet policy is a backstop so a
-spend can never exceed the bound even if a call skips the pre-flight.
+The wallet remains the enforcement boundary. This endpoint records an advisory
+decision and optional budget check; it does not prevent a wallet or caller from
+bypassing it. The wallet must independently validate the final transaction and
+enforce its own limits before signing.
 
 ## Settling a spend
 
-After the wallet pays, report it so the daemon records the receipt and the
-budget debit and links them back to the authorization. This moves no funds;
-the wallet already paid with its own keys.
+After independently confirming the wallet paid, report it so the daemon records
+a receipt and budget debit keyed by the stored authorization and caller-reported
+transaction signature. This endpoint moves no funds and does not query the
+chain.
 
 ```
 POST /spend/settle
@@ -160,10 +172,13 @@ Requires the capability `wallet.spend.settle` (grant it the same way as
 
 | Field | Type | Meaning |
 |---|---|---|
-| `decision_id` | uuid | The id from the `/spend/authorize` response this payment acted on. |
-| `amount` | string | Atomic amount actually settled, decimal string. |
-| `credits` | number | USD-pegged budget the spend consumed; debited from the payer's bucket when one is configured. |
-| `tx_sig` | string, optional | On-chain transaction signature or hash, recorded on the receipt. |
+| `decision_id` | uuid | ID returned by `/spend/authorize`. Settlement requires a stored approved decision bound to the same payer and spend facts. |
+| `provider` | string | Must exactly match the stored authorization. |
+| `network` | string | Must exactly match the stored authorization. |
+| `asset` | string | Must exactly match the stored authorization. |
+| `amount` | string | Caller-reported atomic amount, decimal string. It must exactly match the stored authorization and is not derived from the transaction. |
+| `credits` | number | Caller-reported budget units. They must exactly match the stored authorization and are debited from the payer's bucket when one is configured. |
+| `tx_sig` | string, optional | Caller-reported transaction signature or hash, bound to the retry claim and recorded without chain verification. |
 
 Response:
 
@@ -171,29 +186,44 @@ Response:
 { "kind": "spend_settled", "receipt_id": "821be8f3-cfa2-438a-aeae-90dac60c5352", "decision_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479" }
 ```
 
-`receipt_id` joins the budget debit, the settlement receipt, and the
-`spend_settled` audit row. The `decision_id` is recorded for correlation;
-this path does not yet verify it names a prior approved authorization, so
-treat the join as accounting, not enforcement.
+`receipt_id` is deterministic over the payer and `decision_id`; it joins the
+budget debit, settlement receipt, and `spend_settled` audit row. Before debiting,
+the daemon persists a claim for that key with a SHA-256 commitment over the payer,
+authorized destination, provider, network, asset, amount, credits, and reported
+`tx_sig`. An exact retry can recover after a receipt or audit write failure
+without debiting twice. Reusing the decision with changed facts fails closed.
+Budget compaction retains the claim and a debit tombstone, so idempotency
+survives compaction and restart. Those keys are retained indefinitely and make
+the ledger grow with unique settlements; compaction bounds operator-visible
+debit history, not the idempotency index.
 
-Settlement is idempotent on `decision_id`. Retry it freely: if the original
-response was lost, or it failed after the debit landed, a repeat returns the
-**same** `receipt_id` without debiting the budget again or writing a second
-`spend_settled` row. One on-chain payment yields exactly one debit and one
-row, so a client can safely retry (the reference OrbWallet client retries 3×
-automatically and exposes `retryFailedSettlement(decisionId)`).
+The guarantee is process-local and depends on the JSONL writes that were
+successfully persisted. The stores do not share one transaction, the JSONL
+backend does not promise `fsync` power-loss durability, and multiple daemon
+processes must not share the same files. Legacy authorization rows without a
+payer and legacy partial receipts without a fact claim are refused for operator
+reconciliation rather than adopted. The authorization audit row must remain
+within retention until settlement and any retry complete; if it has been purged,
+settlement fails closed.
+
+Each settlement scans the retained audit and receipt logs while holding the
+process-local settlement lock. A fully completed legacy settlement without a
+claim can be replayed only while its matching audit row and receipt remain
+available. Covenant does not backfill a claim for that row because an older
+compaction may already have discarded its debit idempotency key.
 
 ## Audit
 
 Every decision writes one `spend_authorization_decided` row to the audit
 chain, on both approve and deny, carrying `provider`, `network`, `asset`,
-`amount`, `credits`, `destination`, `approved`, `reason`, and
-`decision_id`. A settlement adds one `spend_settled` row carrying the same
-`decision_id` plus the `receipt_id` and `tx_sig`, so the authorization and
-the payment that acted on it read back as a linked pair. The chain is a
-verifiable record of what each wallet was and was not allowed to spend, and
-of what it then settled. Read it with `covenant audit recent` or
-`GET /audit/recent`, and verify chain integrity with `GET /audit/verify`.
+`amount`, `credits`, `destination`, payer identity, `approved`, `reason`, and
+`decision_id`. A settlement adds one `spend_settled` row carrying a
+validated `decision_id` plus the `receipt_id` and caller-reported `tx_sig`. The
+daemon proves the local accounting join to the stored approval; it does not
+prove that the transaction exists, matches the report, or paid the authorized
+destination on chain.
+Read them with `covenant audit recent` or `GET /audit/recent`, and verify local
+chain integrity with `GET /audit/verify`.
 
 ## Example
 

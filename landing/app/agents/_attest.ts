@@ -1,10 +1,9 @@
-// Covenant validation records, shared by the passport (/api/agents/[asset]) and
-// the "Covenant Verified" check (/api/agents/[asset]/verify). A record is an MPL
-// Core AppData plugin whose on-chain data_authority is the Covenant validator;
-// MPL Core enforces that only that key can write it, so authorship is a chain
-// fact. The check is a pure function over public DAS output, no Covenant infra
-// in the trust path. On-chain keys are camelCase; Helius re-cases to snake_case,
-// so every field is read either way.
+// Covenant validation-record observations shared by the passport and its JSON
+// endpoint. These checks run over a configured DAS provider's response. They
+// match the reported record envelope; they do not authenticate the underlying
+// Core account, prove the claim, or establish completeness of the record set.
+// On-chain keys are camelCase; Helius re-cases to snake_case, so every field is
+// read either way.
 
 import {
   ATTESTATION_HASH_ALG,
@@ -12,9 +11,10 @@ import {
   ATTESTATION_TYPE,
 } from "@/app/agents/_registry";
 
-export type Verdict = {
+export type RecordObservation = {
   asset: string | null;
-  verified: boolean;
+  matchesExpectedEnvelope: boolean;
+  evidenceSource: "configured_das";
   subjectAsset: string | null;
   authority: string | null;
   responseHash: string | null;
@@ -22,10 +22,10 @@ export type Verdict = {
   reasons: string[];
 };
 
-export type Accountability = {
-  accountable: boolean;
+export type ValidationRecordLookup = {
+  hasMatchingRecord: boolean;
   count: number;
-  latest: Verdict | null;
+  latest: RecordObservation | null;
   /** The page cap was hit on a full final page, so more records may exist. */
   truncated: boolean;
 };
@@ -34,16 +34,23 @@ const str = (v: unknown): string | undefined => (typeof v === "string" ? v : und
 const field = (d: Record<string, unknown>, snake: string, camel: string): string | undefined =>
   str(d[snake]) ?? str(d[camel]);
 const isHex64 = (s: string) => /^[0-9a-f]{64}$/.test(s);
+const isPublicKeyLike = (s: string) =>
+  s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
+const unsafeAttestationText =
+  /[\p{Cc}\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/u;
+const isSafeAttestationText = (s: string) =>
+  s.length > 0 &&
+  new TextEncoder().encode(s).length <= 200 &&
+  !unsafeAttestationText.test(s);
+const SUBJECT_REGISTRY = "mpl-agent-014";
+const MAX_UNIX_SECONDS = 253_402_300_799;
 
 const obj = (v: unknown): Record<string, unknown> | undefined =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
 
-// The AppData write authority (data_authority) is the key MPL Core enforces for
-// writes, so it is the only thing that proves authorship. Helius nests it under
-// adapter_config; a flat fallback covers other shapes. The plugin's top-level
-// `authority` is the adapter's config authority, which a minter can set to any
-// address without it signing, so trusting it would let anyone forge a record
-// under our key. Read the write authority only, and fail closed when absent.
+// Helius reports the AppData write authority under adapter_config; a flat
+// fallback covers other DAS shapes. The plugin's top-level `authority` is the
+// adapter config authority and is not the write authority, so it is ignored.
 function writeAuthority(plugin: Record<string, unknown>): string | null {
   const cfg = obj(plugin["adapter_config"]) ?? obj(plugin["adapterConfig"]);
   const da =
@@ -54,19 +61,26 @@ function writeAuthority(plugin: Record<string, unknown>): string | null {
   return str(da?.["address"]) ?? null;
 }
 
-export function appData(asset: Record<string, unknown>): Record<string, unknown> | null {
-  const plugins = (asset["external_plugins"] ?? []) as Array<Record<string, unknown>>;
-  return plugins.find((p) => p["type"] === "AppData") ?? null;
+export function appData(
+  asset: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const plugins = asset["external_plugins"];
+  if (!Array.isArray(plugins)) return null;
+  return plugins.find((plugin) => obj(plugin)?.["type"] === "AppData") ?? null;
 }
 
-/** Pure verification of one DAS asset as a Covenant validation record. */
-export function verifyAttestation(asset: Record<string, unknown>, authority: string): Verdict {
+/** Structural inspection of one DAS-reported validation record. */
+export function inspectValidationRecord(
+  asset: Record<string, unknown>,
+  authority: string,
+): RecordObservation {
   const id = str(asset["id"]) ?? null;
   const plugin = appData(asset);
   if (!plugin) {
     return {
       asset: id,
-      verified: false,
+      matchesExpectedEnvelope: false,
+      evidenceSource: "configured_das",
       subjectAsset: null,
       authority: null,
       responseHash: null,
@@ -74,7 +88,7 @@ export function verifyAttestation(asset: Record<string, unknown>, authority: str
       reasons: ["no AppData external plugin on this asset"],
     };
   }
-  const data = (plugin["data"] ?? {}) as Record<string, unknown>;
+  const data = obj(plugin["data"]) ?? {};
   const dataAuthority = writeAuthority(plugin);
   const reasons: string[] = [];
 
@@ -91,14 +105,80 @@ export function verifyAttestation(asset: Record<string, unknown>, authority: str
 
   if (field(data, "validator", "validator") !== authority) reasons.push("validator field does not match the expected authority");
 
-  const subject = (data["subject"] ?? {}) as Record<string, unknown>;
-  const subjectAsset = field(subject, "asset", "asset") ?? null;
+  const subject = obj(data["subject"]);
+  if (!subject) reasons.push("subject object missing");
+  if (field(subject ?? {}, "registry", "registry") !== SUBJECT_REGISTRY) {
+    reasons.push(`subject.registry is not ${SUBJECT_REGISTRY}`);
+  }
+  const subjectAsset = field(subject ?? {}, "asset", "asset") ?? null;
+  if (!subjectAsset) reasons.push("subject.asset missing");
+  else if (!isPublicKeyLike(subjectAsset)) {
+    reasons.push("subject.asset is not a base58 Solana-address shape");
+  }
+  const subjectRegistration = subject?.["registration"];
+  if (
+    subjectRegistration !== undefined &&
+    (typeof subjectRegistration !== "string" ||
+      !isPublicKeyLike(subjectRegistration))
+  ) {
+    reasons.push("subject.registration is not a base58 Solana-address shape");
+  }
+  const subjectAgentId = subject?.["agent_id"] ?? subject?.["agentId"];
+  if (
+    subjectAgentId !== undefined &&
+    (typeof subjectAgentId !== "string" ||
+      !isSafeAttestationText(subjectAgentId))
+  ) {
+    reasons.push("subject.agentId is not a safe non-empty string");
+  }
+
+  const tag = field(data, "tag", "tag");
+  if (!tag || !isSafeAttestationText(tag))
+    reasons.push("tag missing, empty, or unsafe");
+
+  const covenant = obj(data["covenant"]);
+  if (!covenant) reasons.push("covenant object missing");
+  const releaseTarget = field(
+    covenant ?? {},
+    "release_target",
+    "releaseTarget",
+  );
+  const releaseSubject = field(
+    covenant ?? {},
+    "release_subject",
+    "releaseSubject",
+  );
+  const releaseScope = field(covenant ?? {}, "release_scope", "releaseScope");
+  if (!releaseTarget || !isSafeAttestationText(releaseTarget)) {
+    reasons.push("covenant.releaseTarget missing, empty, or unsafe");
+  }
+  if (!releaseSubject || !isSafeAttestationText(releaseSubject)) {
+    reasons.push("covenant.releaseSubject missing, empty, or unsafe");
+  }
+  if (!releaseScope || !isSafeAttestationText(releaseScope)) {
+    reasons.push("covenant.releaseScope missing, empty, or unsafe");
+  }
+  if (tag && releaseScope && tag !== releaseScope) {
+    reasons.push("tag does not match covenant.releaseScope");
+  }
+
   const recordedRaw = data["recorded_at"] ?? data["recordedAt"];
-  const recordedAt = typeof recordedRaw === "number" ? recordedRaw : null;
+  const recordedAt =
+    Number.isSafeInteger(recordedRaw) &&
+    (recordedRaw as number) >= 0 &&
+    (recordedRaw as number) <= MAX_UNIX_SECONDS
+      ? (recordedRaw as number)
+      : null;
+  if (recordedRaw == null) {
+    reasons.push("recordedAt missing");
+  } else if (recordedAt == null) {
+    reasons.push("recordedAt is outside the supported Unix-seconds range");
+  }
 
   return {
     asset: id,
-    verified: reasons.length === 0,
+    matchesExpectedEnvelope: reasons.length === 0,
+    evidenceSource: "configured_das",
     subjectAsset,
     authority: dataAuthority,
     responseHash,
@@ -109,35 +189,49 @@ export function verifyAttestation(asset: Record<string, unknown>, authority: str
 
 type Rpc = (method: string, params: unknown) => Promise<unknown>;
 
-/** An agent is accountable iff the Covenant validator has minted a verified
- *  record whose subject is this agent. Pages DAS by the validator's owned
- *  assets and matches subject.asset. */
-export async function findAccountability(
+/** Find DAS-reported records with the expected envelope and subject. */
+export async function findValidationRecords(
   rpc: Rpc,
   agent: string,
   authority: string,
-): Promise<Accountability> {
+): Promise<ValidationRecordLookup> {
   const MAX_PAGES = 5;
-  const verified: Verdict[] = [];
+  const matches: RecordObservation[] = [];
   let truncated = false;
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const resp = (await rpc("getAssetsByOwner", {
+    const value = await rpc("getAssetsByOwner", {
       ownerAddress: authority,
       page,
       limit: 1000,
-    })) as Record<string, unknown>;
-    const items = (resp["items"] ?? []) as Array<Record<string, unknown>>;
+    });
+    const resp = obj(value);
+    if (!resp) throw new Error("DAS response is not an object");
+    const rawItems = resp["items"];
+    if (!Array.isArray(rawItems)) throw new Error("DAS items are not an array");
+    const items = rawItems.filter((item): item is Record<string, unknown> =>
+      Boolean(obj(item)),
+    );
     if (items.length === 0) break;
     for (const item of items) {
-      const v = verifyAttestation(item, authority);
-      if (v.verified && v.subjectAsset === agent) verified.push(v);
+      const observation = inspectValidationRecord(item, authority);
+      if (
+        observation.matchesExpectedEnvelope &&
+        observation.subjectAsset === agent
+      ) {
+        matches.push(observation);
+      }
     }
     if (items.length < 1000) break;
     if (page === MAX_PAGES) truncated = true; // full final page at the cap; more may exist
   }
-  const latest = verified.reduce<Verdict | null>(
+  const latest = matches.reduce<RecordObservation | null>(
     (acc, v) => (acc && (acc.recordedAt ?? 0) >= (v.recordedAt ?? 0) ? acc : v),
     null,
   );
-  return { accountable: verified.length > 0, count: verified.length, latest, truncated };
+  return {
+    hasMatchingRecord: matches.length > 0,
+    count: matches.length,
+    latest,
+    truncated,
+  };
 }

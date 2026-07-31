@@ -1,17 +1,19 @@
-//! Daemon-side pre-spend authorization for an external agent wallet.
+//! Daemon-side advisory preflight for an external agent wallet.
 //!
-//! Covenant is the spending policy. An external wallet (e.g. OrbWallet)
-//! asks the daemon to approve a spend *before* it signs: the daemon
-//! checks the agent's capability scope and budget, records the verdict in
-//! the audit chain, and returns approve or deny. This module holds no
-//! keys and moves no funds — it decides and it records. Settlement (the
-//! receipt + budget debit after the wallet actually pays) is the separate
-//! `x402::record_paid_call` path; an authorization here does not debit.
+//! An external wallet can ask the daemon for a decision before it signs. The
+//! current HTTP caller supplies both the proposed spend and its network, asset,
+//! per-call cap, and budget units. The returned UUID is not bound to transaction
+//! bytes, and the signer does not require or consume it. This module therefore
+//! records an advisory decision; it is not the wallet's signing boundary. A
+//! decision does not debit. The later [`record_spend_settlement`] path requires
+//! the stored decision to be approved and to match its payer and reported spend
+//! facts, but it still trusts the authenticated wallet's transaction report and
+//! does not verify the transaction on chain.
 //!
 //! The split mirrors `x402.rs`: the capability *grant* lookup stays in the
 //! daemon `Server` (it owns the capability store), which resolves a
 //! [`SpendScope`] and hands it here. This module then enforces the
-//! per-call cap, the chain/asset match, and the budget, and writes one
+//! per-call cap, the chain/asset match, and the optional budget, and writes one
 //! [`AuditKind::SpendAuthorizationDecided`] row per decision.
 //!
 //! Budget is an optional ceiling. When the payer has a configured budget
@@ -26,8 +28,13 @@ use covenant_audit::{AuditEvent, AuditKind, AuditLog};
 use covenant_budget::{BudgetError, BudgetLedger};
 use covenant_settlement::Settlement;
 use covenant_types::{AgentId, ResourceKind, SettlementReceipt};
+use sha2::{Digest, Sha256};
 use tracing::debug;
 use uuid::Uuid;
+
+const SPEND_RECEIPT_DOMAIN: &[u8] = b"covenant.spend-settlement.receipt.v2";
+const SPEND_BINDING_DOMAIN: &[u8] = b"covenant.spend-settlement.binding.v1";
+static SPEND_SETTLEMENT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Opt-in switch for the daemon's spend-authorization surface. Defaults
 /// to `false` so a daemon with no operator opt-in authorizes nothing.
@@ -49,8 +56,7 @@ pub struct SpendScope {
     pub per_call_cap: u128,
 }
 
-/// A spend an external wallet wants the daemon to authorize before it
-/// signs.
+/// A spend an external wallet wants the daemon to evaluate before it signs.
 pub struct SpendRequest {
     /// CAIP-2 network the wallet intends to settle on.
     pub network: String,
@@ -59,9 +65,8 @@ pub struct SpendRequest {
     /// Atomic amount as a decimal string — stringified to preserve
     /// precision across languages that lack u128.
     pub amount: String,
-    /// USD-pegged budget credits this spend would consume. The caller
-    /// derives this from `amount` (e.g. via a price oracle), the same way
-    /// the x402 path derives the credits it debits.
+    /// Caller-supplied budget units this spend would consume. This module
+    /// does not independently derive them from `amount`.
     pub credits: u64,
     /// Optional pay-to address, recorded on the audit row for triage.
     pub destination: Option<String>,
@@ -118,6 +123,202 @@ fn epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn spend_receipt_id(decision_id: Uuid, payer: &AgentId) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(SPEND_RECEIPT_DOMAIN);
+    hasher.update([0]);
+    hasher.update(decision_id.as_bytes());
+    hasher.update(payer.pubkey);
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_custom_bytes(bytes).into_uuid()
+}
+
+fn hash_binding_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
+fn spend_settlement_binding(
+    payer: &AgentId,
+    facts: &SettleFacts,
+    authorized_destination: Option<&str>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(SPEND_BINDING_DOMAIN);
+    hasher.update([0]);
+    hash_binding_field(&mut hasher, facts.decision_id.as_bytes());
+    hash_binding_field(&mut hasher, &payer.pubkey);
+    hash_binding_field(&mut hasher, facts.provider.as_bytes());
+    hash_binding_field(&mut hasher, facts.network.as_bytes());
+    hash_binding_field(&mut hasher, facts.asset.as_bytes());
+    hash_binding_field(&mut hasher, facts.amount.as_bytes());
+    hash_binding_field(&mut hasher, &facts.credits.to_be_bytes());
+    match authorized_destination {
+        Some(destination) => {
+            hasher.update([1]);
+            hash_binding_field(&mut hasher, destination.as_bytes());
+        }
+        None => hasher.update([0]),
+    }
+    match &facts.tx_sig {
+        Some(tx_sig) => {
+            hasher.update([1]);
+            hash_binding_field(&mut hasher, tx_sig.as_bytes());
+        }
+        None => hasher.update([0]),
+    }
+
+    use std::fmt::Write as _;
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
+}
+
+fn receipt_matches_settlement(
+    receipt: &SettlementReceipt,
+    payer: &AgentId,
+    facts: &SettleFacts,
+) -> bool {
+    receipt.payer.pubkey == payer.pubkey
+        && receipt.resource == ResourceKind::Tool
+        && receipt.memory_record_id.is_none()
+        && receipt.credits_consumed == facts.credits
+        && receipt.tx_sig == facts.tx_sig
+}
+
+fn completed_settlement_receipt(
+    events: &[AuditEvent],
+    receipts: &[SettlementReceipt],
+    payer: &AgentId,
+    facts: &SettleFacts,
+) -> Result<Option<Uuid>, SpendAuthzError> {
+    let expected_receipt_id = spend_receipt_id(facts.decision_id, payer);
+    let mut completed_receipt_id = None;
+
+    for event in events {
+        let AuditKind::SpendSettled {
+            decision_id,
+            receipt_id,
+            provider,
+            network,
+            asset,
+            amount,
+            credits,
+            tx_sig,
+        } = &event.kind
+        else {
+            continue;
+        };
+        if *decision_id != facts.decision_id {
+            continue;
+        }
+        if *receipt_id != expected_receipt_id
+            || provider != &facts.provider
+            || network != &facts.network
+            || asset != &facts.asset
+            || amount != &facts.amount
+            || *credits != facts.credits
+            || tx_sig != &facts.tx_sig
+            || completed_receipt_id.is_some()
+        {
+            return Err(SpendAuthzError::Settlement(format!(
+                "settlement idempotency conflict for decision {}",
+                facts.decision_id
+            )));
+        }
+        completed_receipt_id = Some(*receipt_id);
+    }
+
+    let Some(receipt_id) = completed_receipt_id else {
+        return Ok(None);
+    };
+    let matching_receipts = receipts
+        .iter()
+        .filter(|receipt| receipt.id == receipt_id)
+        .collect::<Vec<_>>();
+    if matching_receipts.len() != 1
+        || matching_receipts
+            .iter()
+            .any(|receipt| !receipt_matches_settlement(receipt, payer, facts))
+    {
+        return Err(SpendAuthzError::Settlement(format!(
+            "completed settlement receipt {receipt_id} is missing or conflicts"
+        )));
+    }
+    Ok(Some(receipt_id))
+}
+
+fn validate_settlement_authorization(
+    events: &[AuditEvent],
+    payer: &AgentId,
+    facts: &SettleFacts,
+) -> Result<Option<String>, SpendAuthzError> {
+    let mut authorized_destination: Option<Option<String>> = None;
+    for event in events {
+        let AuditKind::SpendAuthorizationDecided {
+            provider,
+            payer: authorized_payer,
+            network,
+            asset,
+            amount,
+            credits,
+            destination,
+            approved,
+            decision_id,
+            ..
+        } = &event.kind
+        else {
+            continue;
+        };
+        if *decision_id != facts.decision_id {
+            continue;
+        }
+        if !*approved
+            || authorized_payer
+                .as_ref()
+                .is_none_or(|authorized| authorized.pubkey != payer.pubkey)
+            || provider != &facts.provider
+            || network != &facts.network
+            || asset != &facts.asset
+            || amount != &facts.amount
+            || *credits != facts.credits
+        {
+            return Err(SpendAuthzError::Settlement(format!(
+                "decision {} is not an approved authorization for these payer and spend facts",
+                facts.decision_id
+            )));
+        }
+        if authorized_destination.is_some() {
+            return Err(SpendAuthzError::Settlement(format!(
+                "decision {} has multiple authorization rows",
+                facts.decision_id
+            )));
+        }
+        authorized_destination = Some(destination.clone());
+    }
+    let Some(destination) = authorized_destination else {
+        return Err(SpendAuthzError::Settlement(format!(
+            "no stored authorization for decision {}",
+            facts.decision_id
+        )));
+    };
+    Ok(destination)
+}
+
+fn map_settlement_budget_error(error: BudgetError) -> SpendAuthzError {
+    match error {
+        BudgetError::IdempotencyConflict { paired_receipt } => SpendAuthzError::Settlement(
+            format!("settlement idempotency conflict for receipt {paired_receipt}"),
+        ),
+        other => SpendAuthzError::Budget(other.to_string()),
+    }
+}
+
 /// Evaluates the policy without touching the audit log. `Ok(())` is an
 /// approval; `Err(reason)` is a deny with an operator-readable reason.
 /// Budget *system* errors deny (fail-closed) rather than propagate.
@@ -165,11 +366,11 @@ async fn evaluate(
     }
 }
 
-/// Decides a spend-authorization request and records the verdict.
+/// Evaluates a spend-preflight request and records the advisory verdict.
 ///
 /// Always writes exactly one [`AuditKind::SpendAuthorizationDecided`] row
-/// — on approve and on deny — so the audit chain is a complete record of
-/// what the wallet was and was not permitted to spend. If the audit write
+/// — on approve and on deny — so the audit chain records the decisions this
+/// endpoint returned. It does not prove that the wallet honored them. If the audit write
 /// fails the call returns [`SpendAuthzError::Audit`] and no decision is
 /// returned to the caller: a verdict the chain did not record must not be
 /// acted on.
@@ -198,6 +399,7 @@ pub async fn authorize_spend(
             issuer: ctx.issuer.clone(),
             kind: AuditKind::SpendAuthorizationDecided {
                 provider: scope.provider.clone(),
+                payer: Some(payer.clone()),
                 network: req.network.clone(),
                 asset: req.asset.clone(),
                 amount: req.amount.clone(),
@@ -231,6 +433,7 @@ pub async fn authorize_spend(
 /// Settlement facts an external wallet reports after it has paid, so the
 /// daemon can record the receipt that closes the loop opened by
 /// [`authorize_spend`].
+#[derive(Clone)]
 pub struct SettleFacts {
     /// The `decision_id` the daemon returned from the authorization this
     /// payment acted on. Joins the settlement row back to the approval.
@@ -238,11 +441,15 @@ pub struct SettleFacts {
     pub provider: String,
     pub network: String,
     pub asset: String,
-    /// Atomic amount actually settled, as a decimal string.
+    /// Wallet-reported atomic amount, as a decimal string. Settlement requires
+    /// it to match the stored authorization exactly; it is not derived from the
+    /// transaction.
     pub amount: String,
-    /// USD-pegged budget credits this spend consumed.
+    /// Wallet-reported USD-pegged budget credits. Settlement requires an exact
+    /// match to the stored authorization; it does not derive credits from the
+    /// amount or transaction.
     pub credits: u64,
-    /// On-chain transaction signature or hash, when the wallet has it.
+    /// Wallet-reported transaction signature or hash, when available.
     pub tx_sig: Option<String>,
 }
 
@@ -259,30 +466,39 @@ pub struct SettleContext<'a> {
 /// [`AuditKind::SpendSettled`] row, all sharing the receipt id and carrying
 /// the originating `decision_id`. Returns the receipt id.
 ///
-/// The payment has already happened on-chain by the time this is called, so
-/// the budget debit is best-effort against an unconfigured payer: no bucket
-/// means no cumulative ledger to debit, matching [`authorize_spend`]'s
-/// treatment of an unconfigured budget. A real budget- or
-/// settlement-subsystem failure is surfaced — the operator has an
-/// accounting gap to reconcile — rather than silently dropped. Order is
-/// debit, then receipt, then audit, so the logs never carry a half-recorded
-/// settlement.
+/// The authenticated caller reports that payment has happened; this function
+/// does not verify the transaction or reported facts on chain. Before touching
+/// accounting it requires a stored approved authorization with the same payer,
+/// provider, network, asset, amount, and credits. The authorization's stored
+/// destination is carried into the persisted binding rather than accepted again
+/// from the settlement caller. It then binds a payer-namespaced deterministic
+/// receipt id to that destination and every reported fact, including `tx_sig`.
+/// Exact retries reuse a prior debit or compacted debit tombstone, receipt, and
+/// completed audit row; changed facts fail with an idempotency conflict. A
+/// process-local lock serializes this path. The three stores are still not one
+/// transaction, but failures between writes are recoverable without a second
+/// debit. Legacy authorization rows without a payer and older partial receipts
+/// without a fact-binding claim are refused for reconciliation rather than
+/// adopted. The authorization audit row must still be retained when settlement
+/// or a retry is evaluated.
 ///
-/// Idempotent on `decision_id`: a wallet retries settlement when our
-/// success response is lost or a settle failed after the debit landed (the
-/// reference OrbWallet client retries 3× automatically and exposes a manual
-/// `retryFailedSettlement(decisionId)`). A repeat for a `decision_id` that
-/// already settled returns the original receipt id without debiting or
-/// recording again, so one on-chain payment yields exactly one debit and
-/// one `spend_settled` row. This covers the sequential retries a client
-/// actually issues; it does not serialize two settles racing on the same
-/// `decision_id`, which the client does not produce.
+/// The budget debit is best-effort against an unconfigured payer: no bucket
+/// means no cumulative ledger to debit, matching [`authorize_spend`]'s treatment
+/// of an unconfigured budget. A real budget- or settlement-subsystem failure is
+/// surfaced rather than silently dropped. The JSONL backends serialize writes
+/// within one process; this function does not provide cross-process locking or
+/// an `fsync` durability guarantee.
 ///
-/// The `decision_id` is recorded for correlation; this path does not yet
-/// verify it names a prior *approved* authorization. The caller is
-/// authenticated and capability-gated, so this is an accounting join, not
-/// an enforcement gate; binding settlement to a stored approval is a
-/// planned tightening.
+/// Each call scans the retained audit and receipt logs while holding the
+/// process-local settlement lock. A fully completed legacy row without a claim
+/// can be replayed only while its matching audit row and receipt remain
+/// available. No claim is backfilled because older compaction may have
+/// discarded the corresponding debit idempotency key.
+///
+/// This remains accounting enforcement, not proof of payment: Covenant does
+/// not inspect transaction bytes, verify `tx_sig` on chain, or confirm that the
+/// authorization's optional destination received funds. The external wallet
+/// remains the signing and transaction-submission boundary.
 pub async fn record_spend_settlement(
     ctx: &SettleContext<'_>,
     config: &SpendAuthzConfig,
@@ -293,11 +509,23 @@ pub async fn record_spend_settlement(
         return Err(SpendAuthzError::Disabled);
     }
 
-    if let Some(receipt_id) = ctx
+    let _guard = SPEND_SETTLEMENT_LOCK.lock().await;
+
+    let receipt_id = spend_receipt_id(facts.decision_id, payer);
+    let audit_events = ctx
         .audit
-        .settled_receipt_for(facts.decision_id)
+        .recent(usize::MAX)
         .await
-        .map_err(|e| SpendAuthzError::Audit(e.to_string()))?
+        .map_err(|e| SpendAuthzError::Audit(e.to_string()))?;
+    let authorized_destination = validate_settlement_authorization(&audit_events, payer, facts)?;
+    let binding_sha256 = spend_settlement_binding(payer, facts, authorized_destination.as_deref());
+    let receipts = ctx
+        .settlement
+        .recent(usize::MAX)
+        .await
+        .map_err(|e| SpendAuthzError::Settlement(e.to_string()))?;
+
+    if let Some(receipt_id) = completed_settlement_receipt(&audit_events, &receipts, payer, facts)?
     {
         debug!(
             decision_id = %facts.decision_id,
@@ -307,36 +535,69 @@ pub async fn record_spend_settlement(
         return Ok(receipt_id);
     }
 
-    let receipt_id = Uuid::new_v4();
-    let now = epoch_ms();
+    let existing = receipts
+        .iter()
+        .filter(|receipt| receipt.id == receipt_id)
+        .collect::<Vec<_>>();
 
-    match ctx.budget.try_debit(payer, facts.credits, receipt_id).await {
-        Ok(()) => {}
-        // No bucket configured: nothing to debit, consistent with the
-        // optional-ceiling model the authorize path uses.
-        Err(BudgetError::NoCapacity(_)) => {}
-        Err(e) => return Err(SpendAuthzError::Budget(e.to_string())),
+    if existing.is_empty() {
+        ctx.budget
+            .claim_debit(payer, facts.credits, receipt_id, &binding_sha256)
+            .await
+            .map_err(map_settlement_budget_error)?;
+    } else if !ctx
+        .budget
+        .debit_claim_matches(payer, facts.credits, receipt_id, &binding_sha256)
+        .await
+        .map_err(map_settlement_budget_error)?
+    {
+        return Err(SpendAuthzError::Settlement(format!(
+            "receipt {receipt_id} predates settlement fact binding; reconciliation required"
+        )));
     }
 
-    ctx.settlement
-        .record(SettlementReceipt {
-            id: receipt_id,
-            payer: payer.clone(),
-            resource: ResourceKind::Tool,
-            memory_record_id: None,
-            credits_consumed: facts.credits,
-            settled_at: now,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: facts.tx_sig.clone(),
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        })
-        .await
-        .map_err(|e| SpendAuthzError::Settlement(e.to_string()))?;
+    let now = if let Some(receipt) = existing.first() {
+        if existing.len() != 1
+            || existing
+                .iter()
+                .any(|receipt| !receipt_matches_settlement(receipt, payer, facts))
+        {
+            return Err(SpendAuthzError::Settlement(format!(
+                "receipt idempotency conflict for {receipt_id}"
+            )));
+        }
+        receipt.settled_at
+    } else {
+        match ctx.budget.try_debit(payer, facts.credits, receipt_id).await {
+            Ok(()) => {}
+            // No bucket configured: nothing to debit, consistent with the
+            // optional-ceiling model the authorize path uses.
+            Err(BudgetError::NoCapacity(_)) => {}
+            Err(e) => return Err(map_settlement_budget_error(e)),
+        }
+
+        let now = epoch_ms();
+        ctx.settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: payer.clone(),
+                resource: ResourceKind::Tool,
+                memory_record_id: None,
+                credits_consumed: facts.credits,
+                settled_at: now,
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: facts.tx_sig.clone(),
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .map_err(|e| SpendAuthzError::Settlement(e.to_string()))?;
+        now
+    };
 
     ctx.audit
         .record(AuditEvent {
@@ -369,8 +630,92 @@ pub async fn record_spend_settlement(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use covenant_audit::InMemoryAuditLog;
+    use covenant_audit::{
+        AuditError, AuditEvent, AuditIntegrityReport, AuditLog, InMemoryAuditLog,
+    };
     use covenant_budget::InMemoryLedger;
+    use covenant_settlement::{ChainConfirmation, InMemorySettlement, SettlementError};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct FailOnceAudit {
+        inner: InMemoryAuditLog,
+        fail_next_settlement: AtomicBool,
+    }
+
+    impl FailOnceAudit {
+        fn new() -> Self {
+            Self {
+                inner: InMemoryAuditLog::new(),
+                fail_next_settlement: AtomicBool::new(true),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AuditLog for FailOnceAudit {
+        async fn record(&self, event: AuditEvent) -> Result<(), AuditError> {
+            if matches!(&event.kind, AuditKind::SpendSettled { .. })
+                && self.fail_next_settlement.swap(false, Ordering::SeqCst)
+            {
+                return Err(AuditError::Io(std::io::Error::other(
+                    "injected spend settlement audit failure",
+                )));
+            }
+            self.inner.record(event).await
+        }
+
+        async fn recent(&self, limit: usize) -> Result<Vec<AuditEvent>, AuditError> {
+            self.inner.recent(limit).await
+        }
+
+        async fn purge_older_than(&self, before_ms: u64) -> Result<u64, AuditError> {
+            self.inner.purge_older_than(before_ms).await
+        }
+
+        async fn verify_integrity(&self) -> Result<AuditIntegrityReport, AuditError> {
+            self.inner.verify_integrity().await
+        }
+    }
+
+    struct FailOnceSettlement {
+        inner: InMemorySettlement,
+        fail_next_record: AtomicBool,
+    }
+
+    impl FailOnceSettlement {
+        fn new() -> Self {
+            Self {
+                inner: InMemorySettlement::new(),
+                fail_next_record: AtomicBool::new(true),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Settlement for FailOnceSettlement {
+        async fn record(&self, receipt: SettlementReceipt) -> Result<(), SettlementError> {
+            if self.fail_next_record.swap(false, Ordering::SeqCst) {
+                return Err(SettlementError::Io(std::io::Error::other(
+                    "injected settlement receipt failure",
+                )));
+            }
+            self.inner.record(receipt).await
+        }
+
+        async fn recent(&self, limit: usize) -> Result<Vec<SettlementReceipt>, SettlementError> {
+            self.inner.recent(limit).await
+        }
+
+        async fn mark_batch_confirmed(
+            &self,
+            receipt_ids: &[Uuid],
+            confirmation: ChainConfirmation,
+        ) -> Result<u64, SettlementError> {
+            self.inner
+                .mark_batch_confirmed(receipt_ids, confirmation)
+                .await
+        }
+    }
 
     fn agent(tag: u8) -> AgentId {
         AgentId::new("payer@local", [tag; 32])
@@ -434,6 +779,7 @@ mod tests {
                 credits,
                 decision_id,
                 provider,
+                payer: authorized_payer,
                 ..
             } => {
                 assert!(approved);
@@ -441,6 +787,10 @@ mod tests {
                 assert_eq!(*credits, 8);
                 assert_eq!(*decision_id, decision.decision_id());
                 assert_eq!(provider, "orbserv");
+                assert_eq!(
+                    authorized_payer.as_ref().map(|agent| agent.pubkey),
+                    Some(payer.pubkey)
+                );
             }
             other => panic!("unexpected audit kind: {other:?}"),
         }
@@ -577,6 +927,107 @@ mod tests {
         }
     }
 
+    async fn seed_approved_authorization(
+        audit: &dyn AuditLog,
+        issuer: &AgentId,
+        payer: &AgentId,
+        facts: &SettleFacts,
+    ) {
+        audit
+            .record(AuditEvent {
+                id: Uuid::new_v4(),
+                timestamp_ms: epoch_ms(),
+                issuer: issuer.clone(),
+                kind: AuditKind::SpendAuthorizationDecided {
+                    provider: facts.provider.clone(),
+                    payer: Some(payer.clone()),
+                    network: facts.network.clone(),
+                    asset: facts.asset.clone(),
+                    amount: facts.amount.clone(),
+                    credits: facts.credits,
+                    destination: None,
+                    approved: true,
+                    reason: None,
+                    decision_id: facts.decision_id,
+                },
+            })
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn spend_receipt_identity_is_stable_and_namespaced() {
+        let decision_id = Uuid::from_u128(0x0abc);
+        let payer = agent(1);
+        let receipt_id = spend_receipt_id(decision_id, &payer);
+
+        assert_eq!(
+            receipt_id,
+            Uuid::parse_str("bd79e7ee-82d6-89cb-b5bd-88220a595ed9").unwrap()
+        );
+        assert_eq!(receipt_id.get_version(), Some(uuid::Version::Custom));
+        assert_ne!(receipt_id, decision_id);
+        assert_ne!(
+            receipt_id,
+            spend_receipt_id(Uuid::from_u128(0x0abd), &payer)
+        );
+        assert_ne!(receipt_id, spend_receipt_id(decision_id, &agent(2)));
+    }
+
+    #[test]
+    fn settlement_binding_commits_every_reported_fact() {
+        let payer = agent(1);
+        let facts = settle_facts();
+        let binding = spend_settlement_binding(&payer, &facts, Some("0xPayee"));
+        assert_eq!(binding.len(), 64);
+        assert_eq!(
+            binding,
+            "80fd4fe4cb77741a408e9f709d6a7d92b9eedbcb670ae168af549629e01f2ddf"
+        );
+
+        let mut changed = Vec::new();
+        let mut decision = facts.clone();
+        decision.decision_id = Uuid::from_u128(0x0abd);
+        changed.push(decision);
+        let mut provider = facts.clone();
+        provider.provider = "other-provider".into();
+        changed.push(provider);
+        let mut network = facts.clone();
+        network.network = "solana:mainnet".into();
+        changed.push(network);
+        let mut asset = facts.clone();
+        asset.asset = "other-asset".into();
+        changed.push(asset);
+        let mut amount = facts.clone();
+        amount.amount = "79999".into();
+        changed.push(amount);
+        let mut credits = facts.clone();
+        credits.credits = 9;
+        changed.push(credits);
+        let mut tx_sig = facts.clone();
+        tx_sig.tx_sig = Some("0xother-sig".into());
+        changed.push(tx_sig);
+        let mut no_tx_sig = facts.clone();
+        no_tx_sig.tx_sig = None;
+        changed.push(no_tx_sig);
+
+        for changed_facts in &changed {
+            assert_ne!(
+                binding,
+                spend_settlement_binding(&payer, changed_facts, Some("0xPayee"))
+            );
+        }
+        assert_ne!(
+            binding,
+            spend_settlement_binding(&agent(2), &facts, Some("0xPayee"))
+        );
+        assert_ne!(
+            binding,
+            spend_settlement_binding(&payer, &facts, Some("0xOtherPayee"))
+        );
+        assert_ne!(binding, spend_settlement_binding(&payer, &facts, None));
+    }
+
     #[tokio::test]
     async fn settlement_records_receipt_audit_and_debits_when_budgeted() {
         let settlement = covenant_settlement::InMemorySettlement::new();
@@ -585,6 +1036,8 @@ mod tests {
         let issuer = agent(9);
         let payer = agent(1);
         budget.set_capacity(&payer, 1000).await.unwrap();
+        let facts = settle_facts();
+        seed_approved_authorization(&audit, &issuer, &payer, &facts).await;
 
         let ctx = SettleContext {
             settlement: &settlement,
@@ -592,7 +1045,6 @@ mod tests {
             budget: &budget,
             issuer: &issuer,
         };
-        let facts = settle_facts();
         let receipt_id = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
             .await
             .expect("settle");
@@ -604,8 +1056,12 @@ mod tests {
         assert_eq!(receipts[0].tx_sig.as_deref(), Some("0xsig"));
 
         let events = audit.recent(10).await.unwrap();
-        assert_eq!(events.len(), 1);
-        match &events[0].kind {
+        assert_eq!(events.len(), 2);
+        let settled = events
+            .iter()
+            .find(|event| matches!(event.kind, AuditKind::SpendSettled { .. }))
+            .expect("settlement audit row");
+        match &settled.kind {
             AuditKind::SpendSettled {
                 decision_id,
                 receipt_id: rid,
@@ -625,16 +1081,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn settlement_is_idempotent_on_decision_id() {
-        // A retried settlement (lost response, or a retry of one that failed
-        // after the debit) must join the original receipt: one debit, one
-        // receipt, one audit row, no matter how many times it is replayed.
+    async fn completed_settlement_dedupes_on_decision_id() {
+        // Once the audit row exists, repeats join the recorded receipt without
+        // another debit, receipt, or row. Partial-failure recovery is separate.
         let settlement = covenant_settlement::InMemorySettlement::new();
         let audit = InMemoryAuditLog::new();
         let budget = InMemoryLedger::new();
         let issuer = agent(9);
         let payer = agent(1);
         budget.set_capacity(&payer, 1000).await.unwrap();
+        let facts = settle_facts();
+        seed_approved_authorization(&audit, &issuer, &payer, &facts).await;
 
         let ctx = SettleContext {
             settlement: &settlement,
@@ -642,7 +1099,6 @@ mod tests {
             budget: &budget,
             issuer: &issuer,
         };
-        let facts = settle_facts();
 
         let first = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
             .await
@@ -657,9 +1113,274 @@ mod tests {
         assert_eq!(first, second, "retry returns the original receipt id");
         assert_eq!(first, third);
         assert_eq!(settlement.recent(10).await.unwrap().len(), 1, "one receipt");
-        assert_eq!(audit.recent(10).await.unwrap().len(), 1, "one settled row");
+        assert_eq!(audit.recent(10).await.unwrap().len(), 2, "auth plus settle");
+
+        let mut changed_tx = facts.clone();
+        changed_tx.tx_sig = Some("0xchanged".into());
+        let conflict = record_spend_settlement(&ctx, &enabled(), &payer, &changed_tx)
+            .await
+            .expect_err("completed retry cannot change its transaction signature");
+        assert!(matches!(conflict, SpendAuthzError::Settlement(_)));
         // Debited exactly once: 1000 - 8 = 992, not 976.
         assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+    }
+
+    #[tokio::test]
+    async fn retry_after_audit_failure_reuses_receipt_without_second_debit() {
+        let settlement = InMemorySettlement::new();
+        let audit = FailOnceAudit::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(1);
+        budget.set_capacity(&payer, 1000).await.unwrap();
+        let facts = settle_facts();
+        seed_approved_authorization(&audit, &issuer, &payer, &facts).await;
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+
+        let first = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect_err("first audit write fails after debit and receipt");
+        assert!(matches!(first, SpendAuthzError::Audit(_)));
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+        assert_eq!(settlement.recent(10).await.unwrap().len(), 1);
+        assert_eq!(audit.recent(10).await.unwrap().len(), 1);
+
+        let mut conflicts = Vec::new();
+        let mut provider = facts.clone();
+        provider.provider = "other-provider".into();
+        conflicts.push(provider);
+        let mut network = facts.clone();
+        network.network = "solana:mainnet".into();
+        conflicts.push(network);
+        let mut asset = facts.clone();
+        asset.asset = "other-asset".into();
+        conflicts.push(asset);
+        let mut amount = facts.clone();
+        amount.amount = "79999".into();
+        conflicts.push(amount);
+        let mut credits = facts.clone();
+        credits.credits = 9;
+        conflicts.push(credits);
+        let mut tx_sig = facts.clone();
+        tx_sig.tx_sig = Some("0xother-sig".into());
+        conflicts.push(tx_sig);
+        for conflicting in &conflicts {
+            let conflict = record_spend_settlement(&ctx, &enabled(), &payer, conflicting)
+                .await
+                .expect_err("same decision cannot change any bound settlement fact");
+            assert!(matches!(conflict, SpendAuthzError::Settlement(_)));
+        }
+        let wrong_payer = agent(2);
+        let conflict = record_spend_settlement(&ctx, &enabled(), &wrong_payer, &facts)
+            .await
+            .expect_err("same decision cannot change payer");
+        assert!(matches!(conflict, SpendAuthzError::Settlement(_)));
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+
+        let receipt_id = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect("retry completes the missing audit row");
+        assert_eq!(receipt_id, spend_receipt_id(facts.decision_id, &payer));
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+        assert_eq!(budget.recent_debits(&payer, 10).await.unwrap().len(), 1);
+        assert_eq!(settlement.recent(10).await.unwrap().len(), 1);
+        assert_eq!(audit.recent(10).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn retry_after_receipt_failure_reuses_persisted_debit() {
+        let settlement = FailOnceSettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(1);
+        budget.set_capacity(&payer, 1000).await.unwrap();
+        let facts = settle_facts();
+        seed_approved_authorization(&audit, &issuer, &payer, &facts).await;
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+
+        let first = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect_err("first receipt write fails after debit");
+        assert!(matches!(first, SpendAuthzError::Settlement(_)));
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+        assert_eq!(budget.recent_debits(&payer, 10).await.unwrap().len(), 1);
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert_eq!(audit.recent(10).await.unwrap().len(), 1);
+
+        let receipt_id = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect("retry reuses the persisted debit");
+        assert_eq!(receipt_id, spend_receipt_id(facts.decision_id, &payer));
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+        assert_eq!(budget.recent_debits(&payer, 10).await.unwrap().len(), 1);
+        assert_eq!(settlement.recent(10).await.unwrap().len(), 1);
+        assert_eq!(audit.recent(10).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn racing_settlements_share_one_accounting_effect() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(1);
+        budget.set_capacity(&payer, 1000).await.unwrap();
+        let facts = settle_facts();
+        seed_approved_authorization(&audit, &issuer, &payer, &facts).await;
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let config = enabled();
+
+        let (first, second) = tokio::join!(
+            record_spend_settlement(&ctx, &config, &payer, &facts),
+            record_spend_settlement(&ctx, &config, &payer, &facts)
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+        assert_eq!(budget.recent_debits(&payer, 10).await.unwrap().len(), 1);
+        assert_eq!(settlement.recent(10).await.unwrap().len(), 1);
+        assert_eq!(audit.recent(10).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn settlement_decision_cannot_be_squatted_by_another_payer() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(1);
+        let attacker = agent(2);
+        let facts = settle_facts();
+        budget.set_capacity(&payer, 1000).await.unwrap();
+        seed_approved_authorization(&audit, &issuer, &payer, &facts).await;
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+
+        let error = record_spend_settlement(&ctx, &enabled(), &attacker, &facts)
+            .await
+            .expect_err("another payer cannot consume or squat the decision");
+        assert!(matches!(error, SpendAuthzError::Settlement(_)));
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(budget.recent_debits_all(10).await.unwrap().is_empty());
+
+        let receipt_id = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect("authorized payer can still settle");
+        assert_eq!(receipt_id, spend_receipt_id(facts.decision_id, &payer));
+        assert_ne!(receipt_id, spend_receipt_id(facts.decision_id, &attacker));
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
+    }
+
+    #[tokio::test]
+    async fn legacy_authorization_without_payer_binding_is_refused() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(1);
+        let facts = settle_facts();
+        let legacy = AuditEvent {
+            id: Uuid::new_v4(),
+            timestamp_ms: epoch_ms(),
+            issuer: issuer.clone(),
+            kind: AuditKind::SpendAuthorizationDecided {
+                provider: facts.provider.clone(),
+                payer: None,
+                network: facts.network.clone(),
+                asset: facts.asset.clone(),
+                amount: facts.amount.clone(),
+                credits: facts.credits,
+                destination: Some("0xPayee".into()),
+                approved: true,
+                reason: None,
+                decision_id: facts.decision_id,
+            },
+        };
+        let wire = serde_json::to_value(&legacy).unwrap();
+        assert!(wire["kind"].get("payer").is_none());
+        let legacy = serde_json::from_value(wire).expect("legacy row without payer still decodes");
+        audit.record(legacy).await.unwrap();
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+
+        let error = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect_err("legacy decision has no authenticated payer binding");
+        assert!(matches!(error, SpendAuthzError::Settlement(_)));
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(budget.recent_debits_all(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_partial_receipt_without_fact_claim_is_refused() {
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(1);
+        let facts = settle_facts();
+        budget.set_capacity(&payer, 1000).await.unwrap();
+        seed_approved_authorization(&audit, &issuer, &payer, &facts).await;
+        let receipt_id = spend_receipt_id(facts.decision_id, &payer);
+        settlement
+            .record(SettlementReceipt {
+                id: receipt_id,
+                payer: payer.clone(),
+                resource: ResourceKind::Tool,
+                memory_record_id: None,
+                credits_consumed: facts.credits,
+                settled_at: epoch_ms(),
+                chain: None,
+                cluster: None,
+                batch_id: None,
+                merkle_root: None,
+                tx_sig: facts.tx_sig.clone(),
+                slot: None,
+                confirmed_at: None,
+                onchain_sig: None,
+            })
+            .await
+            .unwrap();
+        let ctx = SettleContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+
+        let error = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
+            .await
+            .expect_err("an unbound legacy partial cannot establish retry facts");
+        assert!(matches!(error, SpendAuthzError::Settlement(_)));
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 1000);
+        assert!(budget.recent_debits_all(10).await.unwrap().is_empty());
+        assert_eq!(audit.recent(10).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -669,6 +1390,8 @@ mod tests {
         let budget = InMemoryLedger::new();
         let issuer = agent(9);
         let payer = agent(2); // never given capacity
+        let facts = settle_facts();
+        seed_approved_authorization(&audit, &issuer, &payer, &facts).await;
 
         let ctx = SettleContext {
             settlement: &settlement,
@@ -676,7 +1399,7 @@ mod tests {
             budget: &budget,
             issuer: &issuer,
         };
-        let receipt_id = record_spend_settlement(&ctx, &enabled(), &payer, &settle_facts())
+        let receipt_id = record_spend_settlement(&ctx, &enabled(), &payer, &facts)
             .await
             .expect("settle");
         assert_eq!(
@@ -684,7 +1407,7 @@ mod tests {
             1,
             "receipt is recorded even with no budget bucket"
         );
-        assert_eq!(audit.recent(10).await.unwrap().len(), 1);
+        assert_eq!(audit.recent(10).await.unwrap().len(), 2);
         assert!(!receipt_id.is_nil());
     }
 

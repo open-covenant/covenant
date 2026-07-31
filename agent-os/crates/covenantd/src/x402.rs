@@ -2,12 +2,13 @@
 //!
 //! The `covenant-x402` crate runs the 402-then-pay loop but holds no
 //! budget, writes no receipts, and records no audit events — by
-//! design. This module is where those Covenant concerns attach. A
-//! completed paid call produces three linked records, in this order:
+//! design. This module is where those Covenant concerns attach. A successful
+//! resource response after a payment-header retry produces three linked local
+//! accounting records, in this order:
 //!
 //! 1. a [`covenant_budget::BudgetDebit`] against the payer,
 //! 2. a [`SettlementReceipt`] (resource [`ResourceKind::Tool`]),
-//! 3. an [`AuditKind::ExternalPaymentSettled`] event.
+//! 3. a legacy-named [`AuditKind::ExternalPaymentSettled`] event.
 //!
 //! All three share the receipt id so the budget log, settlement log,
 //! and audit log join cleanly — the same invariant the daemon's
@@ -15,7 +16,9 @@
 //!
 //! ## Scope
 //!
-//! This is the accounting layer only. It signs nothing: the
+//! This is the accounting layer only. It does not query chain settlement or
+//! finality, and the records must not be treated as that proof. It signs
+//! nothing: the
 //! [`covenant_x402::Signer`] is supplied by the caller. The real
 //! Solana funding-key signer, its `solana` feature wiring, and a
 //! live dispatch endpoint land in a separate, separately-reviewed
@@ -284,24 +287,25 @@ pub struct SettlementContext<'a> {
     pub issuer: &'a AgentId,
 }
 
-/// A resolved paid call ready to execute. The caller resolves the
-/// endpoint and pricing (e.g. from a [`covenant_x402::Catalog`]) and
-/// fills this in; `amount`/`network`/`asset` are recorded on the
-/// receipt and audit event.
+/// A resolved paid call ready to execute. Live payment fields are deliberately
+/// absent: accounting takes them from the selected 402 requirement, not the
+/// caller's cap or a catalog hint.
 pub struct PaidCall<'a> {
     pub provider: &'a str,
     pub endpoint: &'a str,
     pub method: Method,
     pub capability: Capability,
     pub body: Option<&'a Value>,
-    /// Atomic amount advertised for this call.
-    pub amount: String,
-    /// CAIP-2 network the payment settles on.
-    pub network: String,
-    /// Asset (mint/contract) paid in.
-    pub asset: String,
     /// USD-pegged credits to debit from the payer's budget.
     pub credits: u64,
+}
+
+/// Fields selected from the live payment challenge. They do not prove chain
+/// settlement or finality.
+pub struct PaymentRecord<'a> {
+    pub network: &'a str,
+    pub asset: &'a str,
+    pub amount: &'a str,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -334,8 +338,9 @@ fn epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Records the budget debit, settlement receipt, and audit event for
-/// a completed paid call. Returns the shared receipt id.
+/// Records the budget debit, local receipt, and audit event after a successful
+/// resource response following a payment-header retry. Returns the shared
+/// receipt id. This function does not verify on-chain settlement.
 ///
 /// Order is debit → receipt → audit. A debit failure aborts before
 /// any receipt is written, so the logs never carry a half-recorded
@@ -344,6 +349,7 @@ pub async fn record_paid_call(
     ctx: &SettlementContext<'_>,
     payer: &AgentId,
     call: &PaidCall<'_>,
+    payment: &PaymentRecord<'_>,
 ) -> Result<Uuid, X402DaemonError> {
     let receipt_id = Uuid::new_v4();
     let now = epoch_ms();
@@ -381,9 +387,9 @@ pub async fn record_paid_call(
             kind: AuditKind::ExternalPaymentSettled {
                 provider: call.provider.to_string(),
                 endpoint: call.endpoint.to_string(),
-                network: call.network.clone(),
-                asset: call.asset.clone(),
-                amount: call.amount.clone(),
+                network: payment.network.to_string(),
+                asset: payment.asset.to_string(),
+                amount: payment.amount.to_string(),
                 receipt_id,
             },
         })
@@ -402,10 +408,11 @@ pub async fn record_paid_call(
 
 /// Outcome of a [`pay_and_record`] call.
 ///
-/// `receipt_id` is `Some` when the call paid and the daemon recorded
-/// the accounting; it is `None` only on a non-success upstream
-/// response (no spend, no receipt). The caller joins this id against
-/// the budget log, settlement log, and audit log.
+/// `receipt_id` is `Some` only when the endpoint first returned a matching 402,
+/// the client sent a payment header, and the retry returned success. It is
+/// `None` for a free first-response success or a non-success retry. Neither
+/// state proves whether funds settled; reconcile ambiguous outcomes before
+/// retrying.
 #[derive(Debug)]
 pub struct PaidOutcome {
     pub response: Response,
@@ -413,12 +420,13 @@ pub struct PaidOutcome {
 }
 
 /// Pre-checks budget, runs the 402-then-pay loop, and records the
-/// accounting on a successful paid response.
+/// local accounting on a successful response after a paid retry.
 ///
 /// The budget is checked read-only *before* paying so the daemon does
 /// not spend USDC for an agent that cannot afford the credits. The
-/// authoritative debit happens after a successful response. A free
-/// (non-402) success is returned without any debit or receipt.
+/// debit happens after a successful paid retry. A free (non-402) success is
+/// returned without any debit or receipt. Chain settlement remains outside
+/// this function's evidence boundary.
 pub async fn pay_and_record(
     ctx: &SettlementContext<'_>,
     config: &X402Config,
@@ -438,7 +446,7 @@ pub async fn pay_and_record(
         Err(e) => return Err(X402DaemonError::Budget(e)),
     }
 
-    let response = client
+    let outcome = client
         .request_paid(
             call.method.clone(),
             call.endpoint,
@@ -448,21 +456,26 @@ pub async fn pay_and_record(
         )
         .await?;
 
-    // A free 2xx (no 402 was issued) needs no settlement. We can't
-    // distinguish "paid 2xx" from "free 2xx" from the response alone,
-    // so the daemon treats any success here as a settled call when the
-    // endpoint is in a paid catalog. Endpoints known to be free should
-    // not be routed through this path.
+    let response = outcome.response;
     let receipt_id = if response.status().is_success() {
-        match record_paid_call(ctx, payer, call).await {
-            Ok(id) => Some(id),
-            Err(e) => {
-                // The payment already happened; failing to record it is a
-                // serious accounting gap, so surface it loudly rather than
-                // swallowing.
-                warn!(error = %e, endpoint = call.endpoint, "x402 paid call succeeded but accounting failed");
-                return Err(e);
+        match outcome.requirement.as_ref() {
+            Some(requirement) => {
+                let payment = PaymentRecord {
+                    network: &requirement.network,
+                    asset: &requirement.asset,
+                    amount: &requirement.amount,
+                };
+                match record_paid_call(ctx, payer, call, &payment).await {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        // A payment header was sent and the resource returned
+                        // success; failing to record local accounting is a gap.
+                        warn!(error = %e, endpoint = call.endpoint, "x402 paid call succeeded but accounting failed");
+                        return Err(e);
+                    }
+                }
             }
+            None => None,
         }
     } else {
         None
@@ -532,10 +545,15 @@ mod tests {
                 per_call_cap: 100_000,
             },
             body: None,
-            amount: "80000".into(),
-            network: "solana:mainnet".into(),
-            asset: "usdc-sol".into(),
             credits: 8,
+        }
+    }
+
+    fn sample_payment<'a>() -> PaymentRecord<'a> {
+        PaymentRecord {
+            amount: "80000",
+            network: "solana:mainnet",
+            asset: "usdc-sol",
         }
     }
 
@@ -555,7 +573,9 @@ mod tests {
             issuer: &issuer,
         };
         let call = sample_call();
-        let receipt_id = record_paid_call(&ctx, &payer, &call).await.expect("record");
+        let receipt_id = record_paid_call(&ctx, &payer, &call, &sample_payment())
+            .await
+            .expect("record");
 
         let receipts = settlement.recent(10).await.unwrap();
         assert_eq!(receipts.len(), 1);
@@ -598,7 +618,7 @@ mod tests {
             budget: &budget,
             issuer: &issuer,
         };
-        let err = record_paid_call(&ctx, &payer, &sample_call())
+        let err = record_paid_call(&ctx, &payer, &sample_call(), &sample_payment())
             .await
             .expect_err("should abort");
         assert!(matches!(err, X402DaemonError::Budget(_)));
@@ -801,6 +821,117 @@ mod tests {
 
         assert!(settlement.recent(10).await.unwrap().is_empty());
         assert!(audit.recent(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pay_and_record_distinguishes_free_success_and_records_live_requirement() {
+        use wiremock::{
+            matchers::{header_exists, method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/free"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let challenge = serde_json::json!([{
+            "network": "solana:mainnet",
+            "asset": "usdc-sol",
+            "amount": "80000",
+            "amountUsdc": 0.08,
+            "payTo": "AnyPubkey",
+            "scheme": "exact"
+        }]);
+        Mock::given(method("GET"))
+            .and(path("/paid"))
+            .respond_with(ResponseTemplate::new(402).set_body_json(challenge))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/paid"))
+            .and(header_exists("x-payment"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let settlement = InMemorySettlement::new();
+        let audit = InMemoryAuditLog::new();
+        let budget = InMemoryLedger::new();
+        let issuer = agent(9);
+        let payer = agent(6);
+        budget.set_capacity(&payer, 1000).await.unwrap();
+        let ctx = SettlementContext {
+            settlement: &settlement,
+            audit: &audit,
+            budget: &budget,
+            issuer: &issuer,
+        };
+        let config = X402Config {
+            enabled: true,
+            ..Default::default()
+        };
+        let client = Client::new(reqwest::Client::new());
+        let capability = Capability {
+            provider: "xona".into(),
+            network: "solana:mainnet".into(),
+            asset: "usdc-sol".into(),
+            per_call_cap: 100_000,
+        };
+
+        let free_url = format!("{}/free", server.uri());
+        let free = PaidCall {
+            provider: "xona",
+            endpoint: &free_url,
+            method: Method::GET,
+            capability: capability.clone(),
+            body: None,
+            credits: 8,
+        };
+        let free_outcome = pay_and_record(
+            &ctx,
+            &config,
+            &client,
+            &covenant_x402::MockSigner,
+            &payer,
+            &free,
+        )
+        .await
+        .expect("free response");
+        assert!(free_outcome.receipt_id.is_none());
+        assert!(audit.recent(10).await.unwrap().is_empty());
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 1000);
+
+        let paid_url = format!("{}/paid", server.uri());
+        let paid = PaidCall {
+            provider: "xona",
+            endpoint: &paid_url,
+            method: Method::GET,
+            capability,
+            body: None,
+            credits: 8,
+        };
+        let paid_outcome = pay_and_record(
+            &ctx,
+            &config,
+            &client,
+            &covenant_x402::MockSigner,
+            &payer,
+            &paid,
+        )
+        .await
+        .expect("paid response");
+        assert!(paid_outcome.receipt_id.is_some());
+        let events = audit.recent(10).await.unwrap();
+        assert!(matches!(
+            &events[0].kind,
+            AuditKind::ExternalPaymentSettled { amount, .. } if amount == "80000"
+        ));
+        assert_eq!(budget.tokens_remaining(&payer).await.unwrap(), 992);
     }
 
     #[tokio::test]

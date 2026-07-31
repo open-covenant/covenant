@@ -1,13 +1,13 @@
-// /verify/[sha] — four-witness state for a Covenant commit, plus the skill-run
-// panel when the commit has an associated skill run. Verification runs in the
-// /api/verify/[sha] route handler this page reads.
+// /verify/[sha] reports four repository-artifact checks for a Covenant commit.
+// Solana manifests remain publisher reports until an exact RPC verifier is
+// wired in; the self-published verifier key is not an external trust root.
 
 import Link from "next/link";
-import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
 import { redactAuthor } from "@/lib/verify/author";
+import { internalSiteUrl } from "@/lib/internalSiteUrl";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,18 +53,9 @@ type VerifyPayload = {
 };
 
 async function fetchWitness(sha: string): Promise<VerifyPayload | null> {
-  // Resolve the API on the host this request arrived on — the app is reachable
-  // there whatever the port or deploy config, which avoids a wrong-port
-  // self-fetch (e.g. localhost:3000) on hosts that aren't Vercel.
-  const h = await headers();
-  const reqHost = h.get("x-forwarded-host") || h.get("host");
-  const proto = h.get("x-forwarded-proto") || "https";
-  const base = reqHost
-    ? `${proto}://${reqHost}`
-    : process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-  const res = await fetch(`${base}/api/verify/${encodeURIComponent(sha)}`, { cache: "no-store" });
+  // Never derive a server-side fetch target from Host or forwarded headers.
+  const url = internalSiteUrl(`/api/verify/${encodeURIComponent(sha)}`);
+  const res = await fetch(url, { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`verify api ${res.status}`);
   return (await res.json()) as VerifyPayload;
@@ -191,8 +182,9 @@ function SkillRunPanel({ run }: { run: SkillRun }) {
       </dl>
 
       <p className="mt-4 text-[12px] font-light leading-relaxed text-neutral-500">
-        When the anchors below land, the same witnesses that attest the commit also bind this
-        skill&apos;s content digest and signed actions — not a separate trust path.
+        The evidence bundle records the supplied skill digest and action events.
+        It does not prove that the log is complete or that a runtime enforced
+        the declared capabilities.
       </p>
     </div>
   );
@@ -223,11 +215,12 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
             /verify/{commit.shortSha}
           </p>
           <h1 className="text-balance text-[2.2rem] font-extralight uppercase leading-[1.1] tracking-[2px] text-white">
-            Four Witnesses Present
+            Four Artifact Checks
           </h1>
           {commit.predatesWitnessLoop && (
             <p className="mt-2 max-w-2xl border border-neutral-800 bg-neutral-950/60 px-4 py-3 text-[13px] font-light leading-relaxed text-amber-300">
-              This commit predates the witness loop. Anchors below are gray because the commit-memo + audit-chain + on-chain + verifier-signature pipeline was not yet active when this commit landed. Treat as historical record only.
+              This commit predates the witness loop. The checks below are gray;
+              treat this page as historical metadata only.
             </p>
           )}
           <p className="mt-2 text-[13px] font-light leading-relaxed text-neutral-400">
@@ -274,13 +267,17 @@ export default async function VerifyPage({ params }: { params: Promise<{ sha: st
         {!commit.predatesWitnessLoop && (
           <div className="mt-10 border border-neutral-800 bg-neutral-950/60 p-5">
             <h2 className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
-              Witness independence
+              Evidence scope
             </h2>
             <p className="mt-3 max-w-2xl text-[13px] font-light leading-relaxed text-neutral-400">
-              The audit hash chain is the only witness Covenant operates locally. The other three
-              are external — a Solana commit memo, the on-chain settlement anchor, and a
-              separately-keyed verifier — so tampering with the local chain cannot forge them.
-              Each anchor is checked on its own evidence, independently of the others.
+              This page recomputes a supplied hash chain and checks internal
+              consistency of a closed verifier statement. Its Solana cards
+              display mutable manifest assertions; they do not query or decode
+              chain state. The verifier key is published beside the artifact
+              rather than pinned by an external trust root. A green result means
+              only that the named local check passed; it does not prove semantic
+              correctness, completeness, runtime mediation, or W009/W011
+              enforcement.
             </p>
           </div>
         )}

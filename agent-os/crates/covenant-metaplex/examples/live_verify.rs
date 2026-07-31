@@ -1,8 +1,8 @@
-//! Live "Covenant Verified" check against mainnet DAS. No key, no Covenant
-//! infra — exactly what Metaplex's directory (or anyone) would run.
+//! Inspect configured-provider observations against the historical Covenant
+//! record envelope. This does not authenticate Core accounts or validate claims.
 //!   COVENANT_METAPLEX_DAS_URL=<helius mainnet> cargo run -p covenant-metaplex --example live_verify
 use covenant_metaplex::{
-    verify::default_authority, verify_agent, verify_attestation, DasClient, HttpDasClient,
+    inspect_agent_records, inspect_record, verify::default_authority, DasClient, HttpDasClient,
 };
 
 #[tokio::main]
@@ -14,13 +14,13 @@ async fn main() {
     let attestation = "7PEd79CG1hFUU9qeBnAKmyA77YWzckd572qsYdq3W3GH";
 
     let att = das.get_asset(attestation).await.expect("getAsset");
-    let av = verify_attestation(&att, default_authority());
-    println!("=== attestation {attestation} ===");
+    let av = inspect_record(&att, default_authority());
+    println!("=== provider record observation {attestation} ===");
     println!("{}", serde_json::to_string_pretty(&av).unwrap());
 
-    let agent_v = verify_agent(&das, agent, default_authority())
+    let agent_v = inspect_agent_records(&das, agent, default_authority())
         .await
-        .expect("verify_agent");
-    println!("=== agent {agent} ===");
+        .expect("inspect_agent_records");
+    println!("=== provider agent-record observation {agent} ===");
     println!("{}", serde_json::to_string_pretty(&agent_v).unwrap());
 }

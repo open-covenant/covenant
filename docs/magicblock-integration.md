@@ -1,12 +1,14 @@
 # MagicBlock integration
 
-Covenant adds accountability to agent work that runs in MagicBlock ephemeral
-rollups (ERs). An agent bonds a slashable stake on L1, every metered action folds
-into an on-chain provenance root, and a client can check that the ER it runs on is
-a TDX enclave with a valid attestation. Covenant runs alongside execution and
-never touches custody or payments.
+Covenant exposes optional evidence and policy components for work routed through
+MagicBlock ephemeral rollups (ERs). An operator can bond stake on L1 and submit
+receipt hashes to an onchain accumulator. A Covenant-operated monitor can also
+publish a signed statement about a TDX quote for an ER validator. These paths do
+not mediate every action, prove the meaning or completeness of submitted
+receipts, or independently establish that agent work ran inside the enclave.
+Covenant runs alongside execution and does not hold the user's payment keys.
 
-Live on mainnet, OtterSec-verified:
+Observed on mainnet; the settlement program has a public verified-build record:
 
 | What | Address |
 |---|---|
@@ -27,53 +29,56 @@ MagicBlock ER  ── runs agent work (gasless, optionally private/TEE)
    │          account's provenance_root, gaslessly, committed to L1 on undelegate
    ├─ bond  → register_agent + stake (CVNT); slash_for_actions burns the bond
    │          with the reason read from the on-chain provenance_root
-   └─ trust → verified-ER attestation (SAS) keyed to the validator identity,
-              kept fresh by a monitor that DCAP-verifies the TDX enclave
+   └─ quote → issuer-authored ER statement (SAS), keyed to the validator,
+              published after the monitor's DCAP verification path runs
 ```
 
 Per-action state (counters, provenance roots) lives in the ER, where it is hot and
 non-custodial. Custody, staking, slashing, and treasury stay on L1.
 
-## 1. Discover a Covenant-verified ER
+## 1. Read Covenant's ER observation
 
 The Magic Router returns a set of ERs, each identified by a validator pubkey.
-Covenant continuously DCAP-verifies the TDX enclave behind each ER that serves
-quotes and keeps a verified-ER attestation fresh in the Solana Attestation
-Service, keyed to that validator identity ([`services/er-registry`](../services/er-registry)).
-An agent picking where to run resolves it in one account read. No router change,
-no indexer.
+Covenant's monitor requests and locally DCAP-checks a quote from each configured
+ER, then writes an issuer-authored `er-verified` credential to the Solana
+Attestation Service, keyed to the router's validator address
+([`services/er-registry`](../services/er-registry)). A resolver can use that
+credential as a routing-policy input. The credential authenticates Covenant as
+issuer; an account read does not independently reproduce the DCAP verification.
 
 ```js
 import { Connection } from "@solana/web3.js";
 import { pickVerifiedEr } from "@covenant-org/verified-er";
 
 const { picked, routes } = await pickVerifiedEr(new Connection(RPC));
-// picked.fqdn      -> the verified ER endpoint to send transactions to
+// picked.fqdn      -> an ER endpoint selected under the resolver policy
 // picked.covenant  -> { status: "UpToDate", mrTd, verifiedAt, expiry, ... }
 ```
 
-The attestation carries the enclave's DCAP result (TCB status, `mr_td`) and is
-signed by an authorized signer of the Covenant credential. Attestations expire
-72 hours after verification and are renewed by the registry monitor — if an
-enclave stops verifying, its attestation lapses and resolvers fail closed to
-unverified. Validator identities do not rotate, so the key is stable. The
-resolver is [`@covenant-org/verified-er`](../packages/verified-er) (read-only,
-one dependency); any SAS client works too.
+The credential carries the monitor's DCAP result (TCB status, `mr_td`) and is
+signed by an authorized Covenant credential signer. Credentials expire after
+72 hours; the resolver rejects missing, expired, wrong-issuer, and unacceptable
+status records. Consumers still trust the monitor's implementation, issuer key,
+quote endpoint binding, configuration, and renewal process. The resolver is
+[`@covenant-org/verified-er`](../packages/verified-er) (read-only, one
+dependency); another SAS client can inspect the same issuer-authored bytes.
 
 ## 2. Meter work into an on-chain provenance root
 
-A credit account carries a `provenance_root`. Each `consume_credits(amount,
-receipt_hash)` folds the receipt into a hash-chain, gaslessly while the account is
-delegated to the ER, and commits to L1 on undelegate:
+A credit account carries a `provenance_root`. Each successful
+`consume_credits(amount, receipt_hash)` folds the caller-supplied receipt hash
+into a hash-chain while the account is delegated to the ER. The delegated state
+is intended to commit to L1 on undelegation:
 
 ```
 provenance_root = sha256(provenance_root || receipt_hash)   // genesis = 32 zero bytes
 ```
 
-The fold is deterministic, so anyone can recompute it from the receipts and compare
-against the on-chain root. Alter, add, or drop one action and the roots diverge.
-The receipt is yours to define: hash the work product (the intent and the agent's
-output) and the on-chain root becomes a record of what the agent did.
+The fold is deterministic, so someone with the exact ordered receipt hashes can
+recompute it and compare it with the observed account root. A match proves only
+that those hashes were folded in that order. The program does not prove that the
+bytes describe work, that an output was delivered, or that every runtime action
+was submitted.
 
 ## 3. Bond an agent, slash against its record
 
@@ -83,9 +88,10 @@ stake(amount, lock_until)                                   // slashable CVNT po
 slash_for_actions(amount)                                   // reason = on-chain provenance_root
 ```
 
-`slash_for_actions` reads the reason from the agent's on-chain `provenance_root`,
-via the seed-bound credit account (`[b"credits", operator]`). There is no
-caller-supplied reason to forge; the penalty is tied to the on-chain record.
+`slash_for_actions` reads its reason bytes from the agent's observed
+`provenance_root`, via the seed-bound credit account (`[b"credits", operator]`).
+The slash call cannot substitute a different reason directly, but the root was
+built from caller-supplied hashes and does not validate their semantics.
 
 ## 4. Verify the enclave
 
@@ -103,18 +109,19 @@ metering and slashing loop; agent-bound enclave attestation is not part of it ye
 
 ## Reference deployment
 
-Proven end to end with our own agent. The Covenant demo agent (Haiku 4.5) answered
-five prompts; each answer was metered on the verified ER (`mainnet-tee`), and the
-credit account's on-chain `provenance_root` equals the hash-chain of those exact
-answers. The agent holds a 5000 CVNT stake, of which 1000 was slashed against that
-record.
+A historical demo submitted hashes associated with five prompt/answer pairs to
+`mainnet-tee`. The observed credit-account root matched the supplied sequence,
+and a 1000 CVNT slash was recorded against a 5000 CVNT stake. This demonstrates
+the accumulator and slash path for those supplied hashes; it does not prove that
+the runtime mediated the prompts, that the answers came from the named model, or
+that the outputs were correct.
 
 | What | Value |
 |---|---|
 | Metered credit account | `DrawYGmdbQ7sULxzzczUqyZT2nmP8SZeYPuJzy6TNksj` |
-| Provenance root (of the real work) | `2769ee46c8c7dc49e38737c8a3c6d0f57a48553d9b2af08d0bc82cf80ce88933` |
-| Agent identity (PDA) | `G2bMkQkGXTPv2rDLZpXqbn5fAehLqKujXWidcJbYHPwj` |
-| Verified ER validator | `MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo` (mainnet-tee) |
+| Observed accumulator root | `2769ee46c8c7dc49e38737c8a3c6d0f57a48553d9b2af08d0bc82cf80ce88933` |
+| Demo agent record (PDA) | `G2bMkQkGXTPv2rDLZpXqbn5fAehLqKujXWidcJbYHPwj` |
+| ER validator subject | `MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo` (mainnet-tee) |
 
 The reproducible driver is in `examples/magicblock/verify.mjs`; the ER instructions
 themselves (`consume_credits`, `provenance_root`, `slash_for_actions`) live in
@@ -125,8 +132,9 @@ themselves (`consume_credits`, `provenance_root`, `slash_for_actions`) live in
 Beyond checking Covenant's own claims, these are capabilities any MagicBlock
 builder or agent can consume directly:
 
-- **[`@covenant-org/verified-er`](../packages/verified-er)** — pick a verified
-  ER and check provenance roots. Read-only, one dependency.
+- **[`@covenant-org/verified-er`](../packages/verified-er)** — select an ER under
+  the package's issuer, expiry, and TCB-status policy and compare accumulator
+  roots. Read-only, one dependency.
 - **[`@covenant-org/er-guard`](../packages/er-guard)** — session-reliability
   keeper: cooperatively undelegates your accounts on idle, max-lifetime, or a
   validator stall, and documents what dlp 3.1.0's permissionless
@@ -149,8 +157,9 @@ funds.
 cd examples/magicblock && npm install && node verify.mjs
 ```
 
-It resolves which ERs are Covenant-verified from the router, then recomputes the
-reference agent's provenance root from its answers and checks it against the chain.
+It resolves ERs with currently accepted Covenant credentials, then recomputes
+the reference accumulator root from supplied demo records and compares it with
+the observed account.
 
 For integration help, open an issue or reach out at
 [opencovenant.org/contact](https://opencovenant.org/contact).

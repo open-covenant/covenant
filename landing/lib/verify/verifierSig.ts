@@ -3,68 +3,186 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Witness } from "./types";
 
-// Anchor 4 — verifier-refuter signature. A separately-keyed ed25519 verifier
-// signs the audit root into attestations/<sha>.verifier.sig. Presence alone is
-// not sufficient: the light stays yellow until the signature is checked against
-// the published verifier pubkey, turns red if it fails to verify or the
-// verifier refuted the run, and is green only on a verified non-refutation.
-export function checkAnchor4VerifierSig(repoRoot: string, sha: string): Witness {
+const SCHEMA = "covenant.witness-verdict.v2";
+const DOMAIN = "covenant.witness-verdict.v2";
+
+type Refutation = { signed_event: string; after_untrusted: string };
+type VerifierStatement = {
+  schema: typeof SCHEMA;
+  domain: typeof DOMAIN;
+  audit_root_hex: string;
+  event_count: number;
+  verdict: "pass" | "refute";
+  refutations: Refutation[];
+  verifier_pubkey: string;
+};
+
+function object(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function exactKeys(
+  value: Record<string, unknown>,
+  expected: string[],
+): boolean {
+  return (
+    Object.keys(value).sort().join("\0") === [...expected].sort().join("\0")
+  );
+}
+
+function parseStatement(value: unknown): VerifierStatement | null {
+  const raw = object(value);
+  if (
+    !raw ||
+    !exactKeys(raw, [
+      "schema",
+      "domain",
+      "audit_root_hex",
+      "event_count",
+      "verdict",
+      "refutations",
+      "verifier_pubkey",
+    ]) ||
+    raw.schema !== SCHEMA ||
+    raw.domain !== DOMAIN ||
+    typeof raw.audit_root_hex !== "string" ||
+    !/^[0-9a-f]{64}$/.test(raw.audit_root_hex) ||
+    !Number.isSafeInteger(raw.event_count) ||
+    (raw.event_count as number) < 0 ||
+    (raw.verdict !== "pass" && raw.verdict !== "refute") ||
+    typeof raw.verifier_pubkey !== "string" ||
+    !Array.isArray(raw.refutations)
+  ) {
+    return null;
+  }
+  const refutations: Refutation[] = [];
+  for (const value of raw.refutations) {
+    const item = object(value);
+    if (
+      !item ||
+      !exactKeys(item, ["signed_event", "after_untrusted"]) ||
+      typeof item.signed_event !== "string" ||
+      typeof item.after_untrusted !== "string"
+    ) {
+      return null;
+    }
+    refutations.push({
+      signed_event: item.signed_event,
+      after_untrusted: item.after_untrusted,
+    });
+  }
+  if ((raw.verdict === "pass") !== (refutations.length === 0)) return null;
+  return {
+    schema: SCHEMA,
+    domain: DOMAIN,
+    audit_root_hex: raw.audit_root_hex,
+    event_count: raw.event_count as number,
+    verdict: raw.verdict,
+    refutations,
+    verifier_pubkey: raw.verifier_pubkey,
+  };
+}
+
+function canonical(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
+    .join(",")}}`;
+}
+
+// Anchor 4 validates a closed, signed statement that binds the root, verdict,
+// refutations, event count, and signing key. The key is published in the same
+// mutable repository, so a valid signature is self-consistent attribution, not
+// an externally pinned trust root or independent verdict.
+export function checkAnchor4VerifierSig(
+  repoRoot: string,
+  sha: string,
+): Witness {
   const sigPath = join(repoRoot, "attestations", `${sha}.verifier.sig`);
   if (!existsSync(sigPath)) {
     return {
       key: "verifier_sig",
-      label: "Verifier-Refuter signature",
+      label: "Self-published verifier statement",
       state: "yellow",
-      detail:
-        "No verifier signature published for this commit yet. A separately-keyed ed25519 verifier signs the audit root; until then this light reads yellow.",
+      detail: "No v2 verifier statement is published for this commit.",
     };
   }
   try {
-    const att = JSON.parse(readFileSync(join(repoRoot, "attestations", `${sha}.json`), "utf8")) as {
-      audit_root_hex?: string;
-      verdict?: string;
-      domain?: string;
-    };
-    const pubkeyPath = join(repoRoot, "landing", "public", "witness", "verifier-pubkey.txt");
-    if (!att.audit_root_hex || !existsSync(pubkeyPath)) {
+    const att = JSON.parse(
+      readFileSync(join(repoRoot, "attestations", `${sha}.json`), "utf8"),
+    ) as Record<string, unknown>;
+    const pubkeyPath = join(
+      repoRoot,
+      "landing",
+      "public",
+      "witness",
+      "verifier-pubkey.txt",
+    );
+    if (!existsSync(pubkeyPath)) {
       return {
         key: "verifier_sig",
-        label: "Verifier-Refuter signature",
+        label: "Self-published verifier statement",
         state: "yellow",
-        detail: "Verifier signature present but the published pubkey or audit root is missing.",
+        detail:
+          "Verifier signature present but its self-published key is missing.",
       };
     }
     const pubkey = readFileSync(pubkeyPath, "utf8").trim();
     const sig = readFileSync(sigPath, "utf8").trim();
-    const domain = att.domain || "covenant.witness.v1";
-    const message = Buffer.from(`${domain}\n${att.audit_root_hex}`, "utf8");
-    const key = createPublicKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", x: pubkey } });
+    const statement = parseStatement(att.verifier_statement);
+    const steps = Array.isArray(att.steps) ? att.steps : null;
+    if (
+      !statement ||
+      att.audit_root_hex !== statement.audit_root_hex ||
+      att.event_count !== statement.event_count ||
+      !steps ||
+      steps.length !== statement.event_count ||
+      statement.verifier_pubkey !== pubkey
+    ) {
+      return {
+        key: "verifier_sig",
+        label: "Self-published verifier statement",
+        state: "red",
+        detail:
+          "Verifier artifact is legacy or malformed, or its signed statement does not bind the published root, event count, steps, and self-published key.",
+      };
+    }
+    const message = Buffer.from(`${DOMAIN}\n${canonical(statement)}`, "utf8");
+    const key = createPublicKey({
+      format: "jwk",
+      key: { kty: "OKP", crv: "Ed25519", x: pubkey },
+    });
     if (!edVerify(null, message, key, Buffer.from(sig, "base64url"))) {
       return {
         key: "verifier_sig",
-        label: "Verifier-Refuter signature",
+        label: "Self-published verifier statement",
         state: "red",
-        detail: "Verifier signature did not verify against the published verifier pubkey.",
+        detail:
+          "The closed v2 statement did not verify against its self-published key.",
       };
     }
-    if (att.verdict === "refute") {
+    if (statement.verdict === "refute") {
       return {
         key: "verifier_sig",
-        label: "Verifier-Refuter signature",
+        label: "Self-published verifier statement",
         state: "red",
-        detail: `Verifier refuted this run (signed by ${pubkey.slice(0, 12)}…): a signed action causally followed untrusted on-chain input.`,
+        detail: `The signed v2 statement reports ${statement.refutations.length} configured event-order refutation(s) under self-published key ${pubkey.slice(0, 12)}….`,
       };
     }
     return {
       key: "verifier_sig",
-      label: "Verifier-Refuter signature",
-      state: "green",
-      detail: `Audit root signed by an independent verifier (${pubkey.slice(0, 12)}…), no refutation. Check it yourself against landing/public/witness/verifier-pubkey.txt.`,
+      label: "Self-published verifier statement",
+      state: "yellow",
+      detail: `The closed v2 statement is internally consistent and signed under self-published key ${pubkey.slice(0, 12)}…. Because the key ships beside the artifact, this is attribution—not an externally pinned trust root, semantic validation, completeness proof, runtime mediation, or W009/W011 enforcement.`,
     };
   } catch {
     return {
       key: "verifier_sig",
-      label: "Verifier-Refuter signature",
+      label: "Self-published verifier statement",
       state: "red",
       detail: "Verifier signature or pubkey unreadable.",
     };

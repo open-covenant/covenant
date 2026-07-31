@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencovenant.org/schemas/preflight-receipt-v1.schema.json",
+  "title": "Covenant Advisory Preflight Receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "intent",
+    "intent_sha256",
+    "policy_sha256",
+    "outcome",
+    "reason_codes",
+    "evaluated_at_ms",
+    "enforcement"
+  ],
+  "properties": {
+    "schema": { "const": "covenant.preflight-receipt.v1" },
+    "intent": { "$ref": "payment-intent-v1.schema.json" },
+    "intent_sha256": { "$ref": "#/$defs/sha256" },
+    "policy_sha256": { "$ref": "#/$defs/sha256" },
+    "outcome": { "enum": ["allow", "deny"] },
+    "reason_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "policy_invalid",
+          "unsupported_x402_version",
+          "digest_invalid",
+          "payment_identifier_invalid",
+          "resource_not_allowed",
+          "network_not_allowed",
+          "mint_not_allowed",
+          "token_program_not_allowed",
+          "decimals_mismatch",
+          "funder_mismatch",
+          "fee_payer_not_allowed",
+          "pay_to_mismatch",
+          "source_ata_mismatch",
+          "destination_ata_mismatch",
+          "solana_address_invalid",
+          "amount_invalid",
+          "amount_mismatch",
+          "amount_exceeds_limit",
+          "memo_invalid",
+          "compute_budget_exceeded",
+          "time_window_invalid",
+          "not_yet_valid",
+          "expired"
+        ]
+      }
+    },
+    "evaluated_at_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "enforcement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "decision_consumed_by_signer",
+        "signing_key_isolated",
+        "durable_single_use"
+      ],
+      "properties": {
+        "mode": { "const": "advisory" },
+        "decision_consumed_by_signer": { "const": false },
+        "signing_key_isolated": { "const": false },
+        "durable_single_use": { "const": false }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

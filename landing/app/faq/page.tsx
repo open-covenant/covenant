@@ -53,7 +53,7 @@ const FAQ: { id: string; q: string; a: string }[] = [
   {
     id: "multi-chain",
     q: "Does Covenant work across chains?",
-    a: "Yes. $CVNT is a single Solana mint that never bridges, but Covenant's trust layer projects onto Base mainnet: the foundation agent is registered under ERC-8004, a bond-receipt verifier and an EAS reputation schema are deployed, and agents resolve through an ENS CCIP-Read gateway, each as a signed statement any EVM contract verifies with one ecrecover. Per-call fees and bonds are always chain-local USDC. On-chain reputation writes and funded bonds are registered but not yet exercised.",
+    a: "Selected signed evidence is projected to Base mainnet while $CVNT remains a single Solana mint. The foundation agent has an ERC-8004 registration, and a bond-receipt verifier, EAS score schema, and ENS CCIP-Read gateway are deployed. ecrecover authenticates the configured publisher and signed bytes; it does not establish claim truth. Per-call fees and bonds are chain-local USDC. On-chain score writes and funded bonds are not yet exercised.",
   },
   {
     id: "eight-primitives",

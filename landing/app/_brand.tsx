@@ -20,9 +20,13 @@ export const DOCS_PUBLISHED_DATE = "2026-05-13";
 // Everything else (about, blog, roadmap, partners, stake, ...) lives in the
 // footer so the header stays focused.
 export const NAV_LINKS = [
-  { label: "guard", href: "/guard", external: false as const },
-  { label: "trading", href: "/trading", external: false as const },
-  { label: "docs", href: "https://docs.opencovenant.org", external: true as const },
+  { label: "evidence", href: "/guard", external: false as const },
+  { label: "escrow", href: "/robinhood", external: false as const },
+  {
+    label: "docs",
+    href: "https://docs.opencovenant.org",
+    external: true as const,
+  },
   { label: "buy", href: "/token", external: false as const },
 ];
 
@@ -54,9 +58,13 @@ export const FOOTER_COLUMNS: { title: string; links: FooterColumnLink[] }[] = [
   {
     title: "Product",
     links: [
-      { label: "Guard", href: "/guard" },
-      { label: "Trading", href: "/trading" },
-      { label: "Sandbox", href: "https://sandbox.opencovenant.org", external: true },
+      { label: "Evidence", href: "/guard" },
+      { label: "Escrow", href: "/robinhood" },
+      {
+        label: "Sandbox",
+        href: "https://sandbox.opencovenant.org",
+        external: true,
+      },
       { label: "Agents", href: "/agents" },
       { label: "Arena", href: "/arena" },
       { label: "Stake", href: "https://stake.opencovenant.org", external: true },

@@ -67,8 +67,8 @@ const TILES = [
   },
   {
     href: "/multichain",
-    title: "Multi-chain trust",
-    body: "How identity, reputation, and bond receipts project onto Base as signed data any EVM verifies with one ecrecover, while $CVNT stays Solana-only.",
+    title: "Multi-chain signed evidence",
+    body: "How selected registrations, scores, and receipt statements project onto Base, where ecrecover authenticates the publisher and bytes—not claim truth.",
   },
   {
     href: "/provenance",
@@ -141,15 +141,15 @@ export default function DocsIndexPage() {
         manifest-level requirements, trusted-local fail-closed behavior,
         daemon-selectable Linux gVisor configuration, runtime-level gVisor
         runner work, live Linux sandbox coverage, and a documented Linux runner
-        setup. Covenant&apos;s trust layer is live on Base mainnet (ERC-8004
-        identity, a bond-receipt verifier, an EAS reputation schema, and ENS
-        CCIP-Read resolution), projecting Solana-canonical records as signed data
-        any EVM contract verifies with one <code>ecrecover</code> while $CVNT
-        stays a single Solana mint. Distributed settlement, cross-chain
-        enforcement, installers, additional-language SDK
+        setup. Selected signed-evidence components are deployed on Base mainnet:
+        an ERC-8004 registration, bond-receipt verifier, EAS score schema, and
+        ENS CCIP-Read resolution. <code>ecrecover</code> authenticates a
+        configured publisher and the signed bytes; it does not establish the
+        underlying claim. $CVNT stays a single Solana mint. Distributed
+        settlement, cross-chain enforcement, installers, additional-language SDK
         publication (Python and Rust-crate), release-scope and audit-root
-        signing, and transparency publication are
-        tracked on <a href="https://opencovenant.org/roadmap">the roadmap</a>.
+        signing, and transparency publication are tracked on{" "}
+        <a href="https://opencovenant.org/roadmap">the roadmap</a>.
       </p>
 
       <p>

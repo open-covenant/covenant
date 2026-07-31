@@ -1,9 +1,11 @@
-// Independent, separately-keyed verifier for a Covenant run.
+// Separately keyed verifier for a supplied Covenant run log.
 //
 // It reads a run's audit log, recomputes the tamper-evident root from the raw
-// event lines, runs the W011 refutation scan, and signs the root with a key
-// distinct from the daemon's. It writes the four artifacts the /verify page
-// checks. Run it as its own process, not inside the daemon.
+// event lines, runs a configured event-lineage heuristic, and signs the root
+// with a key distinct from the daemon's. Separate keys improve attribution but
+// do not make this an independent source of truth. The scan does not establish
+// semantic correctness, log completeness, runtime mediation, or W009/W011
+// enforcement. It writes the artifacts consumed by the /verify page.
 //
 //   node verify-run.mjs --home <COVENANT_HOME> --sha <commit> --repo <repo-root>
 //
@@ -21,7 +23,13 @@ import {
 } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { recomputeRoot, scanRefutations, buildSkillManifest } from "./verify-lib.mjs";
+import {
+  buildSkillManifest,
+  buildVerifierStatement,
+  recomputeRoot,
+  scanRefutations,
+  verifierMessage,
+} from "./verify-lib.mjs";
 
 const argv = process.argv.slice(2);
 const arg = (name) => {
@@ -36,8 +44,6 @@ if (!home || !sha || !repo) {
   process.exit(2);
 }
 
-const DOMAIN = "covenant.witness.v1";
-
 const lines = readFileSync(join(home, "audit", "events.jsonl"), "utf8")
   .split("\n")
   .filter((l) => l.length > 0);
@@ -49,12 +55,14 @@ const events = lines.map((l) => JSON.parse(l));
 // Skill-run manifest, pulled from the run's own events.
 const manifest = buildSkillManifest(events);
 
-// W011 refutation: a signed skill action that causally follows an untrusted
-// on-chain read, with no skill-context reset between them, is refutable.
+// Event-lineage heuristic over the supplied log: flag a signed skill action
+// ordered after an untrusted-input event for the same issuer unless a context
+// reset appears between them. This is not a semantic or causal proof.
 const { verdict, refutations } = scanRefutations(events);
 
-// Verifier identity: an ed25519 key the daemon does not hold. Stored as a PEM
-// private key; the raw public key is published (base64url) for anyone to check.
+// Verifier identity: a separately stored ed25519 key. Key separation allows a
+// reader to attribute this signature to a different key; it is not evidence of
+// organizational, input, model, or runtime independence.
 const keyPath = join(home, "identity-verifier", "ed25519.pem");
 let privKey;
 if (existsSync(keyPath)) {
@@ -67,7 +75,14 @@ if (existsSync(keyPath)) {
 }
 const verifierPubkey = createPublicKey(privKey).export({ format: "jwk" }).x; // raw 32 bytes, base64url
 
-const message = Buffer.from(`${DOMAIN}\n${root}`, "utf8");
+const verifierStatement = buildVerifierStatement(
+  root,
+  lines.length,
+  verdict,
+  refutations,
+  verifierPubkey,
+);
+const message = verifierMessage(verifierStatement);
 const sig = edSign(null, message, privKey).toString("base64url");
 
 const write = (p, content) => {
@@ -76,7 +91,7 @@ const write = (p, content) => {
 };
 write(
   join(repo, "attestations", `${sha}.json`),
-  `${JSON.stringify({ audit_root_hex: root, event_count: lines.length, steps: lines, verdict, refutations, verifier_pubkey: verifierPubkey, domain: DOMAIN }, null, 2)}\n`,
+  `${JSON.stringify({ audit_root_hex: root, event_count: lines.length, steps: lines, verifier_statement: verifierStatement }, null, 2)}\n`,
 );
 write(join(repo, "attestations", `${sha}.verifier.sig`), `${sig}\n`);
 write(join(repo, "landing", "public", "witness", "verifier-pubkey.txt"), `${verifierPubkey}\n`);

@@ -1,33 +1,23 @@
-//! Daemon-side escrow completion proofs for an external marketplace escrow
-//! (e.g. Orbserv's OrbMarket holding funds in OrbWallet on Base).
+//! Experimental daemon-signed statements for an external marketplace escrow.
 //!
-//! Covenant is the trust layer. A hirer locks funds in escrow against a job,
-//! the worker runs under Covenant, and when the work is done the escrow asks
-//! the daemon to prove completion. The daemon does not take the caller's word
-//! that the work happened: it looks the job up in its own audit chain, derives
-//! the result hash and validation outcome from the worker's actual run, and
-//! signs a proof carrying those derived facts plus the escrow context. The
-//! escrow verifies the signature against the daemon's published pubkey and
-//! releases funds to the worker when `validation_passed`. Covenant holds no
-//! funds and moves none — it produces the release signal and records it.
+//! The result hash and `status == "ok"` observation come from a local
+//! `IntentDispatched` audit row. Escrow id, hirer, worker, amount, asset,
+//! network, and provider come from the authenticated caller. The daemon does
+//! not bind those fields to a prior lock, validate work quality, or verify a
+//! payout onchain. A consumer must pin the daemon key, match every
+//! caller-supplied field against its own precommit, and make a separate release
+//! decision. This statement is not a release authorization.
 //!
-//! Because the facts are derived from Covenant's own records rather than the
-//! request, it is safe for the hirer wallet itself to call prove: it cannot
-//! forge a result the audit chain does not show. A job with no run in the
-//! chain is denied; a job whose run failed is attested with
-//! `validation_passed = false`, so the escrow simply does not release.
-//!
-//! After releasing and executing the transfer, the escrow reports it back
-//! ([`record_escrow_release`]) so the payout joins the proof in the audit
-//! chain, idempotent on `decision_id`.
+//! The legacy release-reporting endpoint is parked. Covenant cannot safely
+//! turn caller-supplied payout fields into settlement or audit facts without
+//! independently binding them to an authorization and an onchain transfer.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use covenant_audit::{AuditEvent, AuditKind, AuditLog};
 use covenant_identity::LocalIdentity;
-use covenant_settlement::Settlement;
-use covenant_types::{AgentId, ResourceKind, SettlementReceipt};
+use covenant_types::AgentId;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 use uuid::Uuid;
@@ -49,9 +39,14 @@ pub enum EscrowError {
     NoCompletion(Uuid),
     #[error("audit: {0}")]
     Audit(String),
-    #[error("settlement: {0}")]
-    Settlement(String),
+    #[error(
+        "escrow release reporting is disabled until payout facts are independently verified and bound to the completion statement"
+    )]
+    ReleaseReportingDisabled,
 }
+
+/// Domain prefix for the exact bytes signed in a completion-statement bundle.
+pub const ESCROW_COMPLETION_DOMAIN: &str = "covenant.escrow-completion.v1\n";
 
 fn epoch_ms() -> u64 {
     SystemTime::now()
@@ -60,11 +55,8 @@ fn epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// The escrow context an authenticated caller reports for a job it wants
-/// proven. The completion facts (result hash, validation) are NOT taken from
-/// here — the daemon derives them from the worker's run — so this carries only
-/// what Covenant cannot know on its own: which escrow, which payee, and the
-/// payment rail, all recorded into the proof and the audit row.
+/// Escrow context reported by the authenticated caller. None of these fields is
+/// matched to a daemon-owned precommit.
 pub struct ProveRequest {
     pub escrow_id: String,
     /// The Covenant job/intent id the worker ran under, as a uuid string.
@@ -96,6 +88,8 @@ pub struct CompletionProof {
     pub network: String,
     pub provider: String,
     pub result_hash_hex: String,
+    /// True only when the newest local dispatch row has status `ok`. This is
+    /// not independent validation of completion, delivery, or quality.
     pub validation_passed: bool,
     /// Audit chain root at proof time, tying the proof to Covenant's
     /// tamper-evident work history. Excludes the proof's own row, which the
@@ -105,10 +99,11 @@ pub struct CompletionProof {
 }
 
 /// A signed [`CompletionProof`]. `proof_blob_b64` is the single opaque token an
-/// escrow stores and verifies: base64 of `{proof_json, signature_b58,
-/// signer_pubkey_b58}`. To verify: base64-decode, parse, then
-/// `ed25519_verify(signer_pubkey_b58, proof_json bytes, signature_b58)` and
-/// trust the parsed `proof_json` fields.
+/// escrow stores and verifies: base64 of `{domain, proof_json, signature_b58,
+/// signer_pubkey_b58}`. A verifier must require [`ESCROW_COMPLETION_DOMAIN`],
+/// compare `signer_pubkey_b58` with a separately pinned key, verify the
+/// signature over `domain || proof_json`, then match the parsed caller-supplied
+/// context with its own precommit.
 #[derive(Debug, Clone)]
 pub struct SignedCompletionProof {
     pub proof: CompletionProof,
@@ -134,8 +129,8 @@ pub struct ProveContext<'a> {
     pub issuer: &'a AgentId,
 }
 
-/// The result hash and validation outcome of a job's run, as the audit chain
-/// recorded it. `validation_passed` is whether the dispatch finished `ok`.
+/// The result hash and status observation of a local dispatch row.
+/// `validation_passed` is whether the recorded status equals `ok`.
 /// Scans newest-first so a re-run's latest outcome wins.
 fn derive_completion(events: &[AuditEvent], job_id: Uuid) -> Option<(String, bool)> {
     events.iter().rev().find_map(|e| match &e.kind {
@@ -149,14 +144,13 @@ fn derive_completion(events: &[AuditEvent], job_id: Uuid) -> Option<(String, boo
     })
 }
 
-/// Proves a job's completion from Covenant's own records and signs the result.
+/// Signs a local dispatch observation plus caller-supplied escrow context.
 ///
-/// Looks the job up in the audit chain, derives the result hash and validation
-/// outcome from the worker's run, binds them with the escrow context and the
-/// chain root, signs the envelope, and writes one
+/// Looks the job up in the audit chain, derives the result hash and status,
+/// copies the caller's unverified escrow context, signs the envelope, and writes one
 /// [`AuditKind::EscrowCompletionProven`] row carrying the proof and its
-/// signature. A job with no run is denied. If the audit write fails the proof
-/// is not returned: a signal the chain did not record must not release funds.
+/// signature. A job with no run is denied. If the audit write fails, the
+/// statement is not returned. The result is not sufficient to release funds.
 pub async fn prove_completion(
     ctx: &ProveContext<'_>,
     config: &EscrowConfig,
@@ -169,7 +163,7 @@ pub async fn prove_completion(
     let job_id =
         Uuid::parse_str(&req.job_id).map_err(|_| EscrowError::BadJobId(req.job_id.clone()))?;
 
-    // Derive the completion facts from our own audit chain, not the request.
+    // Derive only the result hash and dispatch status from the audit chain.
     let events = ctx
         .audit
         .recent(usize::MAX)
@@ -204,10 +198,12 @@ pub async fn prove_completion(
     // stable canonical form for both the signer and the verifier.
     let proof_json = serde_json::to_string(&proof)
         .map_err(|e| EscrowError::Audit(format!("serialize proof: {e}")))?;
-    let signature = ctx.identity.sign(proof_json.as_bytes());
+    let signed_message = format!("{ESCROW_COMPLETION_DOMAIN}{proof_json}");
+    let signature = ctx.identity.sign(signed_message.as_bytes());
     let signature_b58 = bs58::encode(signature.to_bytes()).into_string();
     let signer_pubkey_b58 = bs58::encode(ctx.identity.pubkey_bytes()).into_string();
     let bundle = serde_json::json!({
+        "domain": ESCROW_COMPLETION_DOMAIN,
         "proof_json": proof_json,
         "signature_b58": signature_b58,
         "signer_pubkey_b58": signer_pubkey_b58,
@@ -256,10 +252,10 @@ pub async fn prove_completion(
     })
 }
 
-/// Facts an escrow reports after it released funds against a proof.
+/// Caller-supplied fields retained for the parked release request's wire shape.
 pub struct ReleaseFacts {
-    /// The `decision_id` from the [`CompletionProof`] this release acted on
-    /// (its `proof_id`). Joins the payout back to the proof.
+    /// Intended to reference a [`CompletionProof`], but not trusted or joined
+    /// while release reporting is disabled.
     pub decision_id: Uuid,
     pub escrow_id: String,
     pub hirer_address: String,
@@ -272,99 +268,18 @@ pub struct ReleaseFacts {
     pub tx_sig: Option<String>,
 }
 
-/// Subsystem handles borrowed for the duration of one release record.
-pub struct ReleaseContext<'a> {
-    pub settlement: &'a dyn Settlement,
-    pub audit: &'a dyn AuditLog,
-    pub issuer: &'a AgentId,
-}
-
-/// Records that an escrow released funds against a completion proof: a
-/// [`SettlementReceipt`] and one [`AuditKind::EscrowReleased`] row sharing the
-/// receipt id and carrying the originating `decision_id`. Returns the epoch-ms
-/// timestamp the payout was recorded at. Covenant custodies nothing, so this
-/// moves no funds and debits no budget; it closes the loop the proof opened by
-/// joining the payout to the proof in the audit chain.
+/// Rejects the legacy release-reporting path without writing settlement,
+/// accounting, or audit state.
 ///
-/// Idempotent on `decision_id`: an escrow that retries a release report (its
-/// success response was lost) joins the original receipt instead of writing a
-/// duplicate row, mirroring `spend_authz::record_spend_settlement`.
-pub async fn record_escrow_release(
-    ctx: &ReleaseContext<'_>,
-    config: &EscrowConfig,
-    payee: &AgentId,
-    facts: &ReleaseFacts,
-) -> Result<u64, EscrowError> {
+/// The request fields are caller supplied. Until Covenant can independently
+/// verify a payout and atomically bind it to a prior authorization, recording
+/// them would convert an assertion into trusted state.
+pub fn record_escrow_release(config: &EscrowConfig) -> Result<u64, EscrowError> {
     if !config.enabled {
         return Err(EscrowError::Disabled);
     }
 
-    let now = epoch_ms();
-
-    if ctx
-        .audit
-        .released_receipt_for(facts.decision_id)
-        .await
-        .map_err(|e| EscrowError::Audit(e.to_string()))?
-        .is_some()
-    {
-        debug!(
-            decision_id = %facts.decision_id,
-            "escrow release already recorded; returning idempotently"
-        );
-        return Ok(now);
-    }
-
-    let receipt_id = Uuid::new_v4();
-
-    ctx.settlement
-        .record(SettlementReceipt {
-            id: receipt_id,
-            payer: payee.clone(),
-            resource: ResourceKind::Tool,
-            memory_record_id: None,
-            credits_consumed: 0,
-            settled_at: now,
-            chain: None,
-            cluster: None,
-            batch_id: None,
-            merkle_root: None,
-            tx_sig: facts.tx_sig.clone(),
-            slot: None,
-            confirmed_at: None,
-            onchain_sig: None,
-        })
-        .await
-        .map_err(|e| EscrowError::Settlement(e.to_string()))?;
-
-    ctx.audit
-        .record(AuditEvent {
-            id: Uuid::new_v4(),
-            timestamp_ms: now,
-            issuer: ctx.issuer.clone(),
-            kind: AuditKind::EscrowReleased {
-                decision_id: facts.decision_id,
-                receipt_id,
-                escrow_id: facts.escrow_id.clone(),
-                hirer_address: facts.hirer_address.clone(),
-                worker_address: facts.worker_address.clone(),
-                amount: facts.amount.clone(),
-                asset: facts.asset.clone(),
-                network: facts.network.clone(),
-                provider: facts.provider.clone(),
-                tx_sig: facts.tx_sig.clone(),
-            },
-        })
-        .await
-        .map_err(|e| EscrowError::Audit(e.to_string()))?;
-
-    debug!(
-        provider = facts.provider,
-        %receipt_id,
-        decision_id = %facts.decision_id,
-        "recorded escrow release"
-    );
-    Ok(now)
+    Err(EscrowError::ReleaseReportingDisabled)
 }
 
 #[cfg(test)]
@@ -446,10 +361,18 @@ mod tests {
             .decode(&signed.proof_blob_b64)
             .unwrap();
         let bundle: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        let domain = bundle["domain"].as_str().unwrap();
+        assert_eq!(domain, ESCROW_COMPLETION_DOMAIN);
         let proof_json = bundle["proof_json"].as_str().unwrap();
         let sig = bundle["signature_b58"].as_str().unwrap();
         let pk = bundle["signer_pubkey_b58"].as_str().unwrap();
-        verify_b58(pk, proof_json.as_bytes(), sig).expect("blob signature must verify");
+        let signed_message = format!("{domain}{proof_json}");
+        verify_b58(pk, signed_message.as_bytes(), sig).expect("blob signature must verify");
+        let wrong_domain = format!("covenant.other.v1\n{proof_json}");
+        assert!(
+            verify_b58(pk, wrong_domain.as_bytes(), sig).is_err(),
+            "the completion signature must not verify under another protocol domain"
+        );
         let parsed: CompletionProof = serde_json::from_str(proof_json).unwrap();
         assert_eq!(parsed, signed.proof);
 
@@ -518,80 +441,24 @@ mod tests {
         assert!(matches!(err, EscrowError::Disabled));
     }
 
-    fn release_facts(decision_id: Uuid) -> ReleaseFacts {
-        ReleaseFacts {
-            decision_id,
-            escrow_id: "escrow_xyz".into(),
-            hirer_address: HIRER.into(),
-            worker_address: WORKER.into(),
-            amount: "10000000".into(),
-            asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e".into(),
-            network: "eip155:84532".into(),
-            provider: "orbserv".into(),
-            tx_sig: Some("0xpayout".into()),
-        }
-    }
-
     #[tokio::test]
-    async fn release_records_receipt_and_audits() {
+    async fn release_reporting_is_parked_without_writes() {
+        use covenant_settlement::Settlement as _;
+
         let settlement = covenant_settlement::InMemorySettlement::new();
         let audit = InMemoryAuditLog::new();
-        let issuer = agent(9);
-        let payee = agent(3);
-        let decision_id = Uuid::from_u128(0xbeef);
-        let ctx = ReleaseContext {
-            settlement: &settlement,
-            audit: &audit,
-            issuer: &issuer,
-        };
-        let recorded_at =
-            record_escrow_release(&ctx, &enabled(), &payee, &release_facts(decision_id))
-                .await
-                .expect("release");
-        assert!(recorded_at > 0);
+        let err =
+            record_escrow_release(&enabled()).expect_err("release reporting must stay parked");
 
-        let receipts = settlement.recent(10).await.unwrap();
-        assert_eq!(receipts.len(), 1);
-        assert_eq!(
-            receipts[0].credits_consumed, 0,
-            "escrow release debits no budget"
-        );
-        assert_eq!(receipts[0].tx_sig.as_deref(), Some("0xpayout"));
-
-        match &audit.recent(10).await.unwrap()[0].kind {
-            AuditKind::EscrowReleased {
-                decision_id: did,
-                tx_sig,
-                escrow_id,
-                ..
-            } => {
-                assert_eq!(*did, decision_id);
-                assert_eq!(tx_sig.as_deref(), Some("0xpayout"));
-                assert_eq!(escrow_id, "escrow_xyz");
-            }
-            other => panic!("unexpected audit kind: {other:?}"),
-        }
+        assert!(matches!(err, EscrowError::ReleaseReportingDisabled));
+        assert!(settlement.recent(10).await.unwrap().is_empty());
+        assert!(audit.recent(10).await.unwrap().is_empty());
     }
 
-    #[tokio::test]
-    async fn release_is_idempotent_on_decision_id() {
-        let settlement = covenant_settlement::InMemorySettlement::new();
-        let audit = InMemoryAuditLog::new();
-        let issuer = agent(9);
-        let payee = agent(3);
-        let decision_id = Uuid::from_u128(0xbeef);
-        let ctx = ReleaseContext {
-            settlement: &settlement,
-            audit: &audit,
-            issuer: &issuer,
-        };
-        record_escrow_release(&ctx, &enabled(), &payee, &release_facts(decision_id))
-            .await
-            .unwrap();
-        record_escrow_release(&ctx, &enabled(), &payee, &release_facts(decision_id))
-            .await
-            .unwrap();
-        assert_eq!(settlement.recent(10).await.unwrap().len(), 1, "one receipt");
-        assert_eq!(audit.recent(10).await.unwrap().len(), 1, "one released row");
+    #[test]
+    fn release_reporting_respects_the_global_surface_switch() {
+        let err = record_escrow_release(&EscrowConfig::default()).expect_err("disabled surface");
+
+        assert!(matches!(err, EscrowError::Disabled));
     }
 }

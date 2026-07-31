@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencovenant.org/schemas/payment-intent-v1.schema.json",
+  "title": "Covenant Payment Intent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "protocol",
+    "request",
+    "payment",
+    "observed_at_ms",
+    "expires_at_ms"
+  ],
+  "properties": {
+    "schema": { "const": "covenant.payment-intent.v1" },
+    "protocol": { "$ref": "#/$defs/protocol" },
+    "request": { "$ref": "#/$defs/request" },
+    "payment": { "$ref": "#/$defs/payment" },
+    "observed_at_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "expires_at_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    }
+  },
+  "$defs": {
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "scheme",
+        "accepted_sha256",
+        "payment_identifier"
+      ],
+      "properties": {
+        "name": { "const": "x402" },
+        "version": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "scheme": { "const": "exact" },
+        "accepted_sha256": { "type": "string" },
+        "payment_identifier": { "type": "string" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "method", "body_sha256"],
+      "properties": {
+        "url": { "type": "string" },
+        "method": { "type": "string" },
+        "body_sha256": { "type": "string" }
+      }
+    },
+    "payment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network",
+        "funder",
+        "fee_payer",
+        "mint",
+        "token_program",
+        "required_amount",
+        "transfer_amount",
+        "decimals",
+        "pay_to",
+        "source_ata",
+        "destination_ata",
+        "memo",
+        "compute_unit_limit",
+        "compute_unit_price_micro_lamports",
+        "transaction_profile"
+      ],
+      "properties": {
+        "network": { "type": "string" },
+        "funder": { "type": "string" },
+        "fee_payer": { "type": "string" },
+        "mint": { "type": "string" },
+        "token_program": { "type": "string" },
+        "required_amount": { "type": "string" },
+        "transfer_amount": { "type": "string" },
+        "decimals": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "pay_to": { "type": "string" },
+        "source_ata": { "type": "string" },
+        "destination_ata": { "type": "string" },
+        "memo": { "type": "string" },
+        "compute_unit_limit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "compute_unit_price_micro_lamports": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "transaction_profile": { "const": "sponsored_v0_static_v1" }
+      }
+    }
+  }
+}

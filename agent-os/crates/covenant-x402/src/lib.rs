@@ -31,16 +31,22 @@ pub mod evm;
 pub mod flow;
 mod http;
 pub mod orbit;
+pub mod preflight;
 pub mod signer;
 pub mod types;
 
 #[cfg(feature = "solana")]
 pub mod solana;
 
-pub use client::{http_client, Client};
+pub use client::{http_client, Client, PaidRequestOutcome};
 pub use evm::{EvmSigner, USDC_BASE_MAINNET, USDC_BASE_SEPOLIA};
 pub use flow::PaidRequest;
 pub use orbit::{Catalog, OrbitClient, Pagination, RegistryEntry, RegistryResponse};
+pub use preflight::{
+    evaluate_preflight, payment_intent_hash, payment_policy_hash, verify_preflight_receipt,
+    AdvisoryEnforcementV1, PaymentIntentV1, PaymentPolicyV1, PreflightError, PreflightOutcome,
+    PreflightReasonCode, PreflightReceiptV1,
+};
 pub use signer::{MockSigner, Signer};
 pub use types::{Capability, PaymentExtra, PaymentRequirements};
 

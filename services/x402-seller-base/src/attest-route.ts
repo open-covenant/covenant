@@ -2,8 +2,9 @@
 // validation and issuance directly: server.ts wires env, the facilitator, and the
 // payment middleware at import time (and exits on missing config), so importing it
 // in a test is not an option. Behavior must stay byte-identical to what the
-// middleware forwards to after a verified payment — returning >= 400 here cancels
-// settlement, so a rejected request is never charged.
+// middleware forwards to after a verified payment. Resource status and payment
+// settlement are separate outcomes; callers must reconcile the facilitator
+// response and onchain state before retrying a failed resource request.
 import type { Request, Response } from "express";
 import type { Attestor } from "./attest.js";
 

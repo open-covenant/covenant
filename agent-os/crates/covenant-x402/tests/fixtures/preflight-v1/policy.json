@@ -1,0 +1,28 @@
+{
+  "schema": "covenant.payment-policy.v1",
+  "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "decimals": 6,
+  "funder": "9VaDVp1Wb78G4Wm6VuTiMrpESjrUymXefQTHcJGRSTEA",
+  "source_ata": "5SvmwUbZCqWGi4VdgPryvk7FDUPRzHY4AaXoS4w83h3k",
+  "allowed_fee_payers": [
+    "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
+  ],
+  "routes": [
+    {
+      "origin": "https://provider.example",
+      "method": "POST",
+      "path_and_query": "/resource?format=json",
+      "pay_to": "7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC",
+      "destination_ata": "FaZxn8A41KgRZmm8vLrt4aZNVTDtRBBYS37FjCEKpXBs",
+      "max_amount": "100000"
+    }
+  ],
+  "max_compute_unit_limit": 20000,
+  "max_compute_unit_price_micro_lamports": 1,
+  "max_intent_lifetime_ms": 60000,
+  "transaction_profile": "sponsored_v0_static_v1",
+  "require_exact_amount": true,
+  "require_memo_equals_payment_identifier": true
+}

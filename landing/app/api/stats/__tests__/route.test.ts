@@ -36,7 +36,7 @@ function makeRepo() {
     }).trim();
   sh("init", "-q", "-b", "main");
   sh("config", "user.name", "covtester");
-  sh("config", "user.email", "cov@example.test");
+  sh("config", "user.email", "covenant@users.noreply.github.com");
   const commit = (msg: string) => {
     writeFileSync(join(root, "f.txt"), `${msg}\n`);
     sh("add", "-A");
@@ -142,7 +142,8 @@ describe("stats route GET", () => {
     const second = await (await GET()).json();
 
     expect(second).toEqual(first);
-    // Two GET calls, but githubHead+githubMetrics fired exactly once (first call).
-    expect(f).toHaveBeenCalledTimes(2);
+    // Two GET calls, but githubHead's two requests plus githubMetrics fired only
+    // for the first call.
+    expect(f).toHaveBeenCalledTimes(3);
   });
 });

@@ -1,21 +1,16 @@
-//! Project a Covenant audit-derived reputation score into an EAS off-chain
-//! attestation Base's trust stack can read.
-//!
-//! Covenant computes one canonical reputation score from an agent's audit
-//! chain and anchors it on Solana. This module re-expresses that score as an
-//! [EAS] off-chain attestation — the shape a Base verifier or the EAS
-//! explorer consumes — signed by the same secp256k1 issuer key, so a single
-//! `ecrecover` authenticates it with no bridge and no gas.
+//! Encode an experimental local event-count heuristic in an EAS off-chain
+//! statement. This module is a format/projection utility and is not wired into
+//! covenantd publication. The caller supplies the score, source-chain label,
+//! and Solana account reference; this code does not verify an anchor, identity,
+//! event completeness, or reputation. `ecrecover` authenticates only the
+//! configured EVM publisher and signed bytes.
 //!
 //! The schema is modeled on [Human Passport]'s score attestation: a
 //! `score`/`score_decimals` pair, so a fractional score survives as an
 //! integer without a float ever touching the wire. Covenant adds the
-//! provenance the trust hinges on — `source_chain` and the
-//! `solana_attestation_pda` the score is anchored to. That anchor is the
-//! binding: the reputation belongs to a Solana identity PDA, never to a
-//! transferable EVM token. ERC-8004 identity NFTs can be sold; a score bound
-//! to one could be laundered. A score bound to a non-transferable Solana PDA
-//! cannot.
+//! caller-supplied references `source_chain` and `solana_attestation_pda`.
+//! Carrying those bytes does not show the account exists, is non-transferable,
+//! contains the score, or belongs to the subject.
 //!
 //! [EAS]: https://attest.org
 //! [Human Passport]: https://passport.human.tech
@@ -26,19 +21,20 @@ use crate::eth::{self, hex_decode_32, word_u256};
 use crate::uid::schema_uid;
 use crate::EvmSignerError;
 
-/// Solana mainnet's CAIP-2 chain id — the canonical chain a Covenant
-/// reputation is anchored on. The 32-character reference is the leading
+/// Solana mainnet's CAIP-2 chain id used as a default source label. The
+/// 32-character reference is the leading
 /// slice of the genesis-block hash, and matches `covenant-hyre`'s
-/// `SOLANA_NETWORK`, so the reputation names the same rail the rest of the
-/// stack settles on.
+/// `SOLANA_NETWORK`, so the caller can label the same rail the rest of the
+/// stack uses.
 pub const SOLANA_MAINNET_CAIP2: &str = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 
-/// The EAS schema a Covenant reputation attestation conforms to. `score`
+/// The experimental EAS projection schema. `score`
 /// and `score_decimals` carry the value together — the reader recovers the
 /// real number as `score / 10^score_decimals` — so the decimal scale can
 /// never be lost between issuer and verifier. `expiry` is a hard bound (an
-/// EAS attestation with no expiry stays trusted forever); `source_chain`
-/// and `solana_attestation_pda` trace the score back to its Solana anchor.
+/// EAS attestation with no expiry remains usable forever). `source_chain`
+/// and `solana_attestation_pda` are caller-supplied references, not verified
+/// provenance or an authenticated anchor.
 pub const REPUTATION_SCHEMA: &str =
     "uint32 score,uint8 score_decimals,uint64 expiry,string source_chain,bytes32 solana_attestation_pda";
 
@@ -47,10 +43,9 @@ pub const REPUTATION_SCHEMA: &str =
 /// offset here and its bytes past the head.
 const HEAD_WORDS: u64 = 5;
 
-/// An audit-derived reputation score, pre-scaled to an integer: the real
-/// value is `score / 10^decimals`. Keeping the scale explicit is the whole
-/// point — a bare `95` is meaningless until you know whether it is `0.95`,
-/// `9.5`, or `95`.
+/// A caller-supplied experimental score, pre-scaled to an integer. The real
+/// value is `score / 10^decimals`; this type preserves that scale but does not
+/// establish how the score was produced or what it means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReputationScore {
     pub score: u32,
@@ -95,10 +90,9 @@ impl ReputationScore {
     }
 }
 
-/// Everything a reputation projection commits to: the score, the Solana
-/// anchor it is bound to, and its validity window. The `solana_attestation_pda`
-/// is the 32-byte Solana account (SAS/MPL) that records the score on-chain,
-/// carried as `bytes32` so the EVM side can trace provenance back to Solana.
+/// Values the signed projection commits to. `solana_attestation_pda` is a
+/// caller-supplied 32-byte account reference; this crate does not fetch it or
+/// establish what it stores.
 #[derive(Debug, Clone)]
 pub struct ReputationProjection {
     pub score: ReputationScore,
@@ -126,11 +120,10 @@ impl ReputationProjection {
         }
     }
 
-    /// Build a projection from a canonical audit-derived score
+    /// Build a projection from the experimental audit event heuristic
     /// ([`covenant_audit::reputation::AuditReputation`]), the Solana anchor the
-    /// score is committed to, and the validity window. Refuses a score with no
-    /// history: an agent that has taken no governed actions has no reputation to
-    /// project, and attesting one would dress a blank record up as a number.
+    /// caller-supplied account reference, and validity window. Refuses an empty
+    /// metric, but does not verify the event slice or referenced account.
     pub fn from_audit(
         audit: &covenant_audit::reputation::AuditReputation,
         source_chain: impl Into<String>,
@@ -173,10 +166,9 @@ impl ReputationProjection {
     }
 
     /// Fail closed on the ways a projection would silently under-attest: a
-    /// score that never expires, an expiry that predates issuance, a missing
-    /// Solana anchor, or an empty source chain. Each maps to a documented
-    /// failure mode — a stale score trusted forever, or a projection that
-    /// cannot be traced back to Solana.
+    /// score that never expires, an expiry that predates issuance, an all-zero
+    /// reference, or an empty source chain. These are shape constraints only;
+    /// they do not validate the referenced account.
     fn validate(&self) -> Result<(), EvmSignerError> {
         if self.expiry_unix == 0 {
             return Err(EvmSignerError::Reputation(
@@ -191,7 +183,7 @@ impl ReputationProjection {
         }
         if self.solana_attestation_pda == [0u8; 32] {
             return Err(EvmSignerError::Reputation(
-                "solana_attestation_pda is all-zero: the score must reference its Solana anchor"
+                "solana_attestation_pda is all-zero: a non-zero caller reference is required"
                     .into(),
             ));
         }

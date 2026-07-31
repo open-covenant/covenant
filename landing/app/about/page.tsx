@@ -6,14 +6,14 @@ import { SiteHeader } from "../SiteHeader";
 export const metadata: Metadata = {
   title: "About Covenant",
   description:
-    "Covenant is an open, host-level operating layer for agentic software: every agent runs under a signed grant, every action leaves a receipt, and the system is built in the open by an autonomous loop.",
+    "Covenant is an open, local control plane for agentic software: implemented daemon operations can require signed capabilities and emit audit evidence.",
   alternates: { canonical: "/about" },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/about",
     title: "About Covenant: the operating layer for agentic software",
     description:
-      "Permission, not trust. A receipt for every decision. Built in the open by an autonomous loop that never stops.",
+      "Signed capabilities and audit evidence for operations routed through implemented Covenant boundaries.",
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
   twitter: {
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
     creator: "@OpenCovenant",
     title: "About Covenant: the operating layer for agentic software",
     description:
-      "Permission, not trust. A receipt for every decision. Built in the open by an autonomous loop that never stops.",
+      "Signed capabilities and audit evidence for operations routed through implemented Covenant boundaries.",
     images: "/twitter-image.jpg",
   },
 };
@@ -57,27 +57,27 @@ const SECTIONS: Section[] = [
     title: "Permission, not trust",
     body: (
       <p className={paragraph}>
-        Most software trusts an agent the moment it starts running. It can quietly reach anything the
-        program itself can. Covenant flips that. An agent gets no standing access. Every privileged
-        action needs a capability: a cryptographically signed permission slip (ed25519) that names
-        one specific action, can be narrowed to a scope, expires, and can be revoked. It is checked
-        the instant the action is attempted, so an agent can do exactly what you signed for and
-        nothing else, and the check runs the same way whether the action succeeds or fails.
+        Operations routed through implemented Covenant daemon boundaries can
+        require a capability: a cryptographically signed permission slip
+        (ed25519) that names an action, can be narrowed to a scope, expires, and
+        can be revoked. The daemon checks it when that operation is requested.
+        This does not constrain actions an agent can perform outside Covenant or
+        replace operating-system isolation.
       </p>
     ),
   },
   {
     id: "receipt",
     label: "03",
-    title: "A receipt for every decision",
+    title: "Receipts on audited paths",
     body: (
       <p className={paragraph}>
-        Every consequential thing the system does is written down as it happens: who was issued an
-        identity, which permissions were checked, what was settled. It all goes into a tamper-evident
-        log: append-only and hash-chained, so any later edit breaks the chain and shows. Each entry
-        records what kind of event it was, who issued it, and when, and you can verify the whole
-        chain yourself, on your own machine. The result is a receipt for every decision the system
-        makes, kept no matter the outcome.
+        Implemented audited paths record events such as identity issuance,
+        capability checks, and settlement decisions in an append-only hash
+        chain. Later modification breaks the chain. Coverage depends on the
+        operation using an audited Covenant path; the log does not prove that a
+        compromised writer included every event or that all host activity passed
+        through it.
       </p>
     ),
   },
@@ -104,10 +104,11 @@ const SECTIONS: Section[] = [
     title: "Local-first, and yours",
     body: (
       <p className={paragraph}>
-        One key, on your hardware, is the root of everything. A single ed25519 keypair per install
-        signs your permission grants, signs on-chain settlement, and stamps the audit log. One
-        identity ties it all together. Your agents, your memory, and your keys stay on your machine
-        by default. The core is open source under the{" "}
+        A local ed25519 keypair signs permission grants and Covenant protocol
+        statements and stamps the audit log. Payment funding keys are separate
+        and remain in their configured signer paths. Your agents, memory, and
+        local keys stay on your machine by default. The core is open source
+        under the{" "}
         <a
           href="https://www.apache.org/licenses/LICENSE-2.0"
           target="_blank"
@@ -127,18 +128,20 @@ const SECTIONS: Section[] = [
     title: "What's real, stated plainly",
     body: (
       <p className={paragraph}>
-        We are careful to separate what ships from what is planned. Today the local control plane is
-        real and live-tested across more than thirty-five Rust crates and over three thousand four
-        hundred tests, including over four hundred fifty that exercise real process, model, and
-        network boundaries. Production-grade isolation for untrusted code and networked multi-peer
-        operation are on the roadmap, not the changelog; the Solana settlement program is live on
-        mainnet, while its daemon-driven per-intent lifecycle is not yet production. The trust layer
-        also reaches Base mainnet: an agent&apos;s identity, reputation, and bond receipts are
-        published there as signed statements any contract can check in one step, without ever moving
-        $CVNT off Solana; the parts not exercised yet, like on-chain reputation writes and funded
-        bonds, we mark as such. The line between done, experimental, and
-        planned is documented in BUILT.md and throughout the docs. If a claim is not true yet, we do
-        not make it.
+        We are careful to separate what ships from what is planned. Today the
+        local control plane is real and live-tested across more than thirty-five
+        Rust crates and over three thousand four hundred tests, including over
+        four hundred fifty that exercise real process, model, and network
+        boundaries. Production-grade isolation for untrusted code and networked
+        multi-peer operation are on the roadmap, not the changelog; the Solana
+        settlement program is live on mainnet, while its daemon-driven
+        per-intent lifecycle is not yet production. Selected signed evidence is
+        also projected to Base mainnet without moving $CVNT off Solana. An EVM
+        can authenticate the publisher and bytes with <code>ecrecover</code>;
+        that does not establish claim truth. On-chain score writes and funded
+        bonds are not yet exercised. The line between done, experimental, and
+        planned is documented in BUILT.md and throughout the docs. If a claim is
+        not true yet, we do not make it.
       </p>
     ),
   },

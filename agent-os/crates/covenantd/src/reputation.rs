@@ -1,13 +1,8 @@
-//! Reputation derived from the audit chain — not self-reported.
+//! Legacy heuristic over local escrow audit rows.
 //!
-//! A worker's standing is computed entirely from the escrow rows the daemon
-//! already records: how many completion proofs it issued for that worker, how
-//! many validated, and how many of those proofs an escrow actually released
-//! against. The score is pinned to the audit chain root it was computed over,
-//! so anyone holding the same chain recomputes the same numbers — neither the
-//! worker nor the operator can inflate it. Covenant supplies this half;
-//! earnings (the escrow's ledger) are the other half a marketplace combines
-//! with it.
+//! Worker addresses and release facts in these rows are caller-supplied, and
+//! the daemon does not verify payouts onchain. The result is reproducible from
+//! the same log but is not independent reputation or evidence of work.
 //!
 //! Read-only: this never writes. Disputes are not yet a primitive (no dispute
 //! row exists to count), so they are out of this first cut.
@@ -17,7 +12,7 @@ use std::collections::HashSet;
 use covenant_audit::{AuditError, AuditKind, AuditLog};
 use serde::{Deserialize, Serialize};
 
-/// A worker's audit-derived standing at a point in the chain.
+/// A worker-address summary over local audit rows at a point in the chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reputation {
     pub worker_pubkey: String,
@@ -34,7 +29,7 @@ pub struct Reputation {
     pub computed_audit_root_hex: String,
 }
 
-/// Compute a worker's reputation by scanning the audit log. One pass tallies
+/// Compute the legacy heuristic by scanning the audit log. One pass tallies
 /// the worker's proofs and validation outcomes and collects its proof ids; the
 /// release count joins `escrow_released` rows back to those ids. Pinned to the
 /// chain root at read time.

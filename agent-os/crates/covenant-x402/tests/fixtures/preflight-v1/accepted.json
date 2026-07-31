@@ -1,0 +1,12 @@
+{
+  "scheme": "exact",
+  "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+  "amount": "80000",
+  "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "payTo": "7G73PLhKvAPBGTzG5ESAE4coE7QrVeTTKfhTxQZbyGgC",
+  "maxTimeoutSeconds": 60,
+  "extra": {
+    "feePayer": "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4",
+    "memo": "pay_7d5d747be160e280504c099d984bcfe0"
+  }
+}

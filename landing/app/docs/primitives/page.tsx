@@ -77,15 +77,14 @@ export default function PrimitivesPage() {
 
       <h2>Identity</h2>
       <p>
-        A single ed25519 keypair per Covenant install. The same key signs
-        capability grants, signs Solana settlement transactions, and
-        appears as the daemon&apos;s issuer on audit events and memory
-        records. Persisted as a raw 32-byte seed at{" "}
+        A local ed25519 keypair per Covenant install signs capability grants and
+        protocol statements and appears as the daemon&apos;s issuer on audit
+        events and memory records. Persisted as a raw 32-byte seed at{" "}
         <code>$COVENANT_HOME/identity/local.key</code> with mode{" "}
         <code>0600</code>.
       </p>
       <p>
-        There is no secondary key system. See{" "}
+        Payment funding keys are separate. See{" "}
         <Link href="/identity">Identity and keys</Link>.
       </p>
 

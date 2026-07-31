@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opencovenant.org/schemas/payment-policy-v1.schema.json",
+  "title": "Covenant Payment Policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "network",
+    "mint",
+    "token_program",
+    "decimals",
+    "funder",
+    "source_ata",
+    "allowed_fee_payers",
+    "routes",
+    "max_compute_unit_limit",
+    "max_compute_unit_price_micro_lamports",
+    "max_intent_lifetime_ms",
+    "transaction_profile",
+    "require_exact_amount",
+    "require_memo_equals_payment_identifier"
+  ],
+  "properties": {
+    "schema": { "const": "covenant.payment-policy.v1" },
+    "network": { "type": "string" },
+    "mint": { "type": "string" },
+    "token_program": { "type": "string" },
+    "decimals": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "funder": { "type": "string" },
+    "source_ata": { "type": "string" },
+    "allowed_fee_payers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "routes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/route" }
+    },
+    "max_compute_unit_limit": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "max_compute_unit_price_micro_lamports": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "max_intent_lifetime_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "transaction_profile": { "const": "sponsored_v0_static_v1" },
+    "require_exact_amount": { "const": true },
+    "require_memo_equals_payment_identifier": { "const": true }
+  },
+  "$defs": {
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "method",
+        "path_and_query",
+        "pay_to",
+        "destination_ata",
+        "max_amount"
+      ],
+      "properties": {
+        "origin": { "type": "string" },
+        "method": { "type": "string" },
+        "path_and_query": { "type": "string" },
+        "pay_to": { "type": "string" },
+        "destination_ata": { "type": "string" },
+        "max_amount": { "type": "string" }
+      }
+    }
+  }
+}

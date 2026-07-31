@@ -1,20 +1,20 @@
 import type { Metadata } from "next";
 
 const DESCRIPTION =
-  "Covenant: verifiable trust and safe execution for AI agents on Solana. One-pager.";
+  "This Covenant one-pager is retired while its public claims are rewritten against the current implementation boundary.";
 
 // Unlinked by design — not in any nav/footer, and noindex so it is only reached
 // by people given the direct link. Also the print/PDF source: the @media print
 // block renders a full-bleed A4 page.
 export const metadata: Metadata = {
-  title: "Covenant — one pager",
+  title: "Covenant — retired one-pager",
   description: DESCRIPTION,
   alternates: { canonical: "/onepager" },
   robots: { index: false, follow: false, googleBot: { index: false, follow: false } },
   openGraph: {
     type: "website",
     url: "https://opencovenant.org/onepager",
-    title: "Covenant — verifiable trust & safe execution for AI agents on Solana",
+    title: "Covenant — retired one-pager",
     description: DESCRIPTION,
     images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630 }],
   },
@@ -89,71 +89,49 @@ export default function OnePagerPage() {
           <img src="/logo.svg" alt="Covenant — human intent / agent protocol" className="logo" />
         </div>
         <hr />
-        <p className="deck">Verifiable trust &amp; safe execution for AI agents on Solana</p>
+        <p className="deck">Retired one-pager</p>
 
         <p className="lede">
-          Autonomous agents are getting wallets, spend authority, and the ability to act on chain. The barrier to that
-          future is trust: no one hands an agent real money or authority if it can be front-run, over-leveraged, drained,
-          or tricked into signing a malicious transaction.{" "}
-          <strong>Covenant is the layer that makes an agent&rsquo;s actions safe by construction and verifiable by anyone.</strong>{" "}
-          It is the neutral trust and execution layer for AI agents on Solana.
+          This document is outdated and must not be distributed as a description
+          of the current product. It overstated wallet-level signing
+          enforcement, universal transaction simulation, receipt coverage,
+          partner status, and the meaning of payment and attestation evidence.
         </p>
 
-        <div className="cols">
-          <div className="col">
-            <p className="seclabel"><span className="n">01</span>What Covenant is</p>
-            <p className="intro">
-              A daemon and eight operating-layer primitives turn an agent into one that signs Solana transactions under controls
-              it cannot bypass. Four guarantees hold on every action:
-            </p>
-            <div className="guarantee"><p><b>Capability gating.</b> An agent runs only pre-authorized actions. Anything outside its grant is refused before signing.</p></div>
-            <div className="guarantee"><p><b>Simulate before sign.</b> No transaction is signed unless it simulates clean against live state.</p></div>
-            <div className="guarantee"><p><b>Hash-chained audit, on-chain receipts.</b> Every action is recorded and anchored, with a signed receipt that verifies independently and fails on tampering.</p></div>
-            <div className="guarantee"><p><b>Neutral attestation.</b> As a third party, a Covenant Verified mark carries weight an agent&rsquo;s own claims cannot.</p></div>
-          </div>
-
-          <div className="col">
-            <p className="seclabel"><span className="n">02</span>Live today</p>
-            <ul className="live">
-              <li><b>Alpha released and cryptographically signed.</b> Public, keyless-signed build (v0.1.0-alpha.1).</li>
-              <li><b>Settlement program deployed on Solana mainnet.</b> On-chain audit and attestation, not a promise.</li>
-              <li><b>Safe-execution skills running real mainnet transactions.</b> Swap, stake, perps, and prediction, each gated and receipted.</li>
-              <li><b>x402 seller infrastructure live.</b> Paid, independently verifiable endpoints in production, settled in USDC on Solana mainnet.</li>
-            </ul>
-          </div>
-        </div>
-
         <div className="block">
-          <p className="seclabel"><span className="n">03</span>Traction</p>
+          <p className="seclabel">
+            <span className="n">01</span>Current boundary
+          </p>
           <p>
-            The same trust layer is already reused across the Solana agent stack. Agent identity and on-chain attestations
-            run on mainnet through <span className="lit">Metaplex</span> (the MPL Agent registry and MPL Core); safe swap,
-            perps, and prediction skills execute real mainnet transactions through <span className="lit">Jupiter</span>;
-            agent reputation is live in the <span className="lit">PayAI</span> bazaar alongside x402 payments, never
-            touching them; and credit delegation is proven on <span className="lit">MagicBlock</span>&rsquo;s mainnet
-            ephemeral rollups. Identity resolves through <span className="lit">Solana Name Service</span> (.sol), paid and
-            independently verifiable attestation endpoints are in review for the <span className="lit">Solana Foundation</span>&rsquo;s
-            pay.sh registry, and a flagship safe-execution partnership with <span className="lit">Xona</span> is forming.
-            Further integrations span HatcherLabs, ClawVille, Synapse/SAP, and more &mdash; the same trust layer, reused
-            everywhere agents act.
+            Covenant is a local-first daemon with capability, audit, memory, and
+            settlement primitives. Capability checks cover operations routed
+            through implemented daemon boundaries. Wallet-level pre-sign
+            enforcement, production isolation for hostile agent code, and a
+            complete multi-peer trust boundary remain work in progress.
           </p>
         </div>
 
         <div className="block">
-          <p className="seclabel"><span className="n">04</span>Business model</p>
+          <p className="seclabel">
+            <span className="n">02</span>Evidence semantics
+          </p>
           <p>
-            <span className="lit">Covenant is infrastructure others build on.</span>{" "}Execution skills monetize as a{" "}
-            <span className="lit">per-action fee assessed at signing</span>, with a premium tier for verifiable receipts
-            and neutral attestation. Teams building their own agents and platforms{" "}
-            <span className="lit">license the trust layer and its enterprise features</span>{" "}directly. Covenant never
-            touches a partner&rsquo;s payment rails or token, so revenue scales with agent on-chain activity, the one
-            metric every consumer agent roadmap is built to grow. $CVNT aligns the network through real-yield staking
-            from protocol fees.
+            Hash chains make later changes detectable but do not prove a
+            compromised writer logged every event. Signatures authenticate a
+            publisher and payload but do not establish claim truth. Registration
+            and settlement observations do not prove identity, delivery,
+            quality, or reputation.
           </p>
         </div>
 
         <div className="foot">
-          <span className="site"><span className="tag">{"</>"}</span>opencovenant.org</span>
+          <a
+            className="site"
+            href="https://github.com/open-covenant/covenant#readme"
+          >
+            <span className="tag">{"</>"}</span>Read the current implementation
+            boundary
+          </a>
         </div>
       </div>
     </main>

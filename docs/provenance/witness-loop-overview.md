@@ -1,20 +1,22 @@
-# Witness Loop v0.2 — Architecture Overview
+# Witness Loop v0.2 — Historical Architecture Note
 
-The Witness Loop is Covenant's substrate for verifiable autonomous engineering. This doc onboards engineers (human or agent) to its shape. The full plan lives outside the repo at `~/covenant-witness-loop-plan-v0.2.md`; this is the durable, in-tree summary that survives plan revisions.
+This document records a design and its prototype surfaces. It is not a claim that every component is deployed or that the witness mediates an agent runtime. The full historical plan lives outside the repo at `~/covenant-witness-loop-plan-v0.2.md`; this is the in-tree summary.
+
+The current public surface checks structural properties of supplied repository artifacts: hashes, one self-published-key signature, and event ordering. Its Solana cards read publisher-authored manifests; they do not currently query or decode RPC state. It cannot establish semantic correctness, evidence completeness, runtime mediation, or W009/W011 enforcement.
 
 ## The bet
 
-The next era of autonomous engineering is won by the substrate that makes autonomous work CRYPTOGRAPHICALLY VERIFIABLE, ADVERSARIALLY REFUTED by independently-keyed processes, ANCHORED on a settlement layer anyone can read, and visibly EVOLVING under a constitutional surface restriction the agent cannot rewrite. "An autonomous agent did this" becomes a checkable cert.
+The design makes specific artifact relationships checkable: a commit identifier, supplied event lines, hash-chain root, configured on-chain observations, and signatures. Those checks support provenance analysis; they do not certify that autonomous work was correct, complete, policy-compliant, or exclusively produced by the claimed runtime.
 
 ## Three concentric rings
 
-### Ring 1 — Triple-Anchor Witness
+### Ring 1 — Multi-artifact witness
 
-Every Covenant-author commit is signed by:
+The design associates up to four artifacts with a commit:
 - **Anchor 1: Solana commit memo** (Spike 2 Option-D pivot from gitsign/Rekor). Per-commit Memo-program tx posted by the witness-anchor daemon. Payload: `covenant-commit-v1:<sha>:<audit_root_hex>:<unix_ms>`. Signed by operator authority (`id.json` today, multisig at v0.3). Memo program `MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr` — same primitive the constitution anchor uses, different payload schema. Cluster: devnet for v0.2, mainnet at launch. Verification: query memo program txs by authority pubkey, find one referencing this sha, confirm signature + finality on Solana. No Sigstore Fulcio OIDC dependency; trust root is the operator authority on Solana.
 - **Anchor 2: Local hash chain.** Per-commit `Step` records (model + tokens + durations + trace_id, schema lifted from Letta StepManager) Merkle-rooted into a per-commit `audit_root_hex`. Stored as `attestations/<sha>.json` next to the commit. The same `audit_root_hex` is the second field of the Anchor 1 memo payload, so Anchors 1 and 2 are cryptographically linked.
-- **Anchor 3: Solana settlement-program anchor.** Merkle root of N commits batched and posted via `anchor_receipt_batch` on the existing settlement program at `cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y`. ReceiptBatch PDA carries the root. Coexists with Anchor 1 on Solana; Anchor 1 is per-commit (cheap, immediate), Anchor 3 is batched (Merkle-root over many commits, stronger structural witness).
-- **Anchor 4: Separately-keyed Verifier-Refuter signature.** Independent ed25519 key at `$COVENANT_HOME/identity-verifier/local.key` (loaded via `covenant_identity::LocalIdentity::load_or_create`), separate launchd job (`org.opencovenant.verifier`), separate Anthropic API quota. Verifier signs ONLY if all five mechanical lenses accept.
+- **Anchor 3: Solana settlement-program anchor.** Merkle root of N commits batched and posted via `anchor_receipt_batch` on the existing settlement program at `cov9UDypG7nsryxdgMcKhKU2spRVWLVjxT2iTv6do5Y`. ReceiptBatch PDA carries the root. Coexists with Anchor 1 on Solana; Anchor 1 is per-commit and Anchor 3 batches commitments. Both are configured chain observations, not evidence that a runtime enforced the recorded policy.
+- **Anchor 4: Self-published verifier statement.** The v2 statement signs a closed canonical envelope containing the root, event count, exact pass/refute verdict, refutations, and verifier key. The key is stored beside the artifact, so signature validity provides internal attribution only; replacing the repository key and statement remains possible. The separate v3 reference harness uses a root-signed role document, but it is not wired into this legacy page.
 
 Per-commit Merkle leaf format:
 ```
@@ -25,11 +27,11 @@ Batches anchor every ~10 commits OR 15 min, whichever first.
 
 ### Ring 2 — Constrained-Surface Self-Improvement
 
-The Modifier persona's writes are gated by `covenant_permissions::scaffold_mutation_scope` (new namespace, Spike 9 verified ≤3 days work). Allowed paths:
+The design scopes Modifier writes with `covenant_permissions::scaffold_mutation_scope`. Intended paths:
 - `agent-os/agents/tools/**`
 - `agent-os/autonomy/tasks/**`
 
-Modifier can synthesize new tools and new task templates. It CANNOT touch supervisor scripts, verifier code, the constitution, or `/verify`/api routes.
+The intended mutation allowlist excludes supervisor scripts, verifier code, the constitution, and `/verify`/api routes. A recorded allowlist decision is not proof that a separate OS boundary mediated every write.
 
 Recovery is a pure-functional 4-state machine (lifted from letta-code's turn-recovery-policy):
 - `resolve_approval_pending` — pause for human signal
@@ -50,22 +52,22 @@ agent-os/autonomy/checkpoints/<run_id>.json = {
 
 Loop-detection (lifted from deer-flow LoopDetectionMiddleware): MD5(tool_name, args) at 3/5 threshold + per-tool freq at 30/50. Soft warn injects reminder; hard strip rolls back via checkpoint.
 
-### Ring 3 — Public Verifiable Witness
+### Ring 3 — Public witness surface
 
-Routes on opencovenant.org:
-- `/verify/[sha]` — Four Witnesses Present + permanent yellow Fifth Status Line "Code Quality (Not Witnessed)" + SAME-FAMILY badge weeks 1-4
+Designed routes on opencovenant.org:
+- `/verify/[sha]` — four structural evidence checks plus a permanent yellow "Code Quality (Not Witnessed)" status
 - `/lineage` — evolutionary tree of accepted scaffold revisions
 - `/witness` — live feed of in-flight verifier circles
 
-Verification per commit:
-- Anchor 1 light: Solana Memo program tx lookup → confirm authority pubkey + payload sha match + tx finalized. Manifest at `landing/public/witness/memo/<sha>.json` records the tx signature for the server-side proxy at `/api/verify/[sha]` to render.
+Current checks when the corresponding artifacts are present:
+- Anchor 1 light: displays the transaction, authority, cluster, slot, and `verified` fields claimed by `landing/public/witness/memo/<sha>.json`. It stays yellow because the page does not fetch or decode the transaction, bind the memo to the commit/root, authenticate the authority, or establish finality.
 - Anchor 2 light: audit hash chain root matches recomputed root from `attestations/<sha>.json`. The recomputed root must equal the `audit_root_hex` field in Anchor 1's memo payload — that linkage means a tampered audit chain breaks Anchor 1 too.
-- Anchor 3 light: Solana RPC query for ReceiptBatch PDA on the settlement program containing this commit's Merkle leaf.
-- Anchor 4 light: Verifier-Refuter signature verifies against Verifier's published pubkey at `landing/public/witness/verifier-pubkey.txt`.
+- Anchor 3 light: compares the settlement manifest root with the run-file root and displays the claimed PDA, transaction, cluster, and slot. It stays yellow because no PDA or transaction is fetched or decoded and finality is not established.
+- Anchor 4 light: rejects legacy root-only signatures and verifies a closed v2 statement over the root, event count, exact verdict, refutations, and self-published key. A signed refutation is red; a valid pass stays yellow because `landing/public/witness/verifier-pubkey.txt` is not an external trust root.
 
 Fifth Status Line: permanent yellow "Code Quality (Not Witnessed)" — links to `/lineage/mutation-quality` showing the cargo-mutants nightly trend (Spike 13). Honest UX discipline: the chain does NOT prove semantic correctness; the fifth line explicitly states this.
 
-SAME-FAMILY badge (weeks 1-4): visible UX element on Anchor 4 light. Yellow with "Verifier-A and Modifier are both Claude family." Sub-label weeks 3-4: "model-tier-different (Sonnet verifier vs Opus modifier)." Flips green only after cross-family verifier (Spike 8: OpenAI via covenant-llm OpenAiProvider) ships clean for 7 days.
+The historical SAME-FAMILY badge called out correlated verifier and modifier models. Using a different model family can reduce one correlation, but it still does not establish organizational, infrastructure, input, code, or runtime independence.
 
 ## Memory layer (three-tier per Letta naming)
 
@@ -77,9 +79,9 @@ Fact extraction: mem0 ADDITIVE_EXTRACTION_PROMPT v3, single LLM call per sprint,
 
 Sleeptime reflector (separate launchd `com.covenant.reflector`) runs every N sprints, emits CRUD ops over `blocks/`.
 
-## Hard rules baked into ConstitutionVerifier
+## Planned ConstitutionVerifier checks
 
-Anchored on-chain per `docs/provenance/constitution-anchoring.md` (Spike 12: Memo program v0.2):
+The design evaluates the following checks over supplied repository and run data. An on-chain commitment can make later mutation visible; it does not prove that these checks mediated every runtime action.
 - Identity-token regex (banned strings never appear)
 - Autonomous-author check (`Covenant <covenant@users.noreply.github.com>` for autonomous commits)
 - `scaffold_mutation_scope` path allowlist

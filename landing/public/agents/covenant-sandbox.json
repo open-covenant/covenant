@@ -1,7 +1,7 @@
 {
   "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   "name": "Covenant Coding Sandbox",
-  "description": "Covenant's public coding agent at sandbox.opencovenant.org. It runs real coding tasks for anyone through a capability-gated, budgeted runtime, and every tool call and file write it brokers is recorded in an append-only, hash-chained audit log. A signed audit-root attestation anchoring that history is published on Solana as MPL Core AppData, so anyone can verify the agent's record through a standard DAS query with no Covenant infrastructure required. Its identity is gated on that audit staying valid: it can only transfer while its audit chain is in policy. Accountable, not just discoverable.",
+  "description": "Covenant's public coding sandbox. Its Metaplex asset and selected Covenant-authored audit-root records are publicly readable. Those records identify the reported publisher and make payload changes detectable; they do not prove that every tool call or file write was recorded, that an underlying claim is true, or that the agent is safe. A Core Oracle plugin can gate configured asset lifecycle events; it does not gate general agent execution.",
   "image": "https://opencovenant.org/agents/covenant-agent-1024.png",
   "active": true,
   "registrations": [

@@ -416,7 +416,7 @@ async fn main() -> Result<()> {
 
     let server = match escrow_config_from_env() {
         Some(cfg) => {
-            info!("escrow surface enabled");
+            info!("escrow completion-statement surface enabled");
             server.with_escrow(cfg)
         }
         None => server,
@@ -876,10 +876,10 @@ fn spend_authz_config_from_env() -> Option<covenantd::spend_authz::SpendAuthzCon
     Some(covenantd::spend_authz::SpendAuthzConfig { enabled: true })
 }
 
-/// Resolve the escrow surface config from env. When enabled the daemon will
-/// answer `POST /escrow/prove` (issue a signed completion proof an external
-/// escrow releases against) and `POST /escrow/release` (record the payout back
-/// into the audit chain). Covenant holds no funds. Off by default.
+/// Resolve the escrow statement surface config from env. When enabled the
+/// daemon answers `POST /escrow/prove` by signing a local dispatch observation
+/// plus caller-supplied escrow context. The legacy `POST /escrow/release`
+/// compatibility route remains parked and writes no state. Off by default.
 ///
 /// - `COVENANT_ESCROW_ENABLED` truthy (`1`, `true`, `yes`)
 fn escrow_config_from_env() -> Option<covenantd::escrow::EscrowConfig> {

@@ -68,7 +68,7 @@ export const PARTNERS: Integration[] = [
     slug: "synapse",
     name: "Synapse Agent Protocol",
     blurb:
-      "Covenant publishes signed audit-root attestations to Synapse on Solana for cross-party agent identity.",
+      "Covenant publishes signed audit-root statements to Synapse on Solana; the signature attributes the bytes, not a real-world identity.",
     status: "live",
   },
   {
@@ -91,7 +91,7 @@ export const PARTNERS: Integration[] = [
     slug: "fairscale",
     name: "FairScale",
     blurb:
-      "Covenant streams audit-attested conduct events to FairScale's agent-reputation scoring.",
+      "Covenant can send signed local event statements to FairScale as inputs to FairScale's scoring.",
     status: "live",
     href: "https://fairscale.xyz",
   },
@@ -100,7 +100,7 @@ export const PARTNERS: Integration[] = [
     name: "Hermes",
     by: "Nous Research",
     blurb:
-      "Covenant runs Hermes agents behind a sandboxed, capability-gated coding gateway.",
+      "Covenant runs Hermes agents through a capability-gated coding gateway; host-process controls are not OS isolation.",
     status: "live",
     href: "https://github.com/NousResearch/hermes-agent",
   },
@@ -108,7 +108,7 @@ export const PARTNERS: Integration[] = [
     slug: "hatcherlabs",
     name: "HatcherLabs",
     blurb:
-      "Covenant joins HatcherLabs' agent mesh as a local-first connector, running coding agents under sandbox-gated, capability-scoped permissions.",
+      "Covenant joins HatcherLabs' agent mesh as a local-first connector with capability-scoped host controls.",
     status: "live",
   },
   {
@@ -129,7 +129,7 @@ export const PARTNERS: Integration[] = [
     slug: "acedata",
     name: "Ace Data Cloud",
     blurb:
-      "One capability-gated gateway to Ace Data Cloud's image, video, music, and search models, with provenance on every call.",
+      "A capability-gated gateway to Ace Data Cloud models emits local audit metadata on the audited call path.",
     status: "live",
     href: "https://acedata.cloud",
   },
@@ -144,21 +144,21 @@ export const PARTNERS: Integration[] = [
     slug: "wurk",
     name: "Wurk",
     blurb:
-      "Wurk's agent-to-human microjobs run as capability-scoped, x402-billed tools, with Covenant attesting the work.",
+      "Wurk's microjob endpoints run as capability-scoped, x402-billed tools with publisher-attributed call records, not proof of completed work.",
     status: "live",
   },
   {
     slug: "orbserv",
     name: "Orbserv",
     blurb:
-      "Covenant acts as the spend-authorization policy layer for Orbserv's agent wallets.",
+      "Covenant exposes an advisory pre-spend decision endpoint for Orbserv; the external wallet remains the signing boundary.",
     status: "live",
   },
   {
     slug: "magicblock",
     name: "MagicBlock",
     blurb:
-      "Agent resource metering on a MagicBlock ephemeral rollup, committed periodically back to Solana.",
+      "Explicit receipt hashes can be metered on a MagicBlock ephemeral rollup and observed after state commits to Solana.",
     status: "live",
   },
 
@@ -167,7 +167,7 @@ export const PARTNERS: Integration[] = [
     slug: "clawville",
     name: "ClawVille",
     blurb:
-      "Covenant verifies ClawVille's AI-to-AI bounties with capability-scoped grants, hash-chained action logs, and signed verdicts.",
+      "The ClawVille prototype combines scoped grants, hash-chained event records, and publisher-signed verdict statements.",
     status: "building",
     href: "https://clawville.world",
   },
@@ -175,7 +175,7 @@ export const PARTNERS: Integration[] = [
     slug: "zkmedusa",
     name: "zkMedusa",
     blurb:
-      "Covenant issues a reputation passport bound to its audit-derived reputation, and verifies external Medusa passports.",
+      "The zkMedusa prototype exchanges signed profile statements derived from local heuristics; they are not reputation truth.",
     status: "building",
   },
   {
@@ -189,21 +189,21 @@ export const PARTNERS: Integration[] = [
     slug: "earnfi",
     name: "EarnFi",
     blurb:
-      "EarnFi's human-task endpoints reach agents as capability-scoped, x402-billed tools for real human work.",
+      "The EarnFi prototype exposes human-task endpoints as capability-scoped, x402-billed tools without proving delivery quality.",
     status: "building",
   },
   {
     slug: "percolator",
     name: "Percolator",
     blurb:
-      "Covenant-governed keeper agents run Percolator's perpetuals liveness under stake-backed, slashable bonds.",
+      "The Percolator prototype explores policy-scoped keeper actions and a future stake-backed accountability model.",
     status: "building",
   },
   {
     slug: "gitlawb",
     name: "Gitlawb",
     blurb:
-      "Agents push cryptographically attested commits to Gitlawb's decentralized git nodes.",
+      "The Gitlawb prototype associates publisher-signed statements with commits sent to decentralized git nodes.",
     status: "building",
     href: "https://github.com/Gitlawb",
   },
@@ -211,7 +211,7 @@ export const PARTNERS: Integration[] = [
     slug: "bento",
     name: "Bento",
     blurb:
-      "Bento's execution-firewall verdict screens an agent's intent as a gate input before Covenant signs, with its on-chain standing read in as a labeled reputation signal.",
+      "The Bento prototype treats an external verdict and onchain standing as labeled policy inputs; signer enforcement is not implemented.",
     status: "building",
     href: "https://bentoguard.xyz",
   },
@@ -219,7 +219,7 @@ export const PARTNERS: Integration[] = [
     slug: "robinhood",
     name: "Robinhood",
     blurb:
-      "Agent crypto orders on Robinhood's API pass a Covenant policy gate before they're placed, and every decision lands on-chain as a verifiable trade receipt.",
+      "The Robinhood prototype is a dry-run policy demonstration; no brokerage account, live order path, or venue-enforced gate is attached.",
     status: "building",
     href: "https://robinhood.com/us/en/agentic-trading/",
   },

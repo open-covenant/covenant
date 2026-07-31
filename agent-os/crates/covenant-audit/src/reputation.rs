@@ -1,24 +1,11 @@
-//! The canonical audit-derived reputation score.
+//! Experimental event-classification heuristic with a legacy reputation name.
 //!
-//! Covenant's reputation is not a claim; it is a function of the agent's own
-//! tamper-evident audit chain. This module computes one number from a slice of
-//! [`AuditEvent`]s: of the governed actions the agent attempted, the fraction
-//! that stayed within its authority.
-//!
-//! Every action an agent takes under covenantd either completes within its
-//! capability grant (a compliant action) or is refused, rejected, or found
-//! invalid (a violation the audit chain caught). The score is
-//! `compliant / (compliant + violations)`, so a perfectly-governed agent
-//! scores 1.0 and one that repeatedly oversteps and is blocked scores lower.
-//! Administrative and operator events (token rotation, backfills, peer
-//! management) and in-progress or purely informational events do not reflect
-//! the agent's behavior and are excluded, so they can neither pad nor dent the
-//! score.
-//!
-//! The score carries its two counts, so a consumer sees the volume behind the
-//! ratio: 1.0 over four actions is not 1.0 over ten thousand. Whether a history
-//! is deep enough to attest is a policy the caller applies (a minimum-activity
-//! threshold), not a fudge baked into the number.
+//! The caller supplies an arbitrary event slice. This module classifies selected
+//! event variants and returns a ratio; it does not establish event completeness,
+//! runtime mediation, subject attribution, authorization, delivery, settlement,
+//! or reputation. Some positive variants are operator actions, and
+//! `IntentDispatched` is counted without inspecting its status. Consumers must
+//! treat the output as a local implementation-defined metric only.
 
 use crate::{AuditEvent, AuditKind};
 
@@ -29,20 +16,20 @@ pub const SCORE_DECIMALS: u8 = 4;
 /// How one audit event bears on the compliance score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Signal {
-    /// A governed action the agent was authorized for, completed.
+    /// An event variant this heuristic counts in its numerator.
     Compliant,
-    /// An attempt blocked, refused, or found invalid.
+    /// An event variant this heuristic counts in its denominator only.
     Violation,
     /// Administrative, operator, in-progress, or informational; no bearing.
     Neutral,
 }
 
-/// A reputation score derived from an audit chain, with the counts behind it.
+/// Legacy-named output of the experimental local event heuristic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuditReputation {
-    /// Governed actions that completed within the agent's authority.
+    /// Events classified into the numerator; not proof of compliant execution.
     pub compliant: u64,
-    /// Attempts the audit chain refused, rejected, or found invalid.
+    /// Events classified as negative by this implementation.
     pub violations: u64,
     /// `compliant / (compliant + violations)` scaled to [`SCORE_DECIMALS`],
     /// rounded half-up. `None` when the agent has no scored activity yet, so a
@@ -53,13 +40,13 @@ pub struct AuditReputation {
 }
 
 impl AuditReputation {
-    /// Governed actions that carried a compliance signal (`compliant + violations`).
+    /// Events this heuristic chose to score (`compliant + violations`).
     pub fn scored_actions(&self) -> u64 {
         self.compliant + self.violations
     }
 }
 
-/// Derive the reputation score from an agent's audit events.
+/// Compute the legacy-named ratio over the caller-supplied event slice.
 pub fn score<'a>(events: impl IntoIterator<Item = &'a AuditEvent>) -> AuditReputation {
     let mut compliant = 0u64;
     let mut violations = 0u64;
@@ -91,7 +78,8 @@ pub fn score<'a>(events: impl IntoIterator<Item = &'a AuditEvent>) -> AuditReput
 fn classify(kind: &AuditKind) -> Signal {
     use AuditKind::*;
     match kind {
-        // Governed actions that completed within the agent's authority.
+        // Numerator variants. This is event-type classification, not a proof
+        // that the action was authorized, successful, or attributable.
         IntentDispatched { .. }
         | HermesToolCompleted { .. }
         | HermesFileWritten { .. }
@@ -102,8 +90,7 @@ fn classify(kind: &AuditKind) -> Signal {
         | ExternalPaymentSettled { .. }
         | ToolCallCompleted { .. } => Signal::Compliant,
 
-        // Attempts refused, rejected, spoofed, malformed, or budget-stopped:
-        // the audit chain catching something the agent should not have done.
+        // Denominator-only variants selected by this local heuristic.
         CapabilityGrantRejected { .. }
         | CapabilityScopeRejected { .. }
         | SecretAccessDenied { .. }

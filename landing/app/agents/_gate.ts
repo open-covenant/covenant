@@ -1,24 +1,21 @@
-// The Covenant audit gate: a Core Oracle external plugin whose base_address is
-// the covenant-oracle ["oracle", asset] PDA. The plugin makes MPL Core read the
-// live verdict from that PDA during the agent's lifecycle events, so transfer
-// (and, extended, execute) only succeeds while the audit is in policy. The
-// gating program is source-verified on mainnet; pinning base_address to the
-// derived PDA under COVENANT_ORACLE_PROGRAM is what ties this gate to it.
+// Structural observations for the Covenant Core Oracle experiment. Matching a
+// plugin base address to the derived PDA binds the configured program and asset;
+// it does not establish the verdict's semantic correctness or mediate agent
+// execution, signing, or payment.
 
 import { PublicKey } from "@solana/web3.js";
 import { COVENANT_ORACLE_PROGRAM } from "@/app/agents/_registry";
 
 export type AuditGate = {
-  /** A Covenant oracle plugin gates this asset (base_address is our PDA). */
+  /** The reported Oracle base_address is the configured program's derived PDA. */
   gated: boolean;
   programId: string;
   oraclePda: string;
-  /** Lifecycle events the oracle can veto, e.g. ["transfer"]. */
+  /** Lifecycle checks reported in the asset's configured-provider view. */
   gatedEvents: string[];
-  /** true = in policy (transferable), false = out of policy (vetoed), null = unread. */
+  /** Decoded experimental transfer verdict; null means unread or unrecognized. */
   inPolicy: boolean | null;
-  /** Gate is pinned to the gating program by programId; its source-verified build
-   *  status is checkable live (osecVerifyUrl). We pin per-request, not re-verify. */
+  /** Whether base_address matched the PDA derived under the configured program. */
   programPinned: boolean;
 };
 

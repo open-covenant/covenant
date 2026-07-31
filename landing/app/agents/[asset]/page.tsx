@@ -1,46 +1,49 @@
-// /agents/[asset]: the agent passport. Renders the independently checkable
-// facts about a 014 Registry asset (registry binding, Covenant authority,
-// witness-chain reproducibility, and, for gated agents, the live audit gate)
-// in the same witness language as /verify/[sha]. Registered and proven are
-// different states here, on purpose; the gap between them is the page's
-// whole argument.
+// /agents/[asset] renders bounded configured-provider observations about a
+// 014 Registry asset. A matching structure is not proof of operator identity,
+// claim truth, record completeness, or runtime behavior.
 
 import type { Metadata } from "next";
 import Link from "next/link";
-import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { SiteFooter } from "@/app/SiteFooter";
 import { SiteHeader } from "@/app/SiteHeader";
+import { internalSiteUrl } from "@/lib/internalSiteUrl";
 import {
   COVENANT_DATA_AUTHORITY,
   metaplexAgentUrl,
   osecVerifyUrl,
   solscanAccountUrl,
 } from "@/app/agents/_registry";
-import type { AgentPassport } from "@/app/api/agents/[asset]/route";
+import type { AgentRecordResponse } from "@/app/api/agents/[asset]/route";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Agent passport: Covenant",
+  title: "Agent record: Covenant",
   description:
-    "Verify a 014 Registry agent: on-chain identity binding, Covenant attestation authority, and an audit root recomputed in your browser.",
+    "Inspect configured DAS/RPC observations for a 014 Registry asset and related Covenant records.",
 };
 
-async function fetchPassport(asset: string): Promise<AgentPassport | null> {
-  const h = await headers();
-  const reqHost = h.get("x-forwarded-host") || h.get("host");
-  const proto = h.get("x-forwarded-proto") || "https";
-  const base = reqHost
-    ? `${proto}://${reqHost}`
-    : process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-  const res = await fetch(`${base}/api/agents/${encodeURIComponent(asset)}`, {
+function safeHttpsUrl(value: string | null): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchRecord(asset: string): Promise<AgentRecordResponse | null> {
+  // Never derive a server-side fetch target from Host or forwarded headers.
+  const url = internalSiteUrl(`/api/agents/${encodeURIComponent(asset)}`);
+  const res = await fetch(url, {
     cache: "no-store",
   });
   if (res.status === 404 || res.status === 400) return null;
   if (!res.ok) throw new Error(`agents api ${res.status}`);
-  return (await res.json()) as AgentPassport;
+  return (await res.json()) as AgentRecordResponse;
 }
 
 type State = "green" | "yellow" | "red" | "gray";
@@ -123,34 +126,44 @@ export default async function AgentPassportPage({
   params: Promise<{ asset: string }>;
 }) {
   const { asset } = await params;
-  const p = await fetchPassport(asset);
+  const p = await fetchRecord(asset);
   if (!p) notFound();
 
-  const isAgent = p.registry.registered || p.registry.identityPlugin;
-  const title = p.doc?.name || p.asset.name || p.asset.id;
+  const isAgent = p.registry.registered === true || p.registry.identityPlugin;
+  const title = p.asset.name || p.asset.id;
+  const registrationHref = safeHttpsUrl(p.registry.registrationUri);
 
-  const registryState: State = p.registry.registered ? "green" : isAgent ? "yellow" : "gray";
-  const registryDetail = p.registry.registered
-    ? `The ["agent_identity", asset] account exists at the derived address and is owned by the 014 Registry program, a tamper-evident binding between this asset and its registration. ${p.registry.identityPlugin ? "The asset carries the matching AgentIdentity plugin." : ""}`
-    : isAgent
-      ? "The asset carries an AgentIdentity plugin, but its registry account could not be confirmed just now."
-      : "No 014 Registry record exists for this asset. It is a Core asset, not a registered agent.";
-
-  const recordAuthored = p.attestation?.authority === COVENANT_DATA_AUTHORITY;
-  const authorityState: State = p.attestation
-    ? recordAuthored
+  const registryState: State =
+    p.registry.registered === true
       ? "green"
+      : p.registry.registered === null || isAgent
+        ? "yellow"
+        : "gray";
+  const registryDetail =
+    p.registry.registered === true
+      ? `The configured RPC reports that the ["agent_identity", asset] account exists at the derived address, is owned by the 014 Registry program, and names this asset in its 40-byte state. ${p.registry.identityPlugin ? "The configured DAS response also includes an AgentIdentity plugin." : ""}`
+      : p.registry.registered === null
+        ? "The configured RPC could not answer, so the registry binding is unknown."
+        : isAgent
+          ? "The asset carries an AgentIdentity plugin, but its registry account could not be confirmed just now."
+          : "The configured RPC returned no matching 014 Registry account for this asset.";
+
+  const recordAuthorityMatches =
+    p.attestation?.authority === COVENANT_DATA_AUTHORITY;
+  const authorityState: State = p.attestation
+    ? recordAuthorityMatches
+      ? "yellow"
       : "red"
     : p.asset.inCovenantCollection
-      ? "green"
+      ? "yellow"
       : "gray";
   const authorityDetail = p.attestation
-    ? recordAuthored
-      ? `Only the AppData authority can write this record, and the on-chain authority is Covenant's signer (${COVENANT_DATA_AUTHORITY.slice(0, 8)}…). MPL Core enforced that at write time. Authorship is a chain fact, not a claim.`
-      : `This record's AppData authority is ${p.attestation.authority ?? "unknown"}, which is NOT Covenant's signer. Treat it as foreign.`
+    ? recordAuthorityMatches
+      ? `The configured DAS provider reports Covenant's signer (${COVENANT_DATA_AUTHORITY.slice(0, 8)}…) as this record's AppData authority. This page does not independently authenticate the underlying Core account.`
+      : `The configured DAS response reports ${p.attestation.authority ?? "no authority"}, not Covenant's expected signer.`
     : p.asset.inCovenantCollection
-      ? "The asset sits in the Covenant Agents collection, whose update authority is Covenant's signer."
-      : "This asset carries no Covenant AppData of its own (an agent's record lives on a separate asset; see accountability).";
+      ? "The configured DAS provider reports that this asset belongs to the Covenant Agents collection."
+      : "The configured DAS response includes no Covenant AppData on this asset. Any matching validation record is a separate asset.";
 
   return (
     <main id="main-content" className="min-h-[100dvh] bg-[#030303] text-neutral-200">
@@ -160,15 +173,12 @@ export default async function AgentPassportPage({
         <div className="mb-10 flex flex-col gap-2">
           <p className="text-[11px] uppercase tracking-[3px] text-neutral-500">
             <Link href="/agents" className="hover:text-neutral-300">
-              Agent passport
+              Agent record
             </Link>
           </p>
-          <h1 className="text-2xl font-light tracking-tight text-white sm:text-3xl">{title}</h1>
-          {p.doc?.description && (
-            <p className="max-w-3xl text-[13px] font-light leading-relaxed text-neutral-400">
-              {p.doc.description}
-            </p>
-          )}
+          <h1 className="text-2xl font-light tracking-tight text-white sm:text-3xl">
+            {title}
+          </h1>
         </div>
 
         <div className="mb-6 border border-neutral-800 bg-neutral-950/60 p-5">
@@ -190,7 +200,7 @@ export default async function AgentPassportPage({
               <Field
                 label="Registration document"
                 value={p.registry.registrationUri}
-                href={p.registry.registrationUri}
+                href={registrationHref}
               />
             )}
             {p.gate?.gated && (
@@ -232,43 +242,37 @@ export default async function AgentPassportPage({
           />
           {isAgent && (
             <Check
-              state={p.doc ? (p.doc.listsThisAsset ? "green" : "yellow") : "yellow"}
-              label="Registration document"
-              detail={
-                p.doc
-                  ? p.doc.listsThisAsset
-                    ? "The hosted ERC-8004 document lists this exact asset under registrations. The off-chain identity points back at the on-chain one."
-                    : "The hosted document loads but does not (yet) list this asset under registrations."
-                  : "The registration document could not be fetched just now."
-              }
-              evidenceHref={p.registry.registrationUri ?? undefined}
-              evidenceLabel="Document"
+              state="gray"
+              label="Registration URI"
+              detail="This URI comes from untrusted on-chain or DAS input. Covenant displays an HTTPS reference when present but does not fetch or validate the document server-side."
+              evidenceHref={registrationHref}
+              evidenceLabel="Open untrusted document"
             />
           )}
           {isAgent && (
             <Check
               state={
-                p.accountability == null
+                p.records == null
                   ? "yellow"
-                  : p.accountability.accountable
-                    ? "green"
-                    : p.accountability.truncated
+                  : p.records.hasMatchingRecord
+                    ? "yellow"
+                    : p.records.truncated
                       ? "yellow"
                       : "gray"
               }
-              label="Accountability"
+              label="Covenant-authored records"
               detail={
-                p.accountability == null
+                p.records == null
                   ? "The validation-record lookup could not complete just now."
-                  : p.accountability.accountable
-                    ? `A Covenant validator has minted ${p.accountability.count} verified validation record${p.accountability.count === 1 ? "" : "s"} naming this agent as subject${p.accountability.latest?.recordedAt ? `, latest recorded ${new Date(p.accountability.latest.recordedAt * 1000).toISOString().slice(0, 10)}` : ""}. Each record's on-chain AppData authority is the Covenant validator (Core enforced that at write time), and it carries the ERC-8004 validation type, schema, and a 64-hex response hash. Anyone can recheck it over DAS with no Covenant infrastructure in the path.`
-                    : p.accountability.truncated
-                      ? "The validation-record lookup did not complete; the validator's record set is larger than the pages scanned, so a record naming this agent may exist but was not reached. Treat accountability as unknown."
-                      : "No Covenant validation record names this agent as subject yet. Registration proves identity; a validation record is what makes the agent accountable."
+                  : p.records.hasMatchingRecord
+                    ? `The configured DAS provider reports ${p.records.count} record${p.records.count === 1 ? "" : "s"} with the expected Covenant envelope naming this asset${p.records.latest?.recordedAt ? `, latest dated ${new Date(p.records.latest.recordedAt * 1000).toISOString().slice(0, 10)}` : ""}. This structural match does not prove the claim, completeness of the record set, or agent safety.`
+                    : p.records.truncated
+                      ? "The bounded DAS lookup hit its page cap, so a matching record may exist outside the scanned result set."
+                      : "The bounded configured-DAS lookup found no record with the expected Covenant envelope naming this asset."
               }
               evidenceHref={
-                p.accountability?.latest?.asset
-                  ? solscanAccountUrl(p.accountability.latest.asset)
+                p.records?.latest?.asset
+                  ? solscanAccountUrl(p.records.latest.asset)
                   : undefined
               }
               evidenceLabel="Validation record"
@@ -280,10 +284,10 @@ export default async function AgentPassportPage({
               label="Audit gate"
               detail={
                 p.gate.inPolicy === true
-                  ? `This agent's ${p.gate.gatedEvents.join(" / ")} is gated on its live Covenant audit verdict by the Core Oracle plugin. The verdict is in policy, so Core allows it. Flip the audit out of policy and Core vetoes the event on chain. The rule is enforced by Core, not by us. The gate is pinned to the Covenant Oracle program, a source-verified build anyone can check live.`
+                  ? `The configured providers report a Core Oracle plugin for ${p.gate.gatedEvents.join(" / ")} and an in-policy Covenant oracle value. If those reports and the deployed configuration are correct, Core applies that rule to the listed events.`
                   : p.gate.inPolicy === false
-                    ? `The Covenant audit verdict is out of policy, so MPL Core is vetoing this agent's ${p.gate.gatedEvents.join(" / ")} right now. It stays blocked until the audit is back in policy. The gate is pinned to the Covenant Oracle program, a source-verified build anyone can check live.`
-                    : `This agent's ${p.gate.gatedEvents.join(" / ")} is gated by the Core Oracle plugin on its Covenant audit verdict; the current verdict could not be read just now. The gate is pinned to the Covenant Oracle program.`
+                    ? `The configured providers report a Core Oracle plugin for ${p.gate.gatedEvents.join(" / ")} and an out-of-policy Covenant oracle value. If those reports and the deployed configuration are correct, Core rejects the listed events.`
+                    : `The configured DAS response reports a Core Oracle plugin for ${p.gate.gatedEvents.join(" / ")}, but the current oracle value could not be read.`
               }
               evidenceHref={osecVerifyUrl(p.gate.programId)}
               evidenceLabel="Pinned gating program"
@@ -294,15 +298,17 @@ export default async function AgentPassportPage({
         {p.attestation && (
           <div className="mt-6 border border-neutral-800 bg-neutral-950/60 p-5">
             <div className="flex items-center gap-2.5">
-              <StateDot state={p.attestation.verified ? "green" : "red"} />
+              <StateDot
+                state={p.attestation.matchesExpectedEnvelope ? "yellow" : "red"}
+              />
               <span className="text-[11px] font-light uppercase tracking-[2px] text-neutral-300">
                 Validation record
               </span>
             </div>
             <p className="mt-3 text-[13px] font-light leading-relaxed text-neutral-400">
-              {p.attestation.verified
-                ? "This asset is a Covenant validation record. Its on-chain AppData authority is the Covenant validator (Core enforced it at write time), and it carries the ERC-8004 validation type, the expected schema, and a 64-hex response hash."
-                : `This asset carries AppData but does not verify as a Covenant validation record: ${p.attestation.reasons.join("; ")}.`}
+              {p.attestation.matchesExpectedEnvelope
+                ? "The configured DAS provider reports AppData with the expected Covenant authority, validation type, schema, and response-hash shape. This is a structural match over indexer output, not proof that the claim is true."
+                : `The reported AppData does not match the expected Covenant record envelope: ${p.attestation.reasons.join("; ")}.`}
             </p>
             <dl className="mt-4 grid gap-4 sm:grid-cols-2">
               {p.attestation.subjectAsset && (
@@ -333,10 +339,11 @@ export default async function AgentPassportPage({
         )}
 
         <p className="mt-10 max-w-3xl text-[12px] font-light leading-relaxed text-neutral-500">
-          Registered, accountable, and in policy are different states. Registration binds an asset
-          to the 014 Registry; a validation record makes the agent accountable; the audit gate
-          enforces the verdict on chain. This page never asks a server which one you are looking at.
-          Each check is recomputed against the chain this request.
+          Registration, matching records, and an oracle value are different
+          observations. A colored state means the configured DAS or RPC response
+          matched the implemented check—not that the agent is trustworthy or
+          safe. These providers remain dependencies until the underlying account
+          data or a cryptographic proof is checked independently.
         </p>
       </div>
 

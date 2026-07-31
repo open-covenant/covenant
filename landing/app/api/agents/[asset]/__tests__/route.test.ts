@@ -1,23 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PublicKey } from "@solana/web3.js";
 import { GET } from "../route";
 import {
   AGENT_IDENTITY_PROGRAM,
+  ATTESTATION_HASH_ALG,
   ATTESTATION_SCHEMA_V2,
+  ATTESTATION_TYPE,
   COVENANT_COLLECTION,
   COVENANT_DATA_AUTHORITY,
   FEATURED_AGENT_ASSET,
 } from "@/app/agents/_registry";
 
-// GET /api/agents/[asset] is the server-side agent-passport verifier: it proves
-// three independent on-chain facts about a Core asset — the asset itself (DAS
+// GET /api/agents/[asset] returns bounded agent-passport observations: the asset (DAS
 // getAsset), the 014 Registry binding (the agent_identity PDA owner), and the
-// Covenant attestation AppData plus its write authority. These tests pin the
+// DAS-reported Covenant record envelope plus its reported write authority. These tests pin the
 // route-level decisions: the address gate (400), the fail-closed DAS-failure
 // surface (502), the Core-only interface gate (404), and on the happy path the
-// authority trust check (covenantAuthored iff AppData authority is exactly the
-// Covenant minting key), the casing-independent payload normalization, the
-// registry-owner binding, and the document cross-listing — all driven against a
-// stubbed RPC/HTTP boundary so no fact is asserted on the server's say-so.
+// structural envelope check, casing-independent fields, and the registry-owner
+// binding. Registration-document URIs are never fetched by the
+// server because they are controlled by on-chain input.
 
 const OTHER_ADDR = "11111111111111111111111111111111";
 const REG_URI = "https://reg.example.test/agent.json";
@@ -43,14 +44,25 @@ function das(overrides: DasOverrides = {}): Record<string, unknown> {
       { type: "AgentIdentity", adapter_config: { uri: REG_URI } },
       {
         type: "AppData",
-        authority: { address: overrides.appDataAuthority ?? COVENANT_DATA_AUTHORITY },
+        adapter_config: {
+          data_authority: {
+            address: overrides.appDataAuthority ?? COVENANT_DATA_AUTHORITY,
+          },
+        },
         // Helius snake_cases AppData; the route must normalize it to camelCase.
         data: {
+          type: ATTESTATION_TYPE,
           schema: overrides.appDataSchema ?? ATTESTATION_SCHEMA_V2,
-          root_hash_hex: "ab12cd",
-          release_target: "v0.3.0",
-          release_subject: "covenant",
-          release_scope: "audit-root",
+          hash_alg: ATTESTATION_HASH_ALG,
+          response_hash: "a".repeat(64),
+          validator: COVENANT_DATA_AUTHORITY,
+          subject: { registry: "mpl-agent-014", asset: FEATURED_AGENT_ASSET },
+          tag: "audit",
+          covenant: {
+            release_target: "covenant",
+            release_subject: "witness-loop",
+            release_scope: "audit",
+          },
           recorded_at: 42,
         },
       },
@@ -62,22 +74,33 @@ function stubFetch(opts: {
   getAsset?: unknown;
   getAssetHttpOk?: boolean;
   accountOwner?: string | null;
-  doc?: { ok: boolean; body?: unknown };
+  accountAsset?: string;
+  accountLookupFails?: boolean;
 }) {
-  const f = vi.fn(async (_url: string, init?: { method?: string; body?: unknown }) => {
-    if (init?.method === "POST" && typeof init.body === "string") {
-      const { method } = JSON.parse(init.body) as { method: string };
-      if (method === "getAsset") {
-        if (opts.getAssetHttpOk === false) return { ok: false, status: 502 };
-        return { ok: true, json: async () => ({ result: opts.getAsset }) };
+  const f = vi.fn(
+    async (_url: string, init?: { method?: string; body?: unknown }) => {
+      if (init?.method === "POST" && typeof init.body === "string") {
+        const { method } = JSON.parse(init.body) as { method: string };
+        if (method === "getAsset") {
+          if (opts.getAssetHttpOk === false) return { ok: false, status: 502 };
+          return { ok: true, json: async () => ({ result: opts.getAsset }) };
+        }
+        if (method === "getAccountInfo") {
+          if (opts.accountLookupFails) return { ok: false, status: 503 };
+          const state = Buffer.concat([
+            Buffer.alloc(8),
+            new PublicKey(opts.accountAsset ?? FEATURED_AGENT_ASSET).toBuffer(),
+          ]).toString("base64");
+          const value =
+            opts.accountOwner === undefined
+              ? null
+              : { owner: opts.accountOwner, data: [state, "base64"] };
+          return { ok: true, json: async () => ({ result: { value } }) };
+        }
       }
-      if (method === "getAccountInfo") {
-        const value = opts.accountOwner === undefined ? null : { owner: opts.accountOwner };
-        return { ok: true, json: async () => ({ result: { value } }) };
-      }
-    }
-    return { ok: opts.doc?.ok ?? false, json: async () => opts.doc?.body ?? {} };
-  });
+      throw new Error("unexpected non-RPC fetch");
+    },
+  );
   vi.stubGlobal("fetch", f);
   return f;
 }
@@ -107,7 +130,7 @@ describe("agent passport route", () => {
     const res = await call(FEATURED_AGENT_ASSET);
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({
-      error: "asset lookup failed — DAS endpoint unavailable or asset not found",
+      error: "asset lookup failed: DAS endpoint unavailable",
     });
   });
 
@@ -116,7 +139,7 @@ describe("agent passport route", () => {
     const res = await call(FEATURED_AGENT_ASSET);
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({
-      error: "not an MPL Core asset — the 014 Registry binds Core assets only",
+      error: "not an MPL Core asset: the 014 Registry binds Core assets only",
     });
   });
 
@@ -126,19 +149,10 @@ describe("agent passport route", () => {
     expect(res.status).toBe(404);
   });
 
-  it("assembles a Covenant-authored passport with a normalized attestation", async () => {
+  it("assembles a matching record observation without fetching the registration URI", async () => {
     stubFetch({
       getAsset: das(),
       accountOwner: AGENT_IDENTITY_PROGRAM,
-      doc: {
-        ok: true,
-        body: {
-          name: "Agent X",
-          image: "https://img.example.test/x.png",
-          description: "a registered agent",
-          registrations: [{ agentId: FEATURED_AGENT_ASSET }],
-        },
-      },
     });
 
     const res = await call(FEATURED_AGENT_ASSET);
@@ -153,50 +167,69 @@ describe("agent passport route", () => {
     expect(body.registry.identityPlugin).toBe(true);
     expect(body.registry.registrationUri).toBe(REG_URI);
 
-    expect(body.attestation.covenantAuthored).toBe(true);
+    expect(body.attestation.matchesExpectedEnvelope).toBe(true);
+    expect(body.attestation.evidenceSource).toBe("configured_das");
     expect(body.attestation.authority).toBe(COVENANT_DATA_AUTHORITY);
-    // snake_cased indexer keys must surface as the camelCase contract, coerced.
-    expect(body.attestation.payload).toMatchObject({
-      schema: ATTESTATION_SCHEMA_V2,
-      rootHashHex: "ab12cd",
-      releaseTarget: "v0.3.0",
-      releaseScope: "audit-root",
-      recordedAt: 42,
-    });
+    expect(body.attestation.responseHash).toBe("a".repeat(64));
+    expect(body.attestation.recordedAt).toBe(42);
 
-    expect(body.doc.listsThisAsset).toBe(true);
-    expect(body.doc.image).toBe("https://img.example.test/x.png");
+    expect(body.doc).toBeNull();
   });
 
-  it("marks a non-Covenant AppData authority as not Covenant-authored and a mismatched PDA owner as unregistered", async () => {
+  it("rejects a mismatched reported authority and PDA owner", async () => {
     stubFetch({
       getAsset: das({ appDataAuthority: OTHER_ADDR }),
       accountOwner: OTHER_ADDR,
-      doc: { ok: false },
     });
 
     const res = await call(FEATURED_AGENT_ASSET);
     expect(res.status).toBe(200);
     const body = await res.json();
 
-    // The attestation is still present (schema matched) but its authority is
-    // not the minting key, so it must not be trusted as Covenant-authored.
     expect(body.attestation).not.toBeNull();
     expect(body.attestation.authority).toBe(OTHER_ADDR);
-    expect(body.attestation.covenantAuthored).toBe(false);
+    expect(body.attestation.matchesExpectedEnvelope).toBe(false);
+    expect(body.attestation.reasons).toContain(
+      `data authority ${OTHER_ADDR} is not the Covenant authority ${COVENANT_DATA_AUTHORITY}`,
+    );
     expect(body.registry.registered).toBe(false);
   });
 
-  it("drops AppData whose schema is not the attestation schema", async () => {
+  it("does not accept registry state that names a different asset", async () => {
+    stubFetch({
+      getAsset: das(),
+      accountOwner: AGENT_IDENTITY_PROGRAM,
+      accountAsset: OTHER_ADDR,
+    });
+
+    const res = await call(FEATURED_AGENT_ASSET);
+    expect(res.status).toBe(200);
+    expect((await res.json()).registry.registered).toBe(false);
+  });
+
+  it("reports an unknown registry state when the configured RPC fails", async () => {
+    stubFetch({
+      getAsset: das(),
+      accountLookupFails: true,
+    });
+
+    const res = await call(FEATURED_AGENT_ASSET);
+    expect(res.status).toBe(200);
+    expect((await res.json()).registry.registered).toBeNull();
+  });
+
+  it("reports AppData whose schema does not match the expected envelope", async () => {
     stubFetch({
       getAsset: das({ appDataSchema: "some.other.schema.v1" }),
       accountOwner: AGENT_IDENTITY_PROGRAM,
-      doc: { ok: false },
     });
 
     const res = await call(FEATURED_AGENT_ASSET);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.attestation).toBeNull();
+    expect(body.attestation.matchesExpectedEnvelope).toBe(false);
+    expect(body.attestation.reasons).toContain(
+      `schema is not ${ATTESTATION_SCHEMA_V2}`,
+    );
   });
 });

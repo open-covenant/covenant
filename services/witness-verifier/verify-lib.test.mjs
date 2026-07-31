@@ -1,10 +1,44 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildVerifierStatement,
+  verifierMessage,
   recomputeRoot,
   scanRefutations,
   buildSkillManifest,
   ZERO_CHAIN_HASH,
 } from "./verify-lib.mjs";
+
+describe("verifierMessage", () => {
+  const root = "a".repeat(64);
+  const key = "self-published-key";
+
+  it("binds the exact verdict and refutations", () => {
+    const pass = buildVerifierStatement(root, 2, "pass", [], key);
+    const refute = buildVerifierStatement(
+      root,
+      2,
+      "refute",
+      [{ signed_event: "s1", after_untrusted: "u1" }],
+      key,
+    );
+    expect(verifierMessage(pass)).not.toEqual(verifierMessage(refute));
+  });
+
+  it("binds event count, root, and key", () => {
+    const base = buildVerifierStatement(root, 2, "pass", [], key);
+    expect(verifierMessage(base)).not.toEqual(
+      verifierMessage(
+        buildVerifierStatement("b".repeat(64), 2, "pass", [], key),
+      ),
+    );
+    expect(verifierMessage(base)).not.toEqual(
+      verifierMessage(buildVerifierStatement(root, 3, "pass", [], key)),
+    );
+    expect(verifierMessage(base)).not.toEqual(
+      verifierMessage(buildVerifierStatement(root, 2, "pass", [], "other-key")),
+    );
+  });
+});
 
 // The exact roots below were precomputed with an independent hand-rolled
 // sha256 fold (not via recomputeRoot) and frozen, so any drift in the

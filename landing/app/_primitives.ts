@@ -40,9 +40,9 @@ export const PRIMITIVES: Primitive[] = [
     slug: "identity",
     term: "Identity",
     gloss:
-      "A single ed25519 keypair per install that signs grants, settlement, and audit issuance.",
+      "A local ed25519 keypair for grants, registration statements, and audit issuance.",
     definition:
-      "Identity is a single ed25519 keypair per Covenant install. The same key signs capability grants, signs Solana settlement transactions, and appears as the daemon's issuer on audit events and memory records.",
+      "Identity is a local ed25519 keypair per Covenant install. It signs capability grants and local protocol statements and appears as the daemon issuer on audit events. Solana and EVM payment funding keys are separate.",
     docHref: "https://docs.opencovenant.org/identity",
   },
   {

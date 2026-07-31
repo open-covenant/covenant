@@ -1,16 +1,16 @@
 # Krexa integration: credit/risk oracle as a soft signal
 
-Status: phase 0 built (read-only oracle: REST reads + trustless on-chain decode). Phase 1 (credit-backed x402) built but gated off.
+Status: phase 0 built (read-only oracle: REST reads + direct on-chain account decode). Phase 1 (credit-backed x402) built but gated off.
 Crate: `agent-os/crates/covenant-krexa`
 
 ## Summary
 
 [Krexa](https://krexa.io) scores agent creditworthiness (the on-chain "Krexit Score", 200-850) and lends uncollateralized USDC against it. This crate consumes that as a credit/risk provider plugged into Covenant identity, in two layers with very different risk.
 
-- **Read-only oracle (on by config).** REST reads of an agent's Krexit score, eligibility, and active credit line, surfaced as the `krexa.score` MCP tool. It is a labeled soft signal that sits next to Covenant's own audit-derived reputation, never blended into it. No funds, no counterparty risk.
+- **Read-only oracle (on by config).** REST reads of an agent's Krexit score, eligibility, and active credit line, surfaced as the `krexa.score` MCP tool. It is a labeled soft signal that sits next to Covenant's signer-authenticated audit heuristic, never blended into it. No funds, no counterparty risk.
 - **Credit-backed x402 (built, gated off).** The seam for an agent to cover an x402 payment shortfall from a Krexa credit line and repay from earnings. It refuses unless `credit_enabled` is set, and is not wired into the live payment path regardless. See [Credit](#credit-gated-off) below.
 
-Krexa is a score and credit provider. It is never an identity source: identity stays on the Covenant side.
+Krexa is a score and credit provider, not an identity source. Keep its score separate from Covenant registration and provenance records.
 
 ## Enable it
 
@@ -51,11 +51,11 @@ The crate's public API (`KrexaClient`, `KrexitScore`, `BASE_URL`) is usable on i
 
 ## Trust boundary
 
-Covenant's reputation is audit-derived: computed from an agent's signed work history, meant to be trustless. Krexa's score is a third-party REST value carrying a self-attested SHA-256 hash, not a signature. These are different kinds of trust, so the crate keeps them separate. Every result is stamped `"krexa-attested (third-party REST), soft signal"` so nothing downstream mistakes it for a Covenant-verified fact. A consumer can weigh both signals; neither is laundered into the other.
+Covenant's audit-derived score is a signer-authenticated heuristic over selected records; it is not trustless and does not prove work quality. Krexa's score is a third-party REST value carrying a self-attested SHA-256 hash, not a signature. These are different third-party signals, so the crate keeps them separate. Every result is stamped `"krexa-attested (third-party REST), soft signal"` so nothing downstream mistakes it for an independently established fact. A consumer can weigh both signals; neither is laundered into the other.
 
-The score response also carries `scorePda`, the on-chain account holding the score. Covenant now decodes that account directly instead of trusting the REST endpoint (`onchain.rs`), against the `KrexitScore` layout and discriminator Krexa provided 2026-07-08: point the client at an RPC and the score becomes trustless on the Covenant side, cross-checked against the agent we asked about. The remaining gate is Krexa's: the score program is devnet-only today, so trustless mainnet reads wait on their mainnet deploy. REST stays the default until then.
+The score response also carries `scorePda`, the on-chain account holding the score. Covenant can decode that account directly instead of relying on the REST representation (`onchain.rs`), against the `KrexitScore` layout and discriminator Krexa provided 2026-07-08. That makes the stored value independently readable, but consumers still trust the score program, its authorities and inputs, and their RPC view. The remaining deployment boundary is Krexa's: the score program is devnet-only today, so independently readable mainnet values wait on their mainnet deploy. REST stays the default until then.
 
-One concrete fit: Krexa boosts the score for agents that hold a `.sol` name, and Covenant's identity layer already issues `.sol` names, so a Covenant agent tends to score better on Krexa for free.
+One concrete fit: Krexa reports a score boost for agents that hold a `.sol` name, and Covenant can provision `.sol` names when that integration is configured. The boost remains a Krexa policy signal, not Covenant evidence of identity or quality.
 
 ## Credit (gated off)
 

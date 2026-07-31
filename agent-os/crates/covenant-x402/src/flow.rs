@@ -89,6 +89,7 @@ impl Catalog {
         client
             .request_paid(method, &entry.endpoint, req.body, &capability, signer)
             .await
+            .map(|outcome| outcome.response)
     }
 
     /// Resolve an entry by optional server title + slug.

@@ -474,10 +474,11 @@ pub enum Request {
     /// `wallet.spend.settle`; the daemon records a budget debit (when the
     /// payer has a bucket), a settlement receipt, and a
     /// [`Response::SpendSettled`] returning the receipt id. `decision_id` is
-    /// the id from the [`Request::AuthorizeSpend`] this payment acted on, so
-    /// the settlement joins back to its authorization. `amount` and
-    /// `credits` are the atomic amount and USD-pegged budget actually
-    /// settled; `tx_sig` is the on-chain signature when the wallet has it.
+    /// the id from the [`Request::AuthorizeSpend`] this payment acted on. The
+    /// daemon requires a stored approval for the same payer, provider, network,
+    /// asset, amount, and credits before recording. `amount`, `credits`, and
+    /// `tx_sig` remain wallet-reported; the daemon does not inspect the
+    /// transaction on chain.
     SettleSpend {
         decision_id: Uuid,
         provider: String,
@@ -488,15 +489,11 @@ pub enum Request {
         #[serde(default)]
         tx_sig: Option<String>,
     },
-    /// Ask the daemon to prove a job's completion for an external escrow
-    /// (e.g. Orbserv). Requires capability `escrow.completion.prove`. The
-    /// daemon does NOT trust the request for the outcome: it looks `job_id`
-    /// up in its own audit chain, derives the result hash and validation from
-    /// the worker's run, binds them with this escrow context, signs, and
-    /// returns [`Response::CompletionProven`]. `job_id` is the Covenant
-    /// intent/job uuid the worker ran under; `worker_address`/`hirer_address`
-    /// are the EVM payee/payer; `amount`/`asset`/`network` are the escrow
-    /// rail. No funds move on this path.
+    /// Ask the daemon to sign a local dispatch observation for an external
+    /// escrow. Requires capability `escrow.completion.prove`. The result hash
+    /// and `status == "ok"` observation come from the local audit row; every
+    /// escrow-context field below comes from the caller and is not matched to a
+    /// prior lock. No funds move and the response is not a release authority.
     ProveCompletion {
         escrow_id: String,
         job_id: String,
@@ -507,12 +504,11 @@ pub enum Request {
         network: String,
         provider: String,
     },
-    /// Report from an external escrow that it released funds against a proof.
-    /// Requires capability `escrow.release.record`; the daemon records a
-    /// settlement receipt and a [`Response::EscrowReleased`], joined to the
-    /// proof by `decision_id` (the proof's id) and idempotent on it. `tx_sig`
-    /// is the on-chain payout hash. Covenant custodied nothing; this records
-    /// the payout in the audit chain.
+    /// Legacy caller report that an external escrow released funds. The daemon
+    /// currently rejects this request and writes no settlement, accounting, or
+    /// audit state because the fields, including `tx_sig`, are caller supplied
+    /// and not independently bound to a verified payout. Retained only for wire
+    /// compatibility while release reporting is parked.
     RecordEscrowRelease {
         escrow_id: String,
         decision_id: Uuid,
@@ -525,9 +521,9 @@ pub enum Request {
         #[serde(default)]
         tx_sig: Option<String>,
     },
-    /// Read a worker's audit-derived reputation. Requires capability
-    /// `reputation.read`; the daemon computes the standing from the escrow
-    /// rows in its audit chain and returns [`Response::Reputation`].
+    /// Read a legacy audit-log heuristic. Requires capability
+    /// `reputation.read`; the daemon summarizes local escrow rows, including
+    /// caller-supplied context and unverified release reports.
     /// `worker_pubkey` is the worker address/key the completion proofs name.
     /// Read-only.
     GetReputation {
@@ -1174,12 +1170,14 @@ pub enum Response {
         receipt_id: Uuid,
         decision_id: Uuid,
     },
-    /// Result of [`Request::ProveCompletion`]. `proof` is one opaque base64
-    /// token the escrow stores and passes to its release: base64 of
-    /// `{proof_json, signature_b58, signer_pubkey_b58}`. To verify, base64-
-    /// decode, then `ed25519_verify(signer_pubkey_b58, proof_json, signature_b58)`
-    /// and trust the parsed fields, releasing to `worker_address` when
-    /// `validation_passed`. `decision_id` is echoed back on
+    /// Result of [`Request::ProveCompletion`]. `proof` is base64 of
+    /// `{domain, proof_json, signature_b58, signer_pubkey_b58}`. A consumer
+    /// must require the `covenant.escrow-completion.v1\n` domain, pin the
+    /// expected signer separately, verify the signature over `domain ||
+    /// proof_json`, and compare the caller-supplied context with its own
+    /// precommit. `validation_passed` means only that the newest local dispatch
+    /// row had status `ok`; it is not a release decision.
+    /// `decision_id` is echoed back on
     /// [`Request::RecordEscrowRelease`]; `issued_at` is epoch-ms as a string.
     CompletionProven {
         decision_id: Uuid,
@@ -1187,15 +1185,15 @@ pub enum Response {
         worker_address: String,
         issued_at: String,
     },
-    /// Result of [`Request::RecordEscrowRelease`]. `recorded_at` is the
-    /// epoch-ms the payout row landed, as a string. The `kind` tag plus this
-    /// field is all the escrow's recordRelease reads.
+    /// Legacy success response for [`Request::RecordEscrowRelease`]. Kept for
+    /// wire compatibility; the parked daemon path does not emit it.
     EscrowReleased {
         recorded_at: String,
     },
-    /// A worker's audit-derived reputation, the result of
-    /// [`Request::GetReputation`]. All counts come from the escrow rows in the
-    /// audit chain; `completion_rate_bps` is `validations_passed /
+    /// Legacy local audit-log heuristic returned by
+    /// [`Request::GetReputation`]. Counts come from escrow rows that include
+    /// caller-supplied context and unverified release reports;
+    /// `completion_rate_bps` is `validations_passed /
     /// proofs_total` in basis points; `computed_audit_root_hex` pins the score
     /// to the chain state it was read over, so it is reproducible.
     Reputation {

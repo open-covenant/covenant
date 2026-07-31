@@ -82,6 +82,7 @@ fi
 run node ./scripts/provenance.mjs verify-all
 run node ./scripts/metrics.mjs
 run node ./scripts/conformance.mjs --check
+run node ./scripts/validate-public-payment-claims.mjs
 run node ./scripts/validate-cli-envelope-docs.mjs
 run node ./scripts/validate-chain-cli-envelope-fields.mjs
 run_local ./scripts/validate-sdk-compatibility.mjs

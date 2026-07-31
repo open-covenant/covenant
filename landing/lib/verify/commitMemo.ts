@@ -2,21 +2,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Witness } from "./types";
 
-// Anchor 1 — per-commit Solana Memo tx, signed by the operator authority, with
-// payload covenant-commit-v1:<sha>:<audit_root_hex>:<unix_ms>. Reads the
-// recorded tx from landing/public/witness/memo/<sha>.json and confirms it. The
-// light is green only when the manifest marks the memo verified and carries a
-// tx; an unverified or tx-less manifest reads red, and an unreadable manifest
-// fails closed to red rather than a false green.
+// Anchor 1 legacy manifest reader. This code does not query Solana, decode the
+// transaction, or authenticate the claimed authority, so a manifest can only
+// produce a yellow publisher-report state, never a chain-verified green.
 export function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
   const memoManifest = join(repoRoot, "landing", "public", "witness", "memo", `${sha}.json`);
   if (!existsSync(memoManifest)) {
     return {
       key: "rekor",
-      label: "Solana commit memo",
+      label: "Published memo report",
       state: "yellow",
-      detail:
-        "No memo anchor published for this commit yet. When the anchor daemon posts a memo tx (payload covenant-commit-v1:<sha>:<audit_root_hex>:<ts>, signed by the operator authority), this light verifies it.",
+      detail: "No memo report is published for this commit.",
       badge: { text: "Anchor not yet live", tone: "yellow" },
     };
   }
@@ -32,26 +28,26 @@ export function checkAnchor1CommitMemo(repoRoot: string, sha: string): Witness {
     const solscan = parsed.tx
       ? `https://solscan.io/tx/${parsed.tx}${cluster === "devnet" ? "?cluster=devnet" : ""}`
       : undefined;
-    if (!parsed.verified || !parsed.tx) {
+    if (!parsed.tx) {
       return {
         key: "rekor",
-        label: "Solana commit memo",
+        label: "Published memo report",
         state: "red",
-        detail: `Memo tx ${parsed.tx || "missing"} did not verify against the operator authority pubkey.`,
+        detail: "Memo manifest is present but carries no transaction id.",
         drillHref: solscan,
       };
     }
     return {
       key: "rekor",
-      label: "Solana commit memo",
-      state: "green",
-      detail: `Memo tx ${parsed.tx.slice(0, 16)}… signed by ${parsed.authority || "operator authority"} at slot ${parsed.slot ?? "?"} (${cluster}).`,
+      label: "Published memo report",
+      state: "yellow",
+      detail: `The mutable manifest reports memo tx ${parsed.tx.slice(0, 16)}… at slot ${parsed.slot ?? "?"} (${cluster}) and marks it ${parsed.verified ? "verified" : "unverified"}. This page has not queried or decoded the transaction or authenticated ${parsed.authority || "the claimed authority"}.`,
       drillHref: solscan,
     };
   } catch {
     return {
       key: "rekor",
-      label: "Solana commit memo",
+      label: "Published memo report",
       state: "red",
       detail: "Memo manifest unreadable — investigate landing/public/witness/memo/<sha>.json.",
     };

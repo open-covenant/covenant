@@ -162,13 +162,13 @@ export default function ConceptsPage() {
       <h2>Identity</h2>
       <p>
         Every Covenant install owns a single ed25519 keypair persisted at{" "}
-        <code>$COVENANT_HOME/identity/local.key</code> (raw 32-byte seed,
-        mode <code>0600</code>). The same key:
+        <code>$COVENANT_HOME/identity/local.key</code> (raw 32-byte seed, mode{" "}
+        <code>0600</code>). This key:
       </p>
 
       <ul>
         <li>signs capability grants,</li>
-        <li>signs Solana settlement transactions,</li>
+        <li>signs local registration and protocol statements,</li>
         <li>
           fronts the daemon&apos;s issuer field on audit events and memory
           records.
@@ -176,8 +176,8 @@ export default function ConceptsPage() {
       </ul>
 
       <p>
-        There is no secondary key system. Refer to{" "}
-        <Link href="/identity">Identity and keys</Link> and{" "}
+        Payment funding keys are separate and belong to the Solana or EVM signer
+        paths. Refer to <Link href="/identity">Identity and keys</Link> and{" "}
         <Link href="/security">Security model</Link> for key-management
         practices.
       </p>

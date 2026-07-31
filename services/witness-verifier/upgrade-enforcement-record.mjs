@@ -30,6 +30,9 @@ if (!bundlePath || !enforcerKeyPath) {
 
 const target = resolve(bundlePath);
 const bundle = JSON.parse(readFileSync(target, 'utf8'));
+if (!/^[a-z0-9][a-z0-9._-]{7,127}$/.test(bundle.run_id)) {
+  throw new Error('bundle run_id is invalid');
+}
 const existing = bundle.w009?.devnet_execution;
 if (!existing) throw new Error('bundle has no W009 execution record to upgrade');
 if (existing.event?.durable_reservation) {
@@ -65,9 +68,10 @@ if (
   throw new Error('legacy reservation journal does not match the bundle');
 }
 
-const defaultTrustDirectory = fileURLToPath(
+const trustRootDirectory = fileURLToPath(
   new URL('../../landing/public/witness/enforcement/trust/', import.meta.url),
 );
+const defaultTrustDirectory = resolve(trustRootDirectory, bundle.run_id);
 const trust = {
   authorityRoot: JSON.parse(
     readFileSync(

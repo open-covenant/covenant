@@ -45,9 +45,13 @@ async function rpc(method, params = []) {
 
 const target = resolve(bundlePath);
 const bundle = JSON.parse(readFileSync(target, 'utf8'));
-const defaultTrustDirectory = fileURLToPath(
+if (!/^[a-z0-9][a-z0-9._-]{7,127}$/.test(bundle.run_id)) {
+  throw new Error('bundle run_id is invalid');
+}
+const trustRootDirectory = fileURLToPath(
   new URL('../../landing/public/witness/enforcement/trust/', import.meta.url),
 );
+const defaultTrustDirectory = resolve(trustRootDirectory, bundle.run_id);
 const trust = {
   authorityRoot: JSON.parse(
     readFileSync(

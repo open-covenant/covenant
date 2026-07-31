@@ -190,6 +190,8 @@ describe('trusted enforcement witness', () => {
     });
     expect(result.w011).toMatchObject({
       concrete_transaction_bytes: 'verified',
+      declared_event_parent_lineage: 'verified',
+      scenario_scope: 'fixed_scripted_memo_reference',
       separately_keyed_refutation: 'verified',
       enforcer_denial: 'verified',
       signed_no_submit_outcome: 'verified',
@@ -523,6 +525,55 @@ describe('reference enforcement callbacks', () => {
     expect(submit).toHaveBeenCalledTimes(1);
   });
 
+  it('signs only the snapshotted Memo when caller inputs mutate during reservation', async () => {
+    const source = fixture();
+    trackCanonicalFile(source.bundle);
+    const authorizedMemo =
+      source.bundle.w009.execution_plan.event.transaction.instructions[0].data;
+    const maliciousMemo = 'mutated-after-verification';
+    const submit = vi.fn(async ({ signature }) => signature);
+
+    const execution = executeAuthorizedW009({
+      bundle: source.bundle,
+      trust: source.trust,
+      secretKey: source.agentSecret,
+      recentBlockhash: BLOCKHASH,
+      submit,
+    });
+    queueMicrotask(() => {
+      source.bundle.w009.execution_plan.event.transaction.instructions[0].data = maliciousMemo;
+    });
+
+    const result = await execution;
+    const signedMemo = parseLegacyTransaction(result.transaction.wire)
+      .instructions[0].data.toString('utf8');
+    expect(source.bundle.w009.execution_plan.event.transaction.instructions[0].data)
+      .toBe(maliciousMemo);
+    expect(signedMemo).toBe(authorizedMemo);
+    expect(signedMemo).not.toBe(maliciousMemo);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('signs from a private secret copy when caller bytes mutate during reservation', async () => {
+    const source = fixture();
+    trackCanonicalFile(source.bundle);
+    const submit = vi.fn(async ({ signature }) => signature);
+
+    const execution = executeAuthorizedW009({
+      bundle: source.bundle,
+      trust: source.trust,
+      secretKey: source.agentSecret,
+      recentBlockhash: BLOCKHASH,
+      submit,
+    });
+    queueMicrotask(() => source.agentSecret.fill(0));
+
+    const result = await execution;
+    expect(parseLegacyTransaction(result.transaction.wire).instructions)
+      .toHaveLength(1);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
   it('atomically persists and fsyncs the separately testable durable primitive', async () => {
     const source = fixture();
     const directory = testDirectory();
@@ -538,6 +589,31 @@ describe('reference enforcement callbacks', () => {
     await expect(
       reserveDurablyAt(directory, input),
     ).rejects.toThrow('W009 grant replay blocked: durable consumption already exists');
+    expect(readdirSync(directory)).toHaveLength(1);
+  });
+
+  it('allows exactly one of 32 concurrent durable reservations', async () => {
+    const source = fixture();
+    const directory = testDirectory();
+    const input = {
+      runId: source.bundle.run_id,
+      consumptionKey: source.bundle.w009.grant_consumption.event.consumption_key,
+      proposalHash: source.bundle.w009.proposal.event.proposal_hash,
+    };
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 32 }, () => reserveDurablyAt(directory, input)),
+    );
+    const fulfilled = results.filter(({ status }) => status === 'fulfilled');
+    const rejected = results.filter(({ status }) => status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(31);
+    for (const result of rejected) {
+      expect(result.reason).toHaveProperty(
+        'message',
+        'W009 grant replay blocked: durable consumption already exists',
+      );
+    }
     expect(readdirSync(directory)).toHaveLength(1);
   });
 
@@ -603,6 +679,40 @@ describe('live RPC evidence adapter', () => {
   it('marks exact finalized records as live-confirmed', async () => {
     const source = fixture({ withDevnet: true });
     const result = await verifyRpcEvidence(source.bundle, rpcFixture(source), source.trust);
+    expect(result.w009.live_rpc_confirmation).toBe('verified');
+    expect(result.w011.live_rpc_confirmation).toBe('verified');
+  });
+
+  it('checks snapshotted RPC records when caller evidence mutates after verification', async () => {
+    const source = fixture({ withDevnet: true });
+    const expected = clone(source.bundle);
+    const rpc = vi.fn(async (method, params = []) => {
+      if (method === 'getGenesisHash') {
+        source.bundle.w011.untrusted_input.event.source.slot += 1;
+        source.bundle.w009.devnet_execution.event.slot += 1;
+        return DEVNET_GENESIS_HASH;
+      }
+      const signature = params[0];
+      const w011 = expected.w011.untrusted_input.event.source;
+      const w009 = expected.w009.devnet_execution.event;
+      const record = signature === w011.transaction_signature ? w011 : w009;
+      if (method === 'getTransaction') {
+        return {
+          slot: record.slot,
+          blockTime: record.block_time,
+          meta: { err: null },
+          transaction: [record.wire_transaction_base64, 'base64'],
+        };
+      }
+      if (method === 'getSignatureStatuses') {
+        return { value: [{ err: null, confirmationStatus: 'finalized' }] };
+      }
+      throw new Error(`unexpected RPC method ${method}`);
+    });
+
+    const result = await verifyRpcEvidence(source.bundle, rpc, source.trust);
+    expect(source.bundle.w009.devnet_execution.event.slot)
+      .toBe(expected.w009.devnet_execution.event.slot + 1);
     expect(result.w009.live_rpc_confirmation).toBe('verified');
     expect(result.w011.live_rpc_confirmation).toBe('verified');
   });

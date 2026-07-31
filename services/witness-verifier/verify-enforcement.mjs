@@ -10,9 +10,10 @@ const arg = (name) => {
   return index >= 0 ? args[index + 1] : undefined;
 };
 const has = (name) => args.includes(`--${name}`);
-const defaultTrustDirectory = fileURLToPath(
+const trustRootDirectory = fileURLToPath(
   new URL('../../landing/public/witness/enforcement/trust/', import.meta.url),
 );
+const SAFE_RUN_ID = /^[a-z0-9][a-z0-9._-]{7,127}$/;
 const bundlePath = arg('bundle');
 if (!bundlePath) {
   console.error(
@@ -22,6 +23,9 @@ if (!bundlePath) {
 }
 
 const readJson = (path) => JSON.parse(readFileSync(resolve(path), 'utf8'));
+const bundle = readJson(bundlePath);
+if (!SAFE_RUN_ID.test(bundle.run_id)) throw new Error('bundle run_id is invalid');
+const defaultTrustDirectory = resolve(trustRootDirectory, bundle.run_id);
 const trust = {
   authorityRoot: readJson(
     arg('trust-root') || `${defaultTrustDirectory}/authority-root.json`,
@@ -31,7 +35,6 @@ const trust = {
   ),
   expectedAuthorityPublicKeyB64u: EXPECTED_AUTHORITY_ROOT_PUBLIC_KEY_B64U,
 };
-const bundle = readJson(bundlePath);
 
 async function rpc(rpcUrl, method, params = []) {
   const response = await fetch(rpcUrl, {

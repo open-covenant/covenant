@@ -55,6 +55,20 @@ export function hashObject(value) {
   return sha256Hex(Buffer.from(canonicalJson(value), 'utf8'));
 }
 
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+function canonicalSnapshot(value, label) {
+  try {
+    return deepFreeze(JSON.parse(canonicalJson(value)));
+  } catch (error) {
+    throw new Error(`${label} cannot be canonically snapshotted: ${error.message}`);
+  }
+}
+
 export function base58Encode(bytes) {
   const input = Buffer.from(bytes);
   let value = input.length ? BigInt(`0x${input.toString('hex') || '0'}`) : 0n;
@@ -1466,7 +1480,8 @@ export function verifyEnforcementWitness(
     w011: {
       source: 'untrusted_devnet_input',
       concrete_transaction_bytes: 'verified',
-      causal_lineage: 'verified',
+      declared_event_parent_lineage: 'verified',
+      scenario_scope: 'fixed_scripted_memo_reference',
       separately_keyed_refutation: 'verified',
       enforcer_denial: 'verified',
       signed_no_submit_outcome: 'verified',
@@ -1474,7 +1489,7 @@ export function verifyEnforcementWitness(
       live_rpc_confirmation: 'not_checked',
     },
     boundary:
-      'This proves the standalone reference harness and signed artifact chain, not mediation by a production daemon or external wallet.',
+      'This proves a fixed scripted Memo-only scenario in the standalone reference harness, not general taint tracking or mediation by a production daemon, external wallet, direct signer, or arbitrary submit callback.',
   };
 }
 
@@ -1486,31 +1501,40 @@ export async function executeAuthorizedW009(options) {
       'W009 execution state namespace is module-owned',
     );
   }
-  const { bundle, trust, secretKey, recentBlockhash, submit } = options;
-  const summary = verifyEnforcementWitness(bundle, trust);
-  assert(bundle.w009.devnet_execution === null, 'W009 bundle already contains an execution record');
-  assert(typeof submit === 'function', 'W009 submit callback is required');
-  const expiresAt = Date.parse(bundle.w009.approval_grant.event.capability.expires_at);
-  const assertUnexpired = () => {
-    assert(Date.now() <= expiresAt, 'W009 grant expired before execution');
-  };
-  assertUnexpired();
-  const useKey = bundle.w009.grant_consumption.event.consumption_key;
-  const reservationEvidence = await reserveCanonicalConsumption({
-    runId: bundle.run_id,
-    consumptionKey: useKey,
-    proposalHash: bundle.w009.proposal.event.proposal_hash,
-  });
-  assertUnexpired();
-  const memo = bundle.w009.execution_plan.event.transaction.instructions[0].data;
-  const transaction = buildLegacyMemoTransaction(secretKey, recentBlockhash, memo);
-  assert(
-    transaction.feePayer === bundle.w009.proposal.event.scope.fee_payer,
-    'W009 signing key is not the capability subject',
-  );
-  assertUnexpired();
-  const result = await submit(transaction);
-  return { summary, transaction, reservationEvidence, result };
+  const bundle = canonicalSnapshot(options.bundle, 'W009 bundle');
+  const trust = canonicalSnapshot(options.trust, 'W009 trust');
+  const secretKey = Buffer.from(options.secretKey || []);
+  const recentBlockhash = options.recentBlockhash;
+  const submit = options.submit;
+  try {
+    const summary = verifyEnforcementWitness(bundle, trust);
+    assert(bundle.w009.devnet_execution === null, 'W009 bundle already contains an execution record');
+    assert(typeof submit === 'function', 'W009 submit callback is required');
+    const expiresAt = Date.parse(bundle.w009.approval_grant.event.capability.expires_at);
+    const assertUnexpired = () => {
+      assert(Date.now() <= expiresAt, 'W009 grant expired before execution');
+    };
+    assertUnexpired();
+    const reservationInput = Object.freeze({
+      runId: bundle.run_id,
+      consumptionKey: bundle.w009.grant_consumption.event.consumption_key,
+      proposalHash: bundle.w009.proposal.event.proposal_hash,
+    });
+    const memo = bundle.w009.execution_plan.event.transaction.instructions[0].data;
+    const feePayer = bundle.w009.proposal.event.scope.fee_payer;
+    const reservationEvidence = await reserveCanonicalConsumption(reservationInput);
+    assertUnexpired();
+    const transaction = buildLegacyMemoTransaction(secretKey, recentBlockhash, memo);
+    assert(
+      transaction.feePayer === feePayer,
+      'W009 signing key is not the capability subject',
+    );
+    assertUnexpired();
+    const result = await submit(transaction);
+    return { summary, transaction, reservationEvidence, result };
+  } finally {
+    secretKey.fill(0);
+  }
 }
 
 export async function enforceW011({ bundle, trust, submit }) {
@@ -1591,8 +1615,10 @@ export function createDevnetExecutionEnvelope({
 }
 
 export async function verifyRpcEvidence(bundle, rpc, trust) {
-  const offline = verifyEnforcementWitness(bundle, {
-    ...trust,
+  const bundleSnapshot = canonicalSnapshot(bundle, 'RPC evidence bundle');
+  const trustSnapshot = canonicalSnapshot(trust, 'RPC evidence trust');
+  const offline = verifyEnforcementWitness(bundleSnapshot, {
+    ...trustSnapshot,
     requireDevnetRecord: true,
   });
   const genesisHash = await rpc('getGenesisHash');
@@ -1623,8 +1649,8 @@ export async function verifyRpcEvidence(bundle, rpc, trust) {
     );
   }
 
-  await verifyRecord(bundle.w011.untrusted_input.event.source, 'W011 source');
-  await verifyRecord(bundle.w009.devnet_execution.event, 'W009 execution');
+  await verifyRecord(bundleSnapshot.w011.untrusted_input.event.source, 'W011 source');
+  await verifyRecord(bundleSnapshot.w009.devnet_execution.event, 'W009 execution');
   return {
     ...offline,
     w009: { ...offline.w009, live_rpc_confirmation: 'verified' },

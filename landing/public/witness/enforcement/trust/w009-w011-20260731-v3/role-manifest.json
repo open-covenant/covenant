@@ -1,9 +1,9 @@
 {
   "payload": {
     "schema": "covenant.agent-safety-role-manifest.v1",
-    "run_id": "w009-w011-20260731-v2",
-    "issued_at": "2026-07-31T08:37:17.000Z",
-    "expires_at": "2026-08-07T08:37:17.000Z",
+    "run_id": "w009-w011-20260731-v3",
+    "issued_at": "2026-07-31T17:24:17.000Z",
+    "expires_at": "2026-08-07T17:24:17.000Z",
     "evidence_mode": "standalone_reference_harness",
     "roles": {
       "agent": {
@@ -37,6 +37,6 @@
     "domain": "covenant.agent-safety-role-manifest.v1",
     "signer_role": "authority_root",
     "key_id": "sha256:a78d9c10ed648e260a730abcb0456aaaff56a4c639e38f0daa0e3b6495b6ba62",
-    "value_b64u": "E2gy21dCWmTj_jBuTkqP9ZHYz_wcrwHqiHLfLxi-MXB8xEspRZFQMd6kJw9Hj7_7RGX-eSpLDYdTZ2BDZFa-AA"
+    "value_b64u": "Kt8nhrsqvz6wMyAs40JgwNij_Zp2A2nYjmj5hdGeHuRkt8uRKPsD86mn20keCgGg8N0s23aKgX2QXbdjHj4KAQ"
   }
 }

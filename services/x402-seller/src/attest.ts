@@ -1,18 +1,21 @@
-// Covenant-signed attestation over an arbitrary claim. Signs with a dedicated
-// ed25519 key, separate from the daemon identity, so the public product never
-// reaches into internal infra. A verifier recomputes sha256(canonical(payload)),
-// prepends the domain, and checks the signature against the published pubkey —
-// no trust in this server required.
+// Publisher-signed statement over arbitrary caller data. The signature binds
+// the publisher and exact bytes; it does not establish that a claim is true.
 
-import { createPrivateKey, createPublicKey, createHash, sign as edSign, verify as edVerify } from 'node:crypto';
+import {
+  createPrivateKey,
+  createPublicKey,
+  createHash,
+  sign as edSign,
+  timingSafeEqual,
+  verify as edVerify,
+} from 'node:crypto';
 import bs58 from 'bs58';
 
 const DOMAIN = 'covenant.attest.v1\n';
 
-// Published so any consumer can verify an attestation without trusting this
-// server: pin the pubkey, recompute the digest, check the signature.
 export const ATTEST_DOMAIN = DOMAIN.trimEnd();
-export const ATTEST_CANONICALIZATION = 'JSON, recursively key-sorted, no insignificant whitespace, UTF-8';
+export const ATTEST_CANONICALIZATION =
+  'JSON, recursively key-sorted, no insignificant whitespace, UTF-8';
 export const ATTEST_VERIFY_RECIPE =
   `digest = sha256(canonical(payload)) as lowercase hex; message = "${DOMAIN.trimEnd()}\\n" + digest; ` +
   'ed25519-verify base58-decoded signature_b58 over the UTF-8 message against the published pubkey.';
@@ -47,10 +50,26 @@ export class Attestor {
   readonly pubkeyB58: string;
 
   constructor(keypair: number[]) {
+    if (
+      (keypair.length !== 32 && keypair.length !== 64) ||
+      keypair.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
+    ) {
+      throw new Error(
+        'attestation keypair must be a 32-byte seed or 64-byte seed-plus-public-key array',
+      );
+    }
     const seed = Buffer.from(keypair.slice(0, 32));
-    this.key = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]), format: 'der', type: 'pkcs8' });
+    this.key = createPrivateKey({
+      key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]),
+      format: 'der',
+      type: 'pkcs8',
+    });
     const jwk = createPublicKey(this.key).export({ format: 'jwk' }) as { x: string };
-    this.pubkeyB58 = bs58.encode(Buffer.from(jwk.x, 'base64url'));
+    const publicKey = Buffer.from(jwk.x, 'base64url');
+    if (keypair.length === 64 && !timingSafeEqual(publicKey, Buffer.from(keypair.slice(32)))) {
+      throw new Error('attestation keypair public half does not match its seed');
+    }
+    this.pubkeyB58 = bs58.encode(publicKey);
   }
 
   attest(subject: string, claim: unknown, ts: number): Attestation {
@@ -69,10 +88,28 @@ export class Attestor {
   }
 }
 
-export function verifyAttestation(att: Attestation): boolean {
-  const digest = createHash('sha256').update(canonical(att.payload), 'utf8').digest('hex');
-  if (digest !== att.digest_sha256_hex) return false;
-  const pubkey = Buffer.from(bs58.decode(att.pubkey_b58));
-  const key = createPublicKey({ format: 'jwk', key: { kty: 'OKP', crv: 'Ed25519', x: b64url(pubkey) } });
-  return edVerify(null, Buffer.from(`${att.domain}\n${digest}`, 'utf8'), key, Buffer.from(bs58.decode(att.signature_b58)));
+export function verifyAttestation(att: Attestation, expectedPubkeyB58: string): boolean {
+  try {
+    if (
+      att.alg !== 'ed25519' ||
+      att.domain !== ATTEST_DOMAIN ||
+      att.canonicalization !== ATTEST_CANONICALIZATION ||
+      att.pubkey_b58 !== expectedPubkeyB58 ||
+      !/^[0-9a-f]{64}$/.test(att.digest_sha256_hex)
+    ) {
+      return false;
+    }
+    const digest = createHash('sha256').update(canonical(att.payload), 'utf8').digest('hex');
+    if (digest !== att.digest_sha256_hex) return false;
+    const pubkey = Buffer.from(bs58.decode(expectedPubkeyB58));
+    const signature = Buffer.from(bs58.decode(att.signature_b58));
+    if (pubkey.length !== 32 || signature.length !== 64) return false;
+    const key = createPublicKey({
+      format: 'jwk',
+      key: { kty: 'OKP', crv: 'Ed25519', x: b64url(pubkey) },
+    });
+    return edVerify(null, Buffer.from(`${DOMAIN}${digest}`, 'utf8'), key, signature);
+  } catch {
+    return false;
+  }
 }

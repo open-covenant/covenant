@@ -3,13 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Public Covenant Trust x402 v2 seller: agents pay per call in USDC on Solana to verify an agent's on-chain identity passport or obtain a Covenant-signed attestation. Settles via the PayAI facilitator; emits zauth provider telemetry.",
+  "description": "Public x402 v2 seller for bounded Solana observations and publisher-signed statements. Resource delivery and settlement are separate protocol outcomes.",
   "scripts": {
     "build": "rm -rf dist *.tsbuildinfo && tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/reputation.test.ts",
+    "validate:claims": "node scripts/validate-claims.mjs",
+    "test": "npm run validate:claims && node --import tsx --test src/*.test.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {

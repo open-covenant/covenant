@@ -1,16 +1,16 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Covenant Trust",
-    "version": "1.0.0",
-    "description": "Verify another agent before you transact with it. On-chain identity passports, Covenant-signed attestations, and PayAI settlement-grounded reputation, priced per call in USDC over x402 on Solana.",
+    "title": "Covenant Evidence",
+    "version": "2.0.0",
+    "description": "Bounded Solana provider observations and publisher-signed statements, priced per call in USDC over x402. These resources do not establish identity, delivery, quality, reputation, or W009/W011 enforcement.",
     "contact": {
       "url": "https://opencovenant.org"
     },
     "license": {
       "name": "Apache-2.0"
     },
-    "x-guidance": "Use /x402/passport/{asset} to confirm a counterparty agent's on-chain identity (MPL Core asset + 014 Registry binding + Covenant attestation) before delegating work or paying it, /x402/attest to obtain a Covenant-signed, independently-verifiable statement over a claim, and /x402/payai/reputation/{wallet} to read a wallet's reputation computed from its on-chain PayAI settlements."
+    "x-guidance": "The passport and reputation path names are retained for compatibility. The passport response contains configured-provider structural observations; the reputation response contains only a bounded fee-payer-associated USDC transfer summary. A publisher signature authenticates the publisher and exact bytes after its key is pinned through a trusted channel; it does not make a claim true. Resource delivery and settlement are separate x402 outcomes, so reconcile settlement before retrying after errors."
   },
   "servers": [
     {
@@ -22,9 +22,7 @@
       "get": {
         "operationId": "discovery",
         "summary": "Fetch x402 discovery: resources and the attestation public key.",
-        "tags": [
-          "meta"
-        ],
+        "tags": ["meta"],
         "responses": {
           "200": {
             "description": "Discovery document",
@@ -42,10 +40,8 @@
     "/x402/passport/{asset}": {
       "get": {
         "operationId": "getPassport",
-        "summary": "Verify an agent's on-chain identity passport.",
-        "tags": [
-          "trust"
-        ],
+        "summary": "Observe an MPL Core asset and its 014 Registry binding (legacy path).",
+        "tags": ["evidence"],
         "parameters": [
           {
             "in": "path",
@@ -60,11 +56,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Passport",
+            "description": "Configured-provider structural observations, not proof of identity or claim truth",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Passport"
+                  "$ref": "#/components/schemas/AgentRecordObservation"
                 }
               }
             }
@@ -87,20 +83,15 @@
     "/x402/attest": {
       "post": {
         "operationId": "attest",
-        "summary": "Create a Covenant-signed attestation over a claim.",
-        "tags": [
-          "trust"
-        ],
+        "summary": "Create a publisher-signed statement over caller data.",
+        "tags": ["evidence"],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "subject",
-                  "claim"
-                ],
+                "required": ["subject", "claim"],
                 "properties": {
                   "subject": {
                     "type": "string",
@@ -124,7 +115,7 @@
         },
         "responses": {
           "200": {
-            "description": "Signed attestation",
+            "description": "Publisher-authenticated statement; signature does not establish claim truth",
             "content": {
               "application/json": {
                 "schema": {
@@ -147,11 +138,9 @@
     },
     "/x402/payai/reputation/{wallet}": {
       "get": {
-        "operationId": "getPayaiReputation",
-        "summary": "Read a wallet's PayAI settlement-grounded reputation.",
-        "tags": [
-          "trust"
-        ],
+        "operationId": "getPayaiTransferActivity",
+        "summary": "Read a bounded fee-payer-associated USDC transfer summary (legacy path).",
+        "tags": ["evidence"],
         "parameters": [
           {
             "in": "path",
@@ -166,11 +155,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Reputation plus a Covenant-signed attestation over it",
+            "description": "Bounded transfer observations plus a publisher-signed statement; not jobs or reputation",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReputationResult"
+                  "$ref": "#/components/schemas/TransferActivityResult"
                 }
               }
             }
@@ -192,13 +181,10 @@
     },
     "/x402/er/enclave/{validator}": {
       "get": {
-        "operationId": "verifyErEnclave",
-        "summary": "Live TDX verification of a MagicBlock ephemeral rollup, Covenant-signed.",
-        "description": "Pulls a fresh quote from the validator's Magic-Router-listed endpoint against a random 64-byte challenge, DCAP-verifies it against the Intel PCCS, rejects stale or replayed quotes, and returns the result wrapped in a Covenant-signed attestation (the key published at /.well-known/x402). Optionally binds an agent and its provenance root into the quote challenge, proving that agent's on-chain record came from this genuine enclave. Paid via x402 (USDC on Solana); open non-TEE validators and bad requests return >= 400 and are never charged.",
-        "tags": [
-          "trust",
-          "magicblock"
-        ],
+        "operationId": "checkErEnclave",
+        "summary": "Run this service's DCAP check for a MagicBlock validator quote and sign the result.",
+        "description": "The service fetches a fresh quote from the validator endpoint selected through Magic Router, checks it through its DCAP path against Intel collateral, applies freshness and replay checks, and publisher-signs the reported result. Consumers still trust this service's implementation, issuer, endpoint selection, and collateral handling. Optional subject fields alter the quote challenge; they do not prove that an agent record originated inside the enclave. Resource delivery and settlement are separate x402 outcomes.",
+        "tags": ["evidence", "magicblock"],
         "parameters": [
           {
             "name": "validator",
@@ -231,7 +217,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Enclave verified; DCAP result plus Covenant-signed attestation.",
+            "description": "Service-reported DCAP result plus publisher-signed statement",
             "content": {
               "application/json": {
                 "example": {
@@ -254,13 +240,13 @@
             }
           },
           "400": {
-            "description": "Bad validator, agent, or provenance_root. Not charged."
+            "description": "Bad validator, agent, or provenance_root"
           },
           "402": {
             "description": "Payment required (x402 challenge)."
           },
           "404": {
-            "description": "Validator not on the router, or serves no enclave quote. Not charged."
+            "description": "Validator not on the router, or serves no enclave quote"
           }
         }
       }
@@ -268,13 +254,10 @@
   },
   "components": {
     "schemas": {
-      "Passport": {
+      "AgentRecordObservation": {
         "type": "object",
-        "required": [
-          "asset",
-          "registry",
-          "attestation"
-        ],
+        "description": "Configured RPC/DAS observations. Registration and AppData presence do not prove identity, capability, delivery, reputation, or claim truth. Untrusted metadata and registration URIs are not fetched by this service.",
+        "required": ["asset", "registry", "attestation", "doc", "limitations"],
         "properties": {
           "asset": {
             "type": "object",
@@ -295,10 +278,7 @@
                 "type": "boolean"
               },
               "collection": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": ["string", "null"]
               },
               "burnt": {
                 "type": "boolean"
@@ -312,34 +292,40 @@
                 "type": "string"
               },
               "registered": {
-                "type": "boolean"
+                "type": ["boolean", "null"],
+                "description": "True only when the fetched PDA account has the expected owner, 40-byte length, and embedded asset key; null when RPC could not answer."
               },
               "identityPlugin": {
                 "type": "boolean"
               },
               "registrationUri": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": ["string", "null"]
               }
             }
           },
           "attestation": {
-            "type": [
-              "object",
-              "null"
-            ],
+            "type": ["object", "null"],
             "properties": {
               "authority": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": ["string", "null"]
               },
-              "covenantAuthored": {
+              "matchesConfiguredAuthority": {
                 "type": "boolean"
+              },
+              "evidenceSource": {
+                "type": "string",
+                "const": "configured_das"
               }
+            }
+          },
+          "doc": {
+            "type": "null",
+            "description": "Always null: on-chain URIs are untrusted and are not server-fetched."
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string"
             }
           }
         }
@@ -355,7 +341,7 @@
           "pubkey_b58",
           "signature_b58"
         ],
-        "description": "Independently verifiable: digest = sha256(canonical(payload)) lowercase hex, where canonical is JSON with recursively-sorted keys and no insignificant whitespace (UTF-8); message = domain + \"\\n\" + digest; ed25519-verify base58-decoded signature_b58 over the UTF-8 message against pubkey_b58. Pin the expected pubkey from GET /.well-known/x402 (attestation.publicKey).",
+        "description": "Publisher-authenticated statement: digest = sha256(canonical(payload)) lowercase hex, where canonical is JSON with recursively sorted keys and no insignificant whitespace (UTF-8); message = domain + \"\\n\" + digest; verify the Ed25519 signature against a publisher key pinned through a trusted external channel. The signature authenticates the publisher and exact bytes, not claim truth.",
         "properties": {
           "alg": {
             "type": "string",
@@ -385,65 +371,79 @@
           },
           "pubkey_b58": {
             "type": "string",
-            "description": "Signer pubkey; must match attestation.publicKey from /.well-known/x402."
+            "description": "Signer pubkey; compare it with a value pinned through a trusted channel, not merely this mutable service."
           },
           "signature_b58": {
             "type": "string"
           }
         }
       },
-      "ReputationResult": {
+      "TransferActivityResult": {
         "type": "object",
-        "required": [
-          "reputation",
-          "attestation"
-        ],
-        "description": "A wallet's reputation computed from on-chain PayAI settlements, plus a Covenant-signed attestation over it (same key and verify recipe as /x402/attest). Recompute over the same settlements to reproduce the numbers; nothing is self-reported.",
+        "required": ["activity", "attestation"],
+        "description": "A bounded summary of USDC transfers found in recent transactions associated with the configured fee-payer account, plus a publisher-signed statement. Association does not prove x402 settlement, job completion, quality, or reputation.",
         "properties": {
-          "reputation": {
+          "activity": {
             "type": "object",
             "required": [
+              "schema",
               "wallet",
-              "settled_jobs",
-              "distinct_counterparties",
-              "volume_micro_usdc",
-              "tier",
-              "score",
-              "source_fee_payer"
+              "observed_inbound_transfers",
+              "distinct_observed_senders",
+              "observed_volume_micro_usdc",
+              "source_account_scanned",
+              "coverage",
+              "limitations"
             ],
             "properties": {
+              "schema": {
+                "type": "string",
+                "const": "covenant.payai-transfer-activity.v1"
+              },
               "wallet": {
                 "type": "string",
-                "description": "Solana wallet (owner) the reputation is for."
+                "description": "Solana wallet whose inbound transfer observations are summarized."
               },
-              "settled_jobs": {
+              "observed_inbound_transfers": {
                 "type": "integer",
-                "description": "Inbound settlements from other wallets (self-payments excluded)."
+                "description": "Parsed inbound USDC transfers from other wallets in the bounded scan."
               },
-              "distinct_counterparties": {
+              "distinct_observed_senders": {
                 "type": "integer",
-                "description": "Distinct payer wallets."
+                "description": "Distinct sender wallets in those parsed transfers."
               },
-              "volume_micro_usdc": {
-                "type": "integer",
-                "description": "Lifetime inbound USDC in atomic units (6 decimals)."
-              },
-              "tier": {
+              "observed_volume_micro_usdc": {
                 "type": "string",
-                "enum": [
-                  "bronze",
-                  "silver",
-                  "gold",
-                  "platinum"
-                ]
+                "pattern": "^[0-9]+$",
+                "description": "Exact decimal string of observed USDC atomic units; this is bounded, not lifetime volume."
               },
-              "score": {
-                "type": "integer",
-                "description": "0-1000 composite of jobs, distinct counterparties, and volume."
-              },
-              "source_fee_payer": {
+              "source_account_scanned": {
                 "type": "string",
-                "description": "PayAI facilitator fee-payer the settlements were read from."
+                "description": "Account used to select recent transaction signatures."
+              },
+              "coverage": {
+                "type": "object",
+                "properties": {
+                  "requested_signature_limit": {
+                    "type": "integer"
+                  },
+                  "signatures_returned": {
+                    "type": "integer"
+                  },
+                  "transactions_loaded": {
+                    "type": "integer"
+                  },
+                  "commitment": {
+                    "type": "string",
+                    "const": "confirmed"
+                  }
+                }
+              },
+              "limitations": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -454,10 +454,7 @@
       },
       "Discovery": {
         "type": "object",
-        "required": [
-          "version",
-          "resources"
-        ],
+        "required": ["version", "resources"],
         "properties": {
           "version": {
             "type": "integer"
@@ -472,11 +469,8 @@
             "type": "string"
           },
           "attestation": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "description": "Pin attestation.publicKey to verify /x402/attest responses offline.",
+            "type": ["object", "null"],
+            "description": "Verification metadata. Pin publicKey through a trusted external channel; this mutable discovery response cannot pin itself.",
             "properties": {
               "algorithm": {
                 "type": "string"
